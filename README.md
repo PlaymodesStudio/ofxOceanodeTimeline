@@ -1,0 +1,40 @@
+# ofxOceanodeTimeline
+
+Optional clips, automation and timeline editing for [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode).
+
+Install this folder beside `ofxOceanode` in `openFrameworks/addons`. Use the matching extracted version of Oceanode core, and add `ofxOceanodeTimeline` to your app's `addons.make`. Regenerate existing projects with the openFrameworks project generator to refresh source files, include paths and addon flags.
+
+```cpp
+#include "ofxOceanode.h"
+#include "ofxOceanodeTimeline.h"
+
+void ofApp::setup() {
+    oceanode.setup();
+    ofxOceanodeTimeline::setup(oceanode);
+    // Register/load your presets after attaching the timeline.
+}
+```
+
+For a headless host, call `ofxOceanodeTimeline::attach(container)` and register `lfoTrack` yourself if needed; attachment forwards to the root host.
+
+The root container owns the timeline service. Macro containers share that service. Repeating `setup` on the same host does nothing. Without attachment, Oceanode has no timeline window, publishing menus or automation processing. Calling `getTimelineManager()` without attachment throws an explanatory exception; linking code that calls it requires this addon.
+
+The existing manager API stays available through `oceanode.getTimelineManager()` and `container.getTimelineManager()`. Existing `timeline.json` files, clip IDs, binding paths and LFO Track node names are unchanged. Timeline JSON is left untouched when saving a project with core alone. To use projects containing LFO Track nodes, attach this addon before loading them.
+
+Includes timeline model and persistence, clip/lane editors, parameter publishing menus and badges, piano roll and instrument setup, BPM automation and timebase retiming, LFO Track, wave clips and scheduling lookahead. Shared transport, deterministic random utilities and backend scheduling registration stay in core. Node instrument/value-scale metadata remains available in core so instrument addons do not need a timeline dependency.
+
+See [timeline model usage](docs/timeline.md) and `example-timeline` (generate its project files with the OF project generator).
+
+## Verification
+
+From the Oceanode core folder:
+
+```sh
+python3 tests/integration_compile.py
+python3 tests/integration_compile.py --timeline ../ofxOceanodeTimeline
+python3 tests/transport_regression.py
+python3 ../ofxOceanodeTimeline/tests/timeline_regression.py
+python3 ../ofxOceanodeTimeline/tests/attachment_regression.py
+```
+
+The runtime regression uses real OF parameters and JSON under ASan/UBSan; set `OCEANODE_TEST_OF_ROOT` to a compiled macOS OF tree if needed. `OCEANODE_CORE_ROOT` can override the default sibling core path. Syntax checks do not launch a window or exercise audio hardware.
