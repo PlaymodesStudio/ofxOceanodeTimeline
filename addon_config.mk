@@ -7,4 +7,8 @@ meta:
 
 common:
     ADDON_DEPENDENCIES = ofxOceanode ofxImGui
-    ADDON_CFLAGS += -DOFX_OCEANODE_HAS_TIMELINE=1
+    # A define, not ADDON_CFLAGS: projectGenerator puts cflags in Xcode's
+    # OTHER_CFLAGS, which C++ files never see (OTHER_CPLUSPLUSFLAGS is set by
+    # the OF project), so every .cpp compiled the timeline integration out.
+    # ADDON_DEFINES -> GCC_PREPROCESSOR_DEFINITIONS reaches C, C++ and ObjC.
+    ADDON_DEFINES = OFX_OCEANODE_HAS_TIMELINE
