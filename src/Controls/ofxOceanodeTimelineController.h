@@ -5,6 +5,8 @@
 #include "Editors/ofxOceanodeTimelineBpmEditor.h"
 #include "Editors/ofxOceanodeTimelineEditorView.h"
 #include "Editors/ofxOceanodeTimelineWaveVolumeEditor.h"
+#include "Editors/ofxOceanodeTimelineLaneEditors.h"
+#include "Editors/ofxOceanodeTimelineLfoEditor.h"
 #include <map>
 #include <memory>
 #include <set>
@@ -44,9 +46,6 @@ private:
                    double endBeat, double beatPosition, float bpm);
     void drawLaneEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
                         float contentWidth, double endBeat, double beatPosition);
-    void drawLfoEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
-                       ofxOceanodeTimelineClip& clip, float contentWidth, double endBeat,
-                       double beatPosition);
     void drawWaveClipProperties(ofxOceanodeTimelineManager& timeline,
                                 const ofxOceanodeTimelineTrack& track,
                                 ofxOceanodeTimelineClip& clip);
@@ -86,6 +85,9 @@ private:
 
     ofxOceanodeTimelineEditorView editorView(const ofxOceanodeTimelineManager& timeline,
                                             float fallbackBpm, double endBeat) const;
+    ofxOceanodeTimelineClipEditorState editorState;
+    ofxOceanodeTimelineLfoEditor lfoEditor;
+    ofxOceanodeTimelineLaneEditors laneEditors;
     ofxOceanodeTimelineBpmEditor bpmEditor;
     ofxOceanodeTimelineWaveVolumeEditor waveVolumeEditor;
     std::shared_ptr<ofxOceanodeContainer> container;
@@ -98,38 +100,9 @@ private:
     std::string pendingTrackId;
     std::string pendingClipId;
     std::string pendingLaneId;
-    std::string editorTrackId;
-    std::string editorClipId;
-    std::string editorLaneId;
-    // Independent expand/collapse state for each lane in a multi-lane
-    // clip's editor (keyed by lane id, globally unique). Absence from
-    // this set means expanded -- most lanes are expanded most of the
-    // time, so "collapsed" is the state worth tracking explicitly.
-    std::set<std::string> collapsedLaneIds;
-    // Per-lane editor height override (keyed by lane id), set by dragging
-    // the resize handle at the bottom of a lane's editor row. Absence means
-    // "use the type's default height" -- UI-only, not persisted with the
-    // preset.
-    std::unordered_map<std::string, float> laneEditorHeights;
-    // The resize grip is handled from its screen rectangle instead of as an
-    // overlapping ImGui item. This keeps the editor canvas/child window from
-    // stealing the active id after the drag has started.
-    std::string resizingLaneId;
-    float laneResizeStartMouseY = 0.0f;
-    float laneResizeStartHeight = 0.0f;
     std::string waveTrackResizeId;
     float waveTrackResizeStartMouseY = 0.0f;
     float waveTrackResizeStartHeight = 0.0f;
-    // Piano-roll keyboard-strip "audition" state: while a key is held down,
-    // the lane's Gate/Pitch bindings get a live override (see
-    // ofxOceanodeTimelineManager::setLiveOverride) so the bound parameters
-    // sound immediately, independent of the playhead or any clip data.
-    bool pianoKeyboardPreviewActive = false;
-    std::string pianoKeyboardPreviewTrackId;
-    std::string pianoKeyboardPreviewGateBindingId;
-    std::string pianoKeyboardPreviewClipId, pianoKeyboardPreviewLaneId;
-    std::string pianoKeyboardPreviewPitchBindingId;
-    int pianoKeyboardPreviewPitch = -1;
     char pendingTrackName[128] = {};
     char pendingClipName[128] = {};
     char pendingClipRenameName[128] = {};
@@ -286,50 +259,6 @@ private:
     int pendingAddLaneType = 0;
     bool requestRemoveLane = false;
     std::string pendingRemoveLaneId;
-    bool clipEditorOpen = false;
-    enum class PianoDragMode { None, Move, Resize, Velocity, Probability, Stretch };
-    PianoDragMode pianoDragMode = PianoDragMode::None;
-    int pianoDragNoteIndex = -1;
-    double pianoDragBeatOffset = 0.0;
-    // Multi-note selection: which notes (by index into the lane's
-    // pianoNotes) are selected, plus the state needed to move the whole
-    // group together by a common delta instead of snapping each note
-    // independently to the mouse.
-    std::string pianoSelectionLaneId;
-    std::set<int> pianoSelectedNoteIndices;
-    struct PianoDragSnapshotEntry { int index; double startBeat; int pitch; double durationBeats = 0.0; };
-    std::vector<PianoDragSnapshotEntry> pianoDragSnapshot;
-    double pianoDragAnchorStartBeat = 0.0;
-    int pianoDragAnchorPitch = 0;
-    struct PianoValueDragSnapshotEntry { int index; float value; };
-    std::vector<PianoValueDragSnapshotEntry> pianoValueDragSnapshot;
-    float pianoValueDragAnchorValue = 0.0f;
-    // Shift+drag: the selection's timing scaled from its first start (origin)
-    // by how far the grabbed beat moved, every start and end on the grid.
-    double pianoStretchOrigin = 0.0;
-    double pianoStretchGrab = 0.0;
-    // The VEL / PROB strips' heights per lane (session state, like lane heights),
-    // resized by the handles above them: 0 none, 1 VEL, 2 PROB.
-    std::map<std::string, std::pair<float, float>> pianoStripHeights;
-    int pianoStripResize = 0;
-    float pianoStripResizeStartY = 0.0f, pianoStripResizeStartHeight = 0.0f;
-    bool pianoMarqueeActive = false;
-    float pianoMarqueeStartX = 0.0f;
-    float pianoMarqueeStartY = 0.0f;
-    enum class PianoNumericField { None, Velocity, Probability };
-    PianoNumericField pianoNumericField = PianoNumericField::None;
-    int pianoNumericNoteIndex = -1;
-    float pianoNumericValue = 0.0f;
-    int curveDragPointIndex = -1;
-    int curveValuePointIndex = -1;
-    float curveNumericValue = 0.0f;
-    int curveTensionSegment = -1;
-    float curveTensionDragStartX = 0.0f;
-    float curveTensionDragStartY = 0.0f;
-    float curveTensionStartInflection = 0.5f;
-    float curveTensionStartSteepness = 1.0f;
-    // Clip editors folded down to their header row (session state, per clip id).
-    std::set<std::string> foldedClipEditors;
     // Dragging a parameter row's label to reorder it within its track.
     std::string bindingDragTrackId;
     std::string bindingDragId;
@@ -380,43 +309,12 @@ private:
                             const std::string& trackId, const std::string& editGroupId,
                             double clipStart = -1.0, double clipDuration = -1.0);
     void drawNoteGroupSetupPopup(ofxOceanodeTimelineManager& timeline);
-    std::string lfoDragLaneId;
-    int lfoDragPointIndex = -1;
-    // LFO editor point selection (Delete/Backspace or right-click > Delete point)
-    std::string lfoSelectedClipId;
-    std::string lfoSelectedLaneId;
-    int lfoSelectedPointIndex = -1;
-    // LFO editor Alt-drag tension editing (Log/Exp, Sigmoid)
-    int lfoTensionSegment = -1;
-    bool lfoValueDragActive = false; // dragging the constant in an LFO lane's "Value" mode
-    float lfoPointNumericValue = 0.0f; // right-click "Set value" field (real units)
-    float lfoTensionDragStartX = 0.0f;
-    float lfoTensionDragStartY = 0.0f;
-    float lfoTensionStartInflection = 0.5f;
-    float lfoTensionStartSteepness = 1.0f;
     enum class LoopDragMode { None, Scrub, Start, End, Move };
     LoopDragMode loopDragMode = LoopDragMode::None;
     double loopDragAnchorBeat = 0.0;
     double loopDragStartBeat = 0.0;
     double loopDragEndBeat = 4.0;
 
-    // MultiValue / MultiGate region drag (create/move/resize), shared by
-    // both lane types since only one lane is ever focused (interactive) at
-    // a time -- see the .cpp for why that makes sharing this state safe.
-    // Keyed by row index (into the lane's multiValueRows/multiGateRows) +
-    // index into that row's region vector.
-    enum class RegionDragMode { None, Create, Move, ResizeRight };
-    RegionDragMode regionDragMode = RegionDragMode::None;
-    int regionDragRow = -1;
-    int regionDragIndex = -1;
-    double regionDragAnchorBeat = 0.0;
-    double regionDragOriginalStart = 0.0;
-    double regionDragOriginalDuration = 0.0;
-    // MultiValue's double-click "edit value" popup (mirrors the Curve
-    // lane's "Curve point value" popup).
-    int multiValueEditRow = -1;
-    int multiValueEditIndex = -1;
-    float multiValueEditNumeric = 0.0f;
 };
 
 #endif

@@ -257,7 +257,7 @@ int main() {
 
 
 
-def main():
+def main(*, cases=CASES, extra_sources=(), extra_includes=()):
     of = of_root()
     libdir = of / "libs/openFrameworksCompiled/lib/macos"
     if not (libdir / "openFrameworks.a").is_file():
@@ -266,6 +266,7 @@ def main():
     includes += sorted({path.parent for path in (of / "libs/openFrameworks").rglob("*.h")})
     includes += [path for path in (of / "libs").glob("*/include") if path.is_dir()]
     includes += [of / "libs/freetype/include/freetype", of / "libs/cairo/include/cairo"]
+    includes += list(extra_includes)
     libraries = [str(path) for path in sorted(libdir.glob("*.a"))
                  if "openframeworks" not in path.name.lower()]
     frameworks = ["Accelerate", "AppKit", "ApplicationServices", "AudioToolbox",
@@ -275,6 +276,7 @@ def main():
         folder = Path(folder)
         (folder / "Managers").mkdir()
         (folder / "Managers/ofxOceanodeContainer.h").write_text(CONTAINER)
+        (folder / "ofxOceanodeContainer.h").write_text('#include "Managers/ofxOceanodeContainer.h"\n')
         # The core's parameter destructor now unlinks dropdown peers out of
         # line. Include that production definition without linking unrelated
         # canvas/connection/scope services into this isolated fixture.
@@ -282,7 +284,7 @@ def main():
         destructor_start = parameter_source.index("ofxOceanodeAbstractParameter::~ofxOceanodeAbstractParameter()")
         destructor_end = parameter_source.index("\nvoid ofxOceanodeAbstractParameter::", destructor_start)
         cpp = folder / "regression.cpp"
-        cpp.write_text(CASES + "\n" + parameter_source[destructor_start:destructor_end])
+        cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
         # The container adapter omits NodeModel RTTI; keep the other UB checks.
         command = [os.environ.get("CXX", "clang++"), "-std=c++17", "-O0", "-g", "-w",
@@ -295,6 +297,7 @@ def main():
                    str(ROOT / "src/Nodes/Default_Nodes/Base/baseOscillator.cpp"),
                    str(of / "libs/openFrameworks/types/ofParameter.cpp"),
                    str(of / "libs/openFrameworks/types/ofParameterGroup.cpp"),
+                   *[str(path) for path in extra_sources],
                    str(libdir / "openFrameworks.a"), *libraries, "-Wl,-dead_strip"]
         for framework in frameworks:
             command += ["-framework", framework]

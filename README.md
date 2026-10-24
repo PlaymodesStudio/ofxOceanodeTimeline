@@ -36,7 +36,8 @@ python3 tests/integration_compile.py
 python3 tests/integration_compile.py --timeline ../ofxOceanodeTimeline
 python3 tests/transport_regression.py
 python3 ../ofxOceanodeTimeline/tests/timeline_regression.py
+python3 ../ofxOceanodeTimeline/tests/editor_regression.py
 python3 ../ofxOceanodeTimeline/tests/attachment_regression.py
 ```
 
-The runtime regression uses real OF parameters and JSON under ASan/UBSan; set `OCEANODE_TEST_OF_ROOT` to a compiled macOS OF tree if needed. `OCEANODE_CORE_ROOT` can override the default sibling core path. Syntax checks do not launch a window or exercise audio hardware.
+The runtime regressions use real OF parameters and JSON under ASan/UBSan; the editor suite also runs production editors with headless ImGui. Set `OCEANODE_TEST_OF_ROOT` to a compiled macOS OF tree if needed. `OCEANODE_CORE_ROOT` can override the default sibling core path. These checks do not verify visual appearance or exercise audio hardware.
