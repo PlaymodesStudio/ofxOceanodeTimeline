@@ -25,6 +25,8 @@ Includes timeline model and persistence, clip/lane editors, parameter publishing
 
 See [timeline model usage](docs/timeline.md) and `example-timeline` (generate its project files with the OF project generator).
 
+See [architecture and editor extraction](docs/architecture.md) for component ownership and the path to modular lane editors.
+
 ## Verification
 
 From the Oceanode core folder:

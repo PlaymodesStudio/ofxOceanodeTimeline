@@ -41,6 +41,7 @@ public:
 CASES = r'''
 #include "Managers/ofxOceanodeContainer.h"
 #include "Timeline/ofxOceanodeTimeline.h"
+#include "Controls/Editors/ofxOceanodeTimelineEditorView.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -57,6 +58,35 @@ static void checkNear(double actual, double expected, int line) {
 #define near(actual, expected) checkNear(actual, expected, __LINE__)
 int main() {
     ofSeedRandom(); // OF normally constructs its random engine during app startup.
+    // All editors and arrangement gestures share one tempo-aware coordinate
+    // mapping. Cover the inverse beyond its initial search bound as well as
+    // an automated tempo map, where a fixed pixels-per-beat formula fails.
+    {
+        ofxOceanodeTimelineManager model(nullptr);
+        model.getViewState().pixelsPerSecond = 80.0f;
+        ofxOceanodeTimelineEditorView view(model, 120.0f, 4.0, true, 0.25);
+        near(view.beatToPixels(2.0), 80.0);
+        near(view.pixelsToBeat(80.0f), 2.0);
+        near(view.beatToPixels(-2.0), 0.0);
+        near(view.pixelsToBeat(-10.0f), 0.0);
+        near(view.snapBeat(1.37), 1.25);
+        near(view.snapBeat(-1.0), 0.0);
+        near(view.editIncrement(), 0.25);
+        near(view.displayGridBeats(), 0.25);
+        ofxOceanodeTimelineEditorView unsnapped(model, 120.0f, 4.0, false, 0.25);
+        near(unsnapped.snapBeat(1.37), 1.37);
+        near(unsnapped.displayGridBeats(), 0.25); // magnet does not hide the grid
+        ofxOceanodeTimelineEditorView noGrid(model, 120.0f, 4.0, true, 0.0);
+        near(noGrid.snapBeat(1.37), 1.37);
+        near(noGrid.editIncrement(), 1.0 / 24.0);
+        near(noGrid.displayGridBeats(), 1.0);
+        model.setBpmRange(30.0f, 300.0f);
+        model.getBpmAutomationPoints() = {{0.0, 60.0f}, {8.0, 180.0f}};
+        model.setBpmInterpolation("Linear");
+        model.setBpmAutomationEnabled(true);
+        for(double beat : {0.0, 0.25, 2.5, 8.0, 32.0, 128.0})
+            near(view.pixelsToBeat(view.beatToPixels(beat)), beat);
+    }
     // Number lanes hold absolute values between arbitrarily placed entries.
     {
         ofxOceanodeContainer numberOwner;
@@ -245,13 +275,21 @@ def main():
         folder = Path(folder)
         (folder / "Managers").mkdir()
         (folder / "Managers/ofxOceanodeContainer.h").write_text(CONTAINER)
-        cpp = folder / "regression.cpp"; cpp.write_text(CASES)
+        # The core's parameter destructor now unlinks dropdown peers out of
+        # line. Include that production definition without linking unrelated
+        # canvas/connection/scope services into this isolated fixture.
+        parameter_source = (ROOT / "src/ofxOceanodeParameter.cpp").read_text()
+        destructor_start = parameter_source.index("ofxOceanodeAbstractParameter::~ofxOceanodeAbstractParameter()")
+        destructor_end = parameter_source.index("\nvoid ofxOceanodeAbstractParameter::", destructor_start)
+        cpp = folder / "regression.cpp"
+        cpp.write_text(CASES + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
         # The container adapter omits NodeModel RTTI; keep the other UB checks.
         command = [os.environ.get("CXX", "clang++"), "-std=c++17", "-O0", "-g", "-w",
                    "-fsanitize=address,undefined", "-fno-sanitize=vptr", "-fno-omit-frame-pointer", "-DOF_NO_FMOD",
                    "-I" + str(folder), *["-I" + str(path) for path in includes], str(cpp),
                    str(ADDON / "src/Timeline/ofxOceanodeTimeline.cpp"),
+                   str(ADDON / "src/Controls/Editors/ofxOceanodeTimelineEditorView.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeScheduling.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeTransport.cpp"),
                    str(ROOT / "src/Nodes/Default_Nodes/Base/baseOscillator.cpp"),

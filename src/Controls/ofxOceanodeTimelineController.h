@@ -2,6 +2,10 @@
 #define ofxOceanodeTimelineController_h
 
 #include "ofxOceanodeBaseController.h"
+#include "Editors/ofxOceanodeTimelineBpmEditor.h"
+#include "Editors/ofxOceanodeTimelineEditorView.h"
+#include "Editors/ofxOceanodeTimelineWaveVolumeEditor.h"
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -38,8 +42,6 @@ public:
 private:
     void drawRuler(ofxOceanodeTimelineManager& timeline, float labelWidth, float timelineWidth,
                    double endBeat, double beatPosition, float bpm);
-    void drawBpmLane(ofxOceanodeTimelineManager& timeline, float contentWidth,
-                     double endBeat, double beatPosition, float fallbackBpm);
     void drawLaneEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
                         float contentWidth, double endBeat, double beatPosition);
     void drawLfoEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
@@ -52,16 +54,6 @@ private:
                              const ofxOceanodeTimelineTrack& track,
                              float contentWidth, double endBeat,
                              double beatPosition);
-    // timelineOriginX is where beat 0 sits for the clip rows above, already
-    // scrolled. The envelope has to be drawn against that, not against its
-    // own panel's left edge, or its grid drifts from the clips it belongs to
-    // (by a few pixels normally, and by a lot once the window is narrow
-    // enough for the properties column to stop being kLabelWidth wide).
-    void drawWaveTrackVolumeAutomation(ofxOceanodeTimelineManager& timeline,
-                                       ofxOceanodeTimelineTrack& track,
-                                       float width, float height,
-                                       double endBeat, double beatPosition,
-                                       float timelineOriginX);
     void drawBlendModeOptions(ofxOceanodeTimelineManager& timeline, const std::string& trackId,
                              const ofxOceanodeTimelineParameterBinding& binding);
     void requestClipRename(const std::string& trackId, const ofxOceanodeTimelineClip& clip);
@@ -92,6 +84,10 @@ private:
     double pixelsToBeat(const ofxOceanodeTimelineManager& timeline, float pixels,
                         float fallbackBpm, double endBeatHint) const;
 
+    ofxOceanodeTimelineEditorView editorView(const ofxOceanodeTimelineManager& timeline,
+                                            float fallbackBpm, double endBeat) const;
+    ofxOceanodeTimelineBpmEditor bpmEditor;
+    ofxOceanodeTimelineWaveVolumeEditor waveVolumeEditor;
     std::shared_ptr<ofxOceanodeContainer> container;
     int visibleBars = 8;
     double rulerSnapBeats = 0.25;
@@ -146,9 +142,6 @@ private:
     // Beat used by a Wave Track's context-menu "Add new wave clip" action.
     // Header clicks use the playhead; empty-row clicks use the clicked beat.
     double pendingWaveClipBeat = 0.0;
-    int waveVolumeDragPointIndex = -1;
-    int waveVolumeValuePointIndex = -1;   // right-click "Set value" on a volume point
-    float waveVolumeNumericValue = 1.0f;
 
     // Duplicate: Cmd+drag on a clip's body drops a copy on whichever row the
     // mouse is over (same row, another parameter row, another track).
@@ -327,14 +320,6 @@ private:
     PianoNumericField pianoNumericField = PianoNumericField::None;
     int pianoNumericNoteIndex = -1;
     float pianoNumericValue = 0.0f;
-    int bpmDragPointIndex = -1;
-    int bpmValuePointIndex = -1;
-    float bpmNumericValue = 120.0f;
-    int bpmTensionSegment = -1;
-    float bpmTensionDragStartX = 0.0f;
-    float bpmTensionDragStartY = 0.0f;
-    float bpmTensionStartInflection = 0.5f;
-    float bpmTensionStartSteepness = 1.0f;
     int curveDragPointIndex = -1;
     int curveValuePointIndex = -1;
     float curveNumericValue = 0.0f;
