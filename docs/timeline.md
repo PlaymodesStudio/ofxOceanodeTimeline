@@ -180,6 +180,23 @@ scheduling events. The read-only API is
 `resizeClipEnd(trackId, clipId, duration, ofxOceanodeTimelineEndEdit::Repeat)`
 (or `Trim` / `Stretch`) to match numeric and mouse editing semantics.
 
+## Piano note input ordering
+
+Piano input roles determine dispatch order for every instrument: Pitch, Velocity,
+then Gate. In scheduled playback Pitch is prepared 2 ms before the note boundary,
+Velocity 1 ms before it, and Gate remains on the musical grid. Distinct backend
+execution times avoid conflicting writes when an instrument resends all note
+inputs from each parameter listener. The ordinary frame path applies inputs in
+the same order without adding a frame of gate delay.
+
+The GUI and scheduler correction bookkeeping retain the musical note boundary;
+preparing a pitch early does not count as a playhead mismatch or move a note in
+the editor. Routing roles, rather than parameter names, select this behavior.
+
+The scheduler evaluates only the paths it can send ahead; unrelated continuous
+sound automation remains on the frame path. The target order is sorted once per
+evaluation and reused by the scheduler and both frame application passes.
+
 ## Minimal usage
 
 ```cpp

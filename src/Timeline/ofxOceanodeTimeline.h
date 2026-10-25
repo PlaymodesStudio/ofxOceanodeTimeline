@@ -1030,7 +1030,8 @@ private:
     // second implementation of the lane semantics.
     void collectActiveValues(double beat, bool isPlaying, bool applyPianoRanges,
                              ActiveValueMap& activeValues,
-                             ofxOceanodeTimelineTargetInspection* inspection = nullptr) const;
+                             ofxOceanodeTimelineTargetInspection* inspection = nullptr,
+                             const std::set<std::string>* onlyPaths = nullptr) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
                                ofxOceanodeAbstractParameter* parameter,
@@ -1046,6 +1047,8 @@ private:
     void collectChangeBeats(double fromBeat, double toBeat, bool inclusiveStart,
                             std::vector<double>& outBeats) const;
     double beatAfterSeconds(double startBeat, double seconds, float fallbackBpm) const;
+    const std::vector<std::string>& orderedAutomationPaths() const;
+    uint64_t pianoInputLeadUs(const std::string& path) const;
     void runScheduler(const ofxOceanodeTransportState& transport, bool loopWrappedThisFrame);
     void sendScheduleCorrections(uint64_t nowUs, const std::set<std::string>* onlyPaths = nullptr);
 
@@ -1107,6 +1110,8 @@ private:
     };
     mutable std::unordered_map<const ofxOceanodeTimelineTrack*, TrackEvaluationIndex> trackEvaluationIndexes;
     std::unordered_map<std::string, PianoPitchRangeIndex> pianoPitchRangesCache;
+    std::unordered_map<std::string, int> pianoInputPriorityCache;
+    std::vector<std::string> automationPathOrderCache;
     std::unordered_set<const ofxOceanodeTimelineParameterBinding*> zeroWhenInactiveBindingsCache;
     std::unordered_set<std::string> continuouslyEvaluatedPathsCache;
     // State-capture curves let a stopped transport be auditioned from the node

@@ -1352,6 +1352,7 @@ void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     trackByIdCache.clear();
     trackEvaluationIndexes.clear();
     pianoPitchRangesCache.clear();
+    pianoInputPriorityCache.clear();
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     parameterTrackColorCache.clear();
@@ -1426,6 +1427,14 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                     continue;
                 }
                 if(lane.type != ofxOceanodeTimelineLaneType::PianoRoll) continue;
+                // Roles come from the routing, never parameter names. A piano
+                // roll may target an arbitrary instrument's published inputs.
+                for(const auto& role : {std::make_pair(&lane.pianoPitchBindingId, 0),
+                                       std::make_pair(&lane.pianoVelocityBindingId, 1),
+                                       std::make_pair(&lane.pianoGateBindingId, 3)}) {
+                    if(const auto* binding = bindingFor(*role.first))
+                        pianoInputPriorityCache[binding->parameterPath] = role.second;
+                }
                 auto& voicing = trackIt->second.pianoVoicing[&lane];
                 computeLaneVoicing(track, clip, lane, voicing);
                 if(const auto* binding = bindingFor(lane.pianoPitchBindingId); binding != nullptr && !voicing.kit) {
@@ -1475,6 +1484,17 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
             }
         }
     }
+    automationPathOrderCache.clear();
+    automationPathOrderCache.reserve(bindingsByPathCache.size());
+    for(const auto& entry : bindingsByPathCache) automationPathOrderCache.push_back(entry.first);
+    const auto priority = [this](const std::string& path) {
+        const auto it = pianoInputPriorityCache.find(path);
+        return it == pianoInputPriorityCache.end() ? 2 : it->second;
+    };
+    std::sort(automationPathOrderCache.begin(), automationPathOrderCache.end(), [&](const auto& a, const auto& b) {
+        const int pa = priority(a), pb = priority(b);
+        return pa != pb ? pa < pb : a < b;
+    });
     evaluationIndexesValid = true;
     rebuildParameterTrackColorCache();
 }
@@ -4145,7 +4165,8 @@ ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findParameterCached(co
 void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool isPlaying,
                                                      bool applyPianoRanges,
                                                      ActiveValueMap& activeValues,
-                                                     ofxOceanodeTimelineTargetInspection* inspection) const {
+                                                     ofxOceanodeTimelineTargetInspection* inspection,
+                                                     const std::set<std::string>* onlyPaths) const {
     if(container == nullptr) return;
     if(!evaluationIndexesValid)
         const_cast<ofxOceanodeTimelineManager*>(this)->rebuildEvaluationIndexes();
@@ -4251,6 +4272,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
             it = savedPianoRanges.erase(it);
         }
     }
+    const auto wantsBinding = [&](const ofxOceanodeTimelineParameterBinding* binding) {
+        return binding != nullptr && (onlyPaths == nullptr || onlyPaths->count(binding->parameterPath) > 0);
+    };
     for(const auto& track : tracks) {
         contributionTrack = &track;
         for(const auto& clip : track.clips) {
@@ -4260,7 +4284,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
             if(!clipSourceBeat(clip, beatPosition, sourceBeat)) continue;
             if(clip.isLfo) {
                 const auto* binding = bindingFor(track, clip.lfoOutputBindingId);
-                if(binding != nullptr && !binding->bypass) {
+                if(wantsBinding(binding) && !binding->bypass) {
                     const float normalized = ofxOceanodeTimelineLfo::evaluate(clip, sourceBeat);
                     const float mapped = clip.lfoOutputMin + normalized *
                         (clip.lfoOutputMax - clip.lfoOutputMin);
@@ -4272,6 +4296,14 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                 continue;
             }
             for(const auto& sourceLane : clip.lanes) {
+                if(onlyPaths != nullptr) {
+                    bool wanted = false;
+                    for(const auto& id : sourceLane.bindingIds)
+                        wanted = wanted || wantsBinding(bindingFor(track, id));
+                    for(const auto* id : {&sourceLane.pianoPitchBindingId, &sourceLane.pianoVelocityBindingId, &sourceLane.pianoGateBindingId})
+                        wanted = wanted || wantsBinding(bindingFor(track, *id));
+                    if(!wanted) continue;
+                }
                 // Stopped piano rolls leave pitch, gate and velocity to live input.
                 if(!isPlaying && sourceLane.type == ofxOceanodeTimelineLaneType::PianoRoll) continue;
                 const SharedPianoPlayback* shared = nullptr;
@@ -4485,6 +4517,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
     for(const auto& track : tracks) {
         const auto trackIndexIt = trackEvaluationIndexes.find(&track);
         for(const auto& binding : track.bindings) {
+            if(!wantsBinding(&binding)) continue;
             const bool inspectBinding = inspection != nullptr && binding.parameterPath == inspection->parameterPath;
             if(inspectBinding) inspection->bindings.push_back({track.id, binding.id, {}, binding.mode,
                 binding.bypass, binding.hasLiveOverride, false});
@@ -4756,14 +4789,27 @@ ofxOceanodeTimelineTargetInspection ofxOceanodeTimelineManager::inspectTarget(
     return result;
 }
 
+const std::vector<std::string>& ofxOceanodeTimelineManager::orderedAutomationPaths() const {
+    return automationPathOrderCache;
+}
+
+uint64_t ofxOceanodeTimelineManager::pianoInputLeadUs(const std::string& path) const {
+    const auto it = pianoInputPriorityCache.find(path);
+    if(it == pianoInputPriorityCache.end()) return 0;
+    // Prepare pitch, then velocity, then let Gate fire on the musical grid.
+    // Distinct timetags also protect listeners that resend all note inputs.
+    return it->second == 0 ? 2000 : it->second == 1 ? 1000 : 0;
+}
+
 void ofxOceanodeTimelineManager::applyAutomation() {
     if(container == nullptr) return;
     if(!evaluationIndexesValid) rebuildEvaluationIndexes();
     const auto& activeValues = activeAutomationValues;
-    for(auto& entry : bindingsByPathCache) {
-        auto* parameter = findParameterCached(entry.first);
+    for(const auto& path : orderedAutomationPaths()) {
+        auto& bindings = bindingsByPathCache.at(path);
+        auto* parameter = findParameterCached(path);
         ofxOceanodeTimelineParameterBinding* defaultBinding = nullptr;
-        for(auto* binding : entry.second) {
+        for(auto* binding : bindings) {
             binding->missingTarget = parameter == nullptr;
             if(!binding->bypass && defaultBinding == nullptr) defaultBinding = binding;
         }
@@ -4772,8 +4818,8 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         if(defaultBinding == nullptr) continue;
 
         std::string value;
-        if(!computeParameterValue(entry.second, activeValues, parameter, value)) {
-            stateCaptureLastAppliedValues.erase(entry.first);
+        if(!computeParameterValue(bindings, activeValues, parameter, value)) {
+            stateCaptureLastAppliedValues.erase(path);
             continue;
         }
         if(!value.empty() && parameterValueForAutomation(*parameter) != value) {
@@ -4783,10 +4829,10 @@ void ofxOceanodeTimelineManager::applyAutomation() {
             // backend must not send it a second time -- an untimed duplicate
             // would arrive late and, for a trigger parameter, fire twice.
             ofxOceanodeScheduling::ScopedBackendSuppression suppression(
-                scheduledBackendPaths.count(entry.first) > 0);
+                scheduledBackendPaths.count(path) > 0);
             applyAutomationValue(*parameter, value, defaultBinding->valueType);
         }
-        stateCaptureLastAppliedValues[entry.first] = parameterValueForAutomation(*parameter);
+        stateCaptureLastAppliedValues[path] = parameterValueForAutomation(*parameter);
     }
 }
 
@@ -4861,6 +4907,8 @@ void ofxOceanodeTimelineManager::sendScheduleCorrections(uint64_t nowUs, const s
 double ofxOceanodeTimelineManager::beatAfterSeconds(double startBeat, double seconds,
                                                     float fallbackBpm) const {
     if(seconds <= 0.0) return startBeat;
+    if(!bpmAutomationEnabled || bpmAutomationPoints.empty())
+        return startBeat + seconds * std::max(1.0f, fallbackBpm) / 60.0;
     const double maximumBpm = bpmAutomationEnabled
         ? static_cast<double>(std::max(bpmMaximum, fallbackBpm))
         : static_cast<double>(std::max(1.0f, fallbackBpm));
@@ -5069,13 +5117,14 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     }
 
     std::vector<std::string> schedulablePaths;
-    for(auto& entry : targets) {
-        if(!entry.second.schedulable) continue;
-        entry.second.parameter = findParameterCached(entry.first);
-        if(entry.second.parameter == nullptr) continue;
+    for(const auto& path : orderedAutomationPaths()) {
+        auto& target = targets.at(path);
+        if(!target.schedulable) continue;
+        target.parameter = findParameterCached(path);
+        if(target.parameter == nullptr) continue;
         // Only a backend that can execute a value at an instant gets events.
-        if(!ofxOceanodeScheduling::hasParameterTarget(entry.second.parameter)) continue;
-        schedulablePaths.push_back(entry.first);
+        if(!ofxOceanodeScheduling::hasParameterTarget(target.parameter)) continue;
+        schedulablePaths.push_back(path);
     }
     if(schedulablePaths.empty()) {
         // Same rule as every other invalidation path: events already handed
@@ -5208,8 +5257,9 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         // Evaluate just past the boundary: every lane's own test is
         // "start <= beat < end", so the probe must land inside the new
         // step/note/region, not exactly on its edge.
-        collectActiveValues(beat + 1e-7, true, false, futureValues);
-        for(const auto& path : activePaths) {
+        collectActiveValues(beat + 1e-7, true, false, futureValues, nullptr, &activePaths);
+        for(const auto& path : schedulablePaths) {
+            if(activePaths.count(path) == 0) continue;
             auto& target = targets[path];
             std::string value;
             if(!computeParameterValue(target.bindings, futureValues, target.parameter, value)) continue;
@@ -5219,7 +5269,9 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             event.value = value;
             // Never let one path's events swap order, whatever the rounding of
             // the tempo integral did.
-            event.dueSteadyTimeUs = std::max(dueUs, state.lastScheduledDueUs + 1);
+            const uint64_t leadUs = pianoInputLeadUs(path);
+            const uint64_t preparedDueUs = dueUs > leadUs ? dueUs - leadUs : 0;
+            event.dueSteadyTimeUs = std::max(preparedDueUs, state.lastScheduledDueUs + 1);
             event.generation = transport.generation;
             if(!ofxOceanodeScheduling::dispatch(target.parameter, event)) {
                 // The backend could not take it (no synth yet): drop this path
@@ -5231,7 +5283,10 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             }
             state.lastScheduledValue = value;
             state.lastScheduledDueUs = event.dueSteadyTimeUs;
-            state.pending.emplace_back(event.dueSteadyTimeUs, value);
+            // Promotion/correction compares against the GUI playhead. Pitch
+            // is already prepared in the backend during the lead interval,
+            // but remains logically unchanged until its musical boundary.
+            state.pending.emplace_back(std::max(dueUs, event.dueSteadyTimeUs), value);
         }
     }
 }
