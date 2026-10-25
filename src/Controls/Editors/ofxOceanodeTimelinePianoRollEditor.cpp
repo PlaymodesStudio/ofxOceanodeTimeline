@@ -12,7 +12,7 @@ using namespace ofxOceanodeTimelineEditorUi;
 using namespace ofxOceanodeTimelineCurve;
 using namespace ofxOceanodeTimelineClipTime;
 
-void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {
+void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
     const auto& track = context.track;
     auto* clip = &context.clip;
@@ -58,9 +58,17 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
         if(laneGroup == nullptr) laneGroup = ofxOceanodeTimelineManager::findNoteGroupForBinding(track, id);
     if(laneGroup != nullptr) {
         // Grouped piano rolls follow their group's targets.
-        const std::string buttonLabel = "Targets: " + laneGroup->name + "...";
+        const std::string buttonLabel = "Routing: " + laneGroup->name + "...";
         if(ImGui::Button(buttonLabel.c_str()))
             context.noteGroupToEdit = laneGroup->id;
+        {
+            const char* labels[] = {"Pitch", "Gate", "Velocity"};
+            const std::string* roles[] = {&laneGroup->pitchBindingId, &laneGroup->gateBindingId, &laneGroup->velocityBindingId};
+            for(int role = 0; role < 3; ++role) {
+                const auto* target = timeline.getBinding(track.id, *roles[role]);
+                ImGui::TextWrapped("%s -> %s", labels[role], target == nullptr ? "No target" : target->parameterPath.c_str());
+            }
+        }
         if(ImGui::IsItemHovered()) {
             std::string tip;
             const char* roleNames[3] = {"Pitch", "Gate", "Velocity"};
@@ -77,6 +85,10 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
         drawPianoRole("Gate", lane->pianoGateBindingId);
         drawPianoRole("Velocity", lane->pianoVelocityBindingId);
     }
+}
+
+void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {
+    auto* lane = &context.lane;
     drawDivision(*lane);
     ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Low"));
     ImGui::DragInt("Low", &lane->pianoLowPitch, 0.25f, 0, 127);

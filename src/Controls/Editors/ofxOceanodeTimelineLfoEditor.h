@@ -14,7 +14,8 @@ public:
               const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
               const ofxOceanodeTimelineEditorView& view,
               ofxOceanodeTimelineClipEditorState& editorState,
-              float contentWidth, double beatPosition);
+              float contentWidth, double beatPosition,
+              ofxOceanodeTimelineEndEdit endEdit = ofxOceanodeTimelineEndEdit::Repeat);
     bool hasPointSelection(const std::string& clipId) const {
         return lfoSelectedPointIndex >= 0 && lfoSelectedClipId == clipId;
     }

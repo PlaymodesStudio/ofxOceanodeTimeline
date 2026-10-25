@@ -5,6 +5,132 @@ After `ofxOceanodeTimeline::setup(oceanode)`, the root container owns one
 tracks, parameter bindings, clips and their automation lanes; it is not a
 canvas node.
 
+## Tracks, clips, lanes and targets
+
+A **track** organizes clips and the parameter targets available to them. A
+**clip** owns timing: its start, timeline length, source length, stretch and
+repeats apply to every lane inside it. A **lane** owns editable content and its
+output settings. A **target** is a published node parameter (called a binding
+in the model API). One lane can drive several targets, and several lanes can
+drive one target.
+
+For example, a single “Synth phrase” clip can contain a Piano Roll named
+“Melody” driving pitch/gate/velocity, a Curve named “Filter sweep” driving
+cutoff, and a Step Sequencer named “Rhythm” driving another control. Moving or
+stretching the clip moves or stretches all three lanes together. Independent
+timing requires separate clips; **Group clips** coordinates those independent
+clips, including clips on different tracks.
+
+Each track is one arrangement row and can contain a sequence of clips,
+including overlapping clips. Right-click a clip and use **Clips at this
+position** to reach a clip hidden beneath another. Click the left track pad
+to select and outline a track; Shift or Cmd/Ctrl-click toggles additional
+tracks. Clicking a clip switches back to clip selection, and clicking empty
+arrangement space clears the selection. Track selection is editor state and
+is not saved in a preset. Higher-level track grouping is reserved for a
+future **Create group** action on selected tracks; existing **Group clips**
+links clip timing and does not create a track hierarchy.
+
+The **Clips** view is the default arrangement: each clip appears once, with a
+content/target summary and miniature previews. **Targets** shows parameter
+rows instead. A clip affecting several parameters appears on several target
+rows; these are views of the same clip, not copies. Selection highlights every
+appearance. Both views keep the same clip selection and open editor.
+
+Double-click a clip to open its editor. Shared timing appears once above the
+lanes, labelled with its track and clip. Lane headers show user names and
+editor types; **Content** contains the lane's name, editor type and settings,
+and **Targets** contains its destinations. Piano Roll targets are explicitly
+assigned to pitch, gate and velocity roles. **+ Lane** chooses content and a
+target together; “No target (assign later)” creates editable content without
+output. Lane properties scroll when a small editor height cannot fit them.
+Closing or folding the editor retains content. Right-click anywhere in a
+lane's left properties pad for **Duplicate lane** and **Delete lane**.
+**Delete lane and clip** explicitly removes the last lane and its containing clip.
+
+LFO clips have oscillator **control envelopes** and one result/output target.
+Their controls do not directly automate node parameters. Audio clips contain
+samples; clip gain belongs to the selected sample, while the separately
+labelled track volume envelope affects every audio clip on that track. Tempo
+automation is global to the timeline. “Components” inside a Multi Value or
+Multi Gate lane are vector elements, not independently timed clip lanes.
+
+## Reusable clip files
+
+Right-click a clip and choose **Save clip to disk...** to save an
+`.oceanodeclip` document. It includes all lanes, their content and settings,
+shared source timing, repeats/stretch, and the saved target names and piano
+roles. Other clips, project tempo, clip groups, and track volume automation
+stay in the project. Captured-state clips are recalled as ordinary clips, so
+future state captures cannot overwrite the recalled material.
+
+Use **Load clip...** in the toolbar or **Load clip from disk...** in a track's
+context menu. Choose an existing compatible track or a new track, set the
+start beat, and map each saved parameter to a parameter in the current
+project. The chooser includes compatible parameters inside macros. Nothing
+connects automatically based on matching names. **Unassigned** keeps the
+lane content without a connection; use the lane's **Targets** tab later to
+assign targets and piano roles. LFO files keep their internal control lanes
+and remap their final output. Loading is one undoable edit and creates fresh
+clip and lane identities.
+
+For audio, saving also creates an adjacent `<filename>.media` folder with a
+copy of the source file. Move or share that folder together with the clip
+document. File references are relative, so the bundle can move between
+projects and computers. Slices, gain, reverse, and playback settings are
+preserved; beat-domain source offsets adapt to the destination tempo while
+pointing at the same audio. If media is missing, **Replace sample** relinks
+the imported clip. Audio files load onto audio tracks.
+
+## Timing tools
+
+The **Right edge** tool also controls edits to **Timeline length** in the
+shared properties and clip context menu. All durations are in beats:
+
+| Tool | Effect |
+| --- | --- |
+| Repeat | Change the visible length, preserving one source cycle and its stretch; enable repeats |
+| Trim / extend | Change the source window at the existing stretch; disable repeats; hidden notes/points remain stored |
+| Stretch | Fit the existing source into a new timeline length; disable repeats |
+
+Shift-dragging a right edge temporarily selects Trim / extend. Cmd/Ctrl-dragging
+it selects Stretch. Audio always stretches the complete source slice, which
+changes playback speed. Left-edge trim and Cmd/Ctrl-drag on a clip body (copy)
+retain their existing shortcuts. Drag feedback identifies the operation,
+source/timeline lengths and the number of affected clips.
+
+**Source length** is the length of one source cycle. **Stretch** is timeline
+beats per source beat, displayed as a percentage (200% takes twice as long).
+Editing Stretch preserves the repeat setting and scales the visible duration.
+Changing Repeat source on a one-shot uses its current effective stretch;
+turning it off fits the full source into the visible duration. **Consolidate
+content** is the explicit operation that discards hidden source data.
+
+## Understanding an output
+
+Open **What drives this target?** in the toolbar, a target row's context menu,
+or an assigned lane target's **Inspect** button. At the playhead it shows:
+
+1. Lane values inside clips, including shared piano voice pools.
+2. Which contributing clip wins each track target. The latest start wins;
+   later clip order breaks equal-start ties.
+3. Binding contributions in track order, their blend modes, bypass and live
+   overrides. The first contribution supplies the base value.
+4. The final timeline output, parameter range clamping and missing targets.
+
+The binding's blend mode combines ordinary lanes within the winning clip and
+also its contribution with earlier bindings/tracks. It does not blend
+overlapping clips on the same binding. The clamp control edits the parameter's
+authoritative first non-bypassed binding, so it consistently controls the final
+combined output from every entry point. Outside clips, ordinary values hold;
+gate-like outputs may instead contribute zero.
+
+The inspector uses the playback evaluator without writing parameters or
+scheduling events. The read-only API is
+`inspectTarget(parameterPath, beat, isPlaying)`. Programmatic end edits can use
+`resizeClipEnd(trackId, clipId, duration, ofxOceanodeTimelineEndEdit::Repeat)`
+(or `Trim` / `Stretch`) to match numeric and mouse editing semantics.
+
 ## Minimal usage
 
 ```cpp
@@ -60,8 +186,8 @@ For programmatic edits, wrap related mutations in `beginTimelineEdit()` and
 
 ## Duplicating lanes
 
-Open a clip editor and click **D** beside a lane's header, or right-click its
-header and choose **Duplicate lane** (also available when collapsed). The copy
+Open a clip editor, right-click a lane's left properties pad and choose
+**Duplicate lane** (also available on a collapsed lane's header). The copy
 appears immediately below the original, expanded and selected. It keeps all
 content, settings, probability seed, bindings and editor height; editing either
 lane leaves the other's content independent. Both remain inside the same clip

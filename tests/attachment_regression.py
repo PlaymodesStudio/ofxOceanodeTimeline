@@ -25,17 +25,19 @@ def production():
     result += source[start:end]
     for signature in ('std::string ofxOceanodeContainer::getTimelineParameterPath(',
                       'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findTimelineParameter(',
-                      'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findCustomGuiParameter('):
+                      'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findParameter('):
         result += block(source, signature) + '\n'
     for signature in ('ofxOceanodeContainer::ParsedParameterPath ofxOceanodeContainer::parseParameterPath(',
                       'ofxOceanodeContainer::ResolvedParameter ofxOceanodeContainer::resolveParameterFromPath(',
                       'ofxOceanodeContainer* ofxOceanodeContainer::getContainerForCanvasID(',
                       'const ofxOceanodeContainer* ofxOceanodeContainer::getContainerForCanvasID('):
         result += block(source, signature) + '\n'
-    result += block((CORE / 'src/Nodes/ofxOceanodeNodeModel.cpp').read_text(),
-                    'string ofxOceanodeNodeModel::getParents()') + '\n'
-    result += block((CORE / 'src/Nodes/ofxOceanodeNodeModel.cpp').read_text(),
-                    'ofxOceanodeTransportState ofxOceanodeNodeModel::getTransportState()') + '\n'
+    model_source = (CORE / 'src/Nodes/ofxOceanodeNodeModel.cpp').read_text()
+    for signature in ('string ofxOceanodeNodeModel::getParents()',
+                      'ofxOceanodeTransportState ofxOceanodeNodeModel::getTransportState()'):
+        if signature not in result:
+            result += block(model_source, signature) + '\n'
+    result += 'bool ofxOceanodeContainer::showParameterInCanvas(ofxOceanodeAbstractParameter&) { assert(false); return false; }\n'
     return result
 
 fixture.native_production = production

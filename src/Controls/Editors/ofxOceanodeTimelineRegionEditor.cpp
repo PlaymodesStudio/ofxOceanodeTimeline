@@ -19,8 +19,8 @@ void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEdit
     auto* lane = &context.lane;
 
     int rows = std::max(1, lane->multiRowCount);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Rows"));
-    if(ImGui::DragInt("Rows", &rows, 0.1f, 1, 16))
+    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Components"));
+    if(ImGui::DragInt("Components", &rows, 0.1f, 1, 16))
         timeline.setLaneMultiRowCount(track.id, clip->id, lane->id, rows);
     drawDivision(*lane);
     if(lane->type == ofxOceanodeTimelineLaneType::MultiValue) {

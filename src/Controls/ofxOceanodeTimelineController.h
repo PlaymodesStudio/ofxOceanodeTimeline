@@ -42,6 +42,36 @@ public:
     void drawBeforeWindows() override { drawPendingTrackPopup(); }
 
 private:
+    void filesDropped(ofDragInfo& info);
+    void queueAudioDrop(const std::vector<std::string>& files, float x, float y);
+    void bindNativeFileDrops();
+    void updateAudioDropPreview(const std::vector<std::string>& files, float x, float y);
+    void updateNativeAudioDropPreview();
+    void drawAudioDropPreview(ofxOceanodeTimelineManager& timeline);
+    struct AudioDropPreviewFile {
+        std::string path;
+        double durationSeconds = 0.0;
+    };
+    std::vector<std::string> audioDropPreviewPaths;
+    std::vector<AudioDropPreviewFile> audioDropPreviewFiles;
+    float audioDropPreviewX = 0.0f, audioDropPreviewY = 0.0f;
+    bool audioDropPreviewActive = false;
+    std::shared_ptr<void> nativeFileDropBinding;
+    void* nativeFileDropWindow = nullptr;
+    void importDroppedAudio(ofxOceanodeTimelineManager& timeline);
+    ofEventListener fileDropListener;
+    ofRectangle fileDropBounds;
+    bool fileDropMainViewport = true;
+    float fileDropOriginX = 0.0f;
+    double fileDropEndBeat = 0.0;
+    float fileDropBpm = 120.0f;
+    struct AudioFileDrop {
+        std::vector<std::string> files;
+        std::string trackId;
+        double beat = 0.0;
+    };
+    std::vector<AudioFileDrop> pendingAudioDrops;
+
     void beginHistoryGesture(ofxOceanodeTimelineManager& timeline);
     void finishHistoryGesture(ofxOceanodeTimelineManager& timeline);
     void restoreHistory(ofxOceanodeTimelineManager& timeline, bool redo);
@@ -113,6 +143,8 @@ private:
     std::string clipRenameTrackId;
     std::string clipRenameClipId;
     std::string pendingClipBindingId;
+    std::string pendingAddLaneTarget;
+    int pendingAddLaneChoice = 1;
     int pendingClipLaneType = 1; // Curve
     double pendingStartBeat = 0.0;
     double pendingDurationBeats = 1.0;
@@ -161,6 +193,7 @@ private:
     // and is a separate concept from a *group* (ofxOceanodeTimelineClipGroup),
     // which persists once created. Keyed by (trackId, clipId).
     std::set<std::pair<std::string, std::string>> selectedClips;
+    std::set<std::string> selectedTracks; // editor selection, independent of clip groups
     // Set once per frame (across every track, not just the one currently
     // being drawn) whenever a clip consumes a mouse click -- lets the
     // "clicked empty timeline space" handler know a click already had a
@@ -216,6 +249,15 @@ private:
     void drawMarkerRenamePopup(ofxOceanodeTimelineManager& timeline);
 
     // ---- View ----
+    // Session-only alternate projections of the same clips and routing.
+    bool targetsView = false;
+    int endEditTool = 0; // Repeat, Trim / extend, Stretch; modifiers override it.
+    bool targetInspectorOpen = false;
+    std::string inspectedTargetPath;
+    void drawTargetInspector(ofxOceanodeTimelineManager& timeline);
+    void drawSharedClipProperties(ofxOceanodeTimelineManager& timeline,
+                                  const ofxOceanodeTimelineTrack& track,
+                                  ofxOceanodeTimelineClip& clip, float contentWidth, double endBeat);
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
     std::vector<double> tapTimes;      // tap tempo (seconds)
@@ -227,6 +269,7 @@ private:
     bool marqueeActive = false;        // dragged far enough: selecting
     float marqueeStartX = 0.0f, marqueeStartY = 0.0f;
     bool marqueeAdditive = false;
+    double clipMenuHitBeat = 0.0;      // unsnapped position for overlapping clip selection
     double clipMenuBeat = 0.0;         // beat under the right-click that opened a clip menu
     double clipSplitBeat = 0.0;
     bool requestClipSplit = false;
@@ -239,6 +282,18 @@ private:
     // still on the stack and the frame half-built, so the request is only
     // recorded here and serviced once the track loop and its popups are done
     // (see the handler next to the wave-split one in draw()).
+    enum class ClipFileRequest { None, Save, Load };
+    ClipFileRequest clipFileRequest = ClipFileRequest::None;
+    std::string clipFileTrackId, clipFileClipId;
+    double clipImportBeat = 0.0;
+    ofJson clipImportDocument;
+    std::map<std::string, std::string> clipImportTargetPaths;
+    std::string clipFileErrorMessage;
+    bool requestClipImportPopup = false;
+    bool requestClipFileErrorPopup = false;
+    char clipTargetSearch[128] = {};
+    void serviceClipFileRequest(ofxOceanodeTimelineManager& timeline);
+    void drawClipImportPopup(ofxOceanodeTimelineManager& timeline);
     enum class WaveFileRequest { None, NewTrack, NewClip, ReplaceClip };
     WaveFileRequest waveFileRequest = WaveFileRequest::None;
     std::string waveFileRequestTrackId;

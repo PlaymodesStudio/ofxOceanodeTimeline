@@ -36,7 +36,7 @@ void ofxOceanodeTimelineBpmEditor::draw(
     if(ImGui::SmallButton(collapsed ? ">##bpmCollapse" : "v##bpmCollapse"))
         timeline.setBpmLaneCollapsed(!collapsed);
     ImGui::SameLine();
-    ImGui::TextUnformatted("BPM");
+    ImGui::TextUnformatted("Global tempo (BPM)");
     ImGui::SameLine();
     bool enabled = timeline.isBpmAutomationEnabled();
     if(ImGui::Checkbox("Auto##bpmAuto", &enabled)) timeline.setBpmAutomationEnabled(enabled);

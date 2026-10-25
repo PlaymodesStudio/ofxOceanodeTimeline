@@ -80,6 +80,33 @@ enum class ofxOceanodeTimelineTimebase {
     Time
 };
 
+// Explicit right-edge operations, shared by numeric editing and mouse drags.
+enum class ofxOceanodeTimelineEndEdit { Repeat, Trim, Stretch };
+
+// A read-only explanation of the same evaluation used by playback. Shared
+// piano lanes appear as one voice-pool contribution with all source lane IDs.
+struct ofxOceanodeTimelineContribution {
+    std::string trackId, bindingId, clipId;
+    std::vector<std::string> laneIds;
+    std::string value;
+    bool winningClip = false;
+};
+
+struct ofxOceanodeTimelineTargetInspection {
+    std::string parameterPath, value, unclampedValue;
+    bool missingTarget = false;
+    bool writesValue = false;
+    bool clampEnabled = false;
+    bool clamped = false;
+    std::vector<ofxOceanodeTimelineContribution> contributions;
+    struct Binding {
+        std::string trackId, bindingId, value;
+        ofxOceanodeTimelineAutomationMode mode = ofxOceanodeTimelineAutomationMode::Replace;
+        bool bypass = false, liveOverride = false, active = false;
+    };
+    std::vector<Binding> bindings;
+};
+
 struct ofxOceanodeTimelineStep {
     double startBeat = 0.0;
     // A non-positive duration uses the lane's current grid-cell length.
@@ -379,6 +406,9 @@ struct ofxOceanodeTimelineClip {
 namespace ofxOceanodeTimelineClipTime {
     double sourceDuration(const ofxOceanodeTimelineClip& clip);
     double stretch(const ofxOceanodeTimelineClip& clip);
+    // One-shots fit their source to the visible length, even when an external
+    // producer has not synchronized the stored contentStretch field.
+    double effectiveStretch(const ofxOceanodeTimelineClip& clip);
     double cycleDuration(const ofxOceanodeTimelineClip& clip);
     double sourceToTimelineBeat(const ofxOceanodeTimelineClip& clip,
                                 double sourceBeat, int64_t cycle = 0);
@@ -748,6 +778,11 @@ public:
                          const std::string& laneId, ofxOceanodeTimelineLaneType type);
     bool setClipTiming(const std::string& trackId, const std::string& clipId,
                        double startBeat, double durationBeats);
+    bool resizeClipEnd(const std::string& trackId, const std::string& clipId,
+                       double durationBeats, ofxOceanodeTimelineEndEdit operation);
+    // Does not write parameters, schedule events, or change source content.
+    ofxOceanodeTimelineTargetInspection inspectTarget(const std::string& parameterPath,
+                                                     double beat, bool isPlaying) const;
     bool setClipContentDuration(const std::string& trackId, const std::string& clipId,
                                  double contentDurationBeats, bool repeatContent);
     bool consolidateClipContent(const std::string& trackId, const std::string& clipId);
@@ -903,6 +938,16 @@ public:
 
     ofJson toJson() const;
     void fromJson(const ofJson& json);
+    // Portable clip documents contain one clip and only its target descriptors.
+    // Map saved binding IDs to parameter paths in the destination project.
+    // Missing mappings leave content intact and unassigned. Empty trackId creates a track.
+    ofJson exportClip(const std::string& trackId, const std::string& clipId) const;
+    bool saveClipFile(const std::string& trackId, const std::string& clipId,
+                      const std::string& path, std::string* error = nullptr) const;
+    static ofJson readClipFile(const std::string& path, std::string* error = nullptr);
+    std::pair<std::string, std::string> importClip(const ofJson& document,
+        const std::string& trackId, double startBeat,
+        const std::map<std::string, std::string>& targetPaths = {}, std::string* error = nullptr);
     bool savePreset(const std::string& presetFolderPath) const;
     bool loadPreset(const std::string& presetFolderPath);
 
@@ -912,6 +957,7 @@ public:
     static ofxOceanodeTimelineAutomationMode modeFromString(const std::string& mode);
 
 private:
+    static constexpr int kPresetVersion = 12;
     struct TimelineState {
         ofJson data;
         std::vector<ofxOceanodeTimelineTrack> tracks;
@@ -962,7 +1008,8 @@ private:
     // not been reached yet, which is what makes lookahead possible without a
     // second implementation of the lane semantics.
     void collectActiveValues(double beat, bool isPlaying, bool applyPianoRanges,
-                             ActiveValueMap& activeValues) const;
+                             ActiveValueMap& activeValues,
+                             ofxOceanodeTimelineTargetInspection* inspection = nullptr) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
                                ofxOceanodeAbstractParameter* parameter,

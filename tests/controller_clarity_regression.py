@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""Exercise the complete production controller with native core and headless ImGui.
+
+Optional OCEANODE_TIMELINE_CAPTURE_DIR writes CPU-rendered PPM screenshots for
+visual inspection. No GPU, audio backend or application window is required.
+"""
+import attachment_regression as native
+from pathlib import Path
+
+native.fixture.CASES = r'''
+#include "ofxOceanodeTimeline.h"
+// Inspect transient shell state only; all drawing and mutations use production code.
+#define private public
+#include "Controls/ofxOceanodeTimelineController.h"
+#undef private
+#include "imgui_internal.h"
+#include <cstdlib>
+class ClarityProbe : public ofxOceanodeNodeModel {
+public:
+    ClarityProbe() : ofxOceanodeNodeModel("Synth") {}
+    ofParameter<float> pitch, gate, cutoff;
+    void setup() override {
+        addParameter(pitch.set("Pitch", 60, 0, 127));
+        addParameter(gate.set("Gate", 0, 0, 1));
+        addParameter(cutoff.set("Cutoff", 0.5, 0, 1));
+    }
+};
+void capture(const char* name, unsigned char* atlas, int aw, int ah) {
+    const char* folder = std::getenv("OCEANODE_TIMELINE_CAPTURE_DIR");
+    if(folder == nullptr) return;
+    auto* data = ImGui::GetDrawData();
+    const int w = static_cast<int>(data->DisplaySize.x), h = static_cast<int>(data->DisplaySize.y);
+    std::vector<unsigned char> pixels(w*h*3, 25);
+    for(int listIndex=0; listIndex<data->CmdListsCount; ++listIndex) {
+        const auto* list = data->CmdLists[listIndex];
+        for(const auto& command : list->CmdBuffer) {
+            if(command.UserCallback) continue;
+            for(unsigned i=0; i+2<command.ElemCount; i+=3) {
+                const auto& a=list->VtxBuffer[list->IdxBuffer[command.IdxOffset+i]+command.VtxOffset];
+                const auto& b=list->VtxBuffer[list->IdxBuffer[command.IdxOffset+i+1]+command.VtxOffset];
+                const auto& c=list->VtxBuffer[list->IdxBuffer[command.IdxOffset+i+2]+command.VtxOffset];
+                const float area=(b.pos.x-a.pos.x)*(c.pos.y-a.pos.y)-(b.pos.y-a.pos.y)*(c.pos.x-a.pos.x);
+                if(std::abs(area)<0.00001f) continue;
+                const int x0=std::max(0,static_cast<int>(std::max(command.ClipRect.x,std::floor(std::min({a.pos.x,b.pos.x,c.pos.x})))));
+                const int y0=std::max(0,static_cast<int>(std::max(command.ClipRect.y,std::floor(std::min({a.pos.y,b.pos.y,c.pos.y})))));
+                const int x1=std::min(w,static_cast<int>(std::min(command.ClipRect.z,std::ceil(std::max({a.pos.x,b.pos.x,c.pos.x})))));
+                const int y1=std::min(h,static_cast<int>(std::min(command.ClipRect.w,std::ceil(std::max({a.pos.y,b.pos.y,c.pos.y})))));
+                for(int y=y0;y<y1;++y) for(int x=x0;x<x1;++x) {
+                    const float px=x+0.5f, py=y+0.5f;
+                    const float v=((px-a.pos.x)*(c.pos.y-a.pos.y)-(py-a.pos.y)*(c.pos.x-a.pos.x))/area;
+                    const float z=((b.pos.x-a.pos.x)*(py-a.pos.y)-(b.pos.y-a.pos.y)*(px-a.pos.x))/area;
+                    const float u=1-v-z;
+                    if(u<0 || v<0 || z<0) continue;
+                    const int tx=std::clamp(static_cast<int>((u*a.uv.x+v*b.uv.x+z*c.uv.x)*aw),0,aw-1);
+                    const int ty=std::clamp(static_cast<int>((u*a.uv.y+v*b.uv.y+z*c.uv.y)*ah),0,ah-1);
+                    const float alpha=(u*((a.col>>24)&255)+v*((b.col>>24)&255)+z*((c.col>>24)&255))/255.f * atlas[(ty*aw+tx)*4+3]/255.f;
+                    for(int channel=0;channel<3;++channel) {
+                        const float color=u*((a.col>>(8*channel))&255)+v*((b.col>>(8*channel))&255)+z*((c.col>>(8*channel))&255);
+                        auto& pixel=pixels[(y*w+x)*3+channel]; pixel=static_cast<unsigned char>(pixel*(1-alpha)+color*alpha);
+                    }
+                }
+            }
+        }
+    }
+    std::filesystem::create_directories(folder);
+    std::ofstream file(std::string(folder)+"/"+name+".ppm",std::ios::binary);
+    file<<"P6\n"<<w<<" "<<h<<"\n255\n"; file.write(reinterpret_cast<char*>(pixels.data()),pixels.size());
+}
+int main() {
+    ofDisableDataPath(); ofSeedRandom();
+    auto window=std::make_shared<ofAppNoWindow>(); ofGetMainLoop()->setCurrentWindow(window);
+    auto registry=std::make_shared<ofxOceanodeNodeRegistry>();
+    auto types=std::make_shared<ofxOceanodeTypesRegistry>();
+    auto owner=std::make_shared<ofxOceanodeContainer>(registry,types);
+    owner->setCanvasID("Canvas");
+    auto& model=ofxOceanodeTimeline::attach(*owner);
+    auto& node=owner->createNode(std::make_unique<ClarityProbe>(),1);
+    auto bind=[&](const std::string& track,const char* name) {
+        return model.addBinding(track,static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get(name)));
+    };
+    const auto t=model.createTrack("Synth phrases");
+    const auto pitch=bind(t,"Pitch"), gate=bind(t,"Gate"), cutoff=bind(t,"Cutoff");
+    const auto c=model.createClip(t,"Intro",0,4);
+    const auto piano=model.createLane(t,c,"Melody",ofxOceanodeTimelineLaneType::PianoRoll);
+    model.addBindingToLane(t,c,piano,pitch); model.addBindingToLane(t,c,piano,gate);
+    model.getLane(t,c,piano)->pianoNotes={{0,1,60,0.8f,1},{1,1,64,0.7f,1},{2,1,67,0.8f,1}};
+    const auto curve=model.createLane(t,c,"Filter sweep",ofxOceanodeTimelineLaneType::Curve);
+    model.addBindingToLane(t,c,curve,cutoff);
+    const auto step=model.createLane(t,c,"Rhythm",ofxOceanodeTimelineLaneType::Step);
+    model.addBindingToLane(t,c,step,gate); model.setClipStep(t,c,step,0,"1",0.25);
+    const auto wt=model.createWaveTrack("Samples");
+    const auto wc=model.createClip(wt,"Audio slice",4,4);
+    const auto lc=model.createLfoClip(t,cutoff,"Filter modulation",5,4);
+    ImGui::CreateContext(); auto& io=ImGui::GetIO();
+    io.IniFilename=nullptr; io.DisplaySize=ImVec2(1280,1000); io.DeltaTime=1.f/60;
+    unsigned char* atlas; int aw,ah; io.Fonts->GetTexDataAsRGBA32(&atlas,&aw,&ah);
+    ofxOceanodeTimelineController ui(owner);
+    auto frame=[&](float width=1250,ImVec2 mouse=ImVec2(-100,-100),bool down=false,const char* screenshot=nullptr) {
+        io.AddMousePosEvent(mouse.x,mouse.y); io.AddMouseButtonEvent(0,down);
+        ImGui::NewFrame();
+        ui.drawBeforeWindows();
+        ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(width,980));
+        ImGui::Begin("Timeline",nullptr,ImGuiWindowFlags_NoDecoration);
+        ui.draw(); ImGui::End(); ImGui::Render();
+        if(screenshot) capture(screenshot,atlas,aw,ah);
+    };
+    frame(); frame();
+    assert(!ui.targetsView && ui.clipScreenRects.size()==3);
+    frame(1250,ImVec2(-100,-100),false,"clips");
+    // Track pads own a separate selection; modifiers toggle tracks without
+    // selecting their clips or mutating the preset. Both track types participate.
+    const auto selectionModel=model.toJson();
+    auto padClick=[&](const std::string& track) {
+        const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
+            [&](const auto& r){return r.trackId==track;});
+        assert(row!=ui.clipDropRows.end());
+        const ImVec2 pos(ui.fileDropBounds.x-80,(row->top+row->bottom)*0.5f);
+        frame(1250,pos,false); frame(1250,pos,true); frame(1250,pos,false);
+    };
+    padClick(t);
+    assert(ui.selectedTracks==std::set<std::string>{t} && ui.selectedClips.empty());
+    bool outlined=false;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists)
+        for(const auto& vertex:list->VtxBuffer)
+            outlined |= vertex.col==IM_COL32(150,190,255,255);
+    assert(outlined);
+    capture("track-selected",atlas,aw,ah);
+    io.AddKeyEvent(ImGuiMod_Shift,true); padClick(wt);
+    assert((ui.selectedTracks==std::set<std::string>{t,wt}));
+    for(int i=0;i<25;++i) frame(); // separate pad clicks from double-click rename
+    padClick(wt); assert(ui.selectedTracks==std::set<std::string>{t});
+    io.AddKeyEvent(ImGuiMod_Shift,false);
+    for(int i=0;i<25;++i) frame();
+    padClick(wt); assert(ui.selectedTracks==std::set<std::string>{wt});
+    const auto firstRect=ui.clipScreenRects.front();
+    const ImVec2 clipPos((firstRect.x1+firstRect.x2)*0.5f,(firstRect.y1+firstRect.y2)*0.5f);
+    frame(1250,clipPos,false); frame(1250,clipPos,true); frame(1250,clipPos,false);
+    assert(ui.selectedTracks.empty() && ui.selectedClips.count({t,c}));
+    padClick(t); assert(ui.selectedClips.empty());
+    const ImVec2 emptyPos(ui.fileDropBounds.getRight()-20,(firstRect.y1+firstRect.y2)*0.5f);
+    frame(1250,emptyPos,false); frame(1250,emptyPos,true); frame(1250,emptyPos,false);
+    assert(ui.selectedTracks.empty() && ui.selectedClips.empty());
+    assert(model.toJson()==selectionModel);
+    // Open the real import modal, remap saved targets, and confirm using the
+    // mouse. Import stays deferred until confirmation and remains undoable.
+    const auto beforeImport=model.toJson()["tracks"];
+    const auto originalCount=model.getTrack(t)->clips.size();
+    ui.clipImportDocument=model.exportClip(t,c);
+    ui.clipFileTrackId=t; ui.clipImportBeat=20;
+    ui.clipImportTargetPaths={{pitch,model.getBinding(t,pitch)->parameterPath},
+        {gate,model.getBinding(t,gate)->parameterPath},{cutoff,model.getBinding(t,cutoff)->parameterPath}};
+    ui.requestClipImportPopup=true;
+    frame(); frame(1250,ImVec2(-100,-100),false,"import-clip");
+    assert(model.toJson()["tracks"]==beforeImport);
+    auto* importWindow=ImGui::FindWindowByName("Load reusable clip"); assert(importWindow && importWindow->Active);
+    const ImVec2 confirm(importWindow->Pos.x+ImGui::GetStyle().WindowPadding.x+25,
+        importWindow->Pos.y+importWindow->Size.y-ImGui::GetStyle().WindowPadding.y-ImGui::GetFrameHeight()*0.5f);
+    frame(1250,confirm,false); frame(1250,confirm,true); frame(1250,confirm,false);
+    assert(model.getTrack(t)->clips.size()==originalCount+1);
+    const auto importedId=ui.editorState.editorClipId;
+    assert(importedId!=c && model.getClip(t,importedId)->lanes.size()==3);
+    assert(model.getClip(t,importedId)->startBeat==20);
+    assert(model.undoTimelineEdit()); assert(model.getTrack(t)->clips.size()==originalCount);
+    assert(model.redoTimelineEdit()); assert(model.getTrack(t)->clips.size()==originalCount+1);
+    model.removeClip(t,importedId);
+    ui.editorState.clipEditorOpen=false; frame();
+    assert(model.toJson()["tracks"]==beforeImport);
+    ui.clipImportDocument=model.exportClip(t,c); ui.clipImportTargetPaths.clear();
+    ui.requestClipImportPopup=true; frame();
+    io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+    assert(ImGui::GetCurrentContext()->OpenPopupStack.empty() && model.toJson()["tracks"]==beforeImport);
+    ui.editorState.editorTrackId=t; ui.editorState.editorClipId=c;
+    ui.editorState.editorLaneId=curve; ui.editorState.clipEditorOpen=true;
+    const auto before=model.toJson()["tracks"];
+    frame(); frame(1250,ImVec2(-100,-100),false,"clip-editor");
+    assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && model.toJson()["tracks"]==before);
+    for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i) {
+        auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i);
+        if(!bar) continue;
+        for(auto& tab:bar->Tabs)
+            if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Content") bar->NextSelectedTabId=tab.ID;
+    }
+    frame(); frame(1250,ImVec2(-100,-100),false,"content-properties");
+    assert(model.toJson()["tracks"]==before);
+    ui.targetsView=true;
+    frame(); frame(1250,ImVec2(-100,-100),false,"targets");
+    assert(ui.editorState.clipEditorOpen && ui.clipScreenRects.size()>3);
+    // A collapsed track keeps its open editor anchored below its clip row.
+    model.getTrack(t)->collapsed=true; frame(); assert(ui.editorState.clipEditorOpen);
+    model.getTrack(t)->collapsed=false;
+    frame(460); frame(460,ImVec2(-100,-100),false,"narrow");
+    ui.targetsView=false;
+    ui.editorState.editorClipId=lc; ui.editorState.editorLaneId=model.getClip(t,lc)->lanes.front().id;
+    frame(); frame(1250,ImVec2(-100,-100),false,"lfo");
+    ui.editorState.editorTrackId=wt; ui.editorState.editorClipId=wc;
+    frame(); frame(1250,ImVec2(-100,-100),false,"audio");
+    ui.editorState.clipEditorOpen=false;
+    ui.targetInspectorOpen=true; ui.inspectedTargetPath=model.getBinding(t,cutoff)->parameterPath;
+    frame(); frame(1250,ImVec2(-100,-100),false,"inspector");
+    assert(model.toJson()["tracks"]==before);
+    ui.targetInspectorOpen=false;
+    // Exercise real mouse gestures with the explicit tool, checking shared
+    // source mapping rather than merely calling the model API.
+    for(int tool=0;tool<3;++tool) {
+        auto* clip=model.getClip(t,c); clip->durationBeats=4; clip->contentDurationBeats=4;
+        clip->contentStretch=1; clip->repeatContent=true;
+        ui.endEditTool=tool; ui.snapEnabled=false;
+        // Separate clicks by more than ImGui's double-click interval.
+        for(int settle=0; settle<25; ++settle) frame();
+        const auto rect=ui.clipScreenRects.front();
+        const float x=rect.x2-2, y=(rect.y1+rect.y2)*0.5f;
+        frame(1250,ImVec2(x,y),false); frame(1250,ImVec2(x,y),true);
+        frame(1250,ImVec2(x+70,y),true); frame(1250,ImVec2(x+70,y),false);
+        clip=model.getClip(t,c);
+        assert(clip->durationBeats>4.5);
+        if(tool==0) { assert(clip->repeatContent); assert(clip->contentDurationBeats==4); }
+        if(tool==1) { assert(!clip->repeatContent); assert(clip->contentDurationBeats>4.5); }
+        if(tool==2) { assert(!clip->repeatContent); assert(clip->contentDurationBeats==4); assert(clip->contentStretch>1); }
+    }
+    // A one-shot's effective mapping is derived from its length, even when
+    // an external producer left an old stretch field. Drag and numeric edits
+    // must both preserve that effective mapping when enabling repeats.
+    {
+        auto* oneShot=model.getClip(t,c);
+        oneShot->durationBeats=4; oneShot->contentDurationBeats=2;
+        oneShot->contentStretch=1; oneShot->repeatContent=false;
+        ui.endEditTool=0;
+        for(int settle=0;settle<25;++settle) frame();
+        const auto rect=ui.clipScreenRects.front();
+        const float x=rect.x2-2, y=(rect.y1+rect.y2)*0.5f;
+        frame(1250,ImVec2(x,y),false); frame(1250,ImVec2(x,y),true);
+        frame(1250,ImVec2(x+70,y),true); frame(1250,ImVec2(x+70,y),false);
+        oneShot=model.getClip(t,c);
+        assert(oneShot->repeatContent && oneShot->contentDurationBeats==2);
+        assert(std::abs(oneShot->contentStretch-2)<0.00001);
+    }
+    // Clip menus use the same timing panel and remain balanced in an
+    // auto-sized popup, including when the main window is narrow.
+    for(int settle=0;settle<25;++settle) frame();
+    auto menuRect=ui.clipScreenRects.front();
+    ImVec2 menuPoint(menuRect.x1+30,(menuRect.y1+menuRect.y2)*0.5f);
+    frame(1250,menuPoint,false);
+    io.AddMouseButtonEvent(1,true); frame(1250,menuPoint,false);
+    io.AddMouseButtonEvent(1,false); frame(1250,menuPoint,false,"clip-menu");
+    io.AddKeyEvent(ImGuiKey_Escape,true); frame();
+    io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+    // With keyboard navigation disabled, dismiss the menu by clicking outside.
+    frame(1250,ImVec2(1100,900),false); frame(1250,ImVec2(1100,900),true);
+    frame(1250,ImVec2(1100,900),false); frame();
+    assert(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+    // Cross-track groups keep their source mappings on repeated drag frames;
+    // audio members still stretch their whole slice.
+    auto* grouped=model.getClip(t,c); grouped->durationBeats=4; grouped->contentDurationBeats=4;
+    grouped->contentStretch=1; grouped->repeatContent=true;
+    auto* audio=model.getClip(wt,wc); audio->startBeat=4; audio->durationBeats=4;
+    audio->contentDurationBeats=4; audio->waveFileDurationBeats=4;
+    assert(!model.groupClips({{t,c},{wt,wc}}).empty());
+    ui.endEditTool=0;
+    for(int settle=0;settle<25;++settle) frame();
+    auto groupRect=ui.clipScreenRects.front();
+    const float gx=groupRect.x2-2, gy=(groupRect.y1+groupRect.y2)*0.5f;
+    frame(1250,ImVec2(gx,gy),false); frame(1250,ImVec2(gx,gy),true);
+    frame(1250,ImVec2(gx+35,gy),true); frame(1250,ImVec2(gx+70,gy),true);
+    frame(1250,ImVec2(gx+70,gy),false);
+    assert(model.getClip(t,c)->repeatContent && model.getClip(t,c)->contentDurationBeats==4);
+    assert(model.getClip(wt,wc)->durationBeats>4.5 && !model.getClip(wt,wc)->repeatContent);
+    assert(model.getClip(wt,wc)->contentDurationBeats==4);
+    model.ungroupClip(t,c);
+    // Structural edits stay deferred, retaining the selected target.
+    ui.editorState.editorTrackId=t; ui.editorState.editorClipId=c; ui.editorState.clipEditorOpen=true;
+    ui.pendingAddLaneType=1; ui.pendingAddLaneTarget=cutoff; ui.requestAddLane=true;
+    frame();
+    const auto added=ui.editorState.editorLaneId;
+    assert(model.getLane(t,c,added)->bindingIds==std::vector<std::string>{cutoff});
+    assert(model.getClip(t,c)->lanes.size()==4);
+    ui.pendingRemoveLaneId=added; ui.requestRemoveLane=true; frame();
+    assert(model.getClip(t,c)->lanes.size()==3);
+    // Right-click the properties pad below its header, including over a
+    // control, then activate both menu actions using actual mouse events.
+    auto laneAction = [&](const std::string& laneId, int action) {
+        frame(); frame();
+        const std::string key="##clipProperties"+t+c+laneId;
+        ImGuiWindow* panel=nullptr;
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(window->Active && std::string(window->Name).find(key)!=std::string::npos) panel=window;
+        assert(panel);
+        const ImVec2 point(panel->Pos.x+35,panel->Pos.y+36);
+        frame(1250,point,false);
+        io.AddMouseButtonEvent(1,true); frame(1250,point,false);
+        io.AddMouseButtonEvent(1,false); frame(1250,point,false);
+        frame();
+        assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
+        auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        assert(popup);
+        const ImVec2 item(popup->Pos.x+30,popup->Pos.y+ImGui::GetStyle().WindowPadding.y+
+            ImGui::GetTextLineHeight()*0.5f+action*ImGui::GetTextLineHeightWithSpacing());
+        frame(1250,item,false); frame(1250,item,true); frame(1250,item,false);
+        frame();
+    };
+    laneAction(piano,0);
+    assert(model.getClip(t,c)->lanes.size()==4);
+    const auto duplicate=ui.editorState.editorLaneId;
+    assert(duplicate!=piano && model.getLane(t,c,duplicate)->bindingIds==model.getLane(t,c,piano)->bindingIds);
+    laneAction(duplicate,1);
+    assert(model.getClip(t,c)->lanes.size()==3 && !model.getLane(t,c,duplicate));
+    // Deliver an actual OF file-drag event, then let the production draw
+    // import it. The WAV fixture contains one second of mono PCM silence.
+    const auto samplePath=std::filesystem::temp_directory_path() /
+        ("timeline-drop-"+ofToString(ofGetElapsedTimeMicros())+".WAV");
+    {
+        std::ofstream sample(samplePath,std::ios::binary);
+        auto le=[&](uint32_t value,int bytes) {
+            for(int i=0;i<bytes;++i) sample.put(static_cast<char>((value>>(i*8))&255));
+        };
+        sample.write("RIFF",4); le(16036,4); sample.write("WAVEfmt ",8);
+        le(16,4); le(1,2); le(1,2); le(8000,4); le(16000,4); le(2,2); le(16,2);
+        sample.write("data",4); le(16000,4);
+        for(int i=0;i<16000;++i) sample.put(0);
+    }
+    ui.editorState.clipEditorOpen=false;
+    ui.snapEnabled=true;
+    model.getViewState().scrollX=80;
+    frame();
+    auto dropAt=[&](float x,float y,const std::string& path) {
+        // A Finder drag can arrive while ImGui still has no mouse position
+        // or hovered window. Only the OS drop coordinates identify its target.
+        frame(1250,ImVec2(-FLT_MAX,-FLT_MAX));
+        frame(1250,ImVec2(-FLT_MAX,-FLT_MAX));
+        assert(ImGui::GetCurrentContext()->HoveredWindow==nullptr);
+        ofDragInfo event; event.files={path};
+        const auto origin=ImGui::GetMainViewport()->Pos;
+        event.position=glm::vec2(x-origin.x,y-origin.y);
+        ofNotifyEvent(ofEvents().fileDragEvent,event);
+    };
+    auto waveRow=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
+        [&](const auto& row){return row.trackId==wt;});
+    assert(waveRow!=ui.clipDropRows.end());
+    const float dx=ui.fileDropBounds.x+100, dy=(waveRow->top+waveRow->bottom)*0.5f;
+    const auto originalClips=model.getTrack(wt)->clips.size();
+    dropAt(dx,dy,samplePath.string());
+    assert(ui.pendingAudioDrops.size()==1);
+    const double expectedBeat=ui.pendingAudioDrops.front().beat;
+    frame();
+    assert(model.getTrack(wt)->clips.size()==originalClips+1);
+    const auto imported=model.getTrack(wt)->clips.back();
+    assert(imported.waveFilePath==samplePath.string() && imported.waveNumChannels==1);
+    assert(imported.waveFileDurationMs==1000 && !imported.repeatContent);
+    assert(std::abs(imported.startBeat-expectedBeat)<1e-6);
+    assert(std::abs(imported.durationBeats-owner->getTransportState().bpm/60.0)<1e-6);
+    assert(model.undoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips);
+    assert(model.redoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips+1);
+    const auto trackCount=model.getTracks().size();
+    auto normalRow=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
+        [&](const auto& row){return row.trackId==t;});
+    assert(normalRow!=ui.clipDropRows.end());
+    const float normalY=(normalRow->top+normalRow->bottom)*0.5f;
+    dropAt(dx,normalY,samplePath.string()); frame();
+    assert(model.getTracks().size()==trackCount+1);
+    assert(model.getTracks().back().isWaveTrack && model.getTracks().back().clips.size()==1);
+    assert(model.undoTimelineEdit()); assert(model.getTracks().size()==trackCount);
+    // Unsupported files, unreadable WAVs, and drops outside the canvas leave
+    // no empty tracks or placeholder clips behind.
+    dropAt(dx,normalY,"/tmp/not-audio.txt"); frame();
+    dropAt(dx,normalY,"/tmp/missing-timeline-drop.wav"); frame();
+    dropAt(ui.fileDropBounds.x-40,normalY,samplePath.string()); frame();
+    assert(model.getTracks().size()==trackCount);
+    assert(model.getTrack(wt)->clips.size()==originalClips+1);
+    // A secondary platform viewport supplies desktop coordinates directly;
+    // it never emits the main OF window's fileDragEvent.
+    frame();
+    ui.fileDropMainViewport=false;
+    ui.queueAudioDrop({samplePath.string()},dx,normalY);
+    assert(ui.pendingAudioDrops.size()==1);
+    frame();
+    assert(model.getTracks().size()==trackCount+1);
+    assert(model.undoTimelineEdit());
+    // Hover feedback uses the file's duration and the same snap/zoom mapping
+    // as the import, while leaving the model and undo history untouched.
+    frame();
+    const auto hoverModel=model.toJson();
+    const auto previewRow=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
+        [&](const auto& row){return row.trackId==wt;});
+    assert(previewRow!=ui.clipDropRows.end());
+    const float px=ui.fileDropBounds.x+100, py=(previewRow->top+previewRow->bottom)*0.5f;
+    ui.updateAudioDropPreview({samplePath.string()},px,py);
+    assert(ui.audioDropPreviewActive && ui.audioDropPreviewFiles.size()==1);
+    assert(ui.audioDropPreviewFiles.front().durationSeconds==1.0);
+    frame(1250,ImVec2(-FLT_MAX,-FLT_MAX),false,"audio-drop-preview");
+    float previewLeft=FLT_MAX, previewRight=-FLT_MAX;
+    for(const auto* list : ImGui::GetDrawData()->CmdLists)
+        for(const auto& vertex : list->VtxBuffer)
+            if(vertex.col==IM_COL32(100,210,255,240)) {
+                previewLeft=std::min(previewLeft,vertex.pos.x);
+                previewRight=std::max(previewRight,vertex.pos.x);
+            }
+    const double previewBeat=std::max(0.0,ui.snapBeat(ui.pixelsToBeat(model,
+        px-ui.fileDropOriginX,ui.fileDropBpm,ui.fileDropEndBeat)));
+    const float expectedLeft=ui.fileDropOriginX+ui.beatToPixels(model,previewBeat,ui.fileDropBpm);
+    const float expectedRight=ui.fileDropOriginX+ui.beatToPixels(model,
+        previewBeat+ui.fileDropBpm/60.0,ui.fileDropBpm);
+    assert(std::abs(previewLeft-expectedLeft)<2 && std::abs(previewRight-expectedRight)<2);
+    assert(model.toJson()==hoverModel && ui.pendingAudioDrops.empty());
+    ui.updateAudioDropPreview({"/tmp/missing-timeline-preview.wav"},px,py);
+    assert(!ui.audioDropPreviewActive && ui.audioDropPreviewFiles.empty());
+    ui.updateAudioDropPreview({samplePath.string()},px,py);
+    assert(ui.audioDropPreviewActive);
+    ui.updateAudioDropPreview({},px,py); // cancelled/exited drag
+    assert(!ui.audioDropPreviewActive);
+    std::filesystem::remove(samplePath);
+    ImGui::DestroyContext();
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+}
+'''
+
+if __name__ == '__main__':
+    sources = [str(p) for p in (native.ADDON / 'src').rglob('*.cpp')]
+    sources += ['src/Managers/ofxOceanodeScheduling.cpp', 'src/Controls/ofxOceanodeBaseController.cpp']
+    includes = [native.ADDON / 'src', *sorted({p.parent for p in (native.ADDON / 'src').rglob('*.h')})]
+    native.fixture.main(extra_sources=sources, extra_includes=includes)

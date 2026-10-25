@@ -45,6 +45,7 @@ struct ofxOceanodeTimelineClipPreview {
 class ofxOceanodeTimelineLaneEditor {
 public:
     virtual ~ofxOceanodeTimelineLaneEditor() = default;
+    virtual void drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const = 0;
     virtual void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,

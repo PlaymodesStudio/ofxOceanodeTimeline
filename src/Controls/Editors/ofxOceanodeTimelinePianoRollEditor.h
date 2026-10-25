@@ -9,6 +9,7 @@
 class ofxOceanodeTimelinePianoRollEditor : public ofxOceanodeTimelineLaneEditor {
 public:
     void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const override;
+    void drawTargets(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;

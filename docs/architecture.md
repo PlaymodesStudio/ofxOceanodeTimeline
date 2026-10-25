@@ -41,7 +41,7 @@ The Number/Dropdown and Multi Value/Multi Gate pairs reuse algorithms through
 small shared base classes, with a separate state instance per concrete type.
 Toggle remains a single-row Multi Gate, matching the model.
 
-The shell calls `drawProperties`, `drawCanvas` and `drawPreview` through
+The shell calls `drawTargets`, `drawProperties`, `drawCanvas` and `drawPreview` through
 `ofxOceanodeTimelineLaneEditor`. Each editor owns its transient interaction
 state. Piano note selection and keyboard audition live in the Piano Roll
 editor; curve and held-value point indices live in their respective editors;
@@ -60,6 +60,33 @@ that request. LFO returns a rename request. Add/remove lane and clip operations
 stay at the controller's deferred mutation point so drawing cannot invalidate
 track, clip or lane vectors mid-iteration. The controller forwards selection
 cleanup and track removal to the editors without accessing their private state.
+
+## Arrangement and scope presentation
+
+Clips and Targets are session-only projections of the same model, selected by
+`targetsView` in the controller. Clips draws one arrangement rectangle per clip;
+Targets projects clips onto binding rows. Neither projection changes clip
+identity, routing, playback precedence or the preset format.
+
+`Editors/ofxOceanodeTimelinePresentation.h` centralizes content summaries,
+terminology, clip timing and the shared properties panel. The controller uses
+it in automation/audio editors and arrangement menus; LFO uses the same panel.
+Lane timing is never edited in lane properties. `drawTargets` on the editor
+interface lets Piano Roll own its role-specific routing controls separately
+from content settings. Generic lane targets remain in the shell.
+
+`resizeClipEnd` is the canonical Repeat / Trim / Stretch operation for numeric
+length edits and edge drags. Drag snapshots restore the original source mapping
+before each application, including group edits, to avoid accumulating rounding
+or stretch changes between frames. Audio always normalizes its full slice.
+
+`inspectTarget` rebuilds derived evaluation indexes and calls
+`collectActiveValues` with an optional contribution collector. It shares lane
+evaluation, clip arbitration, voice allocation, blending and final clamping
+with playback; the ordinary playback path does not allocate contribution rows.
+Inspection does not apply piano parameter ranges, write target values, alter
+source data or schedule events. Shared piano lanes are reported as one voice
+pool contribution with their contributing source lane IDs.
 
 ## Coordinates
 
@@ -90,10 +117,18 @@ Run the core's `tests/integration_compile.py --timeline <addon path>` to check
 all translation units. Run the addon's `tests/timeline_regression.py` for model
 and shared coordinate/snap behavior. `tests/editor_regression.py` links the
 production editor classes with headless ImGui and tests properties, canvases,
-read-only previews, clip-stack balance, focus routing and mouse edits. Both
+read-only previews, clip-stack balance, focus routing and mouse edits. The
 runtime suites use ASan/UBSan with real OF parameter and JSON implementations.
 They do not verify visual appearance or audio hardware; use a host application
 for those checks.
 
 Regenerate host projects with the openFrameworks project generator after
 adding source files.
+
+`tests/clarity_regression.py` checks inspector/playback agreement, overlap ties,
+clamping, overrides, missing targets, timing tools, persistence and history.
+`tests/controller_clarity_regression.py` draws the complete production controller
+with native core and headless ImGui, exercising both projections, mixed lanes,
+small windows, audio/LFO scope, mouse tools and deferred target assignment.
+Set `OCEANODE_TIMELINE_CAPTURE_DIR` to capture CPU-rendered PPM screenshots of
+that suite for visual inspection. It does not exercise GPU rendering or audio.

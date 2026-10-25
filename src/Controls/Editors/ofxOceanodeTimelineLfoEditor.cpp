@@ -1,4 +1,5 @@
 #include "ofxOceanodeTimelineLfoEditor.h"
+#include "ofxOceanodeTimelinePresentation.h"
 #include "ofxOceanodeTimelineLaneEditorUi.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeParameter.h"
@@ -16,7 +17,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
     const ofxOceanodeTimelineEditorView& view,
     ofxOceanodeTimelineClipEditorState& editorState,
-    float contentWidth, double beatPosition) {
+    float contentWidth, double beatPosition, ofxOceanodeTimelineEndEdit endEdit) {
     bool renameRequested = false;
 
     const float timelineScrollX = timeline.getViewState().scrollX;
@@ -54,10 +55,12 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         ImGui::SetTooltip("Double-click to rename this clip");
         if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) renameRequested = true;
     }
-    ImGui::SameLine(kLabelWidth - 50.0f);
-    if(ImGui::SmallButton("x##closeLfoEditor")) editorState.clipEditorOpen = false;
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Close##closeLfoEditor")) editorState.clipEditorOpen = false;
     finishAbsoluteLayout(ImVec2(headerMin.x, headerMax.y));
     if(editorFolded) return renameRequested; // folded: only the header row is shown
+    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, track, clip, view, endEdit);
+    ImGui::TextWrapped("Control envelopes shape this oscillator. Only the LFO result drives the output target.");
 
     // Every row is a full-width block starting at the same x, so one origin
     // serves them all -- and it is kLabelWidth, the same gutter the clip rows
@@ -273,7 +276,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                              ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
             editorState.editorLaneId = lane.id;
         }
-        ImGui::TextDisabled("%.3g", current);
+        ImGui::TextDisabled("Control envelope / %.3g", current);
         const float laneSpan = lane.valueMax - lane.valueMin;
         {
             int interpolationMode = lane.curveInterpolation == "Value" ? 0
