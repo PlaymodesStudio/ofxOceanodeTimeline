@@ -59,6 +59,18 @@ Other ordinary automation lane types can also be duplicated, with their
 binding's existing blend mode determining the combined output. LFO control
 lanes and audio volume envelopes have fixed roles and cannot be duplicated.
 
+## Metronome
+
+The metronome icon beside Play toggles a short audible click during playback.
+The first beat of each bar is higher and louder; the remaining beats are softer.
+Clicks follow the time-signature denominator (for example, eighth notes in 7/8),
+transport tempo, pauses, seeks and loops. Audio goes to the default output device
+through a separate output stream, opened only while the metronome is enabled.
+On macOS it uses CoreAudio and the output device's current sample rate to avoid
+changing the hardware clock and shifting the pitch of existing playback. If the
+device rate cannot be read, the metronome stays disabled.
+The toggle is a session preference and is not saved in presets.
+
 Piano-roll vertical lines follow the timeline's grid division and absolute beat
 positions, including bar/quarter-note emphasis and zoom-dependent subdivision
 visibility. Moving, stretching or repeating a clip does not shift these lines.
