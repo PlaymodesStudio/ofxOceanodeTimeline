@@ -448,6 +448,7 @@ bool readWaveformCache(std::string& filePath, int& outNumChannels,
 }
 
 bool clipSourceBeat(const ofxOceanodeTimelineClip& clip, double globalBeat, double& sourceBeat) {
+    if(clip.muted) return false;
     const double duration = std::max(1.0 / 24.0, clip.durationBeats);
     if(globalBeat < clip.startBeat - kEpsilon || globalBeat >= clip.startBeat + duration - kEpsilon) return false;
 
@@ -1411,6 +1412,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
         for(const auto& binding : track.bindings)
             if(binding.hasLiveOverride) continuouslyEvaluatedPathsCache.emplace(binding.parameterPath);
         for(const auto& clip : track.clips) {
+            if(clip.muted) continue;
             if(clip.isLfo) {
                 if(const auto* binding = bindingFor(clip.lfoOutputBindingId))
                     continuouslyEvaluatedPathsCache.emplace(binding->parameterPath);
@@ -1907,6 +1909,23 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     parameter.setTimelined(true);
     ++nextBindingNumber;
     return binding.id;
+}
+
+bool ofxOceanodeTimelineManager::requestParameterLane(const std::string& trackId,
+                                                        ofxOceanodeAbstractParameter& parameter) {
+    const auto* track = getTrack(trackId);
+    if(track == nullptr || track->isWaveTrack || container == nullptr ||
+       !isStepLaneCompatible(parameter) || (parameter.getFlags() & ofxOceanodeParameterFlags_ReadOnly)) return false;
+    const auto path = container->getTimelineParameterPath(parameter);
+    std::string bindingId;
+    for(const auto& binding : track->bindings)
+        if(binding.parameterPath == path) { bindingId = binding.id; break; }
+    if(bindingId.empty()) bindingId = addBinding(trackId, parameter);
+    if(bindingId.empty()) return false;
+    const auto request = std::make_pair(trackId, bindingId);
+    if(std::find(pendingParameterLanes.begin(), pendingParameterLanes.end(), request) == pendingParameterLanes.end())
+        pendingParameterLanes.push_back(request);
+    return true;
 }
 
 bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, const std::string& clipId,
@@ -3640,6 +3659,22 @@ bool ofxOceanodeTimelineManager::setClipTiming(const std::string& trackId, const
     return true;
 }
 
+bool ofxOceanodeTimelineManager::setClipMuted(const std::string& trackId, const std::string& clipId, bool muted) {
+    auto* clip = getClip(trackId, clipId);
+    if(clip == nullptr || clip->muted == muted) return false;
+    clip->muted = muted;
+    invalidateEvaluationIndexes();
+    if(container != nullptr) {
+        const auto transport = container->getTransportState();
+        collectActiveValues(transport.beatPosition, transport.isPlaying, false, activeAutomationValues);
+        updatePianoGateOwnership(transport.isPlaying);
+    }
+    // Correct queued events with the newly muted values, rather than stale notes.
+    invalidateSchedule();
+    applyAutomation();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::resizeClipEnd(const std::string& trackId, const std::string& clipId,
                                                double duration, ofxOceanodeTimelineEndEdit operation) {
     auto* clip = getClip(trackId, clipId);
@@ -4237,6 +4272,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                 continue;
             }
             for(const auto& sourceLane : clip.lanes) {
+                // Stopped piano rolls leave pitch, gate and velocity to live input.
+                if(!isPlaying && sourceLane.type == ofxOceanodeTimelineLaneType::PianoRoll) continue;
                 const SharedPianoPlayback* shared = nullptr;
                 if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                     const auto it = trackIt->second.sharedPiano.find(&sourceLane);
@@ -4479,7 +4516,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                             contribution.winningClip = contribution.clipId == winningClip->id;
                 if(value.empty()) continue;
             }
-            else if(zeroWhenInactiveBindingsCache.count(&binding) > 0) value = "0";
+            else if(isPlaying && zeroWhenInactiveBindingsCache.count(&binding) > 0) value = "0";
             else continue;
             if(inspectBinding) {
                 inspection->bindings.back().value = value;
@@ -4489,6 +4526,23 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
         }
     }
 
+}
+
+// Release a piano gate once when playback or its final unmuted clip goes away.
+// Keeping zeros in the ordinary stopped evaluation would fight live keyboards.
+void ofxOceanodeTimelineManager::updatePianoGateOwnership(bool isPlaying) {
+    std::unordered_set<std::string> next;
+    if(isPlaying) for(const auto* binding : zeroWhenInactiveBindingsCache)
+        if(!binding->bypass) next.insert(binding->parameterPath);
+    for(const auto& entry : bindingsByPathCache)
+        if(playingPianoGatePaths.count(entry.first) > 0 &&
+           std::any_of(entry.second.begin(), entry.second.end(), [](const auto* binding) {
+               return !binding->bypass && binding->hasLiveOverride;
+           })) next.insert(entry.first);
+    for(const auto& path : playingPianoGatePaths)
+        if(next.count(path) == 0 && activeAutomationValues.count(path) == 0)
+            activeAutomationValues[path].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, "0");
+    playingPianoGatePaths = std::move(next);
 }
 
 void ofxOceanodeTimelineManager::evaluateAutomation() {
@@ -4532,7 +4586,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         std::unordered_set<std::string> checkedBindings;
         for(auto& track : tracks) {
             for(const auto& clip : track.clips) {
-                if(!clip.isStateCapture ||
+                if(clip.muted || !clip.isStateCapture ||
                    transport.beatPosition < clip.startBeat - kEpsilon ||
                    transport.beatPosition >= clip.startBeat + clip.durationBeats - kEpsilon) continue;
                 for(const auto& lane : clip.lanes) {
@@ -4596,6 +4650,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     }
 
     collectActiveValues(transport.beatPosition, transport.isPlaying, true, activeAutomationValues);
+    updatePianoGateOwnership(transport.isPlaying);
 
     // Hand the discrete events of the coming window to any backend that can
     // execute them at an exact instant. Everything below still runs exactly
@@ -4617,7 +4672,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                 const double sourceDuration = std::max(1.0 / 24.0, clip.contentDurationBeats);
                 const double sourcePerTimelineBeat = sourceDuration / visibleDuration;
                 const double localBeat = transport.beatPosition - clip.startBeat;
-                const bool active = localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
+                const bool active = !clip.muted && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
                 const double waveSourceBeat = active
                     ? ofClamp(localBeat * sourcePerTimelineBeat, 0.0, sourceDuration) : 0.0;
                 const float volume = ofClamp(evaluateWaveClipVolume(track.id, clip.id,
@@ -4835,6 +4890,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
     for(const auto& track : tracks) {
         if(track.isWaveTrack) continue; // audio, not automation
         for(const auto& clip : track.clips) {
+            if(clip.muted) continue;
             const double clipStart = clip.startBeat;
             const double clipDuration = std::max(1.0 / 24.0, clip.durationBeats);
             const double clipEnd = clipStart + clipDuration;
@@ -5223,6 +5279,7 @@ void ofxOceanodeTimelineManager::setPianoKeyPreview(const std::string& trackId, 
             value = joinAutomationValues(slots);
         }
         setLiveOverride(trackId, gate->id, value);
+        playingPianoGatePaths.insert(gate->parameterPath);
     }
     if(const auto* pitchBinding = getBinding(trackId, lane->pianoPitchBindingId); pitchBinding != nullptr && !voicing.kit)
         setLiveOverride(trackId, pitchBinding->id, ofToString(pitch));   // a scalar: broadcast to every voice
@@ -5441,10 +5498,12 @@ void ofxOceanodeTimelineManager::clear() {
     nextClipNumber = 1;
     nextLaneNumber = 1;
     nextGroupNumber = 1;
+    pendingParameterLanes.clear();
     pendingTrackRenameId.clear();
     pendingTrackRenameIsNew = false;
     pendingNoteGroupSetupParameter = nullptr;
     activeAutomationValues.clear();
+    playingPianoGatePaths.clear();
     stateCaptureLastAppliedValues.clear();
     stateCaptureManualOverrideKeys.clear();
     invalidateSchedule();
@@ -5652,6 +5711,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             clipJson["contentDurationBeats"] = clip.contentDurationBeats;
             clipJson["contentStretch"] = clip.contentStretch;
             clipJson["repeatContent"] = clip.repeatContent;
+            clipJson["muted"] = clip.muted;
             clipJson["isLfo"] = clip.isLfo;
             clipJson["isStateCapture"] = clip.isStateCapture;
             clipJson["lfoOutputBindingId"] = clip.lfoOutputBindingId;
@@ -5953,6 +6013,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
                 clip.durationBeats = std::max(1.0 / 24.0, clipJson.value("durationBeats", 4.0));
                 clip.contentDurationBeats = std::max(1.0 / 24.0, clipJson.value("contentDurationBeats", clip.durationBeats));
                 clip.repeatContent = clipJson.value("repeatContent", true);
+                clip.muted = clipJson.value("muted", false);
                 clip.contentStretch = std::max(1.0 / 1024.0,
                     clipJson.value("contentStretch", clip.repeatContent
                         ? 1.0 : clip.durationBeats / clip.contentDurationBeats));

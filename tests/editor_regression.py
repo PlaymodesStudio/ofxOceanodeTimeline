@@ -187,6 +187,45 @@ int main() {
         assert(!lfoEditor.hasPointSelection(lfoClip));
         endFrame();
     }
+
+    // VEL / PROB painting follows the swept mouse segment, not just the
+    // initially grabbed note. Fast strokes include skipped handles and chords.
+    const auto paintClip=model.createClip(trackId,"Paint",0,4);
+    const auto paintLane=model.createLane(trackId,paintClip,"Paint",ofxOceanodeTimelineLaneType::PianoRoll);
+    model.getClip(trackId,paintClip)->repeatContent=false;
+    model.getLane(trackId,paintClip,paintLane)->pianoNotes={
+        {0,0.5,60,0.9f,1},{1,0.5,62,0.9f,1},{2,0.5,64,0.9f,1},
+        {3,0.5,65,0.9f,1},{3.5,0.5,67,0.9f,1},{1,0.5,69,0.9f,1}};
+    const ofxOceanodeTimelineEditorView paintView(model,120,8,true,0.25);
+    auto px=[&](double beat){return 233.0f+paintView.beatToPixels(beat);};
+    auto paintFrame=[&](float x,float y,bool down){frame(paintClip,paintLane,true,ImVec2(x,y),down);};
+    auto close=[](float a,float b){if(std::abs(a-b)>=0.001f) std::cerr<<"Paint expected "<<b<<", got "<<a<<"\n"; assert(std::abs(a-b)<0.001f);};
+    paintFrame(px(0),330.0f,false); paintFrame(px(0),330.0f,true);
+    paintFrame(px(3),317.0f,true); paintFrame(px(3),317.0f,false);
+    auto& painted=model.getLane(trackId,paintClip,paintLane)->pianoNotes;
+    for(int i=0;i<4;++i) close(painted[i].velocity,(4.0f+i*(13.0f/3))/22.0f);
+    close(painted[4].velocity,0.9f); close(painted[5].velocity,(4.0f+13.0f/3)/22.0f);
+    for(const auto& note:painted) close(note.probability,1);
+    // Reverse strokes interpolate probability without changing velocity.
+    paintFrame(px(3),362.0f,false); paintFrame(px(3),362.0f,true);
+    paintFrame(px(0),344.0f,true); paintFrame(px(0),344.0f,false);
+    for(int i=0;i<4;++i) { close(painted[i].probability,(20.0f-i*6.0f)/23.0f); close(painted[i].velocity,(4.0f+i*(13.0f/3))/22.0f); }
+    close(painted[4].probability,1); close(painted[5].probability,painted[1].probability);
+    // Starting between handles still paints subsequent notes. A release ends
+    // the gesture, so later mouse movement cannot change a value.
+    paintFrame(px(0.3),323.0f,false); paintFrame(px(0.3),323.0f,true);
+    paintFrame(px(3),323.0f,true); paintFrame(px(3),323.0f,false);
+    close(painted[0].velocity,4.0f/22.0f);
+    for(int i=1;i<4;++i) close(painted[i].velocity,0.5f);
+    const auto afterPaint=model.toJson(); paintFrame(px(1),314.0f,false); assert(model.toJson()==afterPaint);
+    // Repeated, stretched copies edit their common source notes.
+    model.getClip(trackId,paintClip)->contentDurationBeats=1;
+    model.getClip(trackId,paintClip)->contentStretch=2;
+    model.getClip(trackId,paintClip)->repeatContent=true;
+    painted={{0.2,0.2,60,0.9f,1},{0.8,0.2,64,0.9f,1}};
+    paintFrame(px(2.4),323.0f,false); paintFrame(px(2.4),323.0f,true);
+    paintFrame(px(3.6),323.0f,true); paintFrame(px(3.6),323.0f,false);
+    close(painted[0].velocity,0.5f); close(painted[1].velocity,0.5f);
     ImGui::DestroyContext();
     std::cout << "Editor regression passed: all lane types, LFO, properties, previews, clip-stack balance, focus routing, step/curve/slider input.\n";
 }

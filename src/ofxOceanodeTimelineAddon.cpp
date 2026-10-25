@@ -75,9 +75,10 @@ public:
                         const bool alreadyBound = std::any_of(timelineTrack.bindings.begin(), timelineTrack.bindings.end(), [&](const auto& binding){
                             return binding.parameterPath == timelineParameterPath;
                         });
-                        if(ImGui::Selectable(timelineTrack.name.c_str(), alreadyBound, alreadyBound ? ImGuiSelectableFlags_Disabled : 0)){
-                            timelineManager.addBinding(timelineTrack.id, absParam);
+                        if(ImGui::Selectable(timelineTrack.name.c_str(), alreadyBound)){
+                            timelineManager.requestParameterLane(timelineTrack.id, absParam);
                         }
+                        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add a lane for this parameter and open its clip.");
                     }
                 }
                 ImGui::EndMenu();

@@ -1935,7 +1935,7 @@ void ofxOceanodeTimelineController::draw() {
                 const bool clipSelected = selectedClips.count({track.id, clip.id}) > 0;
                 auto lift = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * (clipSelected ? 0.45f : 0.0f)); };
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
-                                            clipSelected ? 235 : (lane == nullptr ? 75 : 185));
+                                            clip.muted ? 45 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
                 // A clip's persistent group and its (separate, ephemeral)
                 // Shift+click selection are drawn as extra outlines on top
@@ -1953,7 +1953,7 @@ void ofxOceanodeTimelineController::draw() {
                     dl->AddText(ImVec2(right - 13, min.y + 3), groupColor, "G");
                 }
                 if(right - left > 45) {
-                    std::string label = clip.name;
+                    std::string label = clip.name + (clip.muted ? " [Muted]" : "");
                     label += " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
                     const float labelRight = right - (timeline.getGroupForClip(track.id, clip.id) ? 17.0f : 3.0f);
                     dl->PushClipRect(ImVec2(left + 4.0f, min.y + 3.0f), ImVec2(labelRight, max.y - 3.0f), true);
@@ -2205,6 +2205,8 @@ void ofxOceanodeTimelineController::draw() {
             if(!ImGui::BeginPopup(menuId.c_str())) return;
             ImGui::TextUnformatted(clip.name.c_str());
             contextMenuSection("Clip");
+            if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
+                timeline.setClipMuted(track.id, clip.id, !clip.muted);
             if(ImGui::MenuItem("Rename clip")) {
                 requestClipRename(track.id, clip);
                 ImGui::CloseCurrentPopup();
@@ -3858,6 +3860,64 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         finishHistoryGesture(timeline);
     beginHistoryGesture(timeline);
 
+    for(const auto& request : timeline.consumePendingParameterLanes()) {
+        const auto* track = timeline.getTrack(request.first);
+        const auto* binding = timeline.getBinding(request.first, request.second);
+        if(track == nullptr || track->isWaveTrack || binding == nullptr) continue;
+        auto usable = [&](const std::string& id) {
+            const auto* clip = timeline.getClip(request.first, id);
+            return clip != nullptr && !clip->isLfo;
+        };
+        std::string clipId;
+        // A selected clip takes priority over a different open editor.
+        for(const auto& selected : selectedClips)
+            if(selected.first == request.first && usable(selected.second)) { clipId = selected.second; break; }
+        if(clipId.empty() && editorState.clipEditorOpen && editorState.editorTrackId == request.first && usable(editorState.editorClipId))
+            clipId = editorState.editorClipId;
+        const double beat = container->getTransportState().beatPosition;
+        if(clipId.empty()) {
+            const ofxOceanodeTimelineClip* atPlayhead = nullptr;
+            const ofxOceanodeTimelineClip* onlyClip = nullptr;
+            size_t count = 0;
+            for(const auto& clip : track->clips) {
+                if(clip.isLfo) continue;
+                onlyClip = &clip; ++count;
+                if(beat >= clip.startBeat && beat < clip.startBeat + clip.durationBeats &&
+                   (atPlayhead == nullptr || clip.startBeat >= atPlayhead->startBeat)) atPlayhead = &clip;
+            }
+            if(atPlayhead != nullptr) clipId = atPlayhead->id;
+            else if(count == 1) clipId = onlyClip->id;
+        }
+        if(clipId.empty()) clipId = timeline.createClip(request.first, track->name, snapBeat(beat), timeline.getBeatsPerBar());
+        auto* clip = timeline.getClip(request.first, clipId);
+        if(clip == nullptr) continue;
+        std::string laneId;
+        for(const auto& lane : clip->lanes)
+            if(std::find(lane.bindingIds.begin(), lane.bindingIds.end(), request.second) != lane.bindingIds.end()) { laneId = lane.id; break; }
+        if(laneId.empty()) {
+            laneId = timeline.createLane(request.first, clipId, compactParameterName(binding->parameterPath), binding->laneType);
+            timeline.addBindingToLane(request.first, clipId, laneId, request.second);
+            auto* lane = timeline.getLane(request.first, clipId, laneId);
+            auto* parameter = container->findTimelineParameter(binding->parameterPath);
+            if(lane != nullptr && binding->valueType == typeid(bool).name()) makeToggleLane(lane);
+            if(lane != nullptr && parameter != nullptr) {
+                if(binding->valueType == typeid(float).name()) {
+                    lane->valueMin = parameter->cast<float>().getParameter().getMin();
+                    lane->valueMax = parameter->cast<float>().getParameter().getMax();
+                } else if(binding->valueType == typeid(int).name()) {
+                    lane->valueMin = parameter->cast<int>().getParameter().getMin();
+                    lane->valueMax = parameter->cast<int>().getParameter().getMax();
+                }
+            }
+        }
+        editorState.editorTrackId = request.first; editorState.editorClipId = clipId; editorState.editorLaneId = laneId;
+        editorState.clipEditorOpen = true;
+        editorState.foldedClipEditors.erase(clipId); editorState.collapsedLaneIds.erase(laneId);
+        selectedClips = {{request.first, clipId}}; selectedTracks.clear();
+        timeline.getTrack(request.first)->collapsed = false;
+        timeline.invalidateSchedule();
+    }
+
     std::string requestedRename;
     bool isNewTrack = false;
     if(timeline.consumePendingTrackRename(requestedRename, &isNewTrack)) {
@@ -4395,7 +4455,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         finishAbsoluteLayout(ImVec2(clipHeaderMin.x, clipHeaderMax.y));
     }
     if(editorState.foldedClipEditors.count(clip->id) > 0) return; // folded: only the header row is shown
-    drawSharedClipProperties(timeline, track, *clip, contentWidth, endBeat);
+    // Lane timing lives in the pinned properties pad, alongside Targets and Content.
+    if(clip->lanes.empty()) drawSharedClipProperties(timeline, track, *clip, contentWidth, endBeat);
 
     if(track.isWaveTrack && clip != nullptr)
         drawWaveClipProperties(timeline, track, *clip);
@@ -4526,7 +4587,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     }
     ImGui::TextDisabled("%s%s", laneDisplayName(*lane), isFocused ? " / Editing" : "");
     if(lane->bindingIds.empty()) ImGui::TextDisabled("No target");
-    if(ImGui::BeginTabBar("##clipPropertyTabs")) {
+    if(ImGui::BeginTabBar("##clipPropertyTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
         if(ImGui::BeginTabItem("Targets")) {
             if(lane->type == ofxOceanodeTimelineLaneType::PianoRoll) {
                 laneEditor.drawTargets(context);
@@ -4588,6 +4649,13 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             if(!context.noteGroupToEdit.empty())
                 openNoteGroupSetup(timeline, nullptr, track.id, context.noteGroupToEdit);
 
+            ImGui::EndTabItem();
+        }
+        if(ImGui::BeginTabItem("Timing")) {
+            ImGui::TextUnformatted("Clip timing");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip: %s\nTiming applies to every lane in this clip.", clip->name.c_str());
+            ofxOceanodeTimelinePresentation::drawClipTiming(timeline, track, *clip, view,
+                static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

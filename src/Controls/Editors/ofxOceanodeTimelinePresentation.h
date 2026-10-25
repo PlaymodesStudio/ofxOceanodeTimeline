@@ -49,11 +49,15 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline,
                            ofxOceanodeTimelineEndEdit operation, bool tableLayout = true) {
     ImGui::PushID(clip.id.c_str());
     bool changed = false;
-    const int columns = tableLayout && ImGui::GetContentRegionAvail().x >= 650.0f ? 4 : 2;
+    bool muted = clip.muted;
+    if(ImGui::Checkbox("Mute clip", &muted))
+        changed = timeline.setClipMuted(track.id, clip.id, muted);
+    const float width = ImGui::GetContentRegionAvail().x;
+    const int columns = width < 400.0f ? 1 : (tableLayout && width >= 650.0f ? 4 : 2);
     const bool table = ImGui::BeginTable("##sharedClipTiming", columns, ImGuiTableFlags_SizingStretchSame);
     auto field = [&](const char* label) {
         if(table) ImGui::TableNextColumn();
-        ImGui::TextUnformatted(label);
+        ImGui::TextWrapped("%s", label);
         ImGui::SetNextItemWidth(-1.0f);
     };
     field("Start (beats)");
@@ -93,8 +97,8 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline,
             if(repeat) clip.contentStretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
             changed = timeline.setClipContentDuration(track.id, clip.id, clip.contentDurationBeats, repeat) || changed;
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("One cycle: %.3f timeline beats", ofxOceanodeTimelineClipTime::sourceDuration(clip) * ofxOceanodeTimelineClipTime::effectiveStretch(clip));
+        if(columns > 1) ImGui::SameLine();
+        ImGui::TextWrapped("One cycle: %.3f timeline beats", ofxOceanodeTimelineClipTime::sourceDuration(clip) * ofxOceanodeTimelineClipTime::effectiveStretch(clip));
     } else ImGui::TextDisabled("Audio: length and stretch change playback speed for the full source slice.");
     if(changed) timeline.invalidateSchedule();
     ImGui::PopID();

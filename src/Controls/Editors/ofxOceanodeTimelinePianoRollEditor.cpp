@@ -182,7 +182,6 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             pianoDragMode = PianoDragMode::None;
             pianoDragNoteIndex = -1;
             pianoDragSnapshot.clear();
-            pianoValueDragSnapshot.clear();
             pianoMarqueeActive = false;
         }
         if(keyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -628,6 +627,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         pianoSelectedNoteIndices.clear();
     }
     if(velocityHovered || probabilityHovered) {
+        ImGui::SetTooltip("Click and drag across handles to paint %s. Right-click a handle for a numeric value.", velocityHovered ? "velocity" : "probability");
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             pianoNumericNoteIndex = hitPianoValueHandle();
             if(pianoNumericNoteIndex >= 0) {
@@ -640,23 +640,11 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             }
         } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             pianoDragNoteIndex = hitPianoValueHandle();
-            if(pianoDragNoteIndex >= 0) {
-                pianoDragMode = velocityHovered ? PianoDragMode::Velocity : PianoDragMode::Probability;
-                if(pianoSelectedNoteIndices.count(pianoDragNoteIndex) == 0) {
-                    pianoSelectedNoteIndices.clear();
-                    pianoSelectedNoteIndices.insert(pianoDragNoteIndex);
-                }
-                const auto& anchorNote = lane->pianoNotes[pianoDragNoteIndex];
-                pianoValueDragAnchorValue = pianoDragMode == PianoDragMode::Velocity
-                    ? anchorNote.velocity : anchorNote.probability;
-                pianoValueDragSnapshot.clear();
-                for(int index : pianoSelectedNoteIndices) {
-                    if(index < 0 || index >= static_cast<int>(lane->pianoNotes.size())) continue;
-                    const auto& selectedNote = lane->pianoNotes[index];
-                    pianoValueDragSnapshot.push_back({index,
-                        pianoDragMode == PianoDragMode::Velocity
-                            ? selectedNote.velocity : selectedNote.probability});
-                }
+            pianoDragMode = velocityHovered ? PianoDragMode::Velocity : PianoDragMode::Probability;
+            pianoValuePaintPreviousMouse = mouse;
+            if(pianoDragNoteIndex >= 0 && pianoSelectedNoteIndices.count(pianoDragNoteIndex) == 0) {
+                pianoSelectedNoteIndices.clear();
+                pianoSelectedNoteIndices.insert(pianoDragNoteIndex);
             }
         }
     }
@@ -697,29 +685,37 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 stretched.durationBeats = end - start;
             }
             ImGui::SetTooltip("Stretch x %.2f (on the grid)", factor);
-        } else if(pianoDragMode == PianoDragMode::Velocity) {
-            const float targetValue = ofClamp((velocityBottom - mouse.y) /
-                std::max(1.0f, velocityBottom - velocityTop - 3.0f), 0.0f, 1.0f);
-            const float delta = targetValue - pianoValueDragAnchorValue;
-            for(const auto& entry : pianoValueDragSnapshot) {
-                if(entry.index < 0 || entry.index >= static_cast<int>(lane->pianoNotes.size())) continue;
-                lane->pianoNotes[entry.index].velocity = ofClamp(entry.value + delta, 0.0f, 1.0f);
-            }
-        } else if(pianoDragMode == PianoDragMode::Probability) {
-            const float targetValue = ofClamp((probabilityBottom - mouse.y) /
-                std::max(1.0f, probabilityBottom - probabilityTop - 3.0f), 0.0f, 1.0f);
-            const float delta = targetValue - pianoValueDragAnchorValue;
-            for(const auto& entry : pianoValueDragSnapshot) {
-                if(entry.index < 0 || entry.index >= static_cast<int>(lane->pianoNotes.size())) continue;
-                lane->pianoNotes[entry.index].probability = ofClamp(entry.value + delta, 0.0f, 1.0f);
+        }
+    }
+    const bool paintingVelocity = pianoDragMode == PianoDragMode::Velocity;
+    const bool paintingProbability = pianoDragMode == PianoDragMode::Probability;
+    if((paintingVelocity || paintingProbability) &&
+       (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseReleased(ImGuiMouseButton_Left))) {
+        const float top = paintingVelocity ? velocityTop : probabilityTop;
+        const float bottom = paintingVelocity ? velocityBottom : probabilityBottom;
+        const float dx = mouse.x - pianoValuePaintPreviousMouse.x;
+        const float x1 = std::min(mouse.x, pianoValuePaintPreviousMouse.x);
+        const float x2 = std::max(mouse.x, pianoValuePaintPreviousMouse.x);
+        // Interpolate the entire stroke segment, including handles skipped by
+        // a fast mouse movement and all notes of a chord at the same beat.
+        const float radius = std::abs(dx) < 1.0f ? 8.0f : 0.0f;
+        for(int cycle = 0; cycle < cycles; ++cycle) {
+            for(auto& note : lane->pianoNotes) {
+                const float x = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle)) + 3.0f;
+                if(x < left || x > right || x < x1 - radius || x > x2 + radius) continue;
+                const float t = std::abs(dx) < 1.0f ? 1.0f : ofClamp((x - pianoValuePaintPreviousMouse.x) / dx, 0.0f, 1.0f);
+                const float y = pianoValuePaintPreviousMouse.y + t * (mouse.y - pianoValuePaintPreviousMouse.y);
+                const float value = ofClamp((bottom - y) / std::max(1.0f, bottom - top - 3.0f), 0.0f, 1.0f);
+                (paintingVelocity ? note.velocity : note.probability) = value;
             }
         }
+        pianoValuePaintPreviousMouse = mouse;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         pianoDragMode = PianoDragMode::None;
         pianoDragNoteIndex = -1;
         pianoDragSnapshot.clear();
-        pianoValueDragSnapshot.clear();
     }
     if(ImGui::BeginPopup("Piano note value")) {
         if(pianoNumericNoteIndex >= 0 &&
@@ -746,7 +742,6 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
 void ofxOceanodeTimelinePianoRollEditor::clearSelection() {
     pianoSelectedNoteIndices.clear();
     pianoDragSnapshot.clear();
-    pianoValueDragSnapshot.clear();
     pianoDragMode = PianoDragMode::None;
     pianoDragNoteIndex = -1;
     pianoMarqueeActive = false;

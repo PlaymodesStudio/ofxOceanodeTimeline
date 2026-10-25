@@ -31,6 +31,15 @@ is not saved in a preset. Higher-level track grouping is reserved for a
 future **Create group** action on selected tracks; existing **Group clips**
 links clip timing and does not create a track hierarchy.
 
+In a parameter's **Add to Timeline Track** menu, choosing an existing track
+adds a lane to the selected clip on that track and opens its editor. An open
+clip editor is the next choice, followed by the clip at the playhead or the
+track's only ordinary clip. If none applies, a new one-bar clip is created at
+the playhead. LFO clips keep their fixed control lanes; this action creates an
+ordinary clip alongside them. A parameter already bound to the track can be
+added to another clip, and a lane already using it is focused instead of
+duplicated.
+
 Right-click a track's left pad and choose **Duplicate track** to create an
 independent copy immediately below it. Clips, lanes, target routing, piano
 groups, audio settings and track volume automation are copied. Clip groups
@@ -43,9 +52,9 @@ rows instead. A clip affecting several parameters appears on several target
 rows; these are views of the same clip, not copies. Selection highlights every
 appearance. Both views keep the same clip selection and open editor.
 
-Double-click a clip to open its editor. Shared timing appears once above the
-lanes, labelled with its track and clip. Lane headers show user names and
-editor types; **Content** contains the lane's name, editor type and settings,
+Double-click a clip to open its editor. Shared timing is available in the
+left pad's **Timing** tab. Lane headers show user names and editor types;
+**Content** contains the lane's name, editor type and settings,
 and **Targets** contains its destinations. **Add target...** searches compatible
 parameters in the current patch; selecting a new parameter
 publishes it to the track automatically. Existing target checkboxes remove or
@@ -103,10 +112,18 @@ preserved; beat-domain source offsets adapt to the destination tempo while
 pointing at the same audio. If media is missing, **Replace sample** relinks
 the imported clip. Audio files load onto audio tracks.
 
+In the piano roll's **VEL** and **PROB** strips, click and drag across the
+vertical handles to paint several notes in one gesture. Fast strokes interpolate
+values for every crossed handle, and notes starting together receive the same
+value. Dragging repeated or stretched copies edits their shared source notes.
+Right-click a handle to enter an exact value.
+
 ## Timing tools
 
 The **Right edge** tool also controls edits to **Timeline length** in the
-shared properties and clip context menu. All durations are in beats:
+lane properties pad's **Timing** tab and clip context menu. The Timing tab
+contains Mute clip, Start, Timeline length, Source length, Stretch and Repeat source;
+these settings apply to every lane in the clip. All durations are in beats:
 
 | Tool | Effect |
 | --- | --- |
@@ -126,6 +143,17 @@ Editing Stretch preserves the repeat setting and scales the visible duration.
 Changing Repeat source on a one-shot uses its current effective stretch;
 turning it off fits the full source into the visible duration. **Consolidate
 content** is the explicit operation that discards hidden source data.
+
+**Mute clip** is also available in the clip's right-click menu. Muted clips
+keep their content and timing, appear dimmed with a Muted label, and do not
+contribute automation, notes or audio. Mute is saved with the clip and can be
+undone. Muting a sounding piano clip releases its gates unless another clip
+or a live preview still drives them.
+
+When playback stops, piano rolls release their gates once and stop writing
+pitch, gate and velocity. The instrument's own keyboard can then play freely
+while the timeline remains stopped. The piano roll's keyboard preview still
+works and releases its notes normally.
 
 ## Understanding an output
 

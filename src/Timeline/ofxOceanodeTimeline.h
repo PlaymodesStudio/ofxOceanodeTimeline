@@ -362,6 +362,7 @@ struct ofxOceanodeTimelineClip {
     // when the visible clip edge is later extended to add repetitions.
     double contentStretch = 1.0;
     bool repeatContent = true;
+    bool muted = false; // Preserve content while removing this clip from playback.
     // An LFO clip is a self-contained continuous modulator. Its Curve lanes
     // describe the oscillator controls and this binding receives the final
     // normalized result mapped through lfoOutputMin/lfoOutputMax.
@@ -659,6 +660,14 @@ public:
                         const std::string& laneId, const std::string& parameterPath,
                         ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane);
     bool renameTrack(const std::string& trackId, const std::string& requestedName);
+    // Parameter menus bind immediately, then let the controller choose the clip
+    // from its current selection. Existing bindings can be used by another clip.
+    bool requestParameterLane(const std::string& trackId, ofxOceanodeAbstractParameter& parameter);
+    std::vector<std::pair<std::string, std::string>> consumePendingParameterLanes() {
+        std::vector<std::pair<std::string, std::string>> requests;
+        requests.swap(pendingParameterLanes);
+        return requests;
+    }
     void requestTrackRename(const std::string& trackId, bool isNewTrack = false);
     bool consumePendingTrackRename(std::string& trackId, bool* isNewTrack = nullptr);
     bool isParameterBound(const ofxOceanodeAbstractParameter& parameter) const;
@@ -788,6 +797,7 @@ public:
                          const std::string& laneId, ofxOceanodeTimelineLaneType type);
     bool setClipTiming(const std::string& trackId, const std::string& clipId,
                        double startBeat, double durationBeats);
+    bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);
     bool resizeClipEnd(const std::string& trackId, const std::string& clipId,
                        double durationBeats, ofxOceanodeTimelineEndEdit operation);
     // Does not write parameters, schedule events, or change source content.
@@ -1061,6 +1071,7 @@ private:
     uint64_t nextClipNumber = 1;
     uint64_t nextLaneNumber = 1;
     uint64_t nextGroupNumber = 1;
+    std::vector<std::pair<std::string, std::string>> pendingParameterLanes;
     std::string pendingTrackRenameId;
     bool pendingTrackRenameIsNew = false;
     mutable std::string failedLoadPath; // timeline.json that could not be read
@@ -1138,6 +1149,8 @@ private:
     // Points every piano-roll lane that uses any of affectedBindingIds at the group's roles.
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);
+    void updatePianoGateOwnership(bool isPlaying);
+    std::unordered_set<std::string> playingPianoGatePaths;
     ActiveValueMap activeAutomationValues;
     bool bpmAutomationEnabled = false;
     bool bpmLaneCollapsed = true;

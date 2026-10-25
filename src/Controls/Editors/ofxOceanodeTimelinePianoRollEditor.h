@@ -42,9 +42,7 @@ private:
     std::vector<PianoDragSnapshotEntry> pianoDragSnapshot;
     double pianoDragAnchorStartBeat = 0.0;
     int pianoDragAnchorPitch = 0;
-    struct PianoValueDragSnapshotEntry { int index; float value; };
-    std::vector<PianoValueDragSnapshotEntry> pianoValueDragSnapshot;
-    float pianoValueDragAnchorValue = 0.0f;
+    ImVec2 pianoValuePaintPreviousMouse = ImVec2(0, 0);
     // Shift+drag: the selection's timing scaled from its first start (origin)
     // by how far the grabbed beat moved, every start and end on the grid.
     double pianoStretchOrigin = 0.0;

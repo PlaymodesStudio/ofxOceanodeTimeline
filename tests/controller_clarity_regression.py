@@ -467,6 +467,42 @@ int main() {
     const auto& routed=model.getLane(t,c,curve)->bindingIds;
     assert(std::find(routed.begin(),routed.end(),newBinding)!=routed.end());
     assert(model.undoTimelineEdit() && model.toJson()["tracks"]==beforeTargets);
+
+    // Parameter menus add a lane to the selected clip, reusing a binding
+    // if it already exists on the track, and focus the visible lane editor.
+    auto& addedParameter=static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Pitch"));
+    ui.targetsView=false; ui.selectedClips={{t,c}};
+    const auto laneCount=model.getClip(t,c)->lanes.size();
+    const auto clipCount=model.getTrack(t)->clips.size();
+    assert(model.requestParameterLane(t,addedParameter)); frame(); frame();
+    assert(model.getClip(t,c)->lanes.size()==laneCount+1 && model.getTrack(t)->clips.size()==clipCount);
+    const auto addedLane=ui.editorState.editorLaneId;
+    assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c);
+    assert(model.getLane(t,c,addedLane)->bindingIds.size()==1);
+    assert(model.requestParameterLane(t,addedParameter)); frame();
+    assert(model.getClip(t,c)->lanes.size()==laneCount+1 && ui.editorState.editorLaneId==addedLane);
+    const auto second=model.createClip(t,"Second phrase",20,4);
+    ui.selectedClips={{t,second}};
+    assert(model.requestParameterLane(t,addedParameter)); frame();
+    assert(model.getClip(t,second)->lanes.size()==1 && ui.editorState.editorClipId==second);
+    assert(model.getClip(t,second)->lanes.front().bindingIds==model.getLane(t,c,addedLane)->bindingIds);
+    // An empty track gets a visible clip/lane at the playhead. A wave track
+    // rejects automation, and requests cannot survive a timeline clear.
+    const auto emptyTrack=model.createTrack("Empty");
+    assert(model.requestParameterLane(emptyTrack,addedParameter)); frame();
+    assert(model.getTrack(emptyTrack)->clips.size()==1);
+    assert(model.getTrack(emptyTrack)->clips.front().lanes.size()==1);
+    assert(ui.editorState.editorTrackId==emptyTrack && ui.editorState.clipEditorOpen);
+    assert(!model.requestParameterLane(wt,addedParameter));
+    assert(!model.requestParameterLane("missing",addedParameter));
+    const auto lfoOnly=model.createTrack("LFO only");
+    const auto lb=model.addBinding(lfoOnly,addedParameter);
+    const auto oldLfo=model.createLfoClip(lfoOnly,lb,"LFO",0,4);
+    assert(model.requestParameterLane(lfoOnly,addedParameter)); frame();
+    assert(model.getClip(lfoOnly,oldLfo)->isLfo && model.getTrack(lfoOnly)->clips.size()==2);
+    assert(!model.getClip(lfoOnly,ui.editorState.editorClipId)->isLfo);
+    assert(model.requestParameterLane(t,addedParameter)); model.clear();
+    assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
     std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }
