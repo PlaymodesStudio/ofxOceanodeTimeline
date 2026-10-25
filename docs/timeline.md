@@ -59,6 +59,12 @@ Other ordinary automation lane types can also be duplicated, with their
 binding's existing blend mode determining the combined output. LFO control
 lanes and audio volume envelopes have fixed roles and cannot be duplicated.
 
+Piano-roll vertical lines follow the timeline's grid division and absolute beat
+positions, including bar/quarter-note emphasis and zoom-dependent subdivision
+visibility. Moving, stretching or repeating a clip does not shift these lines.
+The lane's Grid setting still controls note insertion and editing; coloured
+repeat boundaries remain visible.
+
 ## Number clips
 
 Choose **Number** in the clip type selector or lane type menu. Click in the

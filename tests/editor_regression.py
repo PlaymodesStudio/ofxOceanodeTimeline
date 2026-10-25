@@ -11,6 +11,7 @@ CASES = r'''
 #include "Managers/ofxOceanodeContainer.h"
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Controls/Editors/ofxOceanodeTimelineLfoEditor.h"
+#include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
 #include "imgui.h"
 #include <cassert>
 #include <iostream>
@@ -32,6 +33,7 @@ int main() {
     ofxOceanodeTimelineLaneEditors editors;
     ofxOceanodeTimelineLfoEditor lfoEditor;
     ofxOceanodeTimelineClipEditorState shell;
+    std::vector<double> expectedPianoGridBeats;
     auto beginFrame = [&](ImVec2 mouse, bool down) {
         io.AddMousePosEvent(mouse.x, mouse.y);
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
@@ -65,6 +67,18 @@ int main() {
         dl->PushClipRect(ImVec2(170, 100), ImVec2(870, 370), true);
         editor.drawCanvas(context, {ImVec2(0, 100), ImVec2(870, 370), ImVec2(230, 100),
                                    230, 230, 870, ImGui::IsItemHovered(), 1.5});
+        for(double beat : expectedPianoGridBeats) {
+            const float x = 230 + view.beatToPixels(beat);
+            const bool bar = std::fmod(beat, model.getBeatsPerBar()) < 0.001;
+            const bool quarter = std::fmod(beat, 1.0) < 0.001;
+            const ImU32 color = bar ? ofxOceanodeTimelineLaneEditorUi::kBar :
+                quarter ? IM_COL32(92, 92, 92, 145) : ofxOceanodeTimelineLaneEditorUi::kGrid;
+            bool found = false;
+            for(const auto& vertex : dl->VtxBuffer)
+                if(vertex.col == color && std::abs(vertex.pos.x - x) < 2.1f &&
+                   std::abs(vertex.pos.y - 108.0f) < 1.0f) found = true;
+            assert(found); // absolute timeline lines, including the meter's bar
+        }
         assert(dl->_ClipRectStack.Size == depth + 1);
         dl->PopClipRect();
         const auto before = model.toJson();
@@ -94,6 +108,17 @@ int main() {
         frame(clipId, laneId, true, ImVec2(900, 700), false, true);
         frame(clipId, laneId, false);
     }
+    // A moved, stretched piano clip must not shift or rescale timeline lines.
+    const auto pianoClip = model.createClip(trackId, "Grid", 0.37, 8);
+    const auto pianoLane = model.createLane(trackId, pianoClip, "Grid", ofxOceanodeTimelineLaneType::PianoRoll);
+    model.getClip(trackId, pianoClip)->contentStretch = 1.7;
+    model.getClip(trackId, pianoClip)->contentDurationBeats = 2;
+    model.getLane(trackId, pianoClip, pianoLane)->beatsPerStep = 1;
+    model.setTimeSignature(7, 8);
+    expectedPianoGridBeats = {0.25, 0.5, 1.0, 3.5};
+    frame(pianoClip, pianoLane, false);
+    expectedPianoGridBeats.clear();
+    model.setTimeSignature(4, 4);
     // Mouse input is routed only to the focused editor.
     const auto stepClip = model.createClip(trackId, "Step", 0, 4);
     const auto stepLane = model.createLane(trackId, stepClip, "Step", ofxOceanodeTimelineLaneType::Step);

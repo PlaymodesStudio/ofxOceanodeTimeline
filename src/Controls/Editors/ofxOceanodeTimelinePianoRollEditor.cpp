@@ -323,14 +323,28 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     const double grid = std::max(1.0 / kPPQ, lane->beatsPerStep);
     const double content = sourceDuration(*clip);
     const int cycles = clip->repeatContent ? std::max(1, static_cast<int>(std::ceil(clip->durationBeats / cycleDuration(*clip)))) : 1;
-    const int gridCount = static_cast<int>(std::ceil(content / grid));
+    // Absolute timeline divisions, independent of clip offset, stretch or repeats.
+    const double displayGrid = view.displayGridBeats();
+    const double visibleFrom = beatAtOffset(std::max(0.0f, left - timelineMin.x));
+    const double visibleTo = std::min(view.endBeat, beatAtOffset(std::max(0.0f, right - timelineMin.x)) + displayGrid);
+    const int firstLine = std::max(0, static_cast<int>(std::floor(visibleFrom / displayGrid)));
+    const int lastLine = static_cast<int>(std::ceil(visibleTo / displayGrid));
+    for(int i = firstLine; i <= lastLine; ++i) {
+        const double beat = i * displayGrid;
+        const float x = timelineMin.x + beatOffset(beat);
+        if(x < left || x > right) continue;
+        const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
+        const bool quarter = std::fmod(beat, 1.0) < 0.001;
+        if(bar || quarter || beatOffset(beat + displayGrid) - beatOffset(beat) >= 4.0f)
+            dl->AddLine(ImVec2(x, rollTop), ImVec2(x, probabilityBottom),
+                        bar ? kBar : quarter ? IM_COL32(92, 92, 92, 145) : kGrid, bar ? 1.5f : 1.0f);
+    }
+    // Keep source-cycle boundaries visible without restarting the musical grid.
     for(int cycle = 0; cycle < cycles; ++cycle) {
-        for(int i = 0; i <= gridCount; ++i) {
-            const double source = std::min(content, i * grid);
-            const float x = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, source, cycle));
+        if(clip->repeatContent && cycle > 0) {
+            const float x = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, 0.0, cycle));
             if(x < left || x > right) continue;
-            const bool contentBoundary = clip->repeatContent && i == 0 && cycle > 0;
-            dl->AddLine(ImVec2(x, rollTop), ImVec2(x, probabilityBottom), contentBoundary ? IM_COL32(track.color.r, track.color.g, track.color.b, 225) : kGrid, contentBoundary ? 2.0f : 1.0f);
+            dl->AddLine(ImVec2(x, rollTop), ImVec2(x, probabilityBottom), IM_COL32(track.color.r, track.color.g, track.color.b, 225), 2.0f);
         }
     }
 
