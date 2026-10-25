@@ -38,6 +38,18 @@ through the same parameter path convention used by Custom GUI. Missing targets
 remain in the timeline data and are marked in memory instead of deleting their
 lanes.
 
+## Metronome
+
+The metronome icon beside Play toggles a short audible click during playback.
+The first beat of each bar is higher and louder; the remaining beats are softer.
+Clicks follow the time-signature denominator (for example, eighth notes in 7/8),
+transport tempo, pauses, seeks and loops. Audio goes to the default output device
+through a separate output stream, opened only while the metronome is enabled.
+On macOS it uses CoreAudio and the output device's current sample rate to avoid
+changing the hardware clock and shifting the pitch of existing playback. If the
+device rate cannot be read, the metronome stays disabled.
+The toggle is a session preference and is not saved in presets.
+
 ## Number clips
 
 Choose **Number** in the clip type selector or lane type menu. Click in the

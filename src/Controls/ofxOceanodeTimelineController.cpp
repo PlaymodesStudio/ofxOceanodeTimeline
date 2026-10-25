@@ -557,7 +557,7 @@ void ofxOceanodeTimelineController::draw() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 5.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
     const float toolbarHeight = ImGui::GetFrameHeight();
-    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, ZoomIn, ZoomOut, Dots, Tap, Clock, Magnet };
+    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, ZoomIn, ZoomOut, Dots, Tap, Clock, Magnet, Metronome };
     auto drawIcon = [&](ImDrawList* dl, ToolIcon icon, ImVec2 c, float s, ImU32 col) {
         switch(icon) {
             case ToolIcon::Play:
@@ -628,6 +628,14 @@ void ofxOceanodeTimelineController::draw() {
                 dl->AddRectFilled(ImVec2(c.x + r - s * 0.11f, legTop - tip * 0.3f), ImVec2(c.x + r + s * 0.11f, legTop + tip), col);
                 break;
             }
+            case ToolIcon::Metronome:
+                dl->AddQuad(ImVec2(c.x - s * 0.38f, c.y + s * 0.42f),
+                            ImVec2(c.x + s * 0.38f, c.y + s * 0.42f),
+                            ImVec2(c.x + s * 0.18f, c.y - s * 0.42f),
+                            ImVec2(c.x - s * 0.18f, c.y - s * 0.42f), col, 1.5f);
+                dl->AddLine(ImVec2(c.x, c.y + s * 0.25f), ImVec2(c.x + s * 0.32f, c.y - s * 0.35f), col, 1.8f);
+                dl->AddCircleFilled(ImVec2(c.x + s * 0.23f, c.y - s * 0.18f), s * 0.09f, col);
+                break;
             case ToolIcon::Clock:
                 dl->AddCircle(c, s * 0.42f, col, 20, 1.6f);
                 dl->AddLine(c, ImVec2(c.x, c.y - s * 0.28f), col, 1.6f);
@@ -681,6 +689,11 @@ void ofxOceanodeTimelineController::draw() {
                       externalClock ? lockedTip : (transportState.isPlaying ? "Pause (Space)" : "Play (Space)"),
                       transportState.isPlaying, IM_COL32(90, 205, 125, 255), !externalClock))
             transport->setIsPlaying(!transportState.isPlaying);
+        ImGui::SameLine(0.0f, 2.0f);
+        if(iconButton("##tbMetronome", ToolIcon::Metronome,
+                      timeline.isMetronomeEnabled() ? "Metronome: on (accent on the first beat of each bar)" : "Metronome: off",
+                      timeline.isMetronomeEnabled(), IM_COL32(240, 185, 80, 255)))
+            timeline.setMetronomeEnabled(!timeline.isMetronomeEnabled());
         ImGui::SameLine(0.0f, 6.0f);
         {
             bool playOnLoad = timeline.getPlayOnPresetLoad();

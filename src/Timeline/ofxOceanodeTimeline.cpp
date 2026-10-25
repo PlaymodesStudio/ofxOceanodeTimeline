@@ -1322,6 +1322,23 @@ void ofxOceanodeTimelineStepLane::fromJson(const ofJson& json) {
 
 ofxOceanodeTimelineManager::ofxOceanodeTimelineManager(ofxOceanodeContainer* owner) : container(owner) {}
 
+bool ofxOceanodeTimelineManager::setMetronomeEnabled(bool enabled) {
+    if(!enabled) {
+        metronome.reset();
+        return true;
+    }
+    if(metronome) return true;
+    if(container == nullptr || container->getTransport() == nullptr) return false;
+    auto output = std::make_unique<ofxOceanodeTimelineMetronome>(container->getTransport());
+    output->setMeter(timeSignatureNumerator, timeSignatureDenominator);
+    if(!output->start()) {
+        ofLogWarning("ofxOceanodeTimeline") << "Could not open metronome audio output";
+        return false;
+    }
+    metronome = std::move(output);
+    return true;
+}
+
 void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     evaluationIndexesValid = false;
     bindingsByPathCache.clear();
@@ -5007,6 +5024,7 @@ void ofxOceanodeTimelineManager::setTimeSignature(int numerator, int denominator
        std::abs(loopEndBeat - previousBeatsPerBar) <= kEpsilon) {
         loopEndBeat = getBeatsPerBar();
     }
+    if(metronome) metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
 }
 
 std::string ofxOceanodeTimelineManager::modeToString(ofxOceanodeTimelineAutomationMode mode) {

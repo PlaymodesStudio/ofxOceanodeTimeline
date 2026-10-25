@@ -58,6 +58,56 @@ static void checkNear(double actual, double expected, int line) {
 #define near(actual, expected) checkNear(actual, expected, __LINE__)
 int main() {
     ofSeedRandom(); // OF normally constructs its random engine during app startup.
+    // Render the real metronome without opening a device. Verify accents,
+    // denominator beats, discontinuities, loop wraps and silence on pause.
+    for(unsigned int sampleRate : {44100u, 48000u}) {
+        auto clock = std::make_shared<ofxOceanodeTransport>();
+        ofxOceanodeTimelineMetronome click(clock);
+        click.setMeter(3, 8);
+        ofSoundBuffer audio;
+        audio.allocate(sampleRate / 20, 2);
+        audio.setSampleRate(sampleRate);
+        ofxOceanodeTransportState state;
+        state.isPlaying = true;
+        state.driverMode = TransportDriverMode::FrameStep;
+        auto render = [&](double beat) {
+            state.beatPosition = beat;
+            click.render(audio, state, state.steadyTimeUs);
+            double energy = 0;
+            for(size_t i = 0; i < audio.size(); i += 2) {
+                near(audio[i], audio[i + 1]);
+                energy += audio[i] * audio[i];
+            }
+            return energy;
+        };
+        const double accent = render(0);
+        assert(accent > 0);
+        near(render(0), 0); // same beat never retriggers
+        const double weak = render(0.5);
+        assert(weak > 0 && weak < accent);
+        near(render(1.0), weak);
+        near(render(1.5), accent); // next 3/8 bar
+        state.generation++;
+        near(render(0.25), 0); // seeking between beats stays quiet
+        near(render(0.5), weak);
+        state.loopCount++;
+        near(render(0), accent);
+        state.loopCount++;
+        near(render(0.25), 0); // fractional loop start is not a beat
+        near(render(0.5), weak);
+        state.isPlaying = false;
+        near(render(0), 0);
+        state.isPlaying = true;
+        near(render(0), accent);
+        // A real-time buffer straddling a beat starts the click at that sample.
+        state.generation++;
+        state.driverMode = TransportDriverMode::RealTime;
+        state.beatPosition = 0.48;
+        click.render(audio, state, state.steadyTimeUs);
+        const size_t boundaryFrame = sampleRate / 100;
+        for(size_t i = 0; i < boundaryFrame * 2; ++i) near(audio[i], 0);
+        assert(std::abs(audio[(boundaryFrame + 2) * 2]) > 0);
+    }
     // All editors and arrangement gestures share one tempo-aware coordinate
     // mapping. Cover the inverse beyond its initial search bound as well as
     // an automated tempo map, where a fixed pixels-per-beat formula fails.

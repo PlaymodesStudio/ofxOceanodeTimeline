@@ -7,11 +7,13 @@
 #include "ofMain.h"
 #include "ofxOceanodeTransport.h"
 #include "ofxOceanodeScheduling.h"
+#include "ofxOceanodeTimelineMetronome.h"
 #include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <limits>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
@@ -853,6 +855,8 @@ public:
     // transport starts from the beginning (saved per preset, off by default)
     bool getPlayOnPresetLoad() const { return playOnPresetLoad; }
     void setPlayOnPresetLoad(bool enabled) { playOnPresetLoad = enabled; }
+    bool isMetronomeEnabled() const { return metronome != nullptr; }
+    bool setMetronomeEnabled(bool enabled);
     double getLoopStartBeat() const { return loopStartBeat; }
     double getLoopEndBeat() const { return loopEndBeat; }
     void setLoopRange(double startBeat, double endBeat);
@@ -895,6 +899,7 @@ public:
     static ofxOceanodeTimelineAutomationMode modeFromString(const std::string& mode);
 
 private:
+    std::unique_ptr<ofxOceanodeTimelineMetronome> metronome;
     static std::string laneTypeToString(ofxOceanodeTimelineLaneType laneType);
     static ofxOceanodeTimelineLaneType laneTypeFromString(const std::string& laneType);
     static std::string makeId(const char* prefix, uint64_t number);
