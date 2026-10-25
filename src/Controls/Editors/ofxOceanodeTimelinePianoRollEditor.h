@@ -17,6 +17,7 @@ public:
     void forgetTrack(const std::string& trackId);
 
 private:
+    char targetSearch[128] = {};
     // Piano-roll keyboard-strip "audition" state: while a key is held down,
     // the lane's Gate/Pitch bindings get a live override (see
     // ofxOceanodeTimelineManager::setLiveOverride) so the bound parameters

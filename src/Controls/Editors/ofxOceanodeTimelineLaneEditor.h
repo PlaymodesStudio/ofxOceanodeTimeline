@@ -18,6 +18,9 @@ struct ofxOceanodeTimelineLaneEditorContext {
     bool focused;
     // Output request; the shell opens the instrument dialog after properties.
     std::string noteGroupToEdit;
+    std::vector<std::string> targetPaths;
+    std::string requestedTargetPath;
+    ofxOceanodeTimelineTargetRole requestedTargetRole = ofxOceanodeTimelineTargetRole::Lane;
 };
 
 // Screen geometry belongs to the shell; editors draw inside its clip rectangle.

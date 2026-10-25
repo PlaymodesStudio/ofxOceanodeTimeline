@@ -431,6 +431,42 @@ int main() {
         const auto* track=model.getTrack(id);assert(track && track->clips.size()==1 && track->clips[0].lanes.size()==1);
     }
     assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);
+    // Reproduce the reported restriction: bind to a second node parameter
+    // that has never been published to this track or any other track.
+    auto& otherNode=owner->createNode(std::make_unique<ClarityProbe>(),2);
+    const auto newTarget=owner->getTimelineParameterPath(static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Cutoff")));
+    const auto paths=ui.patchTargetPaths();
+    const auto pathIndex=std::find(paths.begin(),paths.end(),newTarget)-paths.begin();
+    assert(pathIndex<paths.size());
+    ui.editorState.editorTrackId=t;ui.editorState.editorClipId=c;ui.editorState.editorLaneId=curve;ui.editorState.clipEditorOpen=true;
+    frame();
+    for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i) {
+        auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i);if(!bar)continue;
+        for(auto& tab:bar->Tabs)if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Targets")bar->NextSelectedTabId=tab.ID;
+    }
+    frame();frame();
+    ImGuiWindow* targetPanel=nullptr;
+    const std::string targetPanelKey="##clipProperties"+t+c+curve;
+    for(auto* window:ImGui::GetCurrentContext()->Windows)
+        if(window->Active && std::string(window->Name).find(targetPanelKey)!=std::string::npos)targetPanel=window;
+    assert(targetPanel);
+    const ImVec2 addTargetPoint(targetPanel->Pos.x+40,targetPanel->Pos.y+66);
+    frame(1250,addTargetPoint,false);frame(1250,addTargetPoint,true);frame(1250,addTargetPoint,false);
+    frame(1250,ImVec2(-100,-100),false,"patch-targets");
+    assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
+    auto* targetPopup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;assert(targetPopup);
+    const auto beforeTargets=model.toJson()["tracks"];
+    const ImVec2 targetItem(targetPopup->Pos.x+40,targetPopup->Pos.y+targetPopup->WindowPadding.y+
+        ImGui::GetFrameHeight()+ImGui::GetStyle().ItemSpacing.y+
+        pathIndex*ImGui::GetTextLineHeightWithSpacing()+ImGui::GetTextLineHeight()*0.5f);
+    frame(1250,targetItem,false);frame(1250,targetItem,true);frame(1250,targetItem,false);
+    assert(model.getTrack(t)->bindings.size()==4);
+    std::string newBinding;
+    for(const auto& binding:model.getTrack(t)->bindings)if(binding.parameterPath==newTarget)newBinding=binding.id;
+    assert(!newBinding.empty());
+    const auto& routed=model.getLane(t,c,curve)->bindingIds;
+    assert(std::find(routed.begin(),routed.end(),newBinding)!=routed.end());
+    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==beforeTargets);
     ImGui::DestroyContext();
     std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }

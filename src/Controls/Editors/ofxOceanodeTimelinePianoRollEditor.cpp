@@ -32,23 +32,17 @@ void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEdit
                 if(!previousRoleId.empty() && !stillUsed)
                     timeline.removeBindingFromLane(track.id, clip->id, lane->id, previousRoleId);
             }
-            for(const auto& candidate : track.bindings) {
-                const bool selected = candidate.id == roleId;
-                const std::string compactName = compactParameterName(candidate.parameterPath);
-                if(ImGui::Selectable(compactName.c_str(), selected)) {
-                    const std::string previousRoleId = roleId;
-                    if(&roleId != &lane->pianoPitchBindingId && lane->pianoPitchBindingId == candidate.id) lane->pianoPitchBindingId.clear();
-                    if(&roleId != &lane->pianoGateBindingId && lane->pianoGateBindingId == candidate.id) lane->pianoGateBindingId.clear();
-                    if(&roleId != &lane->pianoVelocityBindingId && lane->pianoVelocityBindingId == candidate.id) lane->pianoVelocityBindingId.clear();
-                    roleId = candidate.id;
-                    timeline.addBindingToLane(track.id, clip->id, lane->id, candidate.id);
-                    const bool previousStillUsed = lane->pianoPitchBindingId == previousRoleId ||
-                        lane->pianoGateBindingId == previousRoleId ||
-                        lane->pianoVelocityBindingId == previousRoleId;
-                    if(!previousRoleId.empty() && previousRoleId != candidate.id && !previousStillUsed)
-                        timeline.removeBindingFromLane(track.id, clip->id, lane->id, previousRoleId);
+            ImGui::InputText("Search parameters", targetSearch, sizeof(targetSearch));
+            std::vector<std::string> paths = context.targetPaths;
+            if(paths.empty()) for(const auto& binding : track.bindings) paths.push_back(binding.parameterPath);
+            for(const auto& path : paths) {
+                if(targetSearch[0] && ofToLower(path).find(ofToLower(std::string(targetSearch))) == std::string::npos) continue;
+                const bool selected = currentBinding && currentBinding->parameterPath == path;
+                if(ImGui::Selectable(path.c_str(), selected)) {
+                    context.requestedTargetPath = path;
+                    context.requestedTargetRole = &roleId == &lane->pianoPitchBindingId ? ofxOceanodeTimelineTargetRole::Pitch
+                        : &roleId == &lane->pianoGateBindingId ? ofxOceanodeTimelineTargetRole::Gate : ofxOceanodeTimelineTargetRole::Velocity;
                 }
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", candidate.parameterPath.c_str());
             }
             ImGui::EndCombo();
         }

@@ -82,6 +82,7 @@ enum class ofxOceanodeTimelineTimebase {
 
 // Explicit right-edge operations, shared by numeric editing and mouse drags.
 enum class ofxOceanodeTimelineEndEdit { Repeat, Trim, Stretch };
+enum class ofxOceanodeTimelineTargetRole { Lane, Pitch, Gate, Velocity, LfoOutput };
 
 // A read-only explanation of the same evaluation used by playback. Shared
 // piano lanes appear as one voice-pool contribution with all source lane IDs.
@@ -653,6 +654,10 @@ public:
     std::string addBinding(const std::string& trackId,
                           ofxOceanodeAbstractParameter& parameter,
                           ofxOceanodeTimelineAutomationMode mode = ofxOceanodeTimelineAutomationMode::Replace);
+    // Publish the destination on demand, then route only this lane/role to it.
+    bool bindClipTarget(const std::string& trackId, const std::string& clipId,
+                        const std::string& laneId, const std::string& parameterPath,
+                        ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane);
     bool renameTrack(const std::string& trackId, const std::string& requestedName);
     void requestTrackRename(const std::string& trackId, bool isNewTrack = false);
     bool consumePendingTrackRename(std::string& trackId, bool* isNewTrack = nullptr);

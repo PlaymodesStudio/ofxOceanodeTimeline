@@ -1909,6 +1909,48 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     return binding.id;
 }
 
+bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, const std::string& clipId,
+    const std::string& laneId, const std::string& path, ofxOceanodeTimelineTargetRole role) {
+    auto* track = getTrack(trackId);
+    auto* clip = getClip(trackId, clipId);
+    auto* lane = getLane(trackId, clipId, laneId);
+    auto* parameter = container == nullptr ? nullptr : container->findTimelineParameter(path);
+    if(track == nullptr || track->isWaveTrack || clip == nullptr || parameter == nullptr ||
+       !isStepLaneCompatible(*parameter) || (parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly)) return false;
+    using Role = ofxOceanodeTimelineTargetRole;
+    if(role == Role::LfoOutput) { if(!clip->isLfo) return false; }
+    else if(lane == nullptr || clip->isLfo || (role != Role::Lane && lane->type != ofxOceanodeTimelineLaneType::PianoRoll)) return false;
+    std::string bindingId;
+    for(const auto& binding : track->bindings) if(binding.parameterPath == path) bindingId = binding.id;
+    if(bindingId.empty()) bindingId = addBinding(trackId, *parameter);
+    if(bindingId.empty()) return false;
+    if(role == Role::LfoOutput) {
+        clip->lfoOutputBindingId = bindingId;
+        if(parameter->valueType() == typeid(float).name()) {
+            clip->lfoOutputMin = parameter->cast<float>().getParameter().getMin();
+            clip->lfoOutputMax = parameter->cast<float>().getParameter().getMax();
+        } else if(parameter->valueType() == typeid(int).name()) {
+            clip->lfoOutputMin = parameter->cast<int>().getParameter().getMin();
+            clip->lfoOutputMax = parameter->cast<int>().getParameter().getMax();
+        }
+    } else if(role == Role::Lane) {
+        addBindingToLane(trackId, clipId, laneId, bindingId);
+    } else {
+        std::string* selected = role == Role::Pitch ? &lane->pianoPitchBindingId
+            : role == Role::Gate ? &lane->pianoGateBindingId : &lane->pianoVelocityBindingId;
+        const std::string previous = *selected;
+        for(auto* other : {&lane->pianoPitchBindingId, &lane->pianoGateBindingId, &lane->pianoVelocityBindingId})
+            if(other != selected && *other == bindingId) other->clear();
+        *selected = bindingId;
+        addBindingToLane(trackId, clipId, laneId, bindingId);
+        if(!previous.empty() && previous != bindingId && previous != lane->pianoPitchBindingId &&
+           previous != lane->pianoGateBindingId && previous != lane->pianoVelocityBindingId)
+            removeBindingFromLane(trackId, clipId, laneId, previous);
+    }
+    invalidateEvaluationIndexes(); invalidateSchedule();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::isParameterBound(const ofxOceanodeAbstractParameter& parameter) const {
     if(container == nullptr) return false;
     const std::string path = container->getTimelineParameterPath(const_cast<ofxOceanodeAbstractParameter&>(parameter));

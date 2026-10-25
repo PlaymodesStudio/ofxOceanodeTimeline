@@ -16,10 +16,17 @@ public:
               ofxOceanodeTimelineClipEditorState& editorState,
               float contentWidth, double beatPosition,
               ofxOceanodeTimelineEndEdit endEdit = ofxOceanodeTimelineEndEdit::Repeat);
+    void setTargetPaths(std::vector<std::string> paths) { availableTargetPaths = std::move(paths); }
+    std::string consumeOutputTargetRequest() {
+        auto path = std::move(requestedOutputTargetPath); requestedOutputTargetPath.clear(); return path;
+    }
     bool hasPointSelection(const std::string& clipId) const {
         return lfoSelectedPointIndex >= 0 && lfoSelectedClipId == clipId;
     }
 private:
+    std::vector<std::string> availableTargetPaths;
+    std::string requestedOutputTargetPath;
+    char targetSearch[128] = {};
     std::string lfoDragLaneId;
     int lfoDragPointIndex = -1;
     // LFO editor point selection (Delete/Backspace or right-click > Delete point)

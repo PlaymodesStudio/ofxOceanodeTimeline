@@ -72,6 +72,13 @@ private:
     };
     std::vector<AudioFileDrop> pendingAudioDrops;
 
+    std::vector<std::string> patchTargetPaths() const;
+    struct TargetAssignment {
+        std::string trackId, clipId, laneId, path;
+        ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane;
+    };
+    TargetAssignment pendingTargetAssignment;
+    char laneTargetSearch[128] = {};
     void beginHistoryGesture(ofxOceanodeTimelineManager& timeline);
     void finishHistoryGesture(ofxOceanodeTimelineManager& timeline);
     void restoreHistory(ofxOceanodeTimelineManager& timeline, bool redo);

@@ -46,7 +46,11 @@ appearance. Both views keep the same clip selection and open editor.
 Double-click a clip to open its editor. Shared timing appears once above the
 lanes, labelled with its track and clip. Lane headers show user names and
 editor types; **Content** contains the lane's name, editor type and settings,
-and **Targets** contains its destinations. Piano Roll targets are explicitly
+and **Targets** contains its destinations. **Add target...** searches compatible
+parameters in the current patch; selecting a new parameter
+publishes it to the track automatically. Existing target checkboxes remove or
+restore individual connections without affecting other clips. Piano role
+choosers and the LFO output chooser also search the patch. Piano Roll targets are explicitly
 assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
 to select every note at that pitch in the piano-roll lane, including notes
 outside the visible window. Shift+right-click adds another pitch to the
@@ -84,7 +88,7 @@ future state captures cannot overwrite the recalled material.
 Use **Load clip...** in the toolbar or **Load clip from disk...** in a track's
 context menu. Choose an existing compatible track or a new track, set the
 start beat, and map each saved parameter to a parameter in the current
-project. The chooser includes compatible parameters inside macros. Nothing
+project. The chooser lists compatible parameters in the current patch. Nothing
 connects automatically based on matching names. **Unassigned** keeps the
 lane content without a connection; use the lane's **Targets** tab later to
 assign targets and piano roles. LFO files keep their internal control lanes

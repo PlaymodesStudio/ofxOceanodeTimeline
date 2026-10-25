@@ -879,6 +879,21 @@ void ofxOceanodeTimelineController::drawBlendModeOptions(ofxOceanodeTimelineMana
     ImGui::TextWrapped("Within a clip: this mode combines lanes. Overlapping clips: latest start wins. Across tracks: this mode combines the track's contribution with earlier tracks; the first contribution is the base.");
 }
 
+std::vector<std::string> ofxOceanodeTimelineController::patchTargetPaths() const {
+    std::set<std::string> paths;
+    const auto& timeline = container->getTimelineManager();
+    for(auto* node : container->getAllModules()) {
+        if(node == nullptr) continue;
+        for(auto& entry : node->getParameters()) {
+            auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
+            if(parameter && timeline.isStepLaneCompatible(*parameter) &&
+               !(parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly))
+                paths.insert(container->getTimelineParameterPath(*parameter));
+        }
+    }
+    return {paths.begin(), paths.end()};
+}
+
 void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManager& timeline) {
     // This also runs before other windows, so parameter-menu actions such as
     // Add to Timeline are captured even while the timeline window is hidden.
@@ -3209,6 +3224,12 @@ void ofxOceanodeTimelineController::draw() {
         if(!trackPadClickedThisFrame) selectedTracks.clear();
     }
 
+    if(!pendingTargetAssignment.path.empty()) {
+        const auto request = std::move(pendingTargetAssignment);
+        pendingTargetAssignment = {};
+        timeline.bindClipTarget(request.trackId, request.clipId, request.laneId, request.path, request.role);
+    }
+
     if(!breakClipLanesRequest.second.empty()) {
         const auto source = breakClipLanesRequest;
         breakClipLanesRequest = {};
@@ -3763,22 +3784,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
     ImGui::InputDouble("Start beat", &clipImportBeat, 0.25, 1.0, "%.3f");
     if(!track["bindings"].empty()) {
         ImGui::TextWrapped("Choose a new target for each saved parameter. Unassigned lanes keep all their content; connect them later in the lane's Targets tab.");
-        std::set<std::string> candidates;
-        std::set<ofxOceanodeContainer*> visited;
-        std::function<void(ofxOceanodeContainer*)> collect = [&](ofxOceanodeContainer* scope) {
-            if(scope == nullptr || !visited.insert(scope).second) return;
-            for(auto* node : scope->getAllModules()) {
-                if(node == nullptr) continue;
-                for(auto& entry : node->getParameters()) {
-                    auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
-                    if(parameter && timeline.isStepLaneCompatible(*parameter) &&
-                       !(parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly))
-                        candidates.insert(container->getTimelineParameterPath(*parameter));
-                }
-                if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel())) collect(macro->getContainer().get());
-            }
-        };
-        collect(container.get());
+        const auto candidates = patchTargetPaths();
         ImGui::InputText("Filter targets", clipTargetSearch, sizeof(clipTargetSearch));
         ImGui::BeginChild("##savedClipTargets", ImVec2(0, 240), true);
         for(const auto& binding : track["bindings"]) {
@@ -4299,10 +4305,13 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         return;
     }
     if(clip->isLfo) {
+        lfoEditor.setTargetPaths(patchTargetPaths());
         if(lfoEditor.draw(timeline, *container, track, *clip,
                           editorView(timeline, container->getTransportState().bpm, endBeat),
                           editorState, contentWidth, beatPosition, static_cast<ofxOceanodeTimelineEndEdit>(endEditTool)))
             requestClipRename(track.id, *clip);
+        const auto path = lfoEditor.consumeOutputTargetRequest();
+        if(!path.empty()) pendingTargetAssignment = {track.id, clip->id, {}, path, ofxOceanodeTimelineTargetRole::LfoOutput};
         return;
     }
     if(!clip->lanes.empty() && timeline.getLane(editorState.editorTrackId, editorState.editorClipId, editorState.editorLaneId) == nullptr) {
@@ -4393,12 +4402,14 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
 
     if(clip->lanes.empty()) return;
 
+    const auto availableTargets = patchTargetPaths();
     for(size_t laneIndex = 0; laneIndex < clip->lanes.size(); ++laneIndex) {
     auto* lane = &clip->lanes[laneIndex];
     const bool isFocused = lane->id == editorState.editorLaneId;
     const auto view = editorView(timeline, fallbackBpm, endBeat);
     ofxOceanodeTimelineLaneEditorContext context{timeline, *container, track, *clip, *lane,
                                                view, editorState.editorLaneId, isFocused, {}};
+    context.targetPaths = availableTargets;
     auto& laneEditor = laneEditors.forType(lane->type);
     auto drawLaneMenu = [&](bool propertiesPanel) {
         const std::string menuId = "##laneMenu" + lane->id;
@@ -4520,6 +4531,15 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             if(lane->type == ofxOceanodeTimelineLaneType::PianoRoll) {
                 laneEditor.drawTargets(context);
             } else {
+                ImGui::SetNextItemWidth(-1.0f);
+                if(ImGui::BeginCombo("##addPatchTarget", "Add target...")) {
+                    ImGui::InputText("Search parameters", laneTargetSearch, sizeof(laneTargetSearch));
+                    for(const auto& path : context.targetPaths) {
+                        if(laneTargetSearch[0] && ofToLower(path).find(ofToLower(std::string(laneTargetSearch))) == std::string::npos) continue;
+                        if(ImGui::Selectable(path.c_str())) context.requestedTargetPath = path;
+                    }
+                    ImGui::EndCombo();
+                }
                 ImGui::TextWrapped("This lane drives:");
                 if(lane->bindingIds.empty()) ImGui::TextDisabled("No target");
                 for(const auto& candidate : track.bindings) {
@@ -4536,6 +4556,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                     }
                 }
             }
+            if(!context.requestedTargetPath.empty())
+                pendingTargetAssignment = {track.id, clip->id, lane->id, context.requestedTargetPath, context.requestedTargetRole};
             if(!context.noteGroupToEdit.empty()) openNoteGroupSetup(timeline, nullptr, track.id, context.noteGroupToEdit);
             ImGui::EndTabItem();
         }
@@ -4664,7 +4686,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
             NoteRoleCandidate candidate;
             candidate.parameter = parameter.get();
             candidate.path = container->getTimelineParameterPath(*parameter);
-            candidate.label = group.getName() + " / " + parameter->getName();
+            candidate.label = candidate.path;
             candidate.sameNode = sameNode;
             noteSetupCandidates.push_back(candidate);
         }
@@ -4689,7 +4711,6 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         addFromGroup(sourceModel->getParameterGroup(), true);
         addInstrument(sourceModel);
     }
-    // "Every node" means the nodes beside the source (it may sit in a macro).
     ofxOceanodeContainer* candidateContainer = container.get();
     if(sourceModel != nullptr && sourceModel->getHostContainer() != nullptr)
         candidateContainer = sourceModel->getHostContainer();

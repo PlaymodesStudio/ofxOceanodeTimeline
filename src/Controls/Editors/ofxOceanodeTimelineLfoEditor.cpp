@@ -204,22 +204,14 @@ bool ofxOceanodeTimelineLfoEditor::draw(
             ? "No output target" : compactParameterName(outputBinding->parameterPath);
         ImGui::SetNextItemWidth(-1.0f);
         if(ImGui::BeginCombo("Output", outputPreview.c_str())) {
-            for(const auto& binding : track.bindings) {
-                const bool selected = binding.id == clip.lfoOutputBindingId;
-                if(ImGui::Selectable(compactParameterName(binding.parameterPath).c_str(), selected)) {
-                    clip.lfoOutputBindingId = binding.id;
-                    if(binding.valueType == typeid(float).name()) {
-                        if(auto* parameter = container.findTimelineParameter(binding.parameterPath)) {
-                            clip.lfoOutputMin = parameter->cast<float>().getParameter().getMin();
-                            clip.lfoOutputMax = parameter->cast<float>().getParameter().getMax();
-                        }
-                    } else if(binding.valueType == typeid(int).name()) {
-                        if(auto* parameter = container.findTimelineParameter(binding.parameterPath)) {
-                            clip.lfoOutputMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
-                            clip.lfoOutputMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
-                        }
-                    }
-                }
+            if(ImGui::Selectable("No output target", outputBinding == nullptr)) clip.lfoOutputBindingId.clear();
+            ImGui::InputText("Search parameters", targetSearch, sizeof(targetSearch));
+            auto paths = availableTargetPaths;
+            if(paths.empty()) for(const auto& binding : track.bindings) paths.push_back(binding.parameterPath);
+            for(const auto& path : paths) {
+                if(targetSearch[0] && ofToLower(path).find(ofToLower(std::string(targetSearch))) == std::string::npos) continue;
+                if(ImGui::Selectable(path.c_str(), outputBinding && outputBinding->parameterPath == path))
+                    requestedOutputTargetPath = path;
             }
             ImGui::EndCombo();
         }
