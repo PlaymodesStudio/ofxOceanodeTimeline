@@ -734,6 +734,9 @@ public:
     std::string createLane(const std::string& trackId, const std::string& clipId,
                            const std::string& requestedName = "Lane",
                            ofxOceanodeTimelineLaneType type = ofxOceanodeTimelineLaneType::Step);
+    // Independent content, same bindings/settings, inserted immediately after the source.
+    // Fixed-role LFO and legacy Wave lanes cannot be duplicated.
+    std::string duplicateLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     bool removeLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     bool addBindingToLane(const std::string& trackId, const std::string& clipId,
                           const std::string& laneId, const std::string& bindingId);
@@ -975,10 +978,17 @@ private:
     bool parameterCacheActive = false;
     std::unordered_map<std::string, std::vector<ofxOceanodeTimelineParameterBinding*>> bindingsByPathCache;
     std::unordered_map<std::string, ofxOceanodeTimelineTrack*> trackByIdCache;
+    struct SharedPianoPlayback {
+        const ofxOceanodeTimelineLane* first = nullptr;
+        ofxOceanodeTimelineLane lane;
+        std::vector<const ofxOceanodeTimelineLane*> noteLanes;
+        ofxOceanodeTimelinePianoVoicing voicing;
+    };
     struct TrackEvaluationIndex {
         std::unordered_map<std::string, ofxOceanodeTimelineParameterBinding*> bindingById;
         std::unordered_map<const ofxOceanodeTimelineClip*, size_t> clipOrder;
         std::unordered_map<const ofxOceanodeTimelineLane*, ofxOceanodeTimelinePianoVoicing> pianoVoicing;
+        std::unordered_map<const ofxOceanodeTimelineLane*, std::shared_ptr<SharedPianoPlayback>> sharedPiano;
     };
     // The voice count and kit mode a piano lane plays with: the lane's mono
     // switch, its note group's override, else the instrument it drives.

@@ -58,55 +58,113 @@ static void checkNear(double actual, double expected, int line) {
 #define near(actual, expected) checkNear(actual, expected, __LINE__)
 int main() {
     ofSeedRandom(); // OF normally constructs its random engine during app startup.
-    // Render the real metronome without opening a device. Verify accents,
-    // denominator beats, discontinuities, loop wraps and silence on pause.
-    for(unsigned int sampleRate : {44100u, 48000u}) {
-        auto clock = std::make_shared<ofxOceanodeTransport>();
-        ofxOceanodeTimelineMetronome click(clock);
-        click.setMeter(3, 8);
-        ofSoundBuffer audio;
-        audio.allocate(sampleRate / 20, 2);
-        audio.setSampleRate(sampleRate);
-        ofxOceanodeTransportState state;
-        state.isPlaying = true;
-        state.driverMode = TransportDriverMode::FrameStep;
-        auto render = [&](double beat) {
-            state.beatPosition = beat;
-            click.render(audio, state, state.steadyTimeUs);
-            double energy = 0;
-            for(size_t i = 0; i < audio.size(); i += 2) {
-                near(audio[i], audio[i + 1]);
-                energy += audio[i] * audio[i];
-            }
-            return energy;
+    // Duplicate all editable lane types in place, retaining their entire
+    // serialized content/settings but giving each an independent identity.
+    {
+        ofxOceanodeTimelineManager copies;
+        const auto t = copies.createTrack("Copies");
+        for(auto type : {ofxOceanodeTimelineLaneType::Step, ofxOceanodeTimelineLaneType::Curve,
+                        ofxOceanodeTimelineLaneType::PianoRoll, ofxOceanodeTimelineLaneType::Number,
+                        ofxOceanodeTimelineLaneType::Dropdown, ofxOceanodeTimelineLaneType::MultiSlider,
+                        ofxOceanodeTimelineLaneType::MultiValue, ofxOceanodeTimelineLaneType::MultiGate}) {
+            const auto c = copies.createClip(t, "Copy", 0, 4);
+            const auto l = copies.createLane(t, c, "Source", type);
+            const auto tail = copies.createLane(t, c, "Tail");
+            auto* source = copies.getLane(t, c, l);
+            source->pianoNotes = {{0, 1, 36, 0.3f, 0.7f}};
+            source->multiValueRows = {{{0, 1, 0.4f}}};
+            source->multiGateRows = {{{0, 1}}};
+            source->multiSliderValues = {0.2f, 0.7f};
+            source->curvePoints = {{0, 0.2f}, {1, 0.8f}};
+            source->valueQuantizeSteps = 7;
+            const auto d = copies.duplicateLane(t, c, l);
+            assert(!d.empty() && d != l);
+            const auto& lanes = copies.getClip(t, c)->lanes;
+            assert(lanes.size() == 3 && lanes[0].id == l && lanes[1].id == d && lanes[2].id == tail);
+            const auto json = copies.toJson()["tracks"][0]["clips"].back()["lanes"];
+            auto expected = json[0]; expected["id"] = d;
+            assert(json[1] == expected);
+            copies.getLane(t, c, d)->pianoNotes[0].pitch = 72;
+            assert(copies.getLane(t, c, l)->pianoNotes[0].pitch == 36);
+            const auto saved = copies.toJson(); copies.fromJson(saved);
+            assert(copies.getClip(t, c)->lanes[1].id == d);
+            assert(copies.getLane(t, c, d)->pianoNotes[0].pitch == 72);
+            assert(copies.duplicateLane(t, c, "missing").empty());
+        }
+        const auto lfo = copies.createLfoClip(t, "", "LFO", 0, 4);
+        assert(copies.duplicateLane(t, lfo, copies.getClip(t, lfo)->lanes.front().id).empty());
+        assert(copies.duplicateLane("missing", "missing", "missing").empty());
+    }
+    // Independent bass/melody piano lanes share one set of note bindings
+    // and one voice pool. Neither lane replaces the other's held notes.
+    {
+        ofxOceanodeContainer partsOwner;
+        partsOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
+        ofParameter<std::vector<float>> pitches("Part Pitch", {60, 60, 60, 60}, {0}, {127});
+        ofParameter<std::vector<float>> gates("Part Gate", {0, 0, 0, 0}, {0}, {1});
+        ofParameter<std::vector<float>> velocities("Part Velocity", {0, 0, 0, 0}, {0}, {1});
+        ofxOceanodeParameter<std::vector<float>> pitch, gate, velocity;
+        pitch.bindParameter(pitches); gate.bindParameter(gates); velocity.bindParameter(velocities);
+        for(auto* parameter : {&pitch, &gate, &velocity})
+            partsOwner.targets[parameter->getEscapedName()] = parameter;
+        ofxOceanodeTimelineManager parts(&partsOwner);
+        const auto t = parts.createTrack("Parts");
+        const auto pb = parts.addBinding(t, pitch), gb = parts.addBinding(t, gate), vb = parts.addBinding(t, velocity);
+        const auto group = parts.createNoteGroup(t, "Instrument", pb, gb, vb);
+        parts.setNoteGroupVoices(t, group, 4);
+        std::string bass;
+        const auto c = parts.createNoteGroupClip(t, group, "Phrase", 0, 4, &bass);
+        parts.getLane(t, c, bass)->pianoNotes = {{0, 1, 36, 0.3f, 1}};
+        const auto melody = parts.duplicateLane(t, c, bass);
+        assert(parts.getLane(t, c, melody)->bindingIds == parts.getLane(t, c, bass)->bindingIds);
+        assert(parts.getTrack(t)->bindings.size() == 3);
+        parts.getLane(t, c, melody)->pianoNotes = {{0, 2, 72, 0.9f, 1}};
+        auto evaluate = [&](double beat) {
+            partsOwner.transport->seekToBeat(beat);
+            partsOwner.transport->play(); parts.update();
         };
-        const double accent = render(0);
-        assert(accent > 0);
-        near(render(0), 0); // same beat never retriggers
-        const double weak = render(0.5);
-        assert(weak > 0 && weak < accent);
-        near(render(1.0), weak);
-        near(render(1.5), accent); // next 3/8 bar
-        state.generation++;
-        near(render(0.25), 0); // seeking between beats stays quiet
-        near(render(0.5), weak);
-        state.loopCount++;
-        near(render(0), accent);
-        state.loopCount++;
-        near(render(0.25), 0); // fractional loop start is not a beat
-        near(render(0.5), weak);
-        state.isPlaying = false;
-        near(render(0), 0);
-        state.isPlaying = true;
-        near(render(0), accent);
-        // A real-time buffer straddling a beat starts the click at that sample.
-        state.generation++;
-        state.driverMode = TransportDriverMode::RealTime;
-        state.beatPosition = 0.48;
-        click.render(audio, state, state.steadyTimeUs);
-        const size_t boundaryFrame = sampleRate / 100;
-        for(size_t i = 0; i < boundaryFrame * 2; ++i) near(audio[i], 0);
-        assert(std::abs(audio[(boundaryFrame + 2) * 2]) > 0);
+        evaluate(0.5);
+        near(pitches.get()[0], 36); near(pitches.get()[1], 72);
+        near(gates.get()[0], 1); near(gates.get()[1], 1); near(gates.get()[2], 0);
+        near(velocities.get()[0], 0.3); near(velocities.get()[1], 0.9);
+        evaluate(1.5);
+        near(gates.get()[0], 0); near(gates.get()[1], 1);
+        evaluate(2.5); near(gates.get()[0], 0); near(gates.get()[1], 0);
+        const auto saved = parts.toJson(); parts.fromJson(saved);
+        evaluate(0.5); near(gates.get()[0], 1); near(gates.get()[1], 1);
+        parts.setClipTiming(t, c, 0, 8);
+        evaluate(4.5); near(gates.get()[0], 1); near(gates.get()[1], 1);
+        parts.setClipTiming(t, c, 0, 4);
+        parts.getLane(t, c, melody)->pianoNotes[0].probability = 0;
+        evaluate(0.5); near(gates.get()[0], 1); near(gates.get()[1], 0);
+        parts.getLane(t, c, melody)->pianoNotes[0].probability = 1;
+        // Mono is local to a part: a bass replacement leaves melody sounding.
+        parts.getLane(t, c, bass)->pianoMonophonic = true;
+        parts.getLane(t, c, bass)->pianoNotes = {{0, 2, 36, 0.3f, 1}, {0.5, 1.5, 40, 0.4f, 1}};
+        evaluate(0.75);
+        int active = 0;
+        for(size_t i = 0; i < gates.get().size(); ++i) if(gates.get()[i] > 0) {
+            assert(pitches.get()[i] == 40 || pitches.get()[i] == 72); ++active;
+        }
+        assert(active == 2);
+        // Group voice limits still apply across the two parts.
+        parts.setNoteGroupVoices(t, group, 1);
+        evaluate(0.75); near(pitches.get()[0], 40); near(gates.get()[0], 1);
+        near(gates.get()[1], 0);
+        parts.setNoteGroupVoices(t, group, 4);
+        std::vector<ofxOceanodeScheduledParameterEvent> events;
+        ofxOceanodeScheduling::registerParameterTarget(&gate, &parts,
+            [&](const auto& event) { events.push_back(event); return true; });
+        evaluate(1.95);
+        assert(std::any_of(events.begin(), events.end(), [](const auto& event) {
+            if(event.isCorrection) return false;
+            const auto values = ofSplitString(event.value, ",");
+            return values.size() >= 2 && ofToFloat(values[0]) == 0 && ofToFloat(values[1]) == 0;
+        }));
+        partsOwner.transport->pause();
+        ofxOceanodeScheduling::unregisterOwner(&parts);
+        parts.removeLane(t, c, melody);
+        evaluate(0.75); near(pitches.get()[0], 40); near(gates.get()[0], 1);
     }
     // All editors and arrangement gestures share one tempo-aware coordinate
     // mapping. Cover the inverse beyond its initial search bound as well as
@@ -300,7 +358,7 @@ int main() {
     restored.requestNoteGroupSetup(&parameter);
     restored.clear(); assert(!parameter.isTimelined() && !levelParameter.isTimelined());
     assert(restored.consumePendingNoteGroupSetup() == nullptr);
-    std::cout << "Timeline regression passed: automation, dropdown lanes, additive bindings, transport loops, state capture, LFO, wave envelope, JSON persistence, groups, markers, signature, cleanup.\n";
+    std::cout << "Timeline regression passed: lane duplication, shared piano voices, automation, dropdown lanes, additive bindings, transport loops, state capture, LFO, wave envelope, JSON persistence, groups, markers, signature, cleanup.\n";
 }
 '''
 

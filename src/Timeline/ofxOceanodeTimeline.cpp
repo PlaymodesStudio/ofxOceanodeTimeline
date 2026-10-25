@@ -1135,7 +1135,8 @@ constexpr int kKitBaseNote = 36;
 // 0), or else steals the slot whose note started first, which ends there. A
 // kit's slot is fixed by the key.
 void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane,
-                         int voices, bool kit, ofxOceanodeTimelinePianoVoicing& out) {
+                         int voices, bool kit, ofxOceanodeTimelinePianoVoicing& out,
+                         const std::vector<double>* noteEnds = nullptr) {
     constexpr double eps = 1e-6;
     const auto& notes = lane.pianoNotes;
     const size_t count = notes.size();
@@ -1145,7 +1146,8 @@ void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeT
     out.end.resize(count);
     out.retrigger.assign(count, 0);
     out.wrapRetrigger.assign(count, 0);
-    for(size_t i = 0; i < count; ++i) out.end[i] = pianoNoteEnd(notes[i]);
+    for(size_t i = 0; i < count; ++i)
+        out.end[i] = noteEnds == nullptr ? pianoNoteEnd(notes[i]) : (*noteEnds)[i];
 
     std::vector<size_t> order(count);
     for(size_t i = 0; i < count; ++i) order[i] = i;
@@ -1430,6 +1432,40 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                 // (a release still sounding keeps its note and its level).
                 if(const auto* binding = bindingFor(lane.pianoGateBindingId))
                     zeroWhenInactiveBindingsCache.emplace(binding);
+            }
+            // Piano lanes driving the same roles are parts of one instrument.
+            // Allocate their notes together so independent bass/melody editors
+            // share voices rather than replacing or adding MIDI pitches.
+            std::map<std::vector<std::string>, std::vector<const ofxOceanodeTimelineLane*>> parts;
+            for(const auto& lane : clip.lanes) {
+                if(lane.type == ofxOceanodeTimelineLaneType::PianoRoll)
+                    parts[{lane.pianoPitchBindingId, lane.pianoGateBindingId, lane.pianoVelocityBindingId}].push_back(&lane);
+            }
+            for(const auto& entry : parts) {
+                if(entry.second.size() < 2) continue;
+                auto playback = std::make_shared<SharedPianoPlayback>();
+                playback->first = entry.second.front();
+                playback->lane = *playback->first;
+                playback->lane.pianoNotes.clear();
+                playback->lane.pianoMonophonic = false;
+                std::vector<double> ends;
+                for(const auto* part : entry.second) {
+                    const auto& local = trackIt->second.pianoVoicing.at(part);
+                    for(size_t n = 0; n < part->pianoNotes.size(); ++n) {
+                        playback->lane.pianoNotes.push_back(part->pianoNotes[n]);
+                        playback->noteLanes.push_back(part);
+                        // Preserve per-part mono note stealing before sharing
+                        // the instrument's overall voice limit.
+                        ends.push_back(local.end[n]);
+                    }
+                    trackIt->second.sharedPiano.emplace(part, playback);
+                }
+                int voices = 0, instrumentVoices = 0;
+                bool kit = false;
+                pianoLaneVoicesAndKit(track, playback->lane, voices, kit, &instrumentVoices);
+                computePianoVoicing(clip, playback->lane, voices, kit, playback->voicing, &ends);
+                playback->voicing.outputWidth = std::max(playback->voicing.width, instrumentVoices);
+                playback->voicing.instrument = instrumentVoices > 0;
             }
         }
     }
@@ -3219,6 +3255,24 @@ std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, c
     return clip->lanes.back().id;
 }
 
+std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId, const std::string& clipId,
+                                                       const std::string& laneId) {
+    auto* clip = getClip(trackId, clipId);
+    if(clip == nullptr || clip->isLfo) return {};
+    const auto source = std::find_if(clip->lanes.begin(), clip->lanes.end(),
+                                     [&](const auto& lane) { return lane.id == laneId; });
+    if(source == clip->lanes.end() || source->type == ofxOceanodeTimelineLaneType::Wave ||
+       source->isWaveVolume || !source->lfoParameter.empty()) return {};
+    ofxOceanodeTimelineLane copy = *source;
+    copy.id = makeUniqueLaneId();
+    ++nextLaneNumber;
+    const auto newId = copy.id;
+    clip->lanes.insert(std::next(source), std::move(copy));
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return newId;
+}
+
 bool ofxOceanodeTimelineManager::removeLane(const std::string& trackId, const std::string& clipId,
                                             const std::string& laneId) {
     auto* clip = getClip(trackId, clipId);
@@ -3993,7 +4047,14 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                 }
                 continue;
             }
-            for(const auto& lane : clip.lanes) {
+            for(const auto& sourceLane : clip.lanes) {
+                const SharedPianoPlayback* shared = nullptr;
+                if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
+                    const auto it = trackIt->second.sharedPiano.find(&sourceLane);
+                    if(it != trackIt->second.sharedPiano.end()) shared = it->second.get();
+                }
+                if(shared != nullptr && shared->first != &sourceLane) continue;
+                const auto& lane = shared == nullptr ? sourceLane : shared->lane;
                 if(lane.type == ofxOceanodeTimelineLaneType::Wave) {
                     // Real audio, not automation -- never touches a
                     // binding/parameter at all. Handled by the dedicated
@@ -4061,7 +4122,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     // Piano roll: every note plays in its own voice slot (see
                     // computePianoVoicing), so a held note keeps its voice.
                     ofxOceanodeTimelinePianoVoicing localVoicing;
-                    const ofxOceanodeTimelinePianoVoicing* voicing = nullptr;
+                    const ofxOceanodeTimelinePianoVoicing* voicing = shared == nullptr ? nullptr : &shared->voicing;
                     if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                         const auto it = trackIt->second.pianoVoicing.find(&lane);
                         if(it != trackIt->second.pianoVoicing.end() && it->second.slot.size() == lane.pianoNotes.size())
@@ -4095,7 +4156,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                             if(openAt(*it) > sourceBeat) continue;
                             held[slot] = static_cast<long long>(*it);
                             if(isPlaying && sourceBeat < voicing->end[*it] &&
-                               pianoProbabilityPasses(notes[*it], pianoCycle, lane.probabilitySeed))
+                               pianoProbabilityPasses(notes[*it], pianoCycle,
+                                   shared == nullptr ? lane.probabilitySeed : shared->noteLanes[*it]->probabilitySeed))
                                 sounding[slot] = static_cast<long long>(*it);
                             break;
                         }
@@ -4166,7 +4228,12 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                         } else {
                             value = valueOf(latestSounding, latestSounding >= 0 ? latestSounding : latestHeld);
                             if(value.empty()) continue;
-                            if(role == 2) value = mapNormalizedLaneValue(lane, *binding, value);
+                            if(role == 2) {
+                                const auto note = latestSounding >= 0 ? latestSounding : latestHeld;
+                                const auto& valueLane = shared != nullptr && note >= 0
+                                    ? *shared->noteLanes[static_cast<size_t>(note)] : lane;
+                                value = mapNormalizedLaneValue(valueLane, *binding, value);
+                            }
                         }
                         bindingClipValues[binding][&clip].emplace_back(binding->mode, std::move(value));
                     }
@@ -4566,7 +4633,14 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                 // per-cycle probabilities), so it is always a candidate.
                 addSourceBeat(0.0);
 
-                for(const auto& lane : clip.lanes) {
+                for(const auto& sourceLane : clip.lanes) {
+                    const SharedPianoPlayback* shared = nullptr;
+                    if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
+                        const auto it = trackIt->second.sharedPiano.find(&sourceLane);
+                        if(it != trackIt->second.sharedPiano.end()) shared = it->second.get();
+                    }
+                    if(shared != nullptr && shared->first != &sourceLane) continue;
+                    const auto& lane = shared == nullptr ? sourceLane : shared->lane;
                     switch(lane.type) {
                         case ofxOceanodeTimelineLaneType::Number:
                         case ofxOceanodeTimelineLaneType::Dropdown:
@@ -4624,7 +4698,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                         }
                         case ofxOceanodeTimelineLaneType::PianoRoll: {
                             // A note stolen by a later one ends early (its voicing end).
-                            const ofxOceanodeTimelinePianoVoicing* voicing = nullptr;
+                            const ofxOceanodeTimelinePianoVoicing* voicing = shared == nullptr ? nullptr : &shared->voicing;
                             if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                                 const auto it = trackIt->second.pianoVoicing.find(&lane);
                                 if(it != trackIt->second.pianoVoicing.end() && it->second.end.size() == lane.pianoNotes.size())

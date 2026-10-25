@@ -24,10 +24,11 @@ timeline.setClipStep(trackId, clipId, laneId, 1.5, "67", 2.5);
 ```
 
 One track can contain several clips, and one clip can contain Step, Curve, Number and
-Piano Roll lanes. Several lanes or overlapping clips assigned to the same
-binding are summed. A parameter can also be bound on several tracks; each
-binding's automation mode (`Replace`, `Add`, `Multiply`, `Min` or `Max`)
-controls how those track-level contributions combine.
+Piano Roll lanes. Ordinary lanes sharing a binding combine using its automation
+mode (`Replace`, `Add`, `Multiply`, `Min` or `Max`). Overlapping clips on the
+same binding use the clip starting latest, with later track order breaking ties.
+A parameter can also be bound on several tracks; binding modes control how
+those contributions combine.
 
 Clip source duration and visible duration are independent. Clips can be moved,
 cropped, stretched or repeated without changing lane data. “Consolidate
@@ -38,17 +39,25 @@ through the same parameter path convention used by Custom GUI. Missing targets
 remain in the timeline data and are marked in memory instead of deleting their
 lanes.
 
-## Metronome
+## Duplicating lanes
 
-The metronome icon beside Play toggles a short audible click during playback.
-The first beat of each bar is higher and louder; the remaining beats are softer.
-Clicks follow the time-signature denominator (for example, eighth notes in 7/8),
-transport tempo, pauses, seeks and loops. Audio goes to the default output device
-through a separate output stream, opened only while the metronome is enabled.
-On macOS it uses CoreAudio and the output device's current sample rate to avoid
-changing the hardware clock and shifting the pitch of existing playback. If the
-device rate cannot be read, the metronome stays disabled.
-The toggle is a session preference and is not saved in presets.
+Open a clip editor and click **D** beside a lane's header, or right-click its
+header and choose **Duplicate lane** (also available when collapsed). The copy
+appears immediately below the original, expanded and selected. It keeps all
+content, settings, probability seed, bindings and editor height; editing either
+lane leaves the other's content independent. Both remain inside the same clip
+and share its timing, stretching and repeats. The model API is
+`duplicateLane(trackId, clipId, laneId)` and returns the new lane ID.
+
+Piano-roll lanes with the same pitch/gate/velocity bindings in one clip share
+a voice pool. Use separate lanes for bass and melody: their notes play together
+within the instrument's or note group's voice limit. A part's Mono setting
+still limits that part; scalar targets remain monophonic. The same allocation
+is used for playback and scheduled note events.
+
+Other ordinary automation lane types can also be duplicated, with their
+binding's existing blend mode determining the combined output. LFO control
+lanes and audio volume envelopes have fixed roles and cannot be duplicated.
 
 ## Number clips
 

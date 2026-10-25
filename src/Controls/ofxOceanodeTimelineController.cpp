@@ -2821,6 +2821,22 @@ void ofxOceanodeTimelineController::draw() {
             makeToggleLane(timeline.getLane(editorState.editorTrackId, editorState.editorClipId, newLaneId));
     }
 
+    if(requestDuplicateLane) {
+        requestDuplicateLane = false;
+        const auto newId = timeline.duplicateLane(editorState.editorTrackId, editorState.editorClipId,
+                                                   pendingDuplicateLaneId);
+        if(!newId.empty()) {
+            const auto height = editorState.laneEditorHeights.find(pendingDuplicateLaneId);
+            if(height != editorState.laneEditorHeights.end()) {
+                const float copiedHeight = height->second;
+                editorState.laneEditorHeights[newId] = copiedHeight;
+            }
+            editorState.editorLaneId = newId;
+            laneEditors.clearSelection();
+        }
+        pendingDuplicateLaneId.clear();
+    }
+
     if(requestRemoveLane) {
         requestRemoveLane = false;
         if(auto* clip = timeline.getClip(editorState.editorTrackId, editorState.editorClipId)) {
@@ -3548,6 +3564,15 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     ofxOceanodeTimelineLaneEditorContext context{timeline, *container, track, *clip, *lane,
                                                view, editorState.editorLaneId, isFocused, {}};
     auto& laneEditor = laneEditors.forType(lane->type);
+    auto drawLaneMenu = [&]() {
+        if(ImGui::BeginPopupContextItem(("##laneMenu" + lane->id).c_str())) {
+            if(ImGui::MenuItem("Duplicate lane")) {
+                requestDuplicateLane = true;
+                pendingDuplicateLaneId = lane->id;
+            }
+            ImGui::EndPopup();
+        }
+    };
     std::string laneLabel = laneDisplayName(*lane);
     if(!lane->bindingIds.empty()) {
         if(const auto* laneBoundParam = timeline.getBinding(track.id, lane->bindingIds.front()))
@@ -3566,6 +3591,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         ImGui::Selectable((laneLabel + "##laneHeaderCollapsed" + lane->id).c_str(), isFocused,
                           ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
         if(ImGui::IsItemClicked()) editorState.editorLaneId = lane->id;
+        drawLaneMenu();
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         continue;
     }
@@ -3637,9 +3663,16 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     if(ImGui::SmallButton(("v##laneCollapse" + lane->id).c_str())) editorState.collapsedLaneIds.insert(lane->id);
     ImGui::SameLine();
     if(ImGui::Selectable((laneLabel + "##laneHeader" + lane->id).c_str(), isFocused,
-                         ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 22.0f, 0))) {
+                         ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 46.0f, 0))) {
         editorState.editorLaneId = lane->id;
     }
+    drawLaneMenu();
+    ImGui::SameLine();
+    if(ImGui::SmallButton(("D##duplicateLane" + lane->id).c_str())) {
+        requestDuplicateLane = true;
+        pendingDuplicateLaneId = lane->id;
+    }
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate this lane below, keeping its bindings");
     ImGui::SameLine();
     if(ImGui::SmallButton(("x##removeLane" + lane->id).c_str())) {
         requestRemoveLane = true;

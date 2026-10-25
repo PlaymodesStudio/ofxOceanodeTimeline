@@ -250,13 +250,15 @@ private:
     std::string removeBindingTrackId;
     std::string removeBindingId;
     // A clip can hold more than one lane (e.g. a curve and a step pattern
-    // combined into one clip); these back the clip editor's "Add lane" /
-    // "Remove this lane" controls. The actual mutation is deferred to a
+    // combined into one clip); these back the clip editor's add, duplicate
+    // and remove lane controls. The actual mutation is deferred to a
     // fixed point in draw(), like clip deletion above, since createLane/
     // removeLane can reallocate the clip's lane vector and the editor keeps
     // pointers into it for the rest of the frame it was requested on.
     bool requestAddLane = false;
     int pendingAddLaneType = 0;
+    bool requestDuplicateLane = false;
+    std::string pendingDuplicateLaneId;
     bool requestRemoveLane = false;
     std::string pendingRemoveLaneId;
     // Dragging a parameter row's label to reorder it within its track.
