@@ -4359,9 +4359,16 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         const double frameSeconds = std::max(1.0 / 240.0, static_cast<double>(ofGetLastFrameTime()));
         const double beatsPerSecond = std::max(1.0f, transport.bpm) / 60.0;
         const double target = ofClamp(std::max(0.010, 1.2 * frameSeconds) * beatsPerSecond, 1.0 / 192.0, 0.25);
-        // Only follow real changes (frame rate, tempo), not frame-to-frame
-        // jitter: the scheduler placed its gate-offs with the current value.
-        if(std::abs(target - retriggerGapBeats) > 0.25 * retriggerGapBeats) {
+        // Once playback has queued events, keep their gate boundaries stable.
+        // Even a large GUI frame-time fluctuation must not invalidate them:
+        // correction sends would close a future note 1 ms after it opens, then
+        // reschedule that same note on the next frame. Repeated fluctuations
+        // turn one note into a burst of on/off events and late corrections.
+        // The frame-driven path can still adapt, as can the next scheduling
+        // run after stopping or an explicit content/transport edit.
+        const bool schedulingInFlight = schedulingEnabled && transport.isPlaying &&
+                                        !scheduledPaths.empty();
+        if(!schedulingInFlight && std::abs(target - retriggerGapBeats) > 0.25 * retriggerGapBeats) {
             retriggerGapBeats = target;
             invalidateSchedule();
         }
