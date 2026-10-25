@@ -31,6 +31,12 @@ is not saved in a preset. Higher-level track grouping is reserved for a
 future **Create group** action on selected tracks; existing **Group clips**
 links clip timing and does not create a track hierarchy.
 
+Right-click a track's left pad and choose **Duplicate track** to create an
+independent copy immediately below it. Clips, lanes, target routing, piano
+groups, audio settings and track volume automation are copied. Clip groups
+within the track are copied independently; links to other tracks stay with
+the original. The copy is selected, and duplication can be undone.
+
 The **Clips** view is the default arrangement: each clip appears once, with a
 content/target summary and miniature previews. **Targets** shows parameter
 rows instead. A clip affecting several parameters appears on several target
@@ -41,7 +47,10 @@ Double-click a clip to open its editor. Shared timing appears once above the
 lanes, labelled with its track and clip. Lane headers show user names and
 editor types; **Content** contains the lane's name, editor type and settings,
 and **Targets** contains its destinations. Piano Roll targets are explicitly
-assigned to pitch, gate and velocity roles. **+ Lane** chooses content and a
+assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
+to select every note at that pitch in the piano-roll lane, including notes
+outside the visible window. Shift+right-click adds another pitch to the
+selection. Left-click still auditions the key. **+ Lane** chooses content and a
 target together; “No target (assign later)” creates editable content without
 output. Lane properties scroll when a small editor height cannot fit them.
 Closing or folding the editor retains content. Right-click anywhere in a
@@ -54,6 +63,14 @@ samples; clip gain belongs to the selected sample, while the separately
 labelled track volume envelope affects every audio clip on that track. Tempo
 automation is global to the timeline. “Components” inside a Multi Value or
 Multi Gate lane are vector elements, not independently timed clip lanes.
+
+Right-click a multi-lane automation clip and choose **Break lanes into tracks**
+to replace it with one new track per lane, in lane order below the source
+track. Each new clip keeps its original timing, source mapping and lane
+content, with only that lane's targets. Other clips and targets on the source
+track remain. The source track remains available even if it becomes empty.
+The new tracks are selected and the action is undoable. LFO control envelopes
+stay together because they jointly define one oscillator.
 
 ## Reusable clip files
 

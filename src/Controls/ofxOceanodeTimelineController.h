@@ -219,6 +219,8 @@ private:
     // Track removal is deferred until the track iteration has finished;
     // erasing from timeline.getTracks() inside its context menu would
     // invalidate the current track and every clip/lane reference below it.
+    std::pair<std::string, std::string> breakClipLanesRequest;
+    std::string duplicateTrackId; // deferred until iteration has finished
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
     bool requestClipDeletion = false;

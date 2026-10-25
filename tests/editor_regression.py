@@ -9,6 +9,11 @@ from of_environment import of_root
 
 CASES = r'''
 #include "Managers/ofxOceanodeContainer.h"
+#include <map>
+#include <set>
+#define private public
+#include "Controls/Editors/ofxOceanodeTimelinePianoRollEditor.h"
+#undef private
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Controls/Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
@@ -119,6 +124,29 @@ int main() {
     frame(pianoClip, pianoLane, false);
     expectedPianoGridBeats.clear();
     model.setTimeSignature(4, 4);
+    // Right-clicking keyboard keys selects every matching pitch, even notes
+    // outside the visible source window, without changing content or auditioning.
+    auto* pitchLane=model.getLane(trackId,pianoClip,pianoLane);
+    pitchLane->pianoLowPitch=60; pitchLane->pianoHighPitch=63;
+    pitchLane->pianoNotes={{0,0.5,60,0.8f,1},{1,0.5,61,0.8f,1},
+        {2,0.5,60,0.8f,1},{20,0.5,60,0.8f,1}};
+    auto& pianoEditor=static_cast<ofxOceanodeTimelinePianoRollEditor&>(editors.forType(ofxOceanodeTimelineLaneType::PianoRoll));
+    auto selectPitch=[&](float y,bool focused=true) {
+        const ImVec2 point(220,y);
+        frame(pianoClip,pianoLane,focused,point,false);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right,true); frame(pianoClip,pianoLane,focused,point,false);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right,false); frame(pianoClip,pianoLane,true,point,false);
+    };
+    const auto pitchBefore=model.toJson();
+    selectPitch(279.5f,false);
+    assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{0,2,3}));
+    assert(pianoEditor.pianoSelectionLaneId==pianoLane && !pianoEditor.pianoKeyboardPreviewActive);
+    io.AddKeyEvent(ImGuiMod_Shift,true); selectPitch(230.5f);
+    assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{0,1,2,3}));
+    io.AddKeyEvent(ImGuiMod_Shift,false); selectPitch(230.5f);
+    assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{1}));
+    selectPitch(181.5f); assert(pianoEditor.pianoSelectedNoteIndices.empty());
+    assert(model.toJson()==pitchBefore);
     // Mouse input is routed only to the focused editor.
     const auto stepClip = model.createClip(trackId, "Step", 0, 4);
     const auto stepLane = model.createLane(trackId, stepClip, "Step", ofxOceanodeTimelineLaneType::Step);

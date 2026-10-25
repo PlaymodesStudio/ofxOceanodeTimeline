@@ -407,6 +407,30 @@ int main() {
     ui.updateAudioDropPreview({},px,py); // cancelled/exited drag
     assert(!ui.audioDropPreviewActive);
     std::filesystem::remove(samplePath);
+    // Duplicate track through its real context menu, with the mutation deferred
+    // until after track drawing. Its new row is selected and the edit is undoable.
+    frame();
+    const auto trackBefore=model.toJson()["tracks"];
+    const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==t;});
+    assert(row!=ui.clipDropRows.end());
+    const ImVec2 pad(ui.fileDropBounds.x-80,(row->top+row->bottom)*0.5f);
+    frame(1250,pad,false);io.AddMouseButtonEvent(1,true);frame(1250,pad,false);
+    io.AddMouseButtonEvent(1,false);frame(1250,pad,false);frame();
+    assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
+    auto* trackMenu=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;assert(trackMenu);
+    const ImVec2 duplicatePoint(trackMenu->Pos.x+50,trackMenu->Pos.y+trackMenu->Size.y-
+        ImGui::GetStyle().WindowPadding.y-ImGui::GetTextLineHeight()*0.5f-ImGui::GetTextLineHeightWithSpacing());
+    frame(1250,duplicatePoint,false);frame(1250,duplicatePoint,true);frame(1250,duplicatePoint,false);
+    assert(model.getTracks().size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
+    const auto duplicatedTrack=*ui.selectedTracks.begin();assert(duplicatedTrack!=t);
+    assert(model.getTrack(duplicatedTrack)->clips.size()==model.getTrack(t)->clips.size());
+    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);frame();
+    model.beginTimelineEdit();ui.breakClipLanesRequest={t,c};frame();
+    assert(!model.getClip(t,c) && ui.selectedTracks.size()==3);
+    for(const auto& id:ui.selectedTracks) {
+        const auto* track=model.getTrack(id);assert(track && track->clips.size()==1 && track->clips[0].lanes.size()==1);
+    }
+    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);
     ImGui::DestroyContext();
     std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }

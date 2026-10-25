@@ -1871,6 +1871,10 @@ void ofxOceanodeTimelineController::draw() {
                 requestRenamePopup = true;
                 ImGui::CloseCurrentPopup();
             }
+            if(ImGui::MenuItem("Duplicate track")) {
+                duplicateTrackId = track.id;
+                ImGui::CloseCurrentPopup();
+            }
             if(ImGui::MenuItem("Remove track")) {
                 trackDeletionId = track.id;
                 requestTrackDeletion = true;
@@ -2218,6 +2222,12 @@ void ofxOceanodeTimelineController::draw() {
                     editorView(timeline, transportState.bpm, endBeat),
                     static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
                 contextMenuSection("Content");
+                if(!track.isWaveTrack && !clip.isLfo) {
+                    if(ImGui::MenuItem("Break lanes into tracks", nullptr, false, clip.lanes.size() > 1))
+                        breakClipLanesRequest = {track.id, clip.id};
+                    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("Replace this clip with one new track per lane, preserving timing, content and targets.");
+                }
                 if(ImGui::MenuItem("Consolidate content"))
                     timeline.consolidateClipContent(track.id, clip.id);
                 if(ImGui::IsItemHovered())
@@ -3197,6 +3207,30 @@ void ofxOceanodeTimelineController::draw() {
        !ImGui::GetIO().KeyShift && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
         selectedClips.clear();
         if(!trackPadClickedThisFrame) selectedTracks.clear();
+    }
+
+    if(!breakClipLanesRequest.second.empty()) {
+        const auto source = breakClipLanesRequest;
+        breakClipLanesRequest = {};
+        const auto created = timeline.breakClipLanesIntoTracks(source.first, source.second);
+        if(!created.empty()) {
+            selectedClips.clear(); selectedTracks.clear();
+            for(const auto& clip : created) selectedTracks.insert(clip.first);
+            if(editorState.editorTrackId == source.first && editorState.editorClipId == source.second) {
+                editorState.clipEditorOpen = false;
+                editorState.editorTrackId.clear(); editorState.editorClipId.clear(); editorState.editorLaneId.clear();
+                laneEditors.clearSelection();
+            }
+        }
+    }
+
+    if(!duplicateTrackId.empty()) {
+        const auto id = timeline.duplicateTrack(duplicateTrackId);
+        duplicateTrackId.clear();
+        if(!id.empty()) {
+            selectedClips.clear();
+            selectedTracks = {id};
+        }
     }
 
     if(requestTrackDeletion) {

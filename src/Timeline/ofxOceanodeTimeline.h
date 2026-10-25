@@ -640,6 +640,11 @@ public:
     // ofxOceanodeTimelineTrack::isWaveTrack). Reuses createTrack for the
     // usual id/uniqueness/list bookkeeping and just marks the result.
     std::string createWaveTrack(const std::string& requestedName = "Wave Track");
+    // Independent copy immediately below the source, with fresh routing/content IDs.
+    std::string duplicateTrack(const std::string& trackId);
+    // Replaces one multi-lane automation clip with independent single-lane tracks.
+    std::vector<std::pair<std::string, std::string>> breakClipLanesIntoTracks(
+        const std::string& trackId, const std::string& clipId);
     bool removeTrack(const std::string& trackId);
     ofxOceanodeTimelineTrack* getTrack(const std::string& trackId);
     const ofxOceanodeTimelineTrack* getTrack(const std::string& trackId) const;
@@ -988,6 +993,7 @@ private:
     static std::string makeId(const char* prefix, uint64_t number);
     std::string makeUniqueTrackName(const std::string& requestedName) const;
     std::string makeUniqueClipName(const ofxOceanodeTimelineTrack& track, const std::string& requestedName) const;
+    std::string insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
     std::string makeUniqueBindingId() const;
     std::string makeUniqueTrackId() const;
     std::string makeUniqueClipId() const;

@@ -176,6 +176,21 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         const bool keyPressedHere = pianoKeyboardPreviewActive && pianoKeyboardPreviewTrackId == track.id &&
             pianoKeyboardPreviewPitch == keyboardPitch;
         const bool keyHovered = hoverRect(ImVec2(keyboardLeft, keyTop), ImVec2(keyboardRight, keyBottom));
+        if(keyHovered) ImGui::SetTooltip("Left-click to audition. Right-click to select all notes at this pitch.\nShift+right-click adds this pitch to the selection.");
+        if(keyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            editorLaneId = lane->id;
+            if(pianoSelectionLaneId != lane->id || !ImGui::GetIO().KeyShift)
+                pianoSelectedNoteIndices.clear();
+            pianoSelectionLaneId = lane->id;
+            for(size_t index = 0; index < lane->pianoNotes.size(); ++index)
+                if(lane->pianoNotes[index].pitch == keyboardPitch)
+                    pianoSelectedNoteIndices.insert(static_cast<int>(index));
+            pianoDragMode = PianoDragMode::None;
+            pianoDragNoteIndex = -1;
+            pianoDragSnapshot.clear();
+            pianoValueDragSnapshot.clear();
+            pianoMarqueeActive = false;
+        }
         if(keyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             // Match the canvas's own convention (see editorCanvasHovered
             // above): clicking anywhere interactive on an unfocused
