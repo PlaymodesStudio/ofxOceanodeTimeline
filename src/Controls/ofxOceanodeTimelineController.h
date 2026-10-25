@@ -42,6 +42,10 @@ public:
     void drawBeforeWindows() override { drawPendingTrackPopup(); }
 
 private:
+    void beginHistoryGesture(ofxOceanodeTimelineManager& timeline);
+    void finishHistoryGesture(ofxOceanodeTimelineManager& timeline);
+    void restoreHistory(ofxOceanodeTimelineManager& timeline, bool redo);
+    int lastTimelineDrawFrame = -1;
     void drawRuler(ofxOceanodeTimelineManager& timeline, float labelWidth, float timelineWidth,
                    double endBeat, double beatPosition, float bpm);
     void drawLaneEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,

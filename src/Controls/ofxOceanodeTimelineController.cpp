@@ -502,10 +502,53 @@ void ofxOceanodeTimelineController::drawBlendModeOptions(ofxOceanodeTimelineMana
         ImGui::SetTooltip("Keeps the combined value from Add/Multiply/Min/Max bindings within this parameter's own min/max");
 }
 
+void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManager& timeline) {
+    // This also runs before other windows, so parameter-menu actions such as
+    // Add to Timeline are captured even while the timeline window is hidden.
+    const auto& io = ImGui::GetIO();
+    const bool historyKey = (io.KeyCtrl || io.KeySuper) && ImGui::IsKeyPressed(ImGuiKey_Z, false);
+    if(!historyKey && (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1) ||
+       ImGui::IsAnyItemActive() || ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
+       ImGui::IsKeyPressed(ImGuiKey_Backspace, false) || ImGui::IsKeyPressed(ImGuiKey_S, false) ||
+       ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+        timeline.beginTimelineEdit();
+}
+
+void ofxOceanodeTimelineController::finishHistoryGesture(ofxOceanodeTimelineManager& timeline) {
+    if(!ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1) && !ImGui::IsAnyItemActive() &&
+       !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
+        timeline.endTimelineEdit();
+}
+
+void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& timeline, bool redo) {
+    if(!(redo ? timeline.redoTimelineEdit() : timeline.undoTimelineEdit())) return;
+    // Every editor may retain indices into the content that was replaced.
+    // Keep the open clip but discard selections and unfinished gestures.
+    laneEditors = {};
+    bpmEditor = {};
+    waveVolumeEditor = {};
+    lfoEditor = {};
+    selectedClips.clear();
+    clipDragMode = ClipDragMode::None;
+    groupDragSnapshot.clear();
+    markerDragId.clear();
+    loopDragMode = LoopDragMode::None;
+    pendingJump = false;
+}
+
 void ofxOceanodeTimelineController::draw() {
     if(container == nullptr) return;
     editorScreenValid = false;
     auto& timeline = container->getTimelineManager();
+    lastTimelineDrawFrame = ImGui::GetFrameCount();
+    const auto& historyIO = ImGui::GetIO();
+    if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+       !historyIO.WantTextInput && !ImGui::IsAnyItemActive() &&
+       !ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(1) && !historyIO.KeyAlt &&
+       !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) &&
+       (historyIO.KeyCtrl || historyIO.KeySuper) && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        restoreHistory(timeline, historyIO.KeyShift);
+    beginHistoryGesture(timeline);
     auto& viewState = timeline.getViewState();
     float& pixelsPerSecond = viewState.pixelsPerSecond;
     float& timelineScrollX = viewState.scrollX;
@@ -895,7 +938,19 @@ void ofxOceanodeTimelineController::draw() {
                               "Time: manual tempo changes preserve absolute timing.");
     }
 
-    // ---- Row 2: loop | grid | view | output timing | tracks ----
+    // ---- Row 2: history | loop | grid | view | output timing | tracks ----
+    ImGui::BeginDisabled(!timeline.canUndoTimelineEdit());
+    if(ImGui::Button("Undo##timeline")) restoreHistory(timeline, false);
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Undo timeline action (Cmd/Ctrl+Z)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!timeline.canRedoTimelineEdit());
+    if(ImGui::Button("Redo##timeline")) restoreHistory(timeline, true);
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Redo timeline action (Shift+Cmd/Ctrl+Z)");
+    groupSeparator();
     {
         bool loopEnabled = timeline.isLoopEnabled();
         const bool localLoopAvailable = !externalClock;
@@ -3107,6 +3162,7 @@ void ofxOceanodeTimelineController::draw() {
         requestClipRenamePopup = false;
     }
     drawClipRenamePopup(timeline);
+    finishHistoryGesture(timeline);
 }
 
 void ofxOceanodeTimelineController::drawPendingTrackPopup() {
@@ -3116,6 +3172,12 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
     // called at all.
     if(container == nullptr) return;
     auto& timeline = container->getTimelineManager();
+    // If the timeline was hidden last frame, commit actions performed by
+    // canvas parameter menus. Visible-window gestures finish after draw(),
+    // including edits applied on mouse release.
+    if(lastTimelineDrawFrame < ImGui::GetFrameCount() - 1)
+        finishHistoryGesture(timeline);
+    beginHistoryGesture(timeline);
 
     std::string requestedRename;
     bool isNewTrack = false;

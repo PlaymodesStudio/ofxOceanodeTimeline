@@ -891,6 +891,16 @@ public:
     // the backend was given.
     void invalidateSchedule();
 
+    // Like canvas history, transactions span a complete user gesture. Runtime
+    // automation and view scrolling/zooming are never recorded.
+    void beginTimelineEdit();
+    void endTimelineEdit();
+    bool undoTimelineEdit();
+    bool redoTimelineEdit();
+    bool canUndoTimelineEdit() const { return !timelineUndo.empty(); }
+    bool canRedoTimelineEdit() const { return !timelineRedo.empty(); }
+    void clearTimelineHistory();
+
     ofJson toJson() const;
     void fromJson(const ofJson& json);
     bool savePreset(const std::string& presetFolderPath) const;
@@ -902,6 +912,30 @@ public:
     static ofxOceanodeTimelineAutomationMode modeFromString(const std::string& mode);
 
 private:
+    struct TimelineState {
+        ofJson data;
+        std::vector<ofxOceanodeTimelineTrack> tracks;
+        std::vector<ofxOceanodeTimelineClipGroup> groups;
+        std::vector<ofxOceanodeTimelineMarker> markers;
+        std::vector<ofxOceanodeTimelineCurvePoint> tempoPoints;
+        std::vector<ofxOceanodeTimelineCurveTension> tempoTensions;
+        uint64_t nextTrack, nextBinding, nextClip, nextLane, nextGroup;
+        size_t bytes = 0;
+    };
+    struct TimelineEdit {
+        TimelineState before, after;
+        float beforeBpm = 0.0f, afterBpm = 0.0f;
+        bool manualTempo = false;
+        size_t bytes = 0;
+    };
+    std::unique_ptr<TimelineEdit> pendingTimelineEdit;
+    std::deque<TimelineEdit> timelineUndo, timelineRedo;
+    bool replayingTimelineEdit = false;
+    ofJson timelineEditData() const;
+    TimelineState captureTimelineEdit() const;
+    void restoreTimelineState(const TimelineState& state);
+    bool stepTimelineHistory(bool backwards);
+    void trimTimelineHistory();
     std::unique_ptr<ofxOceanodeTimelineMetronome> metronome;
     static std::string laneTypeToString(ofxOceanodeTimelineLaneType laneType);
     static ofxOceanodeTimelineLaneType laneTypeFromString(const std::string& laneType);

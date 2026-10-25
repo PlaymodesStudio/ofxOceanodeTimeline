@@ -39,6 +39,25 @@ through the same parameter path convention used by Custom GUI. Missing targets
 remain in the timeline data and are marked in memory instead of deleting their
 lanes.
 
+## Undo and redo
+
+With the Timeline window focused, **Cmd/Ctrl+Z** undoes an action and
+**Shift+Cmd/Ctrl+Z** redoes it. The toolbar also has **Undo** and **Redo** buttons.
+Text fields keep their normal text undo while editing.
+
+History covers tracks, bindings, clips, lane contents and settings, clip groups,
+markers, loop ranges, tempo automation and manual tempo edits. A complete drag,
+paint stroke or popup edit is one action. Navigation, playback and live parameter
+values do not enter history; zoom, scroll and playhead position stay where they
+are when undoing. Canvas history keeps its own existing shortcuts when the canvas
+has focus.
+
+Like canvas history, timeline history is limited to 100 actions and 64 MB, and a
+new edit clears redo. Clearing or loading a timeline resets history. Unrecorded
+external edits invalidate older history rather than overwriting newer data.
+For programmatic edits, wrap related mutations in `beginTimelineEdit()` and
+`endTimelineEdit()`, then use `undoTimelineEdit()` / `redoTimelineEdit()`.
+
 ## Duplicating lanes
 
 Open a clip editor and click **D** beside a lane's header, or right-click its
@@ -59,7 +78,7 @@ Other ordinary automation lane types can also be duplicated, with their
 binding's existing blend mode determining the combined output. LFO control
 lanes and audio volume envelopes have fixed roles and cannot be duplicated.
 
-## Metronome
+## Metronome and piano-roll grid
 
 The metronome icon beside Play toggles a short audible click during playback.
 The first beat of each bar is higher and louder; the remaining beats are softer.

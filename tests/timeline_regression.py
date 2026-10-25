@@ -27,7 +27,7 @@ public:
     std::map<std::string, ofxOceanodeAbstractParameter*> targets;
     auto getTransport() const { return transport; }
     auto getTransportState() const { return transport->getState(); }
-    void setBpm(float bpm) { transport->setBpm(bpm); }
+    void setBpm(float bpm, bool = true) { transport->setBpm(bpm); }
     std::string getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter) const {
         return parameter.getEscapedName();
     }
