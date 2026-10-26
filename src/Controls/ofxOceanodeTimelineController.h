@@ -39,7 +39,7 @@ public:
     // pop up anchored to wherever that window/tab's viewport is instead of
     // the main canvas the user was actually looking at.
     void drawPendingTrackPopup();
-    void drawBeforeWindows() override { drawPendingTrackPopup(); }
+    void drawBeforeWindows() override;
 
 private:
     void filesDropped(ofDragInfo& info);

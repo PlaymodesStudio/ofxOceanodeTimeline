@@ -114,7 +114,7 @@ int main() {
         const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
             [&](const auto& r){return r.trackId==track;});
         assert(row!=ui.clipDropRows.end());
-        const ImVec2 pos(ui.fileDropBounds.x-80,(row->top+row->bottom)*0.5f);
+        const ImVec2 pos(ui.fileDropBounds.x-120,(row->top+row->bottom)*0.5f);
         frame(1250,pos,false); frame(1250,pos,true); frame(1250,pos,false);
     };
     padClick(t);
@@ -141,6 +141,20 @@ int main() {
     frame(1250,emptyPos,false); frame(1250,emptyPos,true); frame(1250,emptyPos,false);
     assert(ui.selectedTracks.empty() && ui.selectedClips.empty());
     assert(model.toJson()==selectionModel);
+
+    // Real track M/S buttons work on automation and audio tracks.
+    auto trackToggle=[&](const std::string& track,float offset) {
+        const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==track;});
+        assert(row!=ui.clipDropRows.end());
+        const ImVec2 point(ui.fileDropBounds.x+offset,(row->top+row->bottom)*0.5f);
+        frame(1250,point,false); frame(1250,point,true); frame(1250,point,false);
+    };
+    for(const auto& track : {t,wt}) {
+        trackToggle(track,-74); assert(model.getTrack(track)->muted);
+        trackToggle(track,-74); assert(!model.getTrack(track)->muted);
+        trackToggle(track,-49); assert(model.getTrack(track)->solo);
+        trackToggle(track,-49); assert(!model.getTrack(track)->solo);
+    }
     // Open the real import modal, remap saved targets, and confirm using the
     // mouse. Import stays deferred until confirmation and remains undoable.
     const auto beforeImport=model.toJson()["tracks"];
@@ -413,7 +427,7 @@ int main() {
     const auto trackBefore=model.toJson()["tracks"];
     const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==t;});
     assert(row!=ui.clipDropRows.end());
-    const ImVec2 pad(ui.fileDropBounds.x-80,(row->top+row->bottom)*0.5f);
+    const ImVec2 pad(ui.fileDropBounds.x-120,(row->top+row->bottom)*0.5f);
     frame(1250,pad,false);io.AddMouseButtonEvent(1,true);frame(1250,pad,false);
     io.AddMouseButtonEvent(1,false);frame(1250,pad,false);frame();
     assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
@@ -501,6 +515,23 @@ int main() {
     assert(model.requestParameterLane(lfoOnly,addedParameter)); frame();
     assert(model.getClip(lfoOnly,oldLfo)->isLfo && model.getTrack(lfoOnly)->clips.size()==2);
     assert(!model.getClip(lfoOnly,ui.editorState.editorClipId)->isLfo);
+
+    // A note selection owns Delete before the arrangement can remove its clip,
+    // even if the shell's last-click flag is stale and the mouse has moved away.
+    const auto dt=model.createTrack("Delete test");
+    const auto dc=model.createClip(dt,"Keep clip",0,4);
+    const auto dl=model.createLane(dt,dc,"Notes",ofxOceanodeTimelineLaneType::PianoRoll);
+    model.getLane(dt,dc,dl)->pianoNotes={{0,1,60,1,1},{1,1,64,1,1}};
+    ui.editorState.editorTrackId=dt; ui.editorState.editorClipId=dc;
+    ui.editorState.editorLaneId=dl; ui.editorState.clipEditorOpen=true;
+    ui.selectedClips={{dt,dc}}; ui.lastClickInEditor=false;
+    frame(); frame();
+    ui.laneEditors.pianoRoll.pianoSelectionLaneId=dl;
+    ui.laneEditors.pianoRoll.pianoSelectedNoteIndices={0};
+    io.AddKeyEvent(ImGuiKey_Delete,true); frame();
+    assert(model.getClip(dt,dc) && model.getLane(dt,dc,dl)->pianoNotes.size()==1);
+    assert(model.getLane(dt,dc,dl)->pianoNotes.front().pitch==64);
+    io.AddKeyEvent(ImGuiKey_Delete,false); frame();
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();

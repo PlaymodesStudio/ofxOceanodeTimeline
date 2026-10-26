@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace ofxOceanodeTimelineLaneEditorUi {
+bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip);
 constexpr double kPPQ = ofxOceanodeTimelineEditorView::ppq;
 constexpr float kPianoKeyboardWidth = 38.0f;
 constexpr float kPianoScrollbarWidth = 10.0f;

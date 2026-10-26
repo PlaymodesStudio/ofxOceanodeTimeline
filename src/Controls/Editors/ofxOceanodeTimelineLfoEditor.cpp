@@ -99,6 +99,15 @@ bool ofxOceanodeTimelineLfoEditor::draw(
             dl->AddLine(ImVec2(x, graphMin.y), ImVec2(x, graphMax.y), kPlayhead, 1.5f);
     };
 
+    auto drawLanePlayback = [&](ofxOceanodeTimelineLane& lane) {
+        if(playbackToggle("laneMute" + lane.id, "M", lane.muted, "Mute lane"))
+            timeline.setLaneMuted(track.id, clip.id, lane.id, !lane.muted);
+        ImGui::SameLine();
+        if(playbackToggle("laneSolo" + lane.id, "S", lane.solo, "Solo lane within this clip"))
+            timeline.setLaneSolo(track.id, clip.id, lane.id, !lane.solo);
+        ImGui::SameLine();
+    };
+
     // One folded row, shared by the result view and the lanes. Returns true
     // when its label was clicked, which is how a lane takes focus.
     auto drawCollapsedRow = [&](const std::string& key, const std::string& label, bool focused) {
@@ -110,6 +119,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                              ImVec2(rowMin.x + kLabelWidth, rowMax.y),
                              mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
+        if(auto* lane = timeline.getLane(track.id, clip.id, key)) drawLanePlayback(*lane);
         if(ImGui::SmallButton((">##lfoExpand" + key).c_str())) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
         ImGui::Selectable((label + "##lfoHeaderCollapsed" + key).c_str(), focused,
@@ -264,6 +274,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         const auto row = beginRow(lane.id, kDefaultLaneHeight, focused);
         anyLfoCanvasHovered = anyLfoCanvasHovered || row.canvasHovered;
         beginRowProperties(row, lane.id);
+        drawLanePlayback(lane);
         if(ImGui::Selectable((lane.name + "##lfoLaneHeader" + lane.id).c_str(), focused,
                              ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
             editorState.editorLaneId = lane.id;

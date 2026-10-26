@@ -226,6 +226,71 @@ int main() {
     paintFrame(px(2.4),323.0f,false); paintFrame(px(2.4),323.0f,true);
     paintFrame(px(3.6),323.0f,true); paintFrame(px(3.6),323.0f,false);
     close(painted[0].velocity,0.5f); close(painted[1].velocity,0.5f);
+
+    // Dragging a selected handle scales selected notes from a frozen snapshot,
+    // preserving their ratios even across frames, saturation and horizontal travel.
+    model.getClip(trackId,paintClip)->repeatContent=false;
+    model.getClip(trackId,paintClip)->contentDurationBeats=4;
+    model.getClip(trackId,paintClip)->contentStretch=1;
+    painted={{0,0.5,60,0.4f,0.4f},{1,0.5,64,0.2f,0.2f},{2,0.5,67,0.7f,0.7f}};
+
+    pianoEditor.pianoSelectionLaneId=paintLane;
+    pianoEditor.pianoSelectedNoteIndices={0,1};
+    paintFrame(px(0),325.0f,false); paintFrame(px(0),325.0f,true);
+    close(painted[0].velocity,0.4f); close(painted[1].velocity,0.2f);
+    paintFrame(px(2),321.0f,true);
+    close(painted[0].velocity,0.4f+4.0f/22); close(painted[1].velocity,0.2f+2.0f/22); close(painted[2].velocity,0.7f);
+    paintFrame(px(2),316.0f,true);
+    close(painted[0].velocity,0.4f+9.0f/22); close(painted[1].velocity,0.2f+4.5f/22);
+    paintFrame(px(2),316.0f,false);
+    paintFrame(px(0),355.0f,false); paintFrame(px(0),355.0f,true);
+    paintFrame(px(2),350.0f,true); paintFrame(px(2),350.0f,false);
+    close(painted[0].probability,0.4f+5.0f/23); close(painted[1].probability,0.2f+2.5f/23); close(painted[2].probability,0.7f);
+    close(painted[0].velocity,0.4f+9.0f/22); close(painted[1].velocity,0.2f+4.5f/22);
+    // Zero-valued anchors use a shared offset and can be raised from zero.
+    painted[0].velocity=0; painted[1].velocity=0.2f;
+    paintFrame(px(0),333,false); paintFrame(px(0),333,true);
+    paintFrame(px(0),322,true); paintFrame(px(0),322,false);
+    close(painted[0].velocity,0.5f); close(painted[1].velocity,0.7f);
+    // Delete is owned by the focused selection even with the mouse outside the roll.
+    io.AddKeyEvent(ImGuiKey_Delete,true);
+    paintFrame(950,700,false);
+    assert(painted.size()==1 && painted.front().pitch==67);
+    assert(model.getClip(trackId,paintClip));
+    io.AddKeyEvent(ImGuiKey_Delete,false); paintFrame(950,700,false);
+
+    // Live edit sound uses real routed pitch/gate values and releases when the
+    // gesture ends, including when the editor closes while a note is held.
+    ofParameter<float> monitorPitch("Monitor Pitch",72,0,127), monitorGate("Monitor Gate",0,0,1);
+    ofxOceanodeParameter<float> mp,mg; mp.bindParameter(monitorPitch); mg.bindParameter(monitorGate);
+    owner.targets[mp.getEscapedName()]=&mp; owner.targets[mg.getEscapedName()]=&mg;
+    const auto mpb=model.addBinding(trackId,mp), mgb=model.addBinding(trackId,mg);
+    const auto mc=model.createClip(trackId,"Monitor",0,4);
+    const auto ml=model.createLane(trackId,mc,"Monitor",ofxOceanodeTimelineLaneType::PianoRoll);
+    model.addBindingToLane(trackId,mc,ml,mpb); model.addBindingToLane(trackId,mc,ml,mgb);
+    auto* monitor=model.getLane(trackId,mc,ml);
+    monitor->pianoLowPitch=60; monitor->pianoHighPitch=63;
+    assert(!monitor->pianoLiveEditSound);
+    monitor->pianoLiveEditSound=true;
+    auto monitorFrame=[&](float x,float y,bool down){frame(mc,ml,true,ImVec2(x,y),down); model.update();};
+    monitorFrame(265,279,false); monitorFrame(265,279,true);
+    close(monitorPitch,60); close(monitorGate,1);
+    monitorFrame(265,279,false); close(monitorGate,0);
+    monitorFrame(270,279,true); close(monitorGate,1);
+    monitorFrame(300,230,true); close(monitorPitch,61); close(monitorGate,1);
+    monitorFrame(300,230,false); close(monitorGate,0);
+    monitor->pianoLiveEditSound=false;
+    monitorFrame(310,230,true); model.update(); close(monitorGate,0);
+    monitorFrame(310,230,false);
+    monitor->pianoLiveEditSound=true;
+    monitorFrame(400,279,true); close(monitorGate,1);
+    pianoEditor.updateMonitoring(model,""); model.update(); close(monitorGate,0);
+    monitorFrame(400,279,false);
+    const auto monitorSaved=model.toJson(); model.fromJson(monitorSaved);
+    assert(model.getLane(trackId,mc,ml)->pianoLiveEditSound);
+    auto monitorLegacy=monitorSaved;
+    for(auto& tr:monitorLegacy["tracks"]) for(auto& clip:tr["clips"]) for(auto& ln:clip["lanes"]) ln.erase("pianoLiveEditSound");
+    model.fromJson(monitorLegacy); assert(!model.getLane(trackId,mc,ml)->pianoLiveEditSound);
     ImGui::DestroyContext();
     std::cout << "Editor regression passed: all lane types, LFO, properties, previews, clip-stack balance, focus routing, step/curve/slider input.\n";
 }

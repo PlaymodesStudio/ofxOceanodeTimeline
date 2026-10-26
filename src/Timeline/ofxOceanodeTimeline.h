@@ -255,6 +255,8 @@ struct ofxOceanodeTimelineLane {
     std::string name;
     ofxOceanodeTimelineLaneType type = ofxOceanodeTimelineLaneType::Step;
     std::vector<std::string> bindingIds;
+    bool muted = false;
+    bool solo = false;
     ofxOceanodeTimelineStepLane step;
     int stepCount = 16;
     double beatsPerStep = 0.25;
@@ -269,6 +271,7 @@ struct ofxOceanodeTimelineLane {
     int pianoLowPitch = 36;
     int pianoHighPitch = 84;
     bool pianoSnapToGrid = true;
+    bool pianoLiveEditSound = false;
     std::string pianoPitchBindingId;
     std::string pianoGateBindingId;
     std::string pianoVelocityBindingId;
@@ -516,6 +519,8 @@ struct ofxOceanodeTimelineTrack {
     std::string name;
     ofColor color = ofColor(65, 165, 245, 255);
     bool collapsed = false;
+    bool muted = false;
+    bool solo = false;
     std::vector<ofxOceanodeTimelineParameterBinding> bindings;
     std::vector<ofxOceanodeTimelineClip> clips;
     std::vector<ofxOceanodeTimelineNoteGroup> noteGroups;
@@ -797,6 +802,11 @@ public:
                          const std::string& laneId, ofxOceanodeTimelineLaneType type);
     bool setClipTiming(const std::string& trackId, const std::string& clipId,
                        double startBeat, double durationBeats);
+    bool isTrackAudible(const ofxOceanodeTimelineTrack& track) const;
+    bool setTrackMuted(const std::string& trackId, bool muted);
+    bool setTrackSolo(const std::string& trackId, bool solo);
+    bool setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
+    bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
     bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);
     bool resizeClipEnd(const std::string& trackId, const std::string& clipId,
                        double durationBeats, ofxOceanodeTimelineEndEdit operation);
@@ -1056,6 +1066,7 @@ private:
     // linear id lookups for every lane/change beat.
     void rebuildEvaluationIndexes();
     void invalidateEvaluationIndexes();
+    void refreshPlaybackEnablement();
     // Beats in (fromBeat, toBeat] at which any discrete lane can change value:
     // clip edges, repeat cycles, step grid cells, step/region/note boundaries.
     void collectChangeBeats(double fromBeat, double toBeat, bool inclusiveStart,

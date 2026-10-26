@@ -969,6 +969,12 @@ void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& t
     pendingJump = false;
 }
 
+void ofxOceanodeTimelineController::drawBeforeWindows() {
+    if(container != nullptr)
+        laneEditors.updateMonitoring(container->getTimelineManager(), editorState.clipEditorOpen ? editorState.editorLaneId : "");
+    drawPendingTrackPopup();
+}
+
 void ofxOceanodeTimelineController::draw() {
     if(container == nullptr) return;
     editorScreenValid = false;
@@ -1540,6 +1546,7 @@ void ofxOceanodeTimelineController::draw() {
     if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
        !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
        !selectedClips.empty() && !lastClickInEditor && // in the editor, Delete edits the clip's content
+       !(editorState.clipEditorOpen && laneEditors.hasNoteSelection(editorState.editorLaneId)) &&
        !(editorState.clipEditorOpen && lfoEditor.hasPointSelection(editorState.editorClipId)) && // Delete removes the selected LFO point instead
 
        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
@@ -1738,7 +1745,9 @@ void ofxOceanodeTimelineController::draw() {
         // chevron -- just its name, flush where the chevron would be.
         if(targetsView && !track.isWaveTrack)
             dl->AddText(ImVec2(headerMin.x + 7, headerTextY), IM_COL32(235, 235, 235, 255), trackCollapsed ? ">" : "v");
+        dl->PushClipRect(headerMin, ImVec2(headerMin.x + kLabelWidth - 85, headerMax.y), true);
         dl->AddText(ImVec2(headerMin.x + 22, headerTextY), IM_COL32(235, 235, 235, 255), track.name.c_str());
+        dl->PopClipRect();
         // A binding's target parameter can disappear (node deleted, preset
         // loaded on a different graph, ...). The manager keeps the binding
         // and its data instead of dropping it, but that's invisible unless
@@ -1752,7 +1761,7 @@ void ofxOceanodeTimelineController::draw() {
                        IM_COL32(255, 165, 60, 255), "[missing target]");
         }
 
-        const bool trackPadHovered = hoverRect(headerMin, ImVec2(headerMin.x + kLabelWidth, headerMax.y));
+        const bool trackPadHovered = hoverRect(headerMin, ImVec2(headerMin.x + kLabelWidth - 85, headerMax.y));
         if(trackPadHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             trackPadClickedThisFrame = true;
             selectedClips.clear();
@@ -1779,7 +1788,7 @@ void ofxOceanodeTimelineController::draw() {
                         ImVec2(padMax.x - 1, headerMax.y - 1), IM_COL32(150, 190, 255, 255), 2.0f);
         }
 
-        const ImVec2 headerInteractionMax(singleRowTrack ? headerMin.x + kLabelWidth : headerMax.x,
+        const ImVec2 headerInteractionMax(headerMin.x + kLabelWidth - 85,
                                           headerMax.y);
         if(hoverRect(headerMin, headerInteractionMax)) {
             if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -1796,6 +1805,13 @@ void ofxOceanodeTimelineController::draw() {
                 ImGui::OpenPopup(("##trackMenu" + track.id).c_str());
             }
         }
+
+        ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 82, headerMin.y + (trackHeaderHeight - 19.0f) * 0.5f));
+        if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
+            timeline.setTrackMuted(track.id, !track.muted);
+        ImGui::SameLine();
+        if(playbackToggle("trackSolo" + track.id, "S", track.solo, "Solo track (multiple solos allowed)"))
+            timeline.setTrackSolo(track.id, !track.solo);
 
         // Use a ColorButton + explicit picker popup. ColorEdit4 with a local
         // temporary swatch was easy to click past and appeared non-persistent.
@@ -4540,6 +4556,14 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             ImGui::EndPopup();
         }
     };
+    auto drawLanePlayback = [&]() {
+        if(playbackToggle("laneMute" + lane->id, "M", lane->muted, "Mute lane"))
+            timeline.setLaneMuted(track.id, clip->id, lane->id, !lane->muted);
+        ImGui::SameLine();
+        if(playbackToggle("laneSolo" + lane->id, "S", lane->solo, "Solo lane within this clip (multiple solos allowed)"))
+            timeline.setLaneSolo(track.id, clip->id, lane->id, !lane->solo);
+        ImGui::SameLine();
+    };
     const std::string laneLabel = lane->name.empty() ? laneDisplayName(*lane) : lane->name;
     if(editorState.collapsedLaneIds.count(lane->id) > 0) {
         ImGui::Dummy(ImVec2(contentWidth, 22.0f));
@@ -4549,6 +4573,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         ImDrawList* rowDl = ImGui::GetWindowDrawList();
         rowDl->AddRectFilled(ImVec2(rowMin.x + clipIndent, rowMin.y), ImVec2(rowZoneLeft, rowMax.y), mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
+        drawLanePlayback();
         if(ImGui::SmallButton((">##laneExpand" + lane->id).c_str())) editorState.collapsedLaneIds.erase(lane->id);
         ImGui::SameLine();
         ImGui::Selectable((laneLabel + "##laneHeaderCollapsed" + lane->id).c_str(), isFocused,
@@ -4626,6 +4651,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
                       ImGuiWindowFlags_None);
+    drawLanePlayback();
     if(ImGui::SmallButton(("v##laneCollapse" + lane->id).c_str())) editorState.collapsedLaneIds.insert(lane->id);
     ImGui::SameLine();
     if(ImGui::Selectable((laneLabel + "##laneHeader" + lane->id).c_str(), isFocused,

@@ -14,10 +14,19 @@ public:
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
     void clearSelection();
+    void updateMonitoring(ofxOceanodeTimelineManager& timeline, const std::string& activeLaneId);
+    bool hasNoteSelection(const std::string& laneId) const {
+        return pianoSelectionLaneId == laneId && !pianoSelectedNoteIndices.empty();
+    }
     void forgetTrack(const std::string& trackId);
 
 private:
     char targetSearch[128] = {};
+    bool pianoInsertionDrag = false;
+    bool editPreviewActive = false;
+    std::string editPreviewTrackId, editPreviewClipId, editPreviewLaneId;
+    std::string editPreviewGateId, editPreviewPitchId;
+    int editPreviewPitch = -1;
     // Piano-roll keyboard-strip "audition" state: while a key is held down,
     // the lane's Gate/Pitch bindings get a live override (see
     // ofxOceanodeTimelineManager::setLiveOverride) so the bound parameters
@@ -42,6 +51,8 @@ private:
     std::vector<PianoDragSnapshotEntry> pianoDragSnapshot;
     double pianoDragAnchorStartBeat = 0.0;
     int pianoDragAnchorPitch = 0;
+    std::vector<std::pair<int, float>> pianoValueSnapshot;
+    float pianoValueAnchor = 0.0f, pianoValueStartMouseY = 0.0f;
     ImVec2 pianoValuePaintPreviousMouse = ImVec2(0, 0);
     // Shift+drag: the selection's timing scaled from its first start (origin)
     // by how far the grabbed beat moved, every start and end on the grid.

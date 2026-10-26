@@ -599,6 +599,12 @@ bool readWaveformCache(std::string& filePath, int& outNumChannels,
     return true;
 }
 
+// Lane solos are scoped to their clip; track solos are scoped to the timeline.
+bool laneAudible(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane) {
+    return !lane.muted && (lane.solo || std::none_of(clip.lanes.begin(), clip.lanes.end(),
+                                                  [](const auto& other) { return other.solo; }));
+}
+
 bool clipSourceBeat(const ofxOceanodeTimelineClip& clip, double globalBeat, double& sourceBeat) {
     if(clip.muted) return false;
     const double duration = std::max(1.0 / 24.0, clip.durationBeats);
@@ -820,7 +826,7 @@ double lfoCycles(const ofxOceanodeTimelineClip& clip, double sourceBeat) {
     const auto* definition = lfoParameterDefinition("frequency");
     const ofxOceanodeTimelineLane* frequencyLane = nullptr;
     for(const auto& lane : clip.lanes) {
-        if(lane.lfoParameter == "frequency") { frequencyLane = &lane; break; }
+        if(laneAudible(clip, lane) && lane.lfoParameter == "frequency") { frequencyLane = &lane; break; }
     }
     if(definition != nullptr && frequencyLane != nullptr && frequencyLane->curveInterpolation == "Value") {
         const double period = std::max<double>(kMinLfoPeriodBeats, lfoMapNormalized(definition->minimum,
@@ -929,7 +935,7 @@ float evaluateParameter(const ofxOceanodeTimelineClip& clip,
     const auto* definition = lfoParameterDefinition(parameter);
     if(definition == nullptr) return fallback;
     for(const auto& lane : clip.lanes) {
-        if(lane.lfoParameter != parameter) continue;
+        if(!laneAudible(clip, lane) || lane.lfoParameter != parameter) continue;
         const float defaultNormalized = lfoUnmapValue(definition->minimum, definition->maximum,
                                                       lfoLaneIsLog(lane), definition->defaultValue);
         const float normalized = normalizedLfoLaneValue(lane, sourceBeat, defaultNormalized);
@@ -1577,6 +1583,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     // for the current update instead of rediscovering them for the playhead and
     // again for every scheduler lookahead probe.
     for(const auto& track : tracks) {
+        if(!isTrackAudible(track)) continue;
         const auto trackIt = trackEvaluationIndexes.find(&track);
         if(trackIt == trackEvaluationIndexes.end()) continue;
         const auto bindingFor = [&](const std::string& bindingId) -> const ofxOceanodeTimelineParameterBinding* {
@@ -1593,6 +1600,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                 continue;
             }
             for(const auto& lane : clip.lanes) {
+                if(!laneAudible(clip, lane)) continue;
                 if(lane.type == ofxOceanodeTimelineLaneType::Curve) {
                     for(const auto& bindingId : lane.bindingIds)
                         if(const auto* binding = bindingFor(bindingId)) {
@@ -1632,7 +1640,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
             // share voices rather than replacing or adding MIDI pitches.
             std::map<std::vector<std::string>, std::vector<const ofxOceanodeTimelineLane*>> parts;
             for(const auto& lane : clip.lanes) {
-                if(lane.type == ofxOceanodeTimelineLaneType::PianoRoll)
+                if(laneAudible(clip, lane) && lane.type == ofxOceanodeTimelineLaneType::PianoRoll)
                     parts[{lane.pianoPitchBindingId, lane.pianoGateBindingId, lane.pianoVelocityBindingId}].push_back(&lane);
             }
             for(const auto& entry : parts) {
@@ -2919,7 +2927,7 @@ ofxOceanodeTimelineLfoSample ofxOceanodeTimelineManager::evaluateLfoTrack(const 
                                                                          double beat) const {
     ofxOceanodeTimelineLfoSample sample;
     const auto* track = getTrack(trackId);
-    if(track == nullptr) return sample;
+    if(track == nullptr || !isTrackAudible(*track)) return sample;
 
     std::vector<const ofxOceanodeTimelineClip*> clips;
     for(const auto& clip : track->clips) if(clip.isLfo) clips.push_back(&clip);
@@ -3866,20 +3874,63 @@ bool ofxOceanodeTimelineManager::setClipTiming(const std::string& trackId, const
     return true;
 }
 
+bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& track) const {
+    return !track.muted && (track.solo || std::none_of(tracks.begin(), tracks.end(),
+                                                    [](const auto& other) { return other.solo; }));
+}
+
+bool ofxOceanodeTimelineManager::setTrackMuted(const std::string& trackId, bool muted) {
+    auto* track = getTrack(trackId);
+    if(track == nullptr || track->muted == muted) return false;
+    track->muted = muted;
+    refreshPlaybackEnablement();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setTrackSolo(const std::string& trackId, bool solo) {
+    auto* track = getTrack(trackId);
+    if(track == nullptr || track->solo == solo) return false;
+    track->solo = solo;
+    refreshPlaybackEnablement();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setLaneMuted(const std::string& trackId, const std::string& clipId,
+                                            const std::string& laneId, bool muted) {
+    auto* lane = getLane(trackId, clipId, laneId);
+    if(lane == nullptr || lane->muted == muted) return false;
+    lane->muted = muted;
+    refreshPlaybackEnablement();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setLaneSolo(const std::string& trackId, const std::string& clipId,
+                                           const std::string& laneId, bool solo) {
+    auto* lane = getLane(trackId, clipId, laneId);
+    if(lane == nullptr || lane->solo == solo) return false;
+    lane->solo = solo;
+    refreshPlaybackEnablement();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::setClipMuted(const std::string& trackId, const std::string& clipId, bool muted) {
     auto* clip = getClip(trackId, clipId);
     if(clip == nullptr || clip->muted == muted) return false;
     clip->muted = muted;
+    refreshPlaybackEnablement();
+    return true;
+}
+
+void ofxOceanodeTimelineManager::refreshPlaybackEnablement() {
     invalidateEvaluationIndexes();
     if(container != nullptr) {
         const auto transport = container->getTransportState();
         collectActiveValues(transport.beatPosition, transport.isPlaying, false, activeAutomationValues);
         updatePianoGateOwnership(transport.isPlaying);
     }
-    // Correct queued events with the newly muted values, rather than stale notes.
+    // Correct queued events against the updated playback state.
     invalidateSchedule();
     applyAutomation();
-    return true;
 }
 
 bool ofxOceanodeTimelineManager::resizeClipEnd(const std::string& trackId, const std::string& clipId,
@@ -4492,6 +4543,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
         return binding != nullptr && (onlyPaths == nullptr || onlyPaths->count(binding->parameterPath) > 0);
     };
     for(const auto& track : tracks) {
+        if(!isTrackAudible(track)) continue;
         contributionTrack = &track;
         for(const auto& clip : track.clips) {
             contributionClip = &clip;
@@ -4511,6 +4563,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                 continue;
             }
             for(const auto& sourceLane : clip.lanes) {
+                if(!laneAudible(clip, sourceLane)) continue;
                 if(onlyPaths != nullptr) {
                     bool wanted = false;
                     for(const auto& id : sourceLane.bindingIds)
@@ -4837,12 +4890,13 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     } else {
         std::unordered_set<std::string> checkedBindings;
         for(auto& track : tracks) {
+            if(!isTrackAudible(track)) continue;
             for(const auto& clip : track.clips) {
                 if(clip.muted || !clip.isStateCapture ||
                    transport.beatPosition < clip.startBeat - kEpsilon ||
                    transport.beatPosition >= clip.startBeat + clip.durationBeats - kEpsilon) continue;
                 for(const auto& lane : clip.lanes) {
-                    if(lane.type != ofxOceanodeTimelineLaneType::Curve) continue;
+                    if(!laneAudible(clip, lane) || lane.type != ofxOceanodeTimelineLaneType::Curve) continue;
                     for(const auto& bindingId : lane.bindingIds) {
                         const std::string key = track.id + "\x1f" + bindingId;
                         if(!checkedBindings.insert(key).second) continue;
@@ -4947,7 +5001,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                 const double sourceDuration = std::max(1.0 / 24.0, clip.contentDurationBeats);
                 const double sourcePerTimelineBeat = sourceDuration / visibleDuration;
                 const double localBeat = transport.beatPosition - clip.startBeat;
-                const bool active = !clip.muted && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
+                const bool active = isTrackAudible(track) && !clip.muted && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
                 const double waveSourceBeat = active
                     ? ofClamp(localBeat * sourcePerTimelineBeat, 0.0, sourceDuration) : 0.0;
                 const float volume = ofClamp(evaluateWaveClipVolume(track.id, clip.id,
@@ -5111,6 +5165,7 @@ void ofxOceanodeTimelineManager::invalidateSchedule() {
 uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTimelineLane& lane) {
     ChangeHash hash;
     hash.add(lane.type);
+    hash.add(lane.muted); hash.add(lane.solo);
     hash.add(lane.bindingIds.size());
     for(const auto& id : lane.bindingIds) hash.add(id);
     hash.add(lane.step.steps.size());
@@ -5169,7 +5224,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
     ChangeHash hash;
     hash.add(tracks.data()); hash.add(tracks.size());
     for(const auto& track : tracks) {
-        hash.add(track.id); hash.add(track.isWaveTrack);
+        hash.add(track.id); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(track.solo);
         hash.add(track.bindings.data()); hash.add(track.bindings.size());
         for(const auto& binding : track.bindings) {
             hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
@@ -5328,7 +5383,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                            [&](const std::string& id) { return bindingScheduled(track, id); });
     };
     for(const auto& track : tracks) {
-        if(track.isWaveTrack) continue; // audio, not automation
+        if(track.isWaveTrack || !isTrackAudible(track)) continue; // audio, not automation
         for(const auto& clip : track.clips) {
             if(clip.muted || clip.isLfo) continue;
             if(std::none_of(clip.lanes.begin(), clip.lanes.end(),
@@ -5381,6 +5436,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                 addSourceBeat(0.0);
 
                 for(const auto& sourceLane : clip.lanes) {
+                    if(!laneAudible(clip, sourceLane)) continue;
                     const SharedPianoPlayback* shared = nullptr;
                     if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                         const auto it = trackIt->second.sharedPiano.find(&sourceLane);
@@ -6204,6 +6260,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         trackJson["id"] = track.id;
         trackJson["name"] = track.name;
         trackJson["collapsed"] = track.collapsed;
+        trackJson["muted"] = track.muted;
+        trackJson["solo"] = track.solo;
         trackJson["isWaveTrack"] = track.isWaveTrack;
         trackJson["waveVolume"] = track.waveVolume;
         trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
@@ -6273,6 +6331,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 ofJson laneJson;
                 laneJson["id"] = lane.id;
                 laneJson["name"] = lane.name;
+                laneJson["muted"] = lane.muted;
+                laneJson["solo"] = lane.solo;
                 laneJson["laneType"] = laneTypeToString(lane.type);
                 laneJson["bindingIds"] = lane.bindingIds;
                 laneJson["stepCount"] = lane.stepCount;
@@ -6285,6 +6345,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["pianoLowPitch"] = lane.pianoLowPitch;
                 laneJson["pianoHighPitch"] = lane.pianoHighPitch;
                 laneJson["pianoSnapToGrid"] = lane.pianoSnapToGrid;
+                laneJson["pianoLiveEditSound"] = lane.pianoLiveEditSound;
                 laneJson["pianoPitchBindingId"] = lane.pianoPitchBindingId;
                 laneJson["pianoGateBindingId"] = lane.pianoGateBindingId;
                 laneJson["pianoVelocityBindingId"] = lane.pianoVelocityBindingId;
@@ -6480,6 +6541,8 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
         if(!originalTrackId.empty()) loadedTrackIdRemap[originalTrackId] = track.id;
         track.name = makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
         track.collapsed = trackJson.value("collapsed", false);
+        track.muted = trackJson.value("muted", false);
+        track.solo = trackJson.value("solo", false);
         track.isWaveTrack = trackJson.value("isWaveTrack", false);
         track.waveVolume = ofClamp(trackJson.value("waveVolume", 1.0f), 0.0f, 4.0f);
         // Track automation is always present for Wave Tracks. The old flag is
@@ -6584,6 +6647,8 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
                         lane.id = uniqueLoadedId(laneJson.value("id", std::string()),
                                                  "timeline_lane", nextLaneNumber, loadedLaneIds);
                         lane.name = laneJson.value("name", std::string("Lane"));
+                        lane.muted = laneJson.value("muted", false);
+                        lane.solo = laneJson.value("solo", false);
                         lane.type = laneTypeFromString(laneJson.value("laneType", std::string("Step")));
                         lane.stepCount = std::max(1, laneJson.value("stepCount", 16));
                         lane.beatsPerStep = std::max(1.0 / 24.0, laneJson.value("beatsPerStep", 0.25));
@@ -6597,6 +6662,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
                         lane.pianoLowPitch = ofClamp(laneJson.value("pianoLowPitch", 36), 0, 127);
                         lane.pianoHighPitch = ofClamp(laneJson.value("pianoHighPitch", 84), lane.pianoLowPitch, 127);
                         lane.pianoSnapToGrid = laneJson.value("pianoSnapToGrid", true);
+                        lane.pianoLiveEditSound = laneJson.value("pianoLiveEditSound", false);
                         lane.pianoPitchBindingId = mapBinding(laneJson.value("pianoPitchBindingId", std::string()));
                         lane.pianoGateBindingId = mapBinding(laneJson.value("pianoGateBindingId", std::string()));
                         lane.pianoVelocityBindingId = mapBinding(laneJson.value("pianoVelocityBindingId", std::string()));

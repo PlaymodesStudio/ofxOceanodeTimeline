@@ -5,6 +5,17 @@
 #include <cmath>
 
 namespace ofxOceanodeTimelineLaneEditorUi {
+bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip) {
+    ImGui::PushID(id.c_str());
+    if(on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.45f, 0.12f, 1.0f));
+    const bool clicked = ImGui::SmallButton(label);
+    if(on) ImGui::PopStyleColor();
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    ImGui::PopID();
+    return clicked;
+}
+
+
 int divisionIndexForBeats(double beats) {
     int best = 0;
     double bestDistance = std::abs(beats - kDivisionOptions[0].beats);
