@@ -72,7 +72,11 @@ private:
     };
     std::vector<AudioFileDrop> pendingAudioDrops;
 
-    std::vector<std::string> patchTargetPaths() const;
+    const std::vector<std::string>& patchTargetPaths() const;
+    mutable std::vector<std::string> patchTargetPathsCache;
+    mutable uint64_t patchTargetPathsTime = 0;
+    mutable uint64_t patchTargetPathsFingerprint = 0;
+    mutable bool patchTargetPathsValid = false;
     struct TargetAssignment {
         std::string trackId, clipId, laneId, path;
         ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane;

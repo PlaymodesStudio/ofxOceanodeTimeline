@@ -347,6 +347,14 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     const double displayGrid = view.displayGridBeats();
     const double visibleFrom = beatAtOffset(std::max(0.0f, left - timelineMin.x));
     const double visibleTo = std::min(view.endBeat, beatAtOffset(std::max(0.0f, right - timelineMin.x)) + displayGrid);
+    // Only the repeats reaching the visible part of the canvas are drawn and
+    // hit-tested: a short pattern repeated over a long clip has thousands.
+    int firstCycle = 0, lastCycle = cycles - 1;
+    if(clip->repeatContent && cycles > 1) {
+        const double cycleLength = std::max(1e-6, cycleDuration(*clip));
+        firstCycle = ofClamp(static_cast<int>(std::floor((visibleFrom - clip->startBeat) / cycleLength)), 0, cycles - 1);
+        lastCycle = ofClamp(static_cast<int>(std::floor((visibleTo - clip->startBeat) / cycleLength)), firstCycle, cycles - 1);
+    }
     const int firstLine = std::max(0, static_cast<int>(std::floor(visibleFrom / displayGrid)));
     const int lastLine = static_cast<int>(std::ceil(visibleTo / displayGrid));
     for(int i = firstLine; i <= lastLine; ++i) {
@@ -360,7 +368,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                         bar ? kBar : quarter ? IM_COL32(92, 92, 92, 145) : kGrid, bar ? 1.5f : 1.0f);
     }
     // Keep source-cycle boundaries visible without restarting the musical grid.
-    for(int cycle = 0; cycle < cycles; ++cycle) {
+    for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         if(clip->repeatContent && cycle > 0) {
             const float x = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, 0.0, cycle));
             if(x < left || x > right) continue;
@@ -369,7 +377,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     }
 
     dl->PushClipRect(ImVec2(left, rollTop), ImVec2(right, probabilityBottom), true);
-    for(int cycle = 0; cycle < cycles; ++cycle) {
+    for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         for(size_t noteIndex = 0; noteIndex < lane->pianoNotes.size(); ++noteIndex) {
             const auto& note = lane->pianoNotes[noteIndex];
             if(note.pitch < lowPitch || note.pitch > highPitch) continue;
@@ -429,7 +437,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     auto hitPianoValueHandle = [&]() {
         int result = -1;
         float nearestDistance = 8.0f;
-        for(int cycle = 0; cycle < cycles; ++cycle) {
+        for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             for(int i = static_cast<int>(lane->pianoNotes.size()) - 1; i >= 0; --i) {
                 const float handleX = timelineMin.x + beatOffset(
                     sourceToTimelineBeat(*clip, lane->pianoNotes[i].startBeat, cycle)) + 3.0f;
@@ -593,7 +601,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             const float marqueeMaxX = std::max(pianoMarqueeStartX, mouse.x);
             const float marqueeMinY = std::min(pianoMarqueeStartY, mouse.y);
             const float marqueeMaxY = std::max(pianoMarqueeStartY, mouse.y);
-            for(int cycle = 0; cycle < cycles; ++cycle) {
+            for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
                 for(size_t noteIndex = 0; noteIndex < lane->pianoNotes.size(); ++noteIndex) {
                     const auto& note = lane->pianoNotes[noteIndex];
                     if(note.pitch < lowPitch || note.pitch > highPitch) continue;
@@ -699,7 +707,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         // Interpolate the entire stroke segment, including handles skipped by
         // a fast mouse movement and all notes of a chord at the same beat.
         const float radius = std::abs(dx) < 1.0f ? 8.0f : 0.0f;
-        for(int cycle = 0; cycle < cycles; ++cycle) {
+        for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             for(auto& note : lane->pianoNotes) {
                 const float x = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle)) + 3.0f;
                 if(x < left || x > right || x < x1 - radius || x > x2 + radius) continue;

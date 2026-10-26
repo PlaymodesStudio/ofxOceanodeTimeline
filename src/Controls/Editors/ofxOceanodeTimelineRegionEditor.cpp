@@ -67,10 +67,19 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
     auto rowBottomY = [&](int r) { return rowTopY(r) + rowHeight; };
     const int clipCycles = clip->repeatContent ? std::max(1, static_cast<int>(std::ceil(clip->durationBeats / cycleDuration(*clip)))) : 1;
     const float span = lane->valueMax - lane->valueMin;
+    const double visibleFrom = beatAtOffset(std::max(0.0f, left - timelineMin.x));
+    const double visibleTo = std::min(endBeat, beatAtOffset(std::max(0.0f, right - timelineMin.x)) + view.displayGridBeats());
+    // Only the repeats reaching the visible part of the canvas.
+    int firstCycle = 0, lastCycle = clipCycles - 1;
+    if(clip->repeatContent && clipCycles > 1) {
+        const double cycleLength = std::max(1e-6, cycleDuration(*clip));
+        firstCycle = ofClamp(static_cast<int>(std::floor((visibleFrom - clip->startBeat) / cycleLength)), 0, clipCycles - 1);
+        lastCycle = ofClamp(static_cast<int>(std::floor((visibleTo - clip->startBeat) / cycleLength)), firstCycle, clipCycles - 1);
+    }
     {
         const double multiGrid = view.displayGridBeats();
-        const int multiGridLines = static_cast<int>(std::ceil(endBeat / multiGrid));
-        for(int gridIndex = 0; gridIndex <= multiGridLines; ++gridIndex) {
+        const int multiGridLines = static_cast<int>(std::ceil(visibleTo / multiGrid));
+        for(int gridIndex = std::max(0, static_cast<int>(std::floor(visibleFrom / multiGrid))); gridIndex <= multiGridLines; ++gridIndex) {
             const double beat = gridIndex * multiGrid;
             const float x = timelineMin.x + beatOffset(beat);
             const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
@@ -82,7 +91,7 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
     for(int r = 0; r < rowCount; ++r) {
         const float rTop = rowTopY(r), rBottom = rowBottomY(r);
         dl->AddRectFilled(ImVec2(left, rTop), ImVec2(right, rBottom), IM_COL32(255, 255, 255, r % 2 ? 8 : 14));
-        for(int cycle = 0; cycle < clipCycles; ++cycle) {
+        for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             if(isValueRow) {
                 for(const auto& region : lane->multiValueRows[r]) {
                     const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, region.startBeat, cycle));

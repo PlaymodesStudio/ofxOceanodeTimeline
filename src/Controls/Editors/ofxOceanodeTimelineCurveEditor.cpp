@@ -149,22 +149,37 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     dl->AddText(ImVec2(left + 5.0f, curveBottom - ImGui::GetTextLineHeight() - 2.0f),
                 IM_COL32(205, 205, 210, 220), curveMinLabel);
     const double curveGrid = view.displayGridBeats();
-    const int curveGridLines = static_cast<int>(std::ceil(endBeat / curveGrid));
-    for(int gridIndex = 0; gridIndex <= curveGridLines; ++gridIndex) {
+    const double visibleFrom = beatAtOffset(std::max(0.0f, left - timelineMin.x));
+    const double visibleTo = std::min(endBeat, beatAtOffset(std::max(0.0f, right - timelineMin.x)) + curveGrid);
+    const int curveGridLines = static_cast<int>(std::ceil(visibleTo / curveGrid));
+    for(int gridIndex = std::max(0, static_cast<int>(std::floor(visibleFrom / curveGrid))); gridIndex <= curveGridLines; ++gridIndex) {
         const double beat = gridIndex * curveGrid;
         const float x = timelineMin.x + beatOffset(beat);
         const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
         if(bar || beatOffset(beat + curveGrid) - beatOffset(beat) >= 4.0f)
             dl->AddLine(ImVec2(x, curveTop), ImVec2(x, curveBottom), bar ? kBar : kGrid, bar ? 1.5f : 1.0f);
     }
-    std::sort(lane->curvePoints.begin(), lane->curvePoints.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
-    lane->curveTensions.resize(lane->curvePoints.empty() ? 0 : lane->curvePoints.size() - 1);
+    // Points stay in beat order; an edit that moves one past a neighbour is
+    // reordered here. Stable, so two points on one beat (a vertical step)
+    // never swap -- an unstable sort could reorder them every frame.
+    const auto byBeat = [](const auto& a, const auto& b) { return a.beat < b.beat; };
+    if(!std::is_sorted(lane->curvePoints.begin(), lane->curvePoints.end(), byBeat))
+        std::stable_sort(lane->curvePoints.begin(), lane->curvePoints.end(), byBeat);
+    const size_t segments = lane->curvePoints.empty() ? 0 : lane->curvePoints.size() - 1;
+    if(lane->curveTensions.size() != segments) lane->curveTensions.resize(segments);
     const auto& points = lane->curvePoints;
     const double content = sourceDuration(*clip);
     const double repeatCycleDuration = cycleDuration(*clip);
     const int cycles = clip->repeatContent ? std::max(1, static_cast<int>(std::ceil(clip->durationBeats / repeatCycleDuration))) : 1;
+    // Only the repeats reaching the visible part of the canvas.
+    int firstCycle = 0, lastCycle = cycles - 1;
+    if(clip->repeatContent && cycles > 1) {
+        const double cycleLength = std::max(1e-6, repeatCycleDuration);
+        firstCycle = ofClamp(static_cast<int>(std::floor((visibleFrom - clip->startBeat) / cycleLength)), 0, cycles - 1);
+        lastCycle = ofClamp(static_cast<int>(std::floor((visibleTo - clip->startBeat) / cycleLength)), firstCycle, cycles - 1);
+    }
     dl->PushClipRect(ImVec2(left, curveTop), ImVec2(right, curveBottom), true);
-    for(int cycle = 0; cycle < cycles; ++cycle) {
+    for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         if(cycle > 0) {
             const float markerX = timelineMin.x + beatOffset(clip->startBeat + cycle * repeatCycleDuration);
             dl->AddLine(ImVec2(markerX, curveTop), ImVec2(markerX, curveBottom), IM_COL32(track.color.r, track.color.g, track.color.b, 220), 2.0f);

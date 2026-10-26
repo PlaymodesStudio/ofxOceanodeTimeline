@@ -12,15 +12,7 @@ float ofxOceanodeTimelineEditorView::beatToPixels(double beat) const {
 double ofxOceanodeTimelineEditorView::pixelsToBeat(float pixels) const {
     const double targetSeconds = std::max(0.0f, pixels) /
                                  std::max(minPixelsPerSecond, timeline.getViewState().pixelsPerSecond);
-    double low = 0.0;
-    double high = std::max(1.0, endBeat);
-    while(timeline.beatToSeconds(high, fallbackBpm) < targetSeconds && high < 1000000.0) high *= 2.0;
-    for(int iteration = 0; iteration < 40; ++iteration) {
-        const double middle = (low + high) * 0.5;
-        if(timeline.beatToSeconds(middle, fallbackBpm) < targetSeconds) low = middle;
-        else high = middle;
-    }
-    return (low + high) * 0.5;
+    return timeline.secondsToBeat(targetSeconds, fallbackBpm);
 }
 
 double ofxOceanodeTimelineEditorView::snapBeat(double beat, bool enabled, double increment) {

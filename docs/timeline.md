@@ -369,3 +369,32 @@ A Dropdown lane is a Number lane holding option indices: the same
 are always applied as whole indices. Option names are read live from the
 parameter, so a lane whose parameter is missing shows indices and edits them
 numerically. Switching a Number lane to Dropdown rounds its values to indices.
+
+## Per-frame cost
+
+`tests/perf_benchmark.py` builds an optimized (-O2) session and prints timings.
+The session has eight 8-voice instruments with 400 scheduled notes each, a
+curve and a number lane per track, and a sigmoid tempo map. Run it after
+changing the evaluation path.
+
+- **Values:** automation values travel as text, but they never go through OF's
+  string helpers. `ofSplitString(..., trim)` builds a named `std::locale` for
+  every token, which made a frame take about 100 ms in that session. The
+  timeline tokenizes and parses numbers without locale lookups. It writes each
+  float with the fewest digits that read back exactly (`ofToString` keeps 6, so
+  2000003 became 2e+06).
+- **Applying:** a value is applied by comparing typed values, and nothing is set
+  or notified when the parameter already holds it.
+- **Indexes:** evaluation indexes (bindings by path, piano voicing, shared piano
+  parts) are rebuilt only when `evaluationSignature()` changes. That is a
+  word-wise hash of the model, of where its containers live, and of each piano
+  lane's instrument voice count and kit. Editors that write the model in place
+  are therefore still picked up on the next update.
+- **Tempo map:** `beatToSeconds()` caches the time at each tempo point and
+  checks the map with a short fingerprint. `secondsToBeat()` is its exact
+  inverse: closed form for step and linear segments, safeguarded Newton inside
+  one segment for curved ones. The scheduler window and the editors'
+  pixel-to-beat conversion use it.
+- **Scheduler:** it only looks for change beats in clips and lanes that drive a
+  scheduled path.
+- **Piano held notes:** the held-note lookup binary-searches each voice slot.

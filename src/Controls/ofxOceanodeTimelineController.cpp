@@ -903,7 +903,19 @@ void ofxOceanodeTimelineController::drawBlendModeOptions(ofxOceanodeTimelineMana
     ImGui::TextWrapped("Within a clip: this mode combines lanes. Overlapping clips: latest start wins. Across tracks: this mode combines the track's contribution with earlier tracks; the first contribution is the base.");
 }
 
-std::vector<std::string> ofxOceanodeTimelineController::patchTargetPaths() const {
+const std::vector<std::string>& ofxOceanodeTimelineController::patchTargetPaths() const {
+    // Walking every parameter of the patch is too much for every frame an
+    // editor is open. Reuse the list while the patch has the same nodes with
+    // the same parameter counts (cheap to check), and at most for two seconds
+    // (renames, flags).
+    const uint64_t now = ofGetElapsedTimeMillis();
+    uint64_t fingerprint = 1469598103934665603ULL;
+    for(auto* node : container->getAllModules()) {
+        fingerprint = (fingerprint ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node))) * 1099511628211ULL;
+        if(node != nullptr) fingerprint = (fingerprint ^ node->getParameters().size()) * 1099511628211ULL;
+    }
+    if(patchTargetPathsValid && fingerprint == patchTargetPathsFingerprint && now - patchTargetPathsTime < 2000)
+        return patchTargetPathsCache;
     std::set<std::string> paths;
     const auto& timeline = container->getTimelineManager();
     for(auto* node : container->getAllModules()) {
@@ -915,7 +927,11 @@ std::vector<std::string> ofxOceanodeTimelineController::patchTargetPaths() const
                 paths.insert(container->getTimelineParameterPath(*parameter));
         }
     }
-    return {paths.begin(), paths.end()};
+    patchTargetPathsCache.assign(paths.begin(), paths.end());
+    patchTargetPathsTime = now;
+    patchTargetPathsFingerprint = fingerprint;
+    patchTargetPathsValid = true;
+    return patchTargetPathsCache;
 }
 
 void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManager& timeline) {
@@ -3816,7 +3832,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
     ImGui::InputDouble("Start beat", &clipImportBeat, 0.25, 1.0, "%.3f");
     if(!track["bindings"].empty()) {
         ImGui::TextWrapped("Choose a new target for each saved parameter. Unassigned lanes keep all their content; connect them later in the lane's Targets tab.");
-        const auto candidates = patchTargetPaths();
+        const auto& candidates = patchTargetPaths();
         ImGui::InputText("Filter targets", clipTargetSearch, sizeof(clipTargetSearch));
         ImGui::BeginChild("##savedClipTargets", ImVec2(0, 240), true);
         for(const auto& binding : track["bindings"]) {
@@ -4494,7 +4510,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
 
     if(clip->lanes.empty()) return;
 
-    const auto availableTargets = patchTargetPaths();
+    const auto& availableTargets = patchTargetPaths();
     for(size_t laneIndex = 0; laneIndex < clip->lanes.size(); ++laneIndex) {
     auto* lane = &clip->lanes[laneIndex];
     const bool isFocused = lane->id == editorState.editorLaneId;

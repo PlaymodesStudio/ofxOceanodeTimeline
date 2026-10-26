@@ -897,6 +897,8 @@ public:
     void setBpmInterpolation(const std::string& interpolation);
     float evaluateBpm(double beat, float fallbackBpm) const;
     double beatToSeconds(double beat, float fallbackBpm) const;
+    // The inverse: the beat reached `seconds` after beat 0.
+    double secondsToBeat(double seconds, float fallbackBpm) const;
 
     bool isLoopEnabled() const { return loopEnabled; }
     bool didLoopWrapThisFrame() const { return loopWrappedThisFrame; }
@@ -1061,6 +1063,9 @@ private:
     double beatAfterSeconds(double startBeat, double seconds, float fallbackBpm) const;
     const std::vector<std::string>& orderedAutomationPaths() const;
     uint64_t pianoInputLeadUs(const std::string& path) const;
+    // Rebuilds the evaluation indexes when evaluationSignature() changed.
+    void ensureEvaluationIndexes();
+    uint64_t evaluationSignature() const;
     void runScheduler(const ofxOceanodeTransportState& transport, bool loopWrappedThisFrame);
     // Paths whose discrete changes are handed to a timestamping backend.
     std::vector<std::string> selectSchedulablePaths() const;
@@ -1152,6 +1157,9 @@ private:
     // GUI: an external parameter edit becomes a temporary live override until
     // the next capture commits it as a point (or playback resumes).
     std::unordered_map<std::string, std::string> stateCaptureLastAppliedValues;
+    // Paths bound by curve lanes of state-capture clips (the only readers of the map above).
+    std::unordered_set<std::string> stateCapturePathsCache;
+    uint64_t evaluationIndexesSignature = 0;
     std::unordered_set<std::string> stateCaptureManualOverrideKeys;
     bool evaluationIndexesValid = false;
     // The node GUI asks this for every visible parameter. Cache path -> color
@@ -1163,6 +1171,10 @@ private:
     mutable std::vector<double> tempoSecondsAtPoint;
     mutable uint64_t tempoSecondsCacheSignature = 0;
     mutable bool tempoSecondsCacheValid = false;
+    // True when a tempo map applies; refreshes tempoSecondsAtPoint if it changed.
+    bool refreshTempoCache() const;
+    // Seconds from tempo point i - 1 to `fraction` of the segment ending at point i.
+    double tempoSegmentSeconds(size_t i, double fraction) const;
     // A piano roll narrows its pitch parameter's range to the keys it shows;
     // the original range is kept here and restored when no piano roll drives
     // that parameter any more.
