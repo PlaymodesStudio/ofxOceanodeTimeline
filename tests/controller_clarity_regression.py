@@ -155,6 +155,59 @@ int main() {
         trackToggle(track,-49); assert(model.getTrack(track)->solo);
         trackToggle(track,-49); assert(!model.getTrack(track)->solo);
     }
+
+    // Wheel zoom keeps the time under the pointer fixed, including the right
+    // edge where the old scroll limit would incorrectly clamp a zoom-in.
+    const auto originalView=model.getViewState();
+    auto& zoomView=model.getViewState();
+    ui.followPlayhead=false;
+    zoomView.pixelsPerSecond=80; frame();
+    const float zoomVisible=ImGui::FindWindowByName("Timeline")->WorkRect.GetWidth()-230;
+    const float oldZoomMax=std::max(0.0f,static_cast<float>(model.beatToSeconds(ui.getContentEndBeat(model),120)*80)-zoomVisible);
+    zoomView.scrollX=oldZoomMax; frame();
+    const ImVec2 zoomPoint(ui.fileDropBounds.x+700,ui.fileDropBounds.y+25);
+    frame(1250,zoomPoint,false);
+    const double timeAtPointer=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
+    io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
+    assert(zoomView.pixelsPerSecond>80 && zoomView.scrollX>oldZoomMax);
+    assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-timeAtPointer)<0.0001);
+    assert(ui.zoomAnchorUntil>ImGui::GetTime());
+    bool zoomGuide=false;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer)
+        zoomGuide |= v.col==IM_COL32(245,195,90,160);
+    assert(zoomGuide);
+    const auto afterWheel=zoomView;
+    frame(1250,zoomPoint,false); assert(zoomView.scrollX==afterWheel.scrollX);
+    // The pinned ruler uses exactly the same anchor and wheel handling.
+    const ImVec2 rulerZoom(zoomPoint.x,ui.fileDropBounds.y-15);
+    frame(1250,rulerZoom,false);
+    const double rulerTime=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
+    io.AddMouseWheelEvent(0,-1); frame(1250,rulerZoom,false);
+    assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-rulerTime)<0.0001);
+    // Locate and click the actual toolbar button by its hover id.
+    auto toolbarPoint=[&](const char* key) {
+        const auto id=ImGui::FindWindowByName("Timeline")->GetID(key);
+        for(float x=280;x<650;x+=4) {
+            const ImVec2 point(x,46); frame(1250,point,false);
+            if(ImGui::GetCurrentContext()->HoveredId==id) return point;
+        }
+        assert(false && "Toolbar button not found"); return ImVec2();
+    };
+    auto clickZoom=[&]() {
+        const auto point=toolbarPoint("##tbZoomIn");
+        frame(1250,point,true); frame(1250,point,false);
+    };
+    owner->getTransport()->seekToBeat(8); zoomView.pixelsPerSecond=140; zoomView.scrollX=100; frame();
+    const double playheadSeconds=model.beatToSeconds(8,120);
+    const double playheadScreen=playheadSeconds*zoomView.pixelsPerSecond-zoomView.scrollX;
+    clickZoom();
+    assert(std::abs(playheadSeconds*zoomView.pixelsPerSecond-zoomView.scrollX-playheadScreen)<0.001);
+    // With the playhead offscreen, toolbar zoom keeps the viewport center fixed.
+    owner->getTransport()->seekToBeat(0); zoomView.scrollX=200; frame();
+    const double centerTime=(zoomView.scrollX+zoomVisible*0.5)/zoomView.pixelsPerSecond;
+    clickZoom();
+    assert(std::abs((zoomView.scrollX+zoomVisible*0.5)/zoomView.pixelsPerSecond-centerTime)<0.0001);
+    model.getViewState()=originalView; ui.zoomAnchorUntil=0; frame();
     // Open the real import modal, remap saved targets, and confirm using the
     // mouse. Import stays deferred until confirmation and remains undoable.
     const auto beforeImport=model.toJson()["tracks"];

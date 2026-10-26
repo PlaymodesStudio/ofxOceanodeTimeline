@@ -272,6 +272,8 @@ private:
                                   const ofxOceanodeTimelineTrack& track,
                                   ofxOceanodeTimelineClip& clip, float contentWidth, double endBeat);
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
+    float zoomAnchorViewportX = 0.0f;
+    double zoomAnchorUntil = 0.0;
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
     std::vector<double> tapTimes;      // tap tempo (seconds)
 

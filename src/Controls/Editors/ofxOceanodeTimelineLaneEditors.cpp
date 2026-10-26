@@ -20,5 +20,5 @@ float ofxOceanodeTimelineLaneEditors::keyboardReserve(ofxOceanodeTimelineLaneTyp
         ? kPianoKeyboardWidth + kPianoScrollbarWidth + 9.0f : 0.0f;
 }
 float ofxOceanodeTimelineLaneEditors::defaultHeight(ofxOceanodeTimelineLaneType type) {
-    return type == ofxOceanodeTimelineLaneType::PianoRoll ? 270.0f : 190.0f;
+    return type == ofxOceanodeTimelineLaneType::PianoRoll ? 480.0f : 190.0f;
 }

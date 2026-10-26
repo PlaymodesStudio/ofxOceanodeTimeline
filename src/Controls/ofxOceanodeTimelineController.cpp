@@ -991,6 +991,7 @@ void ofxOceanodeTimelineController::draw() {
     beginHistoryGesture(timeline);
     auto& viewState = timeline.getViewState();
     float& pixelsPerSecond = viewState.pixelsPerSecond;
+    const float zoomBeforeToolbar = pixelsPerSecond;
     float& timelineScrollX = viewState.scrollX;
     auto transportState = container->getTransportState();
     auto transport = container->getTransport();
@@ -1445,14 +1446,14 @@ void ofxOceanodeTimelineController::draw() {
 
     groupSeparator();
     {
-        if(iconButton("##tbZoomOut", ToolIcon::ZoomOut, "Zoom out"))
+        if(iconButton("##tbZoomOut", ToolIcon::ZoomOut, "Zoom out around the visible playhead, or the view center"))
             pixelsPerSecond = ofClamp(pixelsPerSecond / 1.4f, kMinPixelsPerSecond, kMaxPixelsPerSecond);
         ImGui::SameLine(0.0f, 2.0f);
         ImGui::SetNextItemWidth(58.0f);
         ImGui::DragFloat("##tbPxPerSec", &pixelsPerSecond, 1.0f, kMinPixelsPerSecond, kMaxPixelsPerSecond, "%.0f px/s");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom: pixels per second (mouse wheel over the timeline also zooms)");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom around the visible playhead, or the view center.\nMouse wheel over the timeline zooms at the pointer; the yellow guide marks the anchor.");
         ImGui::SameLine(0.0f, 2.0f);
-        if(iconButton("##tbZoomIn", ToolIcon::ZoomIn, "Zoom in"))
+        if(iconButton("##tbZoomIn", ToolIcon::ZoomIn, "Zoom in around the visible playhead, or the view center"))
             pixelsPerSecond = ofClamp(pixelsPerSecond * 1.4f, kMinPixelsPerSecond, kMaxPixelsPerSecond);
         ImGui::SameLine(0.0f, 4.0f);
         if(iconButton("##tbFit", ToolIcon::Fit, "Zoom to fit every clip and marker")) requestZoomToFit = true;
@@ -1601,8 +1602,10 @@ void ofxOceanodeTimelineController::draw() {
 
     const double endBeat = getContentEndBeat(timeline);
     const float availableWidth = std::max(320.0f, ImGui::GetContentRegionAvail().x);
+    const bool fittingTimeline = requestZoomToFit;
     if(requestZoomToFit) {
         requestZoomToFit = false;
+        zoomAnchorUntil = 0.0;
         double lastBeat = 0.0;
         for(const auto& fitTrack : timeline.getTracks())
             for(const auto& fitClip : fitTrack.clips)
@@ -1614,65 +1617,72 @@ void ofxOceanodeTimelineController::draw() {
         pixelsPerSecond = ofClamp(static_cast<float>(usable / seconds), kMinPixelsPerSecond, kMaxPixelsPerSecond);
         timelineScrollX = 0.0f;
     }
-    const float timelineWidth = std::max(availableWidth - kLabelWidth,
-                                         beatToPixels(timeline, endBeat, transportState.bpm));
+    const float visibleWidth = std::max(1.0f, availableWidth - kLabelWidth);
+    const float scrollbarHeight = ImGui::GetStyle().ScrollbarSize;
+    const ImVec2 timelineAreaMin = ImGui::GetCursorScreenPos();
+    const ImVec2 timelineAreaMax(timelineAreaMin.x + availableWidth,
+                                timelineAreaMin.y + ImGui::GetContentRegionAvail().y - scrollbarHeight);
+    bool zoomedThisFrame = false;
+    auto zoomAt = [&](float scale, float anchorX) {
+        const float oldScale = std::max(kMinPixelsPerSecond, pixelsPerSecond);
+        const float newScale = ofClamp(scale, kMinPixelsPerSecond, kMaxPixelsPerSecond);
+        if(newScale == pixelsPerSecond) return;
+        const double seconds = (timelineScrollX + anchorX) / oldScale;
+        pixelsPerSecond = newScale;
+        timelineScrollX = std::max(0.0f, static_cast<float>(seconds * newScale - anchorX));
+        zoomAnchorViewportX = kLabelWidth + anchorX;
+        zoomAnchorUntil = ImGui::GetTime() + 0.7;
+        zoomedThisFrame = true;
+    };
+    if(!fittingTimeline && pixelsPerSecond != zoomBeforeToolbar) {
+        const float newScale = pixelsPerSecond;
+        pixelsPerSecond = zoomBeforeToolbar;
+        const float playheadX = static_cast<float>(timeline.beatToSeconds(transportState.beatPosition,
+                                                                          transportState.bpm) * zoomBeforeToolbar) - timelineScrollX;
+        zoomAt(newScale, playheadX >= 0.0f && playheadX <= visibleWidth ? playheadX : visibleWidth * 0.5f);
+    }
+    // Resolve zoom before either child draws: ruler, clips and scrollbar all
+    // use the new scale and its scroll limits in the very same frame.
+    const auto& wheelIO = ImGui::GetIO();
+    const bool timelineHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
+        hoverRect(timelineAreaMin, timelineAreaMax);
+    if(timelineHovered && !ImGui::IsAnyItemActive()) {
+        const float anchorX = wheelIO.MousePos.x - timelineAreaMin.x - kLabelWidth;
+        if(anchorX >= 0.0f && std::abs(wheelIO.MouseWheel) > 0.001f)
+            zoomAt(pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel)), anchorX);
+        if(std::abs(wheelIO.MouseWheelH) > 0.001f && std::abs(wheelIO.MouseWheel) <= 0.001f)
+            timelineScrollX -= wheelIO.MouseWheelH * 55.0f;
+    }
+    const float timelineWidth = std::max(visibleWidth, beatToPixels(timeline, endBeat, transportState.bpm));
     const float contentWidth = kLabelWidth + timelineWidth;
+    const float maxTimelineScrollX = std::max(0.0f, timelineWidth - visibleWidth);
     auto beatOffset = [&](double beat) { return beatToPixels(timeline, beat, transportState.bpm); };
     auto beatAtOffset = [&](float pixels) { return pixelsToBeat(timeline, pixels, transportState.bpm, endBeat); };
-
-    // Horizontal scrolling is fully manual (timelineScrollX) rather than a
-    // native ImGui ScrollX, specifically so the label/properties column (the
-    // first kLabelWidth pixels of every row) can stay visually pinned while
-    // only the beat-based content to its right slides. A native ScrollX
-    // would shift the whole child uniformly, dragging the labels off-screen
-    // together with the timeline content.
-    const float scrollbarHeight = ImGui::GetStyle().ScrollbarSize;
-    const float maxTimelineScrollX = std::max(0.0f, timelineWidth - (availableWidth - kLabelWidth));
-    if(followPlayhead && transportState.isPlaying) {
-        // Page along with the playhead: when it nears the right edge (or is
-        // off screen to the left), bring it back near the left side.
-        const float visibleWidth = std::max(1.0f, availableWidth - kLabelWidth);
+    // Give a manual zoom time to settle before automatic playback paging.
+    if(followPlayhead && transportState.isPlaying && !zoomedThisFrame && ImGui::GetTime() >= zoomAnchorUntil) {
         const float playheadX = beatOffset(transportState.beatPosition);
         if(playheadX > timelineScrollX + visibleWidth * 0.9f || playheadX < timelineScrollX)
             timelineScrollX = playheadX - visibleWidth * 0.1f;
     }
     timelineScrollX = ofClamp(timelineScrollX, 0.0f, maxTimelineScrollX);
-    // Mouse wheel over the timeline zooms around the mouse; over the label column
-    // it scrolls vertically (tracks area only). Shared by the pinned ruler strip
-    // and the scrolling tracks viewport; call inside the child it applies to.
-    auto handleTimelineWheel = [&](bool allowVerticalScroll) {
-        if(!ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows |
-                                   ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) return;
-        const bool zoomGesture = std::abs(ImGui::GetIO().MouseWheel) > 0.001f;
-        if(zoomGesture) {
-            const float oldPixelsPerSecond = pixelsPerSecond;
-            const float mouseViewportX = ImGui::GetIO().MousePos.x - ImGui::GetWindowPos().x;
-            if(mouseViewportX >= kLabelWidth) {
-                const float secondsAtMouse = std::max(0.0f, timelineScrollX + mouseViewportX - kLabelWidth) /
-                                             std::max(kMinPixelsPerSecond, oldPixelsPerSecond);
-                const float zoomFactor = static_cast<float>(std::pow(1.12f, ImGui::GetIO().MouseWheel));
-                pixelsPerSecond = ofClamp(oldPixelsPerSecond * zoomFactor,
-                                          kMinPixelsPerSecond, kMaxPixelsPerSecond);
-                timelineScrollX = ofClamp(kLabelWidth + secondsAtMouse * pixelsPerSecond - mouseViewportX,
-                                          0.0f, maxTimelineScrollX);
-            } else if(allowVerticalScroll) {
-                ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * 55.0f));
-            }
-        }
-        if(!zoomGesture && std::abs(ImGui::GetIO().MouseWheelH) > 0.001f)
-            timelineScrollX = ofClamp(timelineScrollX - ImGui::GetIO().MouseWheelH * 55.0f, 0.0f, maxTimelineScrollX);
+    auto drawZoomAnchor = [&]() {
+        if(ImGui::GetTime() >= zoomAnchorUntil) return;
+        const float x = ImGui::GetWindowPos().x + zoomAnchorViewportX;
+        const float top = ImGui::GetWindowPos().y, bottom = top + ImGui::GetWindowSize().y;
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(245, 195, 90, 160));
     };
 
     // The ruler (seconds / beats) lives in its own non-scrolling strip so it stays
     // pinned at the top while the tracks below scroll vertically.
     ImGui::BeginChild("##TimelineRulerStrip", ImVec2(0, kRulerHeight), false,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    handleTimelineWheel(false);
+
     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
                                                    timeline.getBeatsPerBar(),
                                                    transportState.bpm,
                                                    pixelsPerSecond);
     drawRuler(timeline, kLabelWidth, timelineWidth, endBeat, transportState.beatPosition, transportState.bpm);
+    drawZoomAnchor();
     ImGui::EndChild();
 
     ImGui::BeginChild("##TimelineViewport", ImVec2(0, -scrollbarHeight), false,
@@ -1685,7 +1695,9 @@ void ofxOceanodeTimelineController::draw() {
         dropWindowSize.y);
     fileDropMainViewport = ImGui::GetWindowViewport() == ImGui::GetMainViewport();
     bindNativeFileDrops();
-    handleTimelineWheel(true);
+    if(ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
+       wheelIO.MousePos.x < zoneLeft && std::abs(wheelIO.MouseWheel) > 0.001f)
+        ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() - wheelIO.MouseWheel * 55.0f));
     // The wheel gesture may have changed the scale this frame. Refresh the
     // derived snap before handling timeline input.
     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
@@ -3720,6 +3732,7 @@ void ofxOceanodeTimelineController::draw() {
     // final cursor position uncommitted.
     updateNativeAudioDropPreview();
     drawAudioDropPreview(timeline);
+    drawZoomAnchor();
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
     ImGui::EndChild();
 
