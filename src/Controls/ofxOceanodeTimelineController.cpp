@@ -14,6 +14,7 @@
 #endif
 #include "ofxOceanodeTransport.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #ifdef TARGET_GLFW_WINDOW
 #include "GLFW/glfw3.h"
 #ifdef TARGET_OSX
@@ -969,7 +970,67 @@ void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& t
     pendingJump = false;
 }
 
+void ofxOceanodeTimelineController::drawSynthNavigation(ofxOceanodeTimelineManager& timeline,
+                                                       const ofxOceanodeTimelineTrack& track,
+                                                       const ofxOceanodeTimelineClip* clip) {
+    std::set<std::string> bindingIds;
+    if(clip == nullptr) {
+        for(const auto& binding : track.bindings) bindingIds.insert(binding.id);
+    } else {
+        bindingIds.insert(clip->lfoOutputBindingId);
+        for(const auto& lane : clip->lanes) {
+            bindingIds.insert(lane.bindingIds.begin(), lane.bindingIds.end());
+            bindingIds.insert(lane.pianoPitchBindingId);
+            bindingIds.insert(lane.pianoGateBindingId);
+            bindingIds.insert(lane.pianoVelocityBindingId);
+        }
+    }
+    struct SynthTarget { ofxOceanodeNodeModel* model; ofxOceanodeAbstractParameter* parameter; };
+    std::vector<SynthTarget> targets;
+    for(const auto& id : bindingIds) {
+        const auto* binding = timeline.getBinding(track.id, id);
+        auto* parameter = binding == nullptr ? nullptr : container->findTimelineParameter(binding->parameterPath);
+        auto* model = parameter == nullptr ? nullptr : parameter->getNodeModel();
+        ofxOceanodeTimelineInstrument instrument;
+        if(model == nullptr || !model->getTimelineInstrument(instrument)) continue;
+        if(std::none_of(targets.begin(), targets.end(), [&](const auto& target) { return target.model == model; }))
+            targets.push_back({model, parameter});
+    }
+    if(targets.empty()) return;
+    contextMenuSection("Synth");
+    auto show = [&](const SynthTarget& target, bool window) {
+        if(window) {
+            target.model->showNodeWindow();
+            pendingSynthWindowFocus = target.model->getWindowTitle();
+            pendingSynthWindowFocusFrames = pendingSynthWindowFocus.empty() ? 0 : 30;
+        } else container->showParameterInCanvas(*target.parameter);
+    };
+    for(bool window : {true, false}) {
+        const char* label = window ? "Show synth in window" : "Show synth in canvas";
+        if(targets.size() == 1) {
+            const auto& target = targets.front();
+            if(ImGui::MenuItem(label, nullptr, false, !window || target.model->canShowNodeWindow())) show(target, window);
+        } else if(ImGui::BeginMenu(label)) {
+            for(size_t i = 0; i < targets.size(); ++i) {
+                const auto& target = targets[i];
+                ImGui::PushID(static_cast<int>(i));
+                if(ImGui::MenuItem(target.model->getParameterGroup().getName().c_str(), nullptr, false,
+                                   !window || target.model->canShowNodeWindow())) show(target, window);
+                ImGui::PopID();
+            }
+            ImGui::EndMenu();
+        }
+    }
+}
+
 void ofxOceanodeTimelineController::drawBeforeWindows() {
+    // Like MixerPro, wait for a newly opened synth to draw, then bring its tab forward.
+    if(pendingSynthWindowFocusFrames > 0) {
+        if(ImGui::FindWindowByName(pendingSynthWindowFocus.c_str())) {
+            ImGui::SetWindowFocus(pendingSynthWindowFocus.c_str());
+            pendingSynthWindowFocusFrames = 0;
+        } else if(--pendingSynthWindowFocusFrames == 0) pendingSynthWindowFocus.clear();
+    }
     if(container != nullptr)
         laneEditors.updateMonitoring(container->getTimelineManager(), editorState.clipEditorOpen ? editorState.editorLaneId : "");
     drawPendingTrackPopup();
@@ -1845,6 +1906,7 @@ void ofxOceanodeTimelineController::draw() {
         }
         if(ImGui::BeginPopup(("##trackMenu" + track.id).c_str())) {
             ImGui::TextUnformatted(track.name.c_str());
+            drawSynthNavigation(timeline, track);
             contextMenuSection("Appearance");
             float menuColor[4] = {color.x, color.y, color.z, color.w};
             if(ImGui::ColorEdit4("Track color", menuColor, ImGuiColorEditFlags_AlphaBar)) {
@@ -2275,6 +2337,7 @@ void ofxOceanodeTimelineController::draw() {
             const std::string menuId = "##clipMenu" + track.id + "_" + clip.id;
             if(!ImGui::BeginPopup(menuId.c_str())) return;
             ImGui::TextUnformatted(clip.name.c_str());
+            drawSynthNavigation(timeline, track, &clip);
             contextMenuSection("Clip");
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(track.id, clip.id, !clip.muted);

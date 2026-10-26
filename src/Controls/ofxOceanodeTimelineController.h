@@ -42,6 +42,10 @@ public:
     void drawBeforeWindows() override;
 
 private:
+    void drawSynthNavigation(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
+                             const ofxOceanodeTimelineClip* clip = nullptr);
+    std::string pendingSynthWindowFocus;
+    int pendingSynthWindowFocusFrames = 0;
     void filesDropped(ofDragInfo& info);
     void queueAudioDrop(const std::vector<std::string>& files, float x, float y);
     void bindNativeFileDrops();
