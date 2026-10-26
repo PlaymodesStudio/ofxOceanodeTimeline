@@ -216,6 +216,35 @@ clock). A frame-stepped transport, such as frame mode or an offline render, uses
 the frame path, because its playhead does not move with the wall clock that due
 times are computed from.
 
+Edits made while playing invalidate the schedule:
+- Moving or resizing a clip, adding or removing targets, changing a lane's type,
+  removing a lane and toggling bypass do so through the manager.
+- Lane editors write the open clip in place. The controller compares
+  `lanePlaybackSignature()` of its lanes before and after drawing, and
+  invalidates the schedule when it changed. Renames and view settings don't
+  count.
+
+## Retrigger gap and lookahead
+
+Back-to-back equal events (repeated notes, adjacent gate steps) close the gate
+briefly at the join so the instrument sees a new edge.
+- **Frame path:** the gap is at least 10 ms and 1.2 frames, so a frame always
+  samples it.
+- **Scheduled lanes:** a lane whose targets are all scheduled gets about 3 ms,
+  a couple of control blocks. Its gate boundaries execute at their exact
+  instant, so the repeated note opens that much closer to the grid.
+
+Which paths are scheduled is decided before each frame's evaluation, so the
+frame value and the events sent ahead use the same gap.
+
+`setSchedulingLookaheadMs()` is the longest window. By default the scheduler
+uses three recent frame intervals plus 10 ms, at least 50 ms (about 60 ms at
+60 FPS). A stall raises the window at once, and it shrinks back over a few
+seconds. A shorter window leaves less already-sent content, which a stop, seek
+or edit can only correct, not cancel.
+`setSchedulingLookaheadAdaptive(false)` uses the setting as a fixed window.
+It is saved with the timeline as `scheduling.adaptive`.
+
 ## Minimal usage
 
 ```cpp

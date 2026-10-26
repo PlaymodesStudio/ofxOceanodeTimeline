@@ -35,7 +35,7 @@ int main(){
     // Schedule a note far enough ahead to observe the distinct prep times.
     model.getLane(track,clip,lane)->pianoNotes={{0.2,0.2,64,0.8f,1},{0.6,0.2,69,0.7f,1}};
     owner.transport->seekToBeat(0);owner.transport->play();
-    model.setSchedulingEnabled(true);model.setSchedulingLookaheadMs(500);
+    model.setSchedulingEnabled(true);model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
     std::vector<Sent> sent;
     for(auto entry:{std::make_pair(&pitch,'p'),std::make_pair(&velocity,'v'),std::make_pair(&gate,'g')})
         ofxOceanodeScheduling::registerParameterTarget(entry.first,&model,[&,role=entry.second](const auto& e){sent.push_back({role,e});return true;});

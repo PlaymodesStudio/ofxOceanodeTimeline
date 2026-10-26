@@ -936,15 +936,27 @@ public:
     // (curves) and any parameter without such a backend keep the frame path.
     void setSchedulingEnabled(bool enabled);
     bool isSchedulingEnabled() const { return schedulingEnabled; }
-    // How far ahead events are handed to the backend. It must exceed the worst
-    // frame interval that still has to sound on time; 120 ms covers a GUI
-    // stall of several frames at 60 FPS.
+    // The longest window events are handed to the backend ahead of time. The
+    // scheduler uses three recent frame intervals plus 10 ms (at least 50 ms)
+    // up to this limit: a longer window survives longer GUI stalls, a shorter
+    // one leaves less already-sent content that a stop, seek or edit can only
+    // correct, not cancel.
     void setSchedulingLookaheadMs(double milliseconds);
     double getSchedulingLookaheadMs() const { return schedulingLookaheadMs; }
+    // Off: the window is always getSchedulingLookaheadMs().
+    void setSchedulingLookaheadAdaptive(bool adaptive) { schedulingLookaheadAdaptive = adaptive; }
+    bool isSchedulingLookaheadAdaptive() const { return schedulingLookaheadAdaptive; }
+    // The window actually used: long enough for the recent frame intervals,
+    // never longer than getSchedulingLookaheadMs().
+    double effectiveSchedulingLookaheadMs() const;
     // Editors may call this after changing clip/lane/loop data; the scheduler
     // also repairs itself when it notices the playhead's value is not the one
     // the backend was given. Corrections go out on the next update.
     void invalidateSchedule();
+    // Hash of everything in a lane that changes what it plays (not its name or
+    // view settings). Editors that write lanes in place compare it before and
+    // after drawing, and invalidate the schedule when it changed.
+    static uint64_t lanePlaybackSignature(const ofxOceanodeTimelineLane& lane);
 
     // Like canvas history, transactions span a complete user gesture. Runtime
     // automation and view scrolling/zooming are never recorded.
@@ -1050,6 +1062,10 @@ private:
     const std::vector<std::string>& orderedAutomationPaths() const;
     uint64_t pianoInputLeadUs(const std::string& path) const;
     void runScheduler(const ofxOceanodeTransportState& transport, bool loopWrappedThisFrame);
+    // Paths whose discrete changes are handed to a timestamping backend.
+    std::vector<std::string> selectSchedulablePaths() const;
+    // Retrigger gap of a lane's back-to-back events, in timeline beats.
+    double laneRetriggerGapBeats(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane) const;
     void sendScheduleCorrections(const ofxOceanodeTransportState& transport, uint64_t nowUs,
                                  const std::set<std::string>* onlyPaths = nullptr);
     // Beat the playhead will have reached offsetSeconds after transport's
@@ -1200,10 +1216,19 @@ private:
     // merge). In timeline beats; long enough (>= 1.2 frames, >= 10 ms) that
     // the per-frame path always sees it, and the scheduler uses the same value.
     double retriggerGapBeats = 1.0 / 48.0;
+    // The gap of lanes whose targets are all scheduled (a few milliseconds).
+    double scheduledRetriggerGapBeats = 1.0 / 160.0;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     bool schedulingEnabled = true;
+    // The longest window; the scheduler uses less while frames are short.
     double schedulingLookaheadMs = 120.0;
+    bool schedulingLookaheadAdaptive = true;
+    // Longest recent frame interval, decaying over a few seconds.
+    double frameIntervalPeakSeconds = 1.0 / 60.0;
+    // Selected before the frame's evaluation; the scheduled lanes' paths.
+    std::vector<std::string> schedulablePathsThisFrame;
+    std::unordered_set<std::string> fastRetriggerPaths;
     bool hasScheduleCursor = false;
     // invalidateSchedule() was called: the next runScheduler() corrects what
     // was queued, once the transport position it must correct towards is known.

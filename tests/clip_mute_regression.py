@@ -67,7 +67,7 @@ int main() {
     assert(model.redoTimelineEdit() && model.getClip(t,upper)->muted);
     // A queued gate-on receives a zero correction when its clip is muted.
     model.setSchedulingEnabled(true);
-    model.setSchedulingLookaheadMs(150);
+    model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(150);
     model.getLane(t,c,lane)->pianoNotes = {{0.1,1,60,0.8f,1}};
     owner.transport->seekToBeat(0); owner.transport->play();
     std::vector<ofxOceanodeScheduledParameterEvent> events;

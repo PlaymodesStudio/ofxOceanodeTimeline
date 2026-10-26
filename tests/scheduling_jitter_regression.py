@@ -22,6 +22,7 @@ int main() {
     parameter.bindParameter(value);
     owner.targets[parameter.getEscapedName()] = &parameter;
     ofxOceanodeTimelineManager manager(&owner);
+    manager.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
     const auto track = manager.createTrack("Gate");
     const auto binding = manager.addBinding(track, parameter);
     const auto clip = manager.createClip(track, "Gate", 0.0, 2.0);
@@ -52,7 +53,7 @@ int main() {
     assert(events.front().dueSteadyTimeUs == original);
     // A deliberate user edit must still invalidate queued content.
     const size_t beforeEdit = events.size();
-    manager.setSchedulingLookaheadMs(150.0);
+    manager.setSchedulingLookaheadAdaptive(false); manager.setSchedulingLookaheadMs(150.0);
     manager.update(); // corrections go out on the update after the edit
     assert(std::any_of(events.begin() + beforeEdit, events.end(), [](const auto& e) { return e.isCorrection; }));
     owner.transport->pause();

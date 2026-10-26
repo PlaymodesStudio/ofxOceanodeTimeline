@@ -38,6 +38,30 @@
 namespace {
 using namespace ofxOceanodeTimelineLaneEditorUi;
 
+// Lane editors write the open clip in place. Compare what it plays before and
+// after they draw, so events already queued ahead of the playhead are
+// corrected instead of playing the old content.
+class ScheduledContentEditGuard {
+public:
+    ScheduledContentEditGuard(ofxOceanodeTimelineManager& timeline, std::string trackId, std::string clipId)
+    : timeline(timeline), trackId(std::move(trackId)), clipId(std::move(clipId)), before(signature()) {}
+    ~ScheduledContentEditGuard() { if(signature() != before) timeline.invalidateSchedule(); }
+    ScheduledContentEditGuard(const ScheduledContentEditGuard&) = delete;
+    ScheduledContentEditGuard& operator=(const ScheduledContentEditGuard&) = delete;
+private:
+    uint64_t signature() const {
+        const auto* clip = timeline.getClip(trackId, clipId);
+        if(clip == nullptr) return 0;
+        uint64_t hash = clip->lanes.size();
+        for(const auto& lane : clip->lanes)
+            hash = hash * 1099511628211ULL ^ ofxOceanodeTimelineManager::lanePlaybackSignature(lane);
+        return hash;
+    }
+    ofxOceanodeTimelineManager& timeline;
+    std::string trackId, clipId;
+    uint64_t before;
+};
+
 #ifdef TARGET_GLFW_WINDOW
 struct NativeDropWindow {
     GLFWdropfun previous = nullptr;
@@ -1437,11 +1461,14 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::BeginDisabled(!timeStamped);
         float lookahead = static_cast<float>(timeline.getSchedulingLookaheadMs());
         ImGui::SetNextItemWidth(78.0f);
-        if(ImGui::DragFloat("##schedulingLookahead", &lookahead, 1.0f, 0.0f, 1000.0f, "%.0f ms ahead"))
+        if(ImGui::DragFloat("##schedulingLookahead", &lookahead, 1.0f, 0.0f, 1000.0f, "max %.0f ms"))
             timeline.setSchedulingLookaheadMs(lookahead);
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Lookahead window. It must be longer than the worst frame interval\n"
-                              "that still has to sound on time (120 ms covers a several-frame stall).");
+            ImGui::SetTooltip("Longest lookahead window (now using %.0f ms).\n"
+                              "The window follows recent frame intervals (3 frames + 10 ms, at least 50 ms)\n"
+                              "up to this limit. Longer survives bigger GUI stalls; shorter leaves less\n"
+                              "already-sent content that stop, seek or edits can only correct.",
+                              timeline.effectiveSchedulingLookaheadMs());
         ImGui::EndDisabled();
     }
 
@@ -2976,7 +3003,10 @@ void ofxOceanodeTimelineController::draw() {
                     }
                     if(ImGui::MenuItem("Bypass", nullptr, binding.bypass)) {
                         // Stop automating this parameter (clips stay; the value is left alone).
-                        if(auto* editBinding = timeline.getBinding(track.id, binding.id)) editBinding->bypass = !editBinding->bypass;
+                        if(auto* editBinding = timeline.getBinding(track.id, binding.id)) {
+                            editBinding->bypass = !editBinding->bypass;
+                            timeline.invalidateSchedule();
+                        }
                     }
                     contextMenuSection("Remove");
                     if(ImGui::Selectable("Remove from Timeline")) {
@@ -4359,6 +4389,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                                                    float contentWidth, double endBeat,
                                                    double beatPosition) {
     const float timelineScrollX = timeline.getViewState().scrollX;
+    const ScheduledContentEditGuard scheduledEdits(timeline, editorState.editorTrackId, editorState.editorClipId);
     auto* clip = timeline.getClip(editorState.editorTrackId, editorState.editorClipId);
     if(clip == nullptr || (clip->lanes.empty() && !track.isWaveTrack)) {
         editorState.clipEditorOpen = false;

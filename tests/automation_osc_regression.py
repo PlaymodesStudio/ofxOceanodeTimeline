@@ -17,7 +17,7 @@ int main(){
     std::vector<std::unique_ptr<ofParameter<float>>> values;
     std::vector<std::unique_ptr<ofxOceanodeParameter<float>>> parameters;
     ofxOceanodeTimelineManager model(&owner);
-    model.setSchedulingLookaheadMs(1000);
+    model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(1000);
     const auto track=model.createTrack("Piano");
     const auto pb=model.addBinding(track,pitch),gb=model.addBinding(track,gate);
     const auto group=model.createNoteGroup(track,"Notes",pb,gb,"");

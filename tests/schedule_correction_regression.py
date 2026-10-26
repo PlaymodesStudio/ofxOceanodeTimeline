@@ -60,7 +60,7 @@ int main() {
         Instrument synth(owner, model, 8);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes =
             {{0.5,0.25,60,0.8f,1}, {4.1,0.8,72,0.8f,1}};
-        model.setSchedulingLookaheadMs(500);
+        model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         owner.transport->seekToBeat(0); owner.transport->play();
         model.update(); model.update();
         assert(firstDue(synth.sent, 0, 'g', "1") != 0); // the first note is queued
@@ -89,7 +89,7 @@ int main() {
         Instrument synth(owner, model, 8);
         auto* lane = model.getLane(synth.track, synth.clip, synth.lane);
         lane->pianoNotes = {{0.4,0.2,60,0.8f,1}};
-        model.setSchedulingLookaheadMs(500);
+        model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         owner.transport->seekToBeat(0); owner.transport->play();
         model.update();
         const size_t mark = synth.sent.size();
@@ -140,7 +140,7 @@ int main() {
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.1,0.2,60,0.8f,1}, {0.4,0.2,64,0.8f,1}};
         const auto bend = model.createLane(synth.track, synth.clip, "Bend", ofxOceanodeTimelineLaneType::Curve);
         model.addBindingToLane(synth.track, synth.clip, bend, synth.pb);
-        model.setSchedulingLookaheadMs(500);
+        model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         owner.transport->seekToBeat(0); owner.transport->play();
         model.update(); model.update();
         for(const auto& s : synth.sent) {
@@ -173,7 +173,7 @@ int main() {
         model.update();
         // Removing a lane rebuilds the indexes without invalidating them.
         model.removeLane(synth.track, synth.clip, synth.lane);
-        model.setSchedulingLookaheadMs(500);
+        model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         owner.transport->seekToBeat(0); owner.transport->play();
         model.update();
         uint64_t pitchDue = 0, otherDue = 0;

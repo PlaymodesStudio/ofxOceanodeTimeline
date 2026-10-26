@@ -3494,7 +3494,9 @@ bool ofxOceanodeTimelineManager::removeLane(const std::string& trackId, const st
     clip->lanes.erase(std::remove_if(clip->lanes.begin(), clip->lanes.end(), [&](const auto& lane) {
         return lane.id == laneId;
     }), clip->lanes.end());
-    return clip->lanes.size() != oldSize;
+    if(clip->lanes.size() == oldSize) return false;
+    invalidateSchedule();
+    return true;
 }
 
 void ofxOceanodeTimelineManager::releaseWaveClipIfNeeded(const std::string& trackId, const std::string& clipId) {
@@ -3571,6 +3573,7 @@ bool ofxOceanodeTimelineManager::addBindingToLane(const std::string& trackId, co
             else if(lane->pianoVelocityBindingId.empty()) lane->pianoVelocityBindingId = bindingId;
         }
     }
+    invalidateSchedule();
     return true;
 }
 
@@ -3594,6 +3597,7 @@ bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackI
             }
         }
     }
+    if(removed) invalidateSchedule();
     return removed;
 }
 
@@ -3673,6 +3677,7 @@ bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, con
     } else if(type == ofxOceanodeTimelineLaneType::MultiSlider) {
         if(lane->multiSliderValues.empty()) lane->multiSliderValues.assign(std::max(1, lane->stepCount), 0.0f);
     }
+    if(type != previousType) invalidateSchedule();
     return true;
 }
 
@@ -3680,11 +3685,14 @@ bool ofxOceanodeTimelineManager::setClipTiming(const std::string& trackId, const
                                                double startBeat, double durationBeats) {
     auto* clip = getClip(trackId, clipId);
     if(clip == nullptr) return false;
+    const double previousStart = clip->startBeat, previousDuration = clip->durationBeats;
     clip->startBeat = std::max(0.0, startBeat);
     clip->durationBeats = std::max(1.0 / 24.0, durationBeats);
     // Resizing a Wave clip stretches its complete source over the new length.
     const auto* track = getTrack(trackId);
     if(track != nullptr && track->isWaveTrack) normalizeWaveClipMapping(*clip);
+    // A clip dragged while playing moves notes already queued ahead.
+    if(clip->startBeat != previousStart || clip->durationBeats != previousDuration) invalidateSchedule();
     return true;
 }
 
@@ -4342,7 +4350,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                           lane.type == ofxOceanodeTimelineLaneType::MultiSlider) {
                     std::string value;
                     const bool hasValue = lane.type == ofxOceanodeTimelineLaneType::Step
-                        ? evaluateStepSequencer(lane, sourceBeat, value, retriggerGapBeats * sourcePerTimelineBeat(clip))
+                        ? evaluateStepSequencer(lane, sourceBeat, value, laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip))
                         : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
                         ? evaluateMultiSlider(lane, sourceBeat, value)
                         : evaluateCurve(lane, sourceBeat, value);
@@ -4381,7 +4389,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                         } else {
                             const bool active = row < static_cast<int>(lane.multiGateRows.size()) &&
                                 evaluateMultiGateRow(lane.multiGateRows[row], sourceBeat,
-                                                     retriggerGapBeats * sourcePerTimelineBeat(clip),
+                                                     laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
                                                      clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0);
                             components.push_back(active ? "1" : "0");
                         }
@@ -4411,7 +4419,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     const auto& notes = lane.pianoNotes;
                     const double pianoCycle = static_cast<double>(
                         ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition));
-                    const double noteGap = retriggerGapBeats * sourcePerTimelineBeat(clip);
+                    const double noteGap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
                     // Where a note's gate opens: after the retrigger gap when
                     // its slot was still busy, so the instrument sees an edge.
                     auto openAt = [&](size_t n) {
@@ -4675,9 +4683,32 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         // run after stopping or an explicit content/transport edit.
         const bool schedulingInFlight = schedulingEnabled && transport.isPlaying &&
                                         !scheduledPaths.empty();
-        if(!schedulingInFlight && std::abs(target - retriggerGapBeats) > 0.25 * retriggerGapBeats) {
+        // Scheduled lanes only need two or three control blocks of gate-off.
+        const double scheduledTarget = std::max(1.0 / 1920.0, 0.003 * beatsPerSecond);
+        if(!schedulingInFlight && (std::abs(target - retriggerGapBeats) > 0.25 * retriggerGapBeats ||
+           std::abs(scheduledTarget - scheduledRetriggerGapBeats) > 0.25 * scheduledRetriggerGapBeats)) {
             retriggerGapBeats = target;
+            scheduledRetriggerGapBeats = scheduledTarget;
             invalidateSchedule();
+        }
+        // A stall raises the scheduling window at once; it shrinks back over
+        // a few seconds of short frames.
+        const double rawFrameSeconds = std::min(0.5, static_cast<double>(ofGetLastFrameTime()));
+        frameIntervalPeakSeconds = std::max(rawFrameSeconds,
+            frameIntervalPeakSeconds * std::pow(0.5, std::max(0.0, rawFrameSeconds) / 2.0));
+    }
+    // Decide which paths are scheduled before evaluating this frame: their
+    // lanes retrigger with the short gap, in the frame value and in the
+    // events handed ahead alike.
+    schedulablePathsThisFrame.clear();
+    if(schedulingEnabled && transport.isPlaying && transport.driverMode != TransportDriverMode::FrameStep)
+        schedulablePathsThisFrame = selectSchedulablePaths();
+    {
+        std::unordered_set<std::string> fast(schedulablePathsThisFrame.begin(), schedulablePathsThisFrame.end());
+        if(fast != fastRetriggerPaths) {
+            fastRetriggerPaths = std::move(fast);
+            // Events already queued used the other gap.
+            if(!scheduledPaths.empty()) invalidateSchedule();
         }
     }
     lastEvaluatedTransportBeat = transport.beatPosition;
@@ -4869,6 +4900,53 @@ void ofxOceanodeTimelineManager::invalidateSchedule() {
     if(!scheduledPaths.empty()) scheduleInvalidationPending = true;
     scheduledBackendPaths.clear();
     hasScheduleCursor = false;
+}
+
+uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTimelineLane& lane) {
+    uint64_t hash = 1469598103934665603ULL; // FNV-1a
+    auto bytes = [&](const void* data, size_t size) {
+        const auto* p = static_cast<const unsigned char*>(data);
+        for(size_t i = 0; i < size; ++i) { hash ^= p[i]; hash *= 1099511628211ULL; }
+    };
+    auto value = [&](const auto& v) { bytes(&v, sizeof(v)); };
+    auto text = [&](const std::string& t) { value(t.size()); bytes(t.data(), t.size()); };
+    value(lane.type);
+    value(lane.bindingIds.size());
+    for(const auto& id : lane.bindingIds) text(id);
+    value(lane.step.steps.size());
+    for(const auto& step : lane.step.steps) {
+        value(step.startBeat); value(step.durationBeats); text(step.value); value(step.probability);
+    }
+    value(lane.stepCount); value(lane.beatsPerStep); value(lane.valueMin); value(lane.valueMax);
+    value(lane.probabilityEnabled); text(lane.behavior); value(lane.probabilitySeed);
+    value(lane.pianoLowPitch); value(lane.pianoHighPitch);
+    text(lane.pianoPitchBindingId); text(lane.pianoGateBindingId); text(lane.pianoVelocityBindingId);
+    value(lane.pianoMonophonic); value(lane.curveClamp); text(lane.curveInterpolation); text(lane.curveScale);
+    value(lane.curvePoints.size());
+    for(const auto& point : lane.curvePoints) { value(point.beat); value(point.value); }
+    value(lane.curveTensions.size());
+    for(const auto& tension : lane.curveTensions) { value(tension.inflection); value(tension.steepness); }
+    value(lane.pianoNotes.size());
+    for(const auto& note : lane.pianoNotes) {
+        value(note.startBeat); value(note.durationBeats); value(note.pitch); value(note.velocity); value(note.probability);
+    }
+    value(lane.multiRowCount);
+    value(lane.multiValueRows.size());
+    for(const auto& row : lane.multiValueRows) {
+        value(row.size());
+        for(const auto& region : row) { value(region.startBeat); value(region.durationBeats); value(region.value); }
+    }
+    value(lane.multiGateRows.size());
+    for(const auto& row : lane.multiGateRows) {
+        value(row.size());
+        for(const auto& region : row) { value(region.startBeat); value(region.durationBeats); }
+    }
+    value(lane.multiValueInteger);
+    value(lane.multiSliderValues.size());
+    for(const float v : lane.multiSliderValues) value(v);
+    value(lane.valueQuantizeSteps); value(lane.valueSnap);
+    text(lane.lfoParameter); value(lane.lfoValue);
+    return hash;
 }
 
 double ofxOceanodeTimelineManager::beatAtOffset(const ofxOceanodeTransportState& transport,
@@ -5071,7 +5149,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                                     const double start = std::max(0.0, step.startBeat);
                                     const double duration = step.durationBeats > kEpsilon ? step.durationBeats : cellLength;
                                     addSourceBeat(base + start);
-                                    addSourceBeat(base + start + retriggerGapBeats * sourcePerTimelineBeat(clip));
+                                    addSourceBeat(base + start + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
                                     addSourceBeat(base + start + duration);
                                 }
                             }
@@ -5099,7 +5177,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                             for(const auto& row : lane.multiGateRows)
                                 for(const auto& region : row) {
                                     addSourceBeat(region.startBeat);
-                                    addSourceBeat(region.startBeat + retriggerGapBeats * sourcePerTimelineBeat(clip));
+                                    addSourceBeat(region.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
                                     addSourceBeat(region.end());
                                 }
                             break;
@@ -5115,7 +5193,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
                             for(size_t n = 0; n < lane.pianoNotes.size(); ++n) {
                                 const auto& note = lane.pianoNotes[n];
                                 addSourceBeat(note.startBeat);
-                                addSourceBeat(note.startBeat + retriggerGapBeats * sourcePerTimelineBeat(clip));
+                                addSourceBeat(note.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
                                 addSourceBeat(pianoNoteEnd(note));
                                 if(voicing != nullptr) addSourceBeat(voicing->end[n]);
                             }
@@ -5131,6 +5209,73 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
     outBeats.erase(std::unique(outBeats.begin(), outBeats.end(),
                                [](double a, double b) { return std::abs(a - b) <= kEpsilon; }),
                    outBeats.end());
+}
+
+double ofxOceanodeTimelineManager::effectiveSchedulingLookaheadMs() const {
+    if(!schedulingLookaheadAdaptive) return std::max(0.0, schedulingLookaheadMs);
+    const double adaptive = std::max(50.0, 3000.0 * frameIntervalPeakSeconds + 10.0);
+    return std::max(0.0, std::min(schedulingLookaheadMs, adaptive));
+}
+
+std::vector<std::string> ofxOceanodeTimelineManager::selectSchedulablePaths() const {
+    std::vector<std::string> schedulablePaths;
+    for(const auto& path : orderedAutomationPaths()) {
+        // Continuous lanes (curves, LFOs, live overrides) keep the frame path.
+        if(continuouslyEvaluatedPathsCache.count(path) > 0) continue;
+        auto* parameter = findParameterCached(path);
+        // Only a backend that can execute a value at an instant gets events.
+        if(parameter == nullptr || !ofxOceanodeScheduling::hasParameterTarget(parameter)) continue;
+        schedulablePaths.push_back(path);
+    }
+    // A piano note is one event across Pitch, Velocity and Gate. When one of
+    // its routed roles is held on the frame path although its backend could
+    // schedule it (a curve, an LFO or a live override shares it), a scheduled
+    // Gate would open with the previous note's pitch: the whole lane keeps the
+    // frame path. (A role whose consumer cannot schedule at all is untimed
+    // either way and holds nothing back.) Lanes can share a role path, so
+    // repeat until no group is split.
+    const auto scheduled = [&](const std::string& path) {
+        return std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end();
+    };
+    const auto heldBack = [&](const std::string& path) {
+        if(scheduled(path)) return false;
+        auto* parameter = findParameterCached(path);
+        return parameter != nullptr && ofxOceanodeScheduling::hasParameterTarget(parameter);
+    };
+    for(bool split = !pianoRoleGroupsCache.empty(); split;) {
+        split = false;
+        for(const auto& group : pianoRoleGroupsCache) {
+            if(std::none_of(group.begin(), group.end(), heldBack) ||
+               std::none_of(group.begin(), group.end(), scheduled)) continue;
+            schedulablePaths.erase(std::remove_if(schedulablePaths.begin(), schedulablePaths.end(),
+                [&](const std::string& path) {
+                    return std::find(group.begin(), group.end(), path) != group.end();
+                }), schedulablePaths.end());
+            split = true;
+        }
+    }
+    return schedulablePaths;
+}
+
+// The frame path needs a gate-off of at least 1.2 frames between back-to-back
+// notes to see it at all. A lane whose targets are all scheduled has its gate
+// boundaries executed at their exact instant, so a few milliseconds (a couple
+// of control blocks) is enough for the instrument to see a new edge, and the
+// note opens that much closer to the grid.
+double ofxOceanodeTimelineManager::laneRetriggerGapBeats(const ofxOceanodeTimelineTrack& track,
+                                                         const ofxOceanodeTimelineLane& lane) const {
+    if(fastRetriggerPaths.empty()) return retriggerGapBeats;
+    const auto trackIt = trackEvaluationIndexes.find(&track);
+    if(trackIt == trackEvaluationIndexes.end()) return retriggerGapBeats;
+    const auto scheduled = [&](const std::string& bindingId) {
+        const auto it = trackIt->second.bindingById.find(bindingId);
+        return it != trackIt->second.bindingById.end() &&
+               fastRetriggerPaths.count(it->second->parameterPath) > 0;
+    };
+    const bool allScheduled = lane.type == ofxOceanodeTimelineLaneType::PianoRoll
+        ? scheduled(lane.pianoGateBindingId)
+        : !lane.bindingIds.empty() && std::all_of(lane.bindingIds.begin(), lane.bindingIds.end(), scheduled);
+    return allScheduled ? scheduledRetriggerGapBeats : retriggerGapBeats;
 }
 
 void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& transport,
@@ -5168,55 +5313,17 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     }
 
     // ---- which paths can be scheduled at all -----------------------------
+    // Selected by evaluateAutomation() before this frame's evaluation, which
+    // already used it for the scheduled lanes' retrigger gap.
     struct PathTarget {
         ofxOceanodeAbstractParameter* parameter = nullptr;
-        std::vector<ofxOceanodeTimelineParameterBinding*> bindings;
-        bool schedulable = true;
+        const std::vector<ofxOceanodeTimelineParameterBinding*>* bindings = nullptr;
     };
-    std::map<std::string, PathTarget> targets;
-    for(const auto& entry : bindingsByPathCache) {
-        auto& target = targets[entry.first];
-        target.bindings = entry.second;
-        target.schedulable = continuouslyEvaluatedPathsCache.count(entry.first) == 0;
-    }
-
-    std::vector<std::string> schedulablePaths;
-    for(const auto& path : orderedAutomationPaths()) {
-        auto& target = targets.at(path);
-        if(!target.schedulable) continue;
-        target.parameter = findParameterCached(path);
-        if(target.parameter == nullptr) continue;
-        // Only a backend that can execute a value at an instant gets events.
-        if(!ofxOceanodeScheduling::hasParameterTarget(target.parameter)) continue;
-        schedulablePaths.push_back(path);
-    }
-    // A piano note is one event across Pitch, Velocity and Gate. When one of
-    // its routed roles is held on the frame path although its backend could
-    // schedule it (a curve, an LFO or a live override shares it), a scheduled
-    // Gate would open with the previous note's pitch: the whole lane keeps the
-    // frame path. (A role whose consumer cannot schedule at all is untimed
-    // either way and holds nothing back.) Lanes can share a role path, so
-    // repeat until no group is split.
-    const auto heldBack = [&](const std::string& path) {
-        if(std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end()) return false;
-        auto* parameter = findParameterCached(path);
-        return parameter != nullptr && ofxOceanodeScheduling::hasParameterTarget(parameter);
-    };
-    for(bool split = !pianoRoleGroupsCache.empty(); split;) {
-        split = false;
-        for(const auto& group : pianoRoleGroupsCache) {
-            const auto scheduled = [&](const std::string& path) {
-                return std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end();
-            };
-            if(std::none_of(group.begin(), group.end(), heldBack) ||
-               std::none_of(group.begin(), group.end(), scheduled)) continue;
-            schedulablePaths.erase(std::remove_if(schedulablePaths.begin(), schedulablePaths.end(),
-                [&](const std::string& path) {
-                    return std::find(group.begin(), group.end(), path) != group.end();
-                }), schedulablePaths.end());
-            split = true;
-        }
-    }
+    const std::vector<std::string>& schedulablePaths = schedulablePathsThisFrame;
+    std::unordered_map<std::string, PathTarget> targets;
+    targets.reserve(schedulablePaths.size());
+    for(const auto& path : schedulablePaths)
+        targets[path] = {findParameterCached(path), &bindingsByPathCache.at(path)};
     if(schedulablePaths.empty()) {
         // Same rule as every other invalidation path: events already handed
         // to a backend cannot be recalled, so correct them before forgetting
@@ -5241,7 +5348,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     for(const auto& path : schedulablePaths) {
         auto& target = targets[path];
         std::string frameValue;
-        if(!computeParameterValue(target.bindings, activeAutomationValues, target.parameter, frameValue))
+        if(!computeParameterValue(*target.bindings, activeAutomationValues, target.parameter, frameValue))
             frameValue = parameterValueForAutomation(*target.parameter); // between clips: the held value
         auto& state = scheduledPaths[path];
         const bool wasInitialized = state.initialized;
@@ -5311,7 +5418,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // The window can run past the loop end: events of the next pass are
     // scheduled at the exact instant the transport will wrap, so the loop's
     // first beat is on time too.
-    const double lookaheadSeconds = std::max(0.0, schedulingLookaheadMs) / 1000.0;
+    const double lookaheadSeconds = effectiveSchedulingLookaheadMs() / 1000.0;
     const bool loopActive = transport.loopActive() &&
         transport.beatPosition < transport.loopEndBeat - kEpsilon;
     const uint64_t pass = transport.loopCount;
@@ -5381,7 +5488,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             if(activePaths.count(path) == 0) continue;
             auto& target = targets[path];
             std::string value;
-            if(!computeParameterValue(target.bindings, futureValues, target.parameter, value)) continue;
+            if(!computeParameterValue(*target.bindings, futureValues, target.parameter, value)) continue;
             auto& state = scheduledPaths[path];
             if(value == state.lastScheduledValue) continue;
             ofxOceanodeScheduledParameterEvent event;
@@ -5559,6 +5666,7 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     loopEndBeat = data["loop"]["endBeat"];
     schedulingEnabled = data["scheduling"]["enabled"];
     schedulingLookaheadMs = data["scheduling"]["lookaheadMs"];
+    schedulingLookaheadAdaptive = data["scheduling"].value("adaptive", true);
     setTimeSignature(data["timeSignature"]["numerator"], data["timeSignature"]["denominator"]);
     viewState = oldView;
     syncLoopToTransport();
@@ -5825,7 +5933,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     };
     json["scheduling"] = {
         {"enabled", schedulingEnabled},
-        {"lookaheadMs", schedulingLookaheadMs}
+        {"lookaheadMs", schedulingLookaheadMs},
+        {"adaptive", schedulingLookaheadAdaptive}
     };
     json["tracks"] = ofJson::array();
     for(const auto& track : tracks) {
@@ -6086,6 +6195,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
         const auto& scheduling = json["scheduling"];
         setSchedulingEnabled(scheduling.value("enabled", true));
         setSchedulingLookaheadMs(scheduling.value("lookaheadMs", 120.0));
+        setSchedulingLookaheadAdaptive(scheduling.value("adaptive", true));
     }
     // Every clip, lane and loop below is about to be replaced.
     invalidateSchedule();

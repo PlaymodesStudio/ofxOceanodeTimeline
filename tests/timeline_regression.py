@@ -109,6 +109,7 @@ int main() {
         for(auto* parameter : {&pitch, &gate, &velocity})
             partsOwner.targets[parameter->getEscapedName()] = parameter;
         ofxOceanodeTimelineManager parts(&partsOwner);
+        parts.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         const auto t = parts.createTrack("Parts");
         const auto pb = parts.addBinding(t, pitch), gb = parts.addBinding(t, gate), vb = parts.addBinding(t, velocity);
         const auto group = parts.createNoteGroup(t, "Instrument", pb, gb, vb);
@@ -255,6 +256,7 @@ int main() {
         ofxOceanodeParameter<float> target; target.bindParameter(output);
         numberOwner.targets[target.getEscapedName()] = &target;
         ofxOceanodeTimelineManager numbers(&numberOwner);
+        numbers.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         const auto t = numbers.createTrack("Numbers");
         const auto b = numbers.addBinding(t, target);
         const auto c = numbers.createClip(t, "Numbers", 0.0, 4.0);
