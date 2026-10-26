@@ -14,7 +14,9 @@ float schedulingTestFrameSeconds = 1.0f / 60.0f;
 int main() {
     ofSeedRandom();
     ofxOceanodeContainer owner;
-    owner.transport->setDriverMode(TransportDriverMode::FrameStep);
+    // Frozen like FrameStep, but scheduling only follows clock-driven transports:
+    // External with no clock attached never advances the playhead.
+    owner.transport->setDriverMode(TransportDriverMode::External);
     ofParameter<float> value("Gate", 0.0f, 0.0f, 1.0f);
     ofxOceanodeParameter<float> parameter;
     parameter.bindParameter(value);
@@ -49,8 +51,10 @@ int main() {
     }
     assert(events.front().dueSteadyTimeUs == original);
     // A deliberate user edit must still invalidate queued content.
+    const size_t beforeEdit = events.size();
     manager.setSchedulingLookaheadMs(150.0);
-    assert(events.size() > 1 && events.back().isCorrection);
+    manager.update(); // corrections go out on the update after the edit
+    assert(std::any_of(events.begin() + beforeEdit, events.end(), [](const auto& e) { return e.isCorrection; }));
     owner.transport->pause();
     ofxOceanodeScheduling::unregisterOwner(&manager);
     std::cout << "Timeline frame jitter: no extra gates; explicit edit correction preserved.\n";

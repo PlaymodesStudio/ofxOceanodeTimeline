@@ -197,6 +197,25 @@ The scheduler evaluates only the paths it can send ahead; unrelated continuous
 sound automation remains on the frame path. The target order is sorted once per
 evaluation and reused by the scheduler and both frame application passes.
 
+A piano lane's Pitch, Velocity and Gate are scheduled together. If a curve, an
+LFO or a live override keeps one of those roles on the frame path, the lane's
+other roles stay there too, so Gate never opens with the previous note's pitch.
+
+## Schedule corrections
+
+Events already sent to SuperCollider can't be recalled. After a seek, a stop or
+an edit (`invalidateSchedule()`), each path with queued events receives a
+correction on the next update. The correction is stamped after that path's queue
+and carries the value due at the correction's own instant, so it agrees with any
+notes newly scheduled before it. Small disagreements between the playhead and the
+backend clock (up to two frames, at least 20 ms) count as timing, not as content
+to repair.
+
+Scheduling follows clock-driven transports only (real time and an external
+clock). A frame-stepped transport, such as frame mode or an offline render, uses
+the frame path, because its playhead does not move with the wall clock that due
+times are computed from.
+
 ## Minimal usage
 
 ```cpp

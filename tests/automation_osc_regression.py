@@ -8,7 +8,9 @@ import timeline_regression as fixture
 cases=fixture.CASES.split('int main()')[0]+r'''
 int main(){
     ofSeedRandom();ofxOceanodeContainer owner;
-    owner.transport->setDriverMode(TransportDriverMode::FrameStep);
+    // Frozen like FrameStep, but scheduling only follows clock-driven transports:
+    // External with no clock attached never advances the playhead.
+    owner.transport->setDriverMode(TransportDriverMode::External);
     ofParameter<float> pv("Pitch",60,0,127),gv("Gate",0,0,1);
     ofxOceanodeParameter<float> pitch,gate;pitch.bindParameter(pv);gate.bindParameter(gv);
     owner.targets[pitch.getEscapedName()]=&pitch;owner.targets[gate.getEscapedName()]=&gate;

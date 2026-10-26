@@ -99,7 +99,8 @@ int main() {
     // and one voice pool. Neither lane replaces the other's held notes.
     {
         ofxOceanodeContainer partsOwner;
-        partsOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
+        // Frozen, and clock-driven so its notes are scheduled (see note_order_regression).
+        partsOwner.transport->setDriverMode(TransportDriverMode::External);
         ofParameter<std::vector<float>> pitches("Part Pitch", {60, 60, 60, 60}, {0}, {127});
         ofParameter<std::vector<float>> gates("Part Gate", {0, 0, 0, 0}, {0}, {1});
         ofParameter<std::vector<float>> velocities("Part Velocity", {0, 0, 0, 0}, {0}, {1});
@@ -248,7 +249,8 @@ int main() {
     // Number lanes hold absolute values between arbitrarily placed entries.
     {
         ofxOceanodeContainer numberOwner;
-        numberOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
+        // Frozen, and clock-driven so its notes are scheduled (see note_order_regression).
+        numberOwner.transport->setDriverMode(TransportDriverMode::External);
         ofParameter<float> output("Number", 0.0f, -100.0f, 100.0f);
         ofxOceanodeParameter<float> target; target.bindParameter(output);
         numberOwner.targets[target.getEscapedName()] = &target;

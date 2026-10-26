@@ -11,7 +11,9 @@ int main(){
     ofSeedRandom();
     // Deliberately misleading names: ordering must use piano routing roles.
     ofxOceanodeContainer owner;
-    owner.transport->setDriverMode(TransportDriverMode::FrameStep);
+    // Frozen like FrameStep, but scheduling only follows clock-driven transports:
+    // External with no clock attached never advances the playhead.
+    owner.transport->setDriverMode(TransportDriverMode::External);
     ofParameter<float> pv("Z Frequency",48,0,127),gv("A Trigger",0,0,1),vv("B Level",0,0,1);
     ofxOceanodeParameter<float> pitch,gate,velocity;
     pitch.bindParameter(pv);gate.bindParameter(gv);velocity.bindParameter(vv);

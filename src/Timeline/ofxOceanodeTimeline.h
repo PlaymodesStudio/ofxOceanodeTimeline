@@ -943,7 +943,7 @@ public:
     double getSchedulingLookaheadMs() const { return schedulingLookaheadMs; }
     // Editors may call this after changing clip/lane/loop data; the scheduler
     // also repairs itself when it notices the playhead's value is not the one
-    // the backend was given.
+    // the backend was given. Corrections go out on the next update.
     void invalidateSchedule();
 
     // Like canvas history, transactions span a complete user gesture. Runtime
@@ -1050,13 +1050,28 @@ private:
     const std::vector<std::string>& orderedAutomationPaths() const;
     uint64_t pianoInputLeadUs(const std::string& path) const;
     void runScheduler(const ofxOceanodeTransportState& transport, bool loopWrappedThisFrame);
-    void sendScheduleCorrections(uint64_t nowUs, const std::set<std::string>* onlyPaths = nullptr);
+    void sendScheduleCorrections(const ofxOceanodeTransportState& transport, uint64_t nowUs,
+                                 const std::set<std::string>* onlyPaths = nullptr);
+    // Beat the playhead will have reached offsetSeconds after transport's
+    // instant, following the tempo map and wrapping at the loop end.
+    double beatAtOffset(const ofxOceanodeTransportState& transport, double offsetSeconds) const;
+    // Value path will hold at dueUs, for a correction stamped then.
+    bool scheduledValueAt(const ofxOceanodeTransportState& transport, uint64_t nowUs, uint64_t dueUs,
+                          const std::string& path, ofxOceanodeAbstractParameter* parameter,
+                          std::string& outValue) const;
 
     struct ScheduledPathState {
         bool initialized = false;
         // Value the backend is playing right now (the last event whose due
         // time has passed).
         std::string valueInEffect;
+        // The value before it, and when it was replaced: a playhead slightly
+        // behind the backend still reports it.
+        std::string previousValueInEffect;
+        uint64_t valueInEffectSinceUs = 0;
+        // After a repair, values still queued before it are known to be
+        // stale; they are not compared against the playhead until then.
+        uint64_t repairQuietUntilUs = 0;
         // Value of the last event handed to the backend, with its due time.
         std::string lastScheduledValue;
         uint64_t lastScheduledDueUs = 0;
@@ -1111,6 +1126,9 @@ private:
     mutable std::unordered_map<const ofxOceanodeTimelineTrack*, TrackEvaluationIndex> trackEvaluationIndexes;
     std::unordered_map<std::string, PianoPitchRangeIndex> pianoPitchRangesCache;
     std::unordered_map<std::string, int> pianoInputPriorityCache;
+    // Parameter paths routed as Pitch/Velocity/Gate of one piano lane. The
+    // scheduler takes such a group whole or not at all.
+    std::vector<std::vector<std::string>> pianoRoleGroupsCache;
     std::vector<std::string> automationPathOrderCache;
     std::unordered_set<const ofxOceanodeTimelineParameterBinding*> zeroWhenInactiveBindingsCache;
     std::unordered_set<std::string> continuouslyEvaluatedPathsCache;
@@ -1187,6 +1205,9 @@ private:
     bool schedulingEnabled = true;
     double schedulingLookaheadMs = 120.0;
     bool hasScheduleCursor = false;
+    // invalidateSchedule() was called: the next runScheduler() corrects what
+    // was queued, once the transport position it must correct towards is known.
+    bool scheduleInvalidationPending = false;
     double scheduleCursorBeat = 0.0;
     // Loop pass the cursor belongs to (it can already be in the next pass,
     // when events past the loop end were scheduled before the wrap).

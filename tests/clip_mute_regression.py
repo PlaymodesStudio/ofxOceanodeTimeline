@@ -13,7 +13,9 @@ struct AudioProbe : ofxOceanodeTimelineWaveAudioProvider {
 int main() {
     ofSeedRandom();
     ofxOceanodeContainer owner;
-    owner.transport->setDriverMode(TransportDriverMode::FrameStep);
+    // Frozen like FrameStep, but scheduling only follows clock-driven transports:
+    // External with no clock attached never advances the playhead.
+    owner.transport->setDriverMode(TransportDriverMode::External);
     ofParameter<float> pitches("Pitch", 72, 0, 127), gates("Gate", 1, 0, 1);
     ofxOceanodeParameter<float> pitch, gate;
     pitch.bindParameter(pitches); gate.bindParameter(gates);
@@ -74,7 +76,7 @@ int main() {
     });
     model.update();
     assert(std::any_of(events.begin(),events.end(),[](const auto& e){ return !e.isCorrection && ofToFloat(e.value)>0; }));
-    model.setClipMuted(t,c,true);
+    model.setClipMuted(t,c,true); model.update(); // corrections go out on the next update
     assert(events.back().isCorrection && ofToFloat(events.back().value)==0);
     ofxOceanodeScheduling::unregisterOwner(&model);
     // Vector instruments also release once, then retain manual polyphonic notes.

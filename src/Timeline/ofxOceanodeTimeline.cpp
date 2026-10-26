@@ -1353,6 +1353,7 @@ void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     trackEvaluationIndexes.clear();
     pianoPitchRangesCache.clear();
     pianoInputPriorityCache.clear();
+    pianoRoleGroupsCache.clear();
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     parameterTrackColorCache.clear();
@@ -1378,6 +1379,10 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     trackByIdCache.clear();
     trackEvaluationIndexes.clear();
     pianoPitchRangesCache.clear();
+    // Roles are rediscovered below; a path no longer routed to a piano lane
+    // must lose its lead and its place ahead of the other paths.
+    pianoInputPriorityCache.clear();
+    pianoRoleGroupsCache.clear();
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
 
@@ -1429,12 +1434,16 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                 if(lane.type != ofxOceanodeTimelineLaneType::PianoRoll) continue;
                 // Roles come from the routing, never parameter names. A piano
                 // roll may target an arbitrary instrument's published inputs.
+                std::vector<std::string> rolePaths;
                 for(const auto& role : {std::make_pair(&lane.pianoPitchBindingId, 0),
                                        std::make_pair(&lane.pianoVelocityBindingId, 1),
                                        std::make_pair(&lane.pianoGateBindingId, 3)}) {
-                    if(const auto* binding = bindingFor(*role.first))
+                    if(const auto* binding = bindingFor(*role.first)) {
                         pianoInputPriorityCache[binding->parameterPath] = role.second;
+                        if(!binding->bypass) rolePaths.push_back(binding->parameterPath);
+                    }
                 }
+                if(rolePaths.size() > 1) pianoRoleGroupsCache.push_back(std::move(rolePaths));
                 auto& voicing = trackIt->second.pianoVoicing[&lane];
                 computeLaneVoicing(track, clip, lane, voicing);
                 if(const auto* binding = bindingFor(lane.pianoPitchBindingId); binding != nullptr && !voicing.kit) {
@@ -4854,18 +4863,64 @@ void ofxOceanodeTimelineManager::setSchedulingLookaheadMs(double milliseconds) {
 }
 
 void ofxOceanodeTimelineManager::invalidateSchedule() {
-    if(!scheduledPaths.empty()) sendScheduleCorrections(ofxOceanodeScheduling::steadyNowUs());
-    scheduledPaths.clear();
+    // Corrected by the next runScheduler(), not here: an editor or a seek
+    // calls this between frames, when the position the correction has to
+    // agree with is not known yet.
+    if(!scheduledPaths.empty()) scheduleInvalidationPending = true;
     scheduledBackendPaths.clear();
     hasScheduleCursor = false;
+}
+
+double ofxOceanodeTimelineManager::beatAtOffset(const ofxOceanodeTransportState& transport,
+                                                double offsetSeconds) const {
+    if(offsetSeconds <= 0.0) return transport.beatPosition;
+    auto secondsAt = [&](double beat) {
+        if(!scheduleUsesTempoMap) return beat * 60.0 / std::max(1.0f, transport.bpm);
+        return beatToSeconds(beat, transport.bpm);
+    };
+    auto advance = [&](double fromBeat, double seconds) {
+        if(!scheduleUsesTempoMap) return fromBeat + seconds * std::max(1.0f, transport.bpm) / 60.0;
+        return beatAfterSeconds(fromBeat, seconds, transport.bpm);
+    };
+    const double beat = advance(transport.beatPosition, offsetSeconds);
+    const bool loopActive = transport.loopActive() &&
+        transport.beatPosition < transport.loopEndBeat - kEpsilon;
+    if(!loopActive || beat < transport.loopEndBeat) return beat;
+    const double loopSeconds = secondsAt(transport.loopEndBeat) - secondsAt(transport.loopStartBeat);
+    double remaining = offsetSeconds - (secondsAt(transport.loopEndBeat) - secondsAt(transport.beatPosition));
+    if(loopSeconds > 0.0) remaining = std::fmod(std::max(0.0, remaining), loopSeconds);
+    return std::min(advance(transport.loopStartBeat, remaining), transport.loopEndBeat);
+}
+
+bool ofxOceanodeTimelineManager::scheduledValueAt(const ofxOceanodeTransportState& transport,
+                                                  uint64_t nowUs, uint64_t dueUs,
+                                                  const std::string& path,
+                                                  ofxOceanodeAbstractParameter* parameter,
+                                                  std::string& outValue) const {
+    const auto bindingsIt = bindingsByPathCache.find(path);
+    if(parameter == nullptr || bindingsIt == bindingsByPathCache.end()) return false;
+    // A stopped or frame-stepped transport does not move with the clock: what
+    // it holds now is what it will hold then.
+    if(transport.isPlaying && transport.driverMode != TransportDriverMode::FrameStep) {
+        ActiveValueMap values;
+        const std::set<std::string> only{path};
+        const double offsetSeconds = dueUs > nowUs ? static_cast<double>(dueUs - nowUs) / 1000000.0 : 0.0;
+        collectActiveValues(beatAtOffset(transport, offsetSeconds) + 1e-7, true, false, values, nullptr, &only);
+        if(computeParameterValue(bindingsIt->second, values, parameter, outValue)) return true;
+    }
+    return computeParameterValue(bindingsIt->second, activeAutomationValues, parameter, outValue);
 }
 
 // Events already handed to a backend cannot be recalled (scsynth's /clearSched
 // is global and would also drop whatever an unrelated part of the patch
 // scheduled). Instead every path that has something queued is given the value
-// it should really hold, stamped after everything queued for it: the stale
-// events still execute, and this lands on top of them.
-void ofxOceanodeTimelineManager::sendScheduleCorrections(uint64_t nowUs, const std::set<std::string>* onlyPaths) {
+// it will hold at an instant after everything queued for it: the stale events
+// still execute, and this lands on top of them. It must be the value due at
+// that instant, not the one the playhead holds now -- events newly scheduled
+// before it (after a seek or an edit) would otherwise be overwritten by it.
+void ofxOceanodeTimelineManager::sendScheduleCorrections(const ofxOceanodeTransportState& transport,
+                                                         uint64_t nowUs,
+                                                         const std::set<std::string>* onlyPaths) {
     if(container == nullptr) {
         scheduledPaths.clear();
         return;
@@ -4877,10 +4932,9 @@ void ofxOceanodeTimelineManager::sendScheduleCorrections(uint64_t nowUs, const s
         if(state.pending.empty() && state.lastScheduledDueUs <= nowUs) continue;
         auto* parameter = findParameterCached(entry.first);
         if(parameter == nullptr) continue;
-        const auto bindingsIt = bindingsByPathCache.find(entry.first);
+        const uint64_t dueUs = std::max(nowUs, state.lastScheduledDueUs + 1000);
         std::string value;
-        if(bindingsIt == bindingsByPathCache.end() ||
-           !computeParameterValue(bindingsIt->second, activeAutomationValues, parameter, value)) {
+        if(!scheduledValueAt(transport, nowUs, dueUs, entry.first, parameter, value)) {
             // No longer automated: land on what is playing now, after the
             // queued events, so none of them is left standing.
             while(!state.pending.empty() && state.pending.front().first <= nowUs) {
@@ -4892,7 +4946,8 @@ void ofxOceanodeTimelineManager::sendScheduleCorrections(uint64_t nowUs, const s
         }
         ofxOceanodeScheduledParameterEvent event;
         event.value = value;
-        event.dueSteadyTimeUs = std::max(nowUs, state.lastScheduledDueUs + 1000);
+        event.dueSteadyTimeUs = dueUs;
+        event.generation = transport.generation;
         event.isCorrection = true;
         ofxOceanodeScheduling::dispatch(parameter, event);
     }
@@ -5086,18 +5141,27 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // frame shifts nothing: only the window's far edge moves.
     const uint64_t nowUs = transport.steadyTimeUs != 0
         ? transport.steadyTimeUs : ofxOceanodeScheduling::steadyNowUs();
-    const bool schedulingActive = schedulingEnabled && transport.isPlaying;
+    // Due times are wall-clock projections of the playhead. A frame-stepped
+    // transport (frame mode, offline/NRT renders) advances a fixed step per
+    // frame whatever the clock does, so the backend would play the notes on
+    // the clock while the playhead lags or leads them -- and an NRT capture
+    // would record them a lookahead early. It keeps the frame path.
+    const bool schedulingActive = schedulingEnabled && transport.isPlaying &&
+        transport.driverMode != TransportDriverMode::FrameStep;
 
     const bool generationChanged = hasSeenTransportGeneration &&
         lastSeenTransportGeneration != transport.generation;
     lastSeenTransportGeneration = transport.generation;
     hasSeenTransportGeneration = true;
     // A loop wrap is continuous playback (the transport does not bump the
-    // generation for it); only seeks and stops invalidate what was scheduled.
-    const bool invalidated = generationChanged;
+    // generation for it); only seeks, stops and edits invalidate what was
+    // scheduled.
+    const bool invalidated = generationChanged || scheduleInvalidationPending;
+    scheduleInvalidationPending = false;
 
     if(!schedulingActive || invalidated) {
-        if(!scheduledPaths.empty()) sendScheduleCorrections(nowUs);
+        if(!scheduledPaths.empty()) sendScheduleCorrections(transport, nowUs);
+        scheduledPaths.clear();
         scheduledBackendPaths.clear();
         hasScheduleCursor = false;
         if(!schedulingActive) return;
@@ -5126,11 +5190,38 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         if(!ofxOceanodeScheduling::hasParameterTarget(target.parameter)) continue;
         schedulablePaths.push_back(path);
     }
+    // A piano note is one event across Pitch, Velocity and Gate. When one of
+    // its routed roles is held on the frame path although its backend could
+    // schedule it (a curve, an LFO or a live override shares it), a scheduled
+    // Gate would open with the previous note's pitch: the whole lane keeps the
+    // frame path. (A role whose consumer cannot schedule at all is untimed
+    // either way and holds nothing back.) Lanes can share a role path, so
+    // repeat until no group is split.
+    const auto heldBack = [&](const std::string& path) {
+        if(std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end()) return false;
+        auto* parameter = findParameterCached(path);
+        return parameter != nullptr && ofxOceanodeScheduling::hasParameterTarget(parameter);
+    };
+    for(bool split = !pianoRoleGroupsCache.empty(); split;) {
+        split = false;
+        for(const auto& group : pianoRoleGroupsCache) {
+            const auto scheduled = [&](const std::string& path) {
+                return std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end();
+            };
+            if(std::none_of(group.begin(), group.end(), heldBack) ||
+               std::none_of(group.begin(), group.end(), scheduled)) continue;
+            schedulablePaths.erase(std::remove_if(schedulablePaths.begin(), schedulablePaths.end(),
+                [&](const std::string& path) {
+                    return std::find(group.begin(), group.end(), path) != group.end();
+                }), schedulablePaths.end());
+            split = true;
+        }
+    }
     if(schedulablePaths.empty()) {
         // Same rule as every other invalidation path: events already handed
         // to a backend cannot be recalled, so correct them before forgetting
         // they exist. sendScheduleCorrections clears scheduledPaths itself.
-        if(!scheduledPaths.empty()) sendScheduleCorrections(nowUs);
+        if(!scheduledPaths.empty()) sendScheduleCorrections(transport, nowUs);
         scheduledPaths.clear();
         scheduledBackendPaths.clear();
         return;
@@ -5142,6 +5233,11 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // joins the scheduler the backend has not been given anything yet, so that
     // frame's ordinary send is what puts the current value in place.
     std::set<std::string> suppressedPaths;
+    // The playhead and the backend's clock agree only to within a frame or
+    // so (frame jitter, an external clock's reports, a tempo ramp sampled per
+    // frame). A difference that small is timing, not content to repair.
+    const uint64_t toleranceUs = static_cast<uint64_t>(1000000.0 *
+        std::max(0.020, 2.0 * std::min(0.25, static_cast<double>(ofGetLastFrameTime()))));
     for(const auto& path : schedulablePaths) {
         auto& target = targets[path];
         std::string frameValue;
@@ -5150,29 +5246,52 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         auto& state = scheduledPaths[path];
         const bool wasInitialized = state.initialized;
         while(!state.pending.empty() && state.pending.front().first <= nowUs) {
+            if(state.pending.front().second != state.valueInEffect) {
+                state.previousValueInEffect = state.valueInEffect;
+                state.valueInEffectSinceUs = state.pending.front().first;
+            }
             state.valueInEffect = state.pending.front().second;
             state.pending.pop_front();
         }
+        const auto explainedByTiming = [&] {
+            // The playhead is about to reach a queued value...
+            for(const auto& queued : state.pending) {
+                if(queued.first > nowUs + toleranceUs) break;
+                if(queued.second == frameValue) return true;
+            }
+            // ...or has not quite reached the one the backend just applied.
+            return state.valueInEffectSinceUs + toleranceUs >= nowUs &&
+                   state.previousValueInEffect == frameValue;
+        };
         if(!state.initialized) {
             state.initialized = true;
             state.valueInEffect = frameValue;
+            state.previousValueInEffect.clear();
+            state.valueInEffectSinceUs = 0;
+            state.repairQuietUntilUs = 0;
             state.lastScheduledValue = frameValue;
             state.lastScheduledDueUs = nowUs;
-        } else if(frameValue != state.valueInEffect) {
+        } else if(frameValue != state.valueInEffect && nowUs >= state.repairQuietUntilUs &&
+                  !explainedByTiming()) {
             // The value the playhead actually has is not the one the backend
             // was told to play: the content was edited inside the window, or
             // something outside the timeline moved. Correct it after
-            // everything already queued for this path.
+            // everything already queued for this path, with the value due
+            // then. The queued events still execute; until the correction
+            // lands they are not compared again.
+            const uint64_t dueUs = std::max(nowUs, state.lastScheduledDueUs + 1000);
+            std::string value;
+            if(!scheduledValueAt(transport, nowUs, dueUs, path, target.parameter, value)) value = frameValue;
             ofxOceanodeScheduledParameterEvent event;
-            event.value = frameValue;
-            event.dueSteadyTimeUs = std::max(nowUs, state.lastScheduledDueUs + 1000);
+            event.value = value;
+            event.dueSteadyTimeUs = dueUs;
             event.generation = transport.generation;
             event.isCorrection = true;
             ofxOceanodeScheduling::dispatch(target.parameter, event);
-            state.pending.clear();
-            state.valueInEffect = frameValue;
-            state.lastScheduledValue = frameValue;
-            state.lastScheduledDueUs = event.dueSteadyTimeUs;
+            state.pending.emplace_back(dueUs, value);
+            state.lastScheduledValue = value;
+            state.lastScheduledDueUs = dueUs;
+            state.repairQuietUntilUs = dueUs;
         }
         activePaths.insert(path);
         if(wasInitialized) suppressedPaths.insert(path);
@@ -5183,7 +5302,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         std::set<std::string> dropped;
         for(const auto& entry : scheduledPaths)
             if(activePaths.count(entry.first) == 0) dropped.insert(entry.first);
-        if(!dropped.empty()) sendScheduleCorrections(nowUs, &dropped);
+        if(!dropped.empty()) sendScheduleCorrections(transport, nowUs, &dropped);
     }
     scheduledBackendPaths = suppressedPaths;
     if(activePaths.empty()) return;
