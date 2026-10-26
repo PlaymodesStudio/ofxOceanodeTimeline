@@ -83,6 +83,9 @@ int main() {
             assert(lanes.size() == 3 && lanes[0].id == l && lanes[1].id == d && lanes[2].id == tail);
             const auto json = copies.toJson()["tracks"][0]["clips"].back()["lanes"];
             auto expected = json[0]; expected["id"] = d;
+            // A duplicate rolls on its own seed.
+            assert(json[1]["probabilitySeed"] != json[0]["probabilitySeed"]);
+            expected["probabilitySeed"] = json[1]["probabilitySeed"];
             assert(json[1] == expected);
             copies.getLane(t, c, d)->pianoNotes[0].pitch = 72;
             assert(copies.getLane(t, c, l)->pianoNotes[0].pitch == 36);

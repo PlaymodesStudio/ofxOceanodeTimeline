@@ -1188,14 +1188,21 @@ bool inRetriggerGap(const Events& events, size_t index, double beat, double gap,
     return touching;
 }
 
+// localBeat is the clip's source beat, which starts over in every repeat of
+// the clip; clipRepeat says which repeat it is, so each one rolls its own
+// probabilities (as piano notes do).
 bool evaluateStepSequencer(const ofxOceanodeTimelineLane& lane,
                            double localBeat,
                            std::string& value,
-                           double retriggerGap = 0.0) {
+                           double retriggerGap = 0.0,
+                           int64_t clipRepeat = 0,
+                           double contentLength = 0.0) {
     if(lane.behavior == "Mute") return false;
     const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
     const double patternLength = std::max(cellLength, lane.stepCount * cellLength);
-    const double cycle = std::floor(std::max(0.0, localBeat) / patternLength);
+    const double patternsPerRepeat = std::max(1.0, std::ceil(contentLength / patternLength - 1e-9));
+    const double cycle = static_cast<double>(clipRepeat) * patternsPerRepeat +
+                         std::floor(std::max(0.0, localBeat) / patternLength);
     const double patternBeat = positiveModulo(localBeat, patternLength);
     auto startOf = [](const ofxOceanodeTimelineStep& s) { return std::max(0.0, s.startBeat); };
     auto endOf = [&](const ofxOceanodeTimelineStep& s) {
@@ -1307,9 +1314,12 @@ constexpr int kKitBaseNote = 36;
 // longest (so releases ring out), a new slot when the count is open (voices
 // 0), or else steals the slot whose note started first, which ends there. A
 // kit's slot is fixed by the key.
+// sounding: when given, only those notes take a voice (the others play
+// nowhere, so they neither steal a slot nor set its pitch).
 void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane,
                          int voices, bool kit, ofxOceanodeTimelinePianoVoicing& out,
-                         const std::vector<double>* noteEnds = nullptr) {
+                         const std::vector<double>* noteEnds = nullptr,
+                         const std::vector<uint8_t>* sounding = nullptr) {
     constexpr double eps = 1e-6;
     const auto& notes = lane.pianoNotes;
     const size_t count = notes.size();
@@ -1319,8 +1329,10 @@ void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeT
     out.end.resize(count);
     out.retrigger.assign(count, 0);
     out.wrapRetrigger.assign(count, 0);
-    for(size_t i = 0; i < count; ++i)
+    for(size_t i = 0; i < count; ++i) {
         out.end[i] = noteEnds == nullptr ? pianoNoteEnd(notes[i]) : (*noteEnds)[i];
+        if(notes[i].probability < 1.0f) out.chance = true;
+    }
 
     std::vector<size_t> order(count);
     for(size_t i = 0; i < count; ++i) order[i] = i;
@@ -1339,6 +1351,7 @@ void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeT
     if(voices > 0 && !kit) ensureSlot(voices - 1);
 
     for(const size_t n : order) {
+        if(sounding != nullptr && !(*sounding)[n]) continue;
         const double start = notes[n].startBeat;
         int chosen = -1;
         if(kit) {
@@ -1529,6 +1542,7 @@ void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     stateCapturePathsCache.clear();
+    repeatVoicingCache.clear();
     parameterTrackColorCache.clear();
     parameterTrackColorCacheFrame = std::numeric_limits<uint64_t>::max();
 }
@@ -1559,6 +1573,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     stateCapturePathsCache.clear();
+    repeatVoicingCache.clear();
 
     size_t bindingCount = 0;
     for(const auto& track : tracks) bindingCount += track.bindings.size();
@@ -1651,15 +1666,26 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                 playback->lane.pianoNotes.clear();
                 playback->lane.pianoMonophonic = false;
                 std::vector<double> ends;
+                // A duplicated lane starts as a copy of its source: a note of
+                // another part on the same start and key is the same note, not
+                // a second voice. (Within one part, every note is kept.)
+                std::set<std::pair<int64_t, int>> earlierParts;
                 for(const auto* part : entry.second) {
                     const auto& local = trackIt->second.pianoVoicing.at(part);
+                    std::vector<std::pair<int64_t, int>> thisPart;
                     for(size_t n = 0; n < part->pianoNotes.size(); ++n) {
-                        playback->lane.pianoNotes.push_back(part->pianoNotes[n]);
+                        const auto& note = part->pianoNotes[n];
+                        const std::pair<int64_t, int> key{std::llround(note.startBeat * 96000.0), note.pitch};
+                        if(earlierParts.count(key) > 0) continue;
+                        thisPart.push_back(key);
+                        playback->lane.pianoNotes.push_back(note);
                         playback->noteLanes.push_back(part);
+                        playback->noteIndex.push_back(n);
                         // Preserve per-part mono note stealing before sharing
                         // the instrument's overall voice limit.
                         ends.push_back(local.end[n]);
                     }
+                    earlierParts.insert(thisPart.begin(), thisPart.end());
                     trackIt->second.sharedPiano.emplace(part, playback);
                 }
                 int voices = 0, instrumentVoices = 0;
@@ -2427,13 +2453,66 @@ void ofxOceanodeTimelineManager::pianoLaneVoicesAndKit(const ofxOceanodeTimeline
 void ofxOceanodeTimelineManager::computeLaneVoicing(const ofxOceanodeTimelineTrack& track,
                                                     const ofxOceanodeTimelineClip& clip,
                                                     const ofxOceanodeTimelineLane& lane,
-                                                    ofxOceanodeTimelinePianoVoicing& out) const {
+                                                    ofxOceanodeTimelinePianoVoicing& out,
+                                                    const std::vector<uint8_t>* sounding) const {
     int voices = 0, instrumentVoices = 0;
     bool kit = false;
     pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
-    computePianoVoicing(clip, lane, voices, kit, out);
+    computePianoVoicing(clip, lane, voices, kit, out, nullptr, sounding);
     out.outputWidth = std::max(out.width, instrumentVoices);
     out.instrument = instrumentVoices > 0;
+}
+
+const ofxOceanodeTimelinePianoVoicing& ofxOceanodeTimelineManager::repeatVoicing(
+        const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip,
+        const ofxOceanodeTimelineLane& lane, const SharedPianoPlayback* shared, int64_t repeat) const {
+    auto& cached = repeatVoicingCache[shared != nullptr ? static_cast<const void*>(shared)
+                                                        : static_cast<const void*>(&lane)];
+    if(const auto it = cached.find(repeat); it != cached.end()) return it->second;
+    // A few repeats around the playhead (the frame's and the scheduler's).
+    while(cached.size() >= 8) {
+        auto farthest = cached.begin();
+        for(auto it = cached.begin(); it != cached.end(); ++it)
+            if(std::llabs(it->first - repeat) > std::llabs(farthest->first - repeat)) farthest = it;
+        cached.erase(farthest);
+    }
+    const double cycle = static_cast<double>(repeat);
+    auto soundingIn = [&](const ofxOceanodeTimelineLane& part) {
+        std::vector<uint8_t> sounding(part.pianoNotes.size());
+        for(size_t n = 0; n < part.pianoNotes.size(); ++n)
+            sounding[n] = pianoProbabilityPasses(part.pianoNotes[n], cycle, part.probabilitySeed) ? 1 : 0;
+        return sounding;
+    };
+    ofxOceanodeTimelinePianoVoicing out;
+    if(shared == nullptr) {
+        const auto sounding = soundingIn(lane);
+        computeLaneVoicing(track, clip, lane, out, &sounding);
+    } else {
+        // As the indexes build a shared playback: each part's own stealing
+        // first (among its sounding notes), then the instrument's voices.
+        const auto& notes = shared->lane.pianoNotes;
+        std::vector<uint8_t> sounding(notes.size());
+        std::vector<double> ends(notes.size());
+        std::unordered_map<const ofxOceanodeTimelineLane*, ofxOceanodeTimelinePianoVoicing> parts;
+        for(size_t m = 0; m < notes.size(); ++m) {
+            const auto* part = shared->noteLanes[m];
+            auto [local, created] = parts.try_emplace(part);
+            if(created) {
+                const auto partSounding = soundingIn(*part);
+                computeLaneVoicing(track, clip, *part, local->second, &partSounding);
+            }
+            sounding[m] = pianoProbabilityPasses(notes[m], cycle, part->probabilitySeed) ? 1 : 0;
+            ends[m] = local->second.end[shared->noteIndex[m]];
+        }
+        int voices = 0, instrumentVoices = 0;
+        bool kit = false;
+        pianoLaneVoicesAndKit(track, shared->lane, voices, kit, &instrumentVoices);
+        computePianoVoicing(clip, shared->lane, voices, kit, out, &ends, &sounding);
+        out.outputWidth = std::max(out.width, instrumentVoices);
+        out.instrument = instrumentVoices > 0;
+    }
+    out.chance = true;
+    return cached.emplace(repeat, std::move(out)).first->second;
 }
 
 std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& trackId, const std::string& groupId,
@@ -3643,6 +3722,8 @@ std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId
        source->isWaveVolume || !source->lfoParameter.empty()) return {};
     ofxOceanodeTimelineLane copy = *source;
     copy.id = makeUniqueLaneId();
+    // Its own rolls: a copy on the source's seed would pass and fail with it.
+    copy.probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));
     ++nextLaneNumber;
     const auto newId = copy.id;
     clip->lanes.insert(std::next(source), std::move(copy));
@@ -4601,7 +4682,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                           lane.type == ofxOceanodeTimelineLaneType::MultiSlider) {
                     std::string value;
                     const bool hasValue = lane.type == ofxOceanodeTimelineLaneType::Step
-                        ? evaluateStepSequencer(lane, sourceBeat, value, laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip))
+                        ? evaluateStepSequencer(lane, sourceBeat, value, laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
+                                                ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition),
+                                                ofxOceanodeTimelineClipTime::sourceDuration(clip))
                         : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
                         ? evaluateMultiSlider(lane, sourceBeat, value)
                         : evaluateCurve(lane, sourceBeat, value);
@@ -4668,8 +4751,12 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                         voicing = &localVoicing;
                     }
                     const auto& notes = lane.pianoNotes;
-                    const double pianoCycle = static_cast<double>(
-                        ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition));
+                    const int64_t pianoRepeat = ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition);
+                    const double pianoCycle = static_cast<double>(pianoRepeat);
+                    // With chance notes, only those sounding in this repeat
+                    // hold a voice: a failed note neither cuts the one before
+                    // it nor moves the slot's pitch.
+                    if(voicing->chance) voicing = &repeatVoicing(track, clip, lane, shared, pianoRepeat);
                     const double noteGap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
                     // Where a note's gate opens: after the retrigger gap when
                     // its slot was still busy, so the instrument sees an edge.
@@ -4844,9 +4931,13 @@ void ofxOceanodeTimelineManager::updatePianoGateOwnership(bool isPlaying) {
            std::any_of(entry.second.begin(), entry.second.end(), [](const auto* binding) {
                return !binding->bypass && binding->hasLiveOverride;
            })) next.insert(entry.first);
-    for(const auto& path : playingPianoGatePaths)
-        if(next.count(path) == 0 && activeAutomationValues.count(path) == 0)
+    releasedPianoGatePaths.clear();
+    for(const auto& path : playingPianoGatePaths) {
+        if(next.count(path) > 0) continue;
+        releasedPianoGatePaths.push_back(path);
+        if(activeAutomationValues.count(path) == 0)
             activeAutomationValues[path].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, "0");
+    }
     playingPianoGatePaths = std::move(next);
 }
 
@@ -5132,6 +5223,19 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         // Only state-capture curves compare against it (GUI edits while stopped).
         if(stateCapturePathsCache.count(path) > 0)
             stateCaptureLastAppliedValues[path] = parameterValueForAutomation(*parameter);
+    }
+    // A gate released this frame whose binding is no longer active -- bypassed,
+    // or gone with an undo or a load -- has nothing above to close it. Close it
+    // once, at its own width, and leave it alone afterwards.
+    for(const auto& path : releasedPianoGatePaths) {
+        const auto bindingsIt = bindingsByPathCache.find(path);
+        if(bindingsIt != bindingsByPathCache.end() &&
+           std::any_of(bindingsIt->second.begin(), bindingsIt->second.end(),
+                       [](const auto* binding) { return !binding->bypass; })) continue;
+        auto* parameter = findParameterCached(path);
+        if(parameter == nullptr) continue;
+        const std::string type = parameter->valueType();
+        applyAutomationValue(*parameter, broadcastScalarNumericVectorValue(*parameter, "0", type), type);
     }
 }
 
@@ -6103,7 +6207,8 @@ void ofxOceanodeTimelineManager::clear() {
     pendingTrackRenameIsNew = false;
     pendingNoteGroupSetupParameter = nullptr;
     activeAutomationValues.clear();
-    playingPianoGatePaths.clear();
+    // playingPianoGatePaths survives: a gate held open by the content being
+    // replaced (an undo, a preset load) is released on the next update.
     stateCaptureLastAppliedValues.clear();
     stateCaptureManualOverrideKeys.clear();
     invalidateSchedule();
@@ -6415,7 +6520,29 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     return json;
 }
 
-void ofxOceanodeTimelineManager::fromJson(const ofJson& json) {
+namespace {
+// A non-finite number is written to JSON as null, and reading a null where a
+// number is expected throws -- which skipped the whole track holding it. Drop
+// null members, so every field falls back to its default, and read null array
+// entries as 0.
+ofJson withoutNulls(const ofJson& json) {
+    if(json.is_object()) {
+        ofJson result = ofJson::object();
+        for(auto it = json.begin(); it != json.end(); ++it)
+            if(!it.value().is_null()) result[it.key()] = withoutNulls(it.value());
+        return result;
+    }
+    if(json.is_array()) {
+        ofJson result = ofJson::array();
+        for(const auto& item : json) result.push_back(item.is_null() ? ofJson(0) : withoutNulls(item));
+        return result;
+    }
+    return json;
+}
+}
+
+void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
+    const ofJson json = withoutNulls(input);
     const int fileVersion = json.value("version", kPresetVersion);
     if(fileVersion > kPresetVersion) {
         ofLogWarning("ofxOceanodeTimeline")

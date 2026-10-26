@@ -398,3 +398,25 @@ changing the evaluation path.
 - **Scheduler:** it only looks for change beats in clips and lanes that drive a
   scheduled path.
 - **Piano held notes:** the held-note lookup binary-searches each voice slot.
+
+## Gates, chance notes and duplicated lanes
+
+- **Gate release:** a piano gate held open by the timeline is closed once when
+  nothing holds it any more. That covers playback stopping, its last clip being
+  muted or removed, an undo or a preset load replacing the content, and its
+  binding being bypassed. After that it is left alone for live input.
+- **Step probability:** steps roll again in every repeat of their clip, as
+  piano notes do.
+- **Chance notes:** a piano note with a probability below 1 takes a voice only
+  in the repeats where it sounds. A note that fails its roll doesn't cut the
+  note before it, steal its slot or move the pitch. These voicings are
+  computed per repeat and cached; the frame value and the scheduler's probes
+  use the same ones.
+- **Duplicated lanes:**
+  - A duplicated piano lane gets its own probability seed.
+  - Lanes sharing an instrument play a note that appears in more than one of
+    them (same start and key) once, so a fresh duplicate doesn't double its
+    source. Edited apart, both parts play.
+- **Non-finite values:** a non-finite number is saved as `null`. On load, a
+  `null` member falls back to its default and a `null` array entry reads as 0,
+  instead of discarding the track that holds it.

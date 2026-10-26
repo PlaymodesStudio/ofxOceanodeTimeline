@@ -512,6 +512,8 @@ struct ofxOceanodeTimelinePianoVoicing {
     std::vector<uint8_t> retrigger;       // its slot was still busy at its start: gate opens after a gap
     std::vector<uint8_t> wrapRetrigger;   // same, against the previous repeat of the clip
     std::vector<std::vector<size_t>> slotNotes; // per slot, its notes in start order
+    bool chance = false;                  // a note may not sound (probability < 1): the
+                                          // slots then depend on the repeat being played
 };
 
 struct ofxOceanodeTimelineTrack {
@@ -1135,6 +1137,7 @@ private:
         const ofxOceanodeTimelineLane* first = nullptr;
         ofxOceanodeTimelineLane lane;
         std::vector<const ofxOceanodeTimelineLane*> noteLanes;
+        std::vector<size_t> noteIndex; // each note's index in its own lane
         ofxOceanodeTimelinePianoVoicing voicing;
     };
     struct TrackEvaluationIndex {
@@ -1149,7 +1152,16 @@ private:
     void pianoLaneVoicesAndKit(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
                                int& voices, bool& kit, int* instrumentVoices = nullptr) const;
     void computeLaneVoicing(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip,
-                            const ofxOceanodeTimelineLane& lane, ofxOceanodeTimelinePianoVoicing& out) const;
+                            const ofxOceanodeTimelineLane& lane, ofxOceanodeTimelinePianoVoicing& out,
+                            const std::vector<uint8_t>* sounding = nullptr) const;
+    // The voicing of one repeat of a lane with chance notes: only the notes
+    // that sound in that repeat take a voice. Cached per lane (a few repeats).
+    const ofxOceanodeTimelinePianoVoicing& repeatVoicing(const ofxOceanodeTimelineTrack& track,
+                                                         const ofxOceanodeTimelineClip& clip,
+                                                         const ofxOceanodeTimelineLane& lane,
+                                                         const SharedPianoPlayback* shared,
+                                                         int64_t repeat) const;
+    mutable std::unordered_map<const void*, std::map<int64_t, ofxOceanodeTimelinePianoVoicing>> repeatVoicingCache;
     struct PianoPitchRangeIndex {
         std::string valueType;
         int low = 127;
@@ -1213,6 +1225,8 @@ private:
                             const std::vector<std::string>& affectedBindingIds);
     void updatePianoGateOwnership(bool isPlaying);
     std::unordered_set<std::string> playingPianoGatePaths;
+    // Gates closed by the last updatePianoGateOwnership().
+    std::vector<std::string> releasedPianoGatePaths;
     ActiveValueMap activeAutomationValues;
     bool bpmAutomationEnabled = false;
     bool bpmLaneCollapsed = true;
