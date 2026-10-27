@@ -196,18 +196,23 @@ struct ofxOceanodeTimelinePianoNote {
 // (0..1) is the chance that aspect changes; 0 turns it off.
 struct ofxOceanodeTimelineMutationRules {
     float pitchStrength = 1.0f;
-    int pitchRange = 7;          // up to +/- this many semitones...
+    int pitchRange = 7;          // up to this many semitones...
+    int pitchDirection = 0;      // ...both ways (0), up only (1) or down only (2)...
     int scaleMask = 0xFFF;       // ...onto these pitch classes (bit 0 = C)
     float offsetStrength = 0.0f;
     int offsetSteps = 1;         // moved up to +/- this many grid steps
     float lengthStrength = 0.0f;
     float lengthMax = 2.0f;      // up to this many times shorter or longer, on the grid
+    float velocityStrength = 0.0f;
+    float velocityRange = 0.25f; // velocity moves up to +/- this much (0..1)
     // Fields, for a group's overrides.
     enum Field { PitchStrength = 1, PitchRange = 2, ScaleMask = 4, OffsetStrength = 8,
-                 OffsetSteps = 16, LengthStrength = 32, LengthMax = 64 };
+                 OffsetSteps = 16, LengthStrength = 32, LengthMax = 64, PitchDirection = 128,
+                 VelocityStrength = 256, VelocityRange = 512 };
     bool active() const {
         return (pitchStrength > 0.0f && pitchRange > 0 && (scaleMask & 0xFFF) != 0) ||
-               (offsetStrength > 0.0f && offsetSteps > 0) || (lengthStrength > 0.0f && lengthMax > 1.0f);
+               (offsetStrength > 0.0f && offsetSteps > 0) || (lengthStrength > 0.0f && lengthMax > 1.0f) ||
+               (velocityStrength > 0.0f && velocityRange > 0.0f);
     }
 };
 
@@ -314,6 +319,16 @@ struct ofxOceanodeTimelineLane {
     // ofxOceanodeTimelineMutationGroup and ofxOceanodeTimelineMutationRulesFor).
     ofxOceanodeTimelineMutationRules mutation;
     std::vector<ofxOceanodeTimelineMutationGroup> mutationGroups;
+    // Mutated timing never makes notes overlap (see mutatedPianoNotes).
+    bool mutationMonophonic = false;
+    // Drift: each repeat mutates the notes the previous repeat played, so
+    // changes accumulate while playing; stopping returns to the written notes.
+    bool mutationDrift = false;
+    // Scale overlay (editing aid): keys outside the scale are shaded in the
+    // roll; with snap, drawn and moved notes land on scale keys.
+    bool pianoScaleEnabled = false;
+    int pianoScaleMask = 0xAB5;  // bit 0 = C
+    bool pianoScaleSnap = false;
     bool curveClamp = true;
     std::string curveInterpolation = "Linear";
     // Curve value scale: "" = Auto (the binding's valueScale), "Linear", "dB".
@@ -399,11 +414,14 @@ inline ofxOceanodeTimelineMutationRules ofxOceanodeTimelineMutationRulesFor(cons
     Rules rules = lane.mutation;
     if(entry.overrides & Rules::PitchStrength) rules.pitchStrength = own.pitchStrength;
     if(entry.overrides & Rules::PitchRange) rules.pitchRange = own.pitchRange;
+    if(entry.overrides & Rules::PitchDirection) rules.pitchDirection = own.pitchDirection;
     if(entry.overrides & Rules::ScaleMask) rules.scaleMask = own.scaleMask;
     if(entry.overrides & Rules::OffsetStrength) rules.offsetStrength = own.offsetStrength;
     if(entry.overrides & Rules::OffsetSteps) rules.offsetSteps = own.offsetSteps;
     if(entry.overrides & Rules::LengthStrength) rules.lengthStrength = own.lengthStrength;
     if(entry.overrides & Rules::LengthMax) rules.lengthMax = own.lengthMax;
+    if(entry.overrides & Rules::VelocityStrength) rules.velocityStrength = own.velocityStrength;
+    if(entry.overrides & Rules::VelocityRange) rules.velocityRange = own.velocityRange;
     return rules;
 }
 
@@ -1250,6 +1268,13 @@ private:
     // Which clip start mutations roll for (from the transport generation and
     // loop pass, set with the clip chance rolls).
     mutable uint64_t mutationEpoch = 0;
+    // The notes a lane plays in one repeat of the current start, mutated
+    // (and, with drift, from the repeat played before).
+    std::vector<ofxOceanodeTimelinePianoNote> repeatNotes(const ofxOceanodeTimelineLane& lane, int64_t repeat,
+                                                          double sourceLength) const;
+    // Drift: per lane, the last few repeats played (epoch, repeat) in order.
+    using PianoDriftStep = std::pair<std::pair<uint64_t, int64_t>, std::vector<ofxOceanodeTimelinePianoNote>>;
+    mutable std::unordered_map<const ofxOceanodeTimelineLane*, std::vector<PianoDriftStep>> pianoDrift;
     // Rolls every clip's chance for one transport generation / loop pass.
     // The frame path rolls the current pass; the scheduler rolls the next one
     // while it probes beats past the loop end, then restores the current one.

@@ -91,6 +91,92 @@ int main() {
     lane = model.getLane(t, c, l);
     near(lane->pianoNotes[0].mutation, 0.0);
     assert(lane->mutation.pitchStrength == 1.0f && lane->mutation.scaleMask == 0xFFF && lane->mutation.lengthStrength == 0.0f);
+    // Monophonic: lengthened notes stop at the next note; a note shifted onto
+    // another's start keeps its written timing. Off, they may overlap.
+    {
+        lane = model.getLane(t, c, l);
+        const auto savedRules = lane->mutation;
+        lane->mutation = ofxOceanodeTimelineMutationRules();
+        lane->mutation.pitchStrength = 0.0f;
+        lane->mutation.lengthStrength = 1.0f; lane->mutation.lengthMax = 4.0f;
+        lane->beatsPerStep = 0.25;
+        lane->pianoNotes = {{0, 1, 60, 0.8f, 1, 1.0f}, {1, 1, 62, 0.8f, 1, 0.0f}};
+        bool overlapped = false;
+        for(int i = 0; i < 40; ++i) {
+            playAt(0.5);
+            assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+            overlapped = overlapped || preview[0].startBeat + preview[0].durationBeats > 1.0 + 1e-9;
+        }
+        assert(overlapped);
+        lane = model.getLane(t, c, l);
+        lane->mutationMonophonic = true;
+        for(int i = 0; i < 40; ++i) {
+            playAt(0.5);
+            assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+            assert(preview[0].startBeat + preview[0].durationBeats <= 1.0 + 1e-9);
+        }
+        lane = model.getLane(t, c, l);
+        lane->mutation.lengthStrength = 0.0f;
+        lane->mutation.offsetStrength = 1.0f; lane->mutation.offsetSteps = 1; lane->beatsPerStep = 1.0;
+        lane->pianoNotes = {{0, 1, 60, 0.8f, 1, 0.0f}, {1, 1, 62, 0.8f, 1, 1.0f}};
+        for(int i = 0; i < 40; ++i) {
+            playAt(0.5);
+            assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+            // Shifted back to 0 would land on the first note: it stays at 1.
+            assert(std::abs(preview[1].startBeat - 1.0) < 1e-9 || std::abs(preview[1].startBeat - 2.0) < 1e-9);
+            assert(preview[0].startBeat + preview[0].durationBeats <= preview[1].startBeat + 1e-9);
+        }
+        const auto saved = model.toJson(); model.fromJson(saved);
+        assert(model.getLane(t, c, l)->mutationMonophonic);
+        lane = model.getLane(t, c, l);
+        lane->mutationMonophonic = false; lane->mutation = savedRules;
+    }
+    // Velocity: moves within +/- range, pitch untouched.
+    {
+        lane = model.getLane(t, c, l);
+        const auto savedRules = lane->mutation;
+        lane->mutation = ofxOceanodeTimelineMutationRules();
+        lane->mutation.pitchStrength = 0.0f;
+        lane->mutation.velocityStrength = 1.0f; lane->mutation.velocityRange = 0.2f;
+        lane->pianoNotes = {{0, 3, 60, 0.8f, 1, 1.0f}};
+        bool changed = false;
+        for(int i = 0; i < 20; ++i) {
+            playAt(0.5);
+            assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+            assert(preview[0].pitch == 60 && preview[0].velocity >= 0.6f - 1e-6f && preview[0].velocity <= 1.0f + 1e-6f);
+            changed = changed || std::abs(preview[0].velocity - 0.8f) > 1e-4f;
+        }
+        assert(changed);
+        // Drift: each repeat mutates the previous one (+1 semitone each), up to
+        // the roll's highest key; stopping starts again from the written note.
+        lane = model.getLane(t, c, l);
+        lane->mutation = ofxOceanodeTimelineMutationRules();
+        lane->mutation.pitchRange = 1; lane->mutation.pitchDirection = 1;
+        lane->pianoLowPitch = 36; lane->pianoHighPitch = 63;
+        lane->mutationDrift = true;
+        playAt(0.5);
+        for(int repeat = 0; repeat < 6; ++repeat) {
+            assert(model.pianoRepeatNotes(t, c, l, repeat, preview));
+            assert(preview[0].pitch == std::min(63, 61 + repeat));
+        }
+        owner.transport->pause(); model.update();
+        owner.transport->play(); playAt(0.5);
+        assert(model.pianoRepeatNotes(t, c, l, 0, preview) && preview[0].pitch == 61);
+        lane = model.getLane(t, c, l);
+        lane->mutationDrift = false;
+        assert(model.pianoRepeatNotes(t, c, l, 4, preview) && preview[0].pitch == 61);
+        // Velocity rules, drift and the scale overlay are saved.
+        lane->mutationDrift = true;
+        lane->mutation.velocityStrength = 0.3f; lane->mutation.velocityRange = 0.15f;
+        lane->pianoScaleEnabled = true; lane->pianoScaleMask = 0x5AD; lane->pianoScaleSnap = true;
+        const auto saved = model.toJson(); model.fromJson(saved);
+        lane = model.getLane(t, c, l);
+        assert(lane->mutationDrift && lane->pianoScaleEnabled && lane->pianoScaleMask == 0x5AD && lane->pianoScaleSnap);
+        assert(std::abs(lane->mutation.velocityStrength - 0.3f) < 1e-6f && std::abs(lane->mutation.velocityRange - 0.15f) < 1e-6f);
+        lane->mutationDrift = false; lane->pianoScaleEnabled = false; lane->pianoScaleSnap = false;
+        lane->pianoLowPitch = 36; lane->pianoHighPitch = 84;
+        lane->mutation = savedRules;
+    }
     // Groups: B uses its own keys and follows A for everything else.
     using Rules = ofxOceanodeTimelineMutationRules;
     lane = model.getLane(t, c, l);
@@ -108,6 +194,36 @@ int main() {
         const auto resolved = ofxOceanodeTimelineMutationRulesFor(*model.getLane(t, c, l), 1);
         assert(resolved.scaleMask == 1 << 7 && resolved.pitchRange == 12); // range followed from A
         assert(ofxOceanodeTimelineMutationRulesFor(*model.getLane(t, c, l), 3).scaleMask == 1 << 4); // missing: A
+    }
+    // Direction: up only stays above the written pitch, down only below; a
+    // group can override it and it is saved.
+    lane = model.getLane(t, c, l);
+    lane->mutation.scaleMask = 0xFFF;
+    lane->mutation.pitchDirection = 1;
+    for(int i = 0; i < 30; ++i) {
+        playAt(0.5);
+        assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+        assert(preview[0].pitch > 60 && preview[0].pitch <= 72);
+    }
+    lane = model.getLane(t, c, l);
+    lane->mutationGroups[0].rules.pitchDirection = 2;
+    lane->mutationGroups[0].overrides |= Rules::PitchDirection;
+    lane->mutationGroups[0].rules.scaleMask = 0xFFF;
+    for(int i = 0; i < 30; ++i) {
+        playAt(0.5);
+        assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+        assert(preview[0].pitch > 60 && preview[1].pitch < 48 && preview[1].pitch >= 36);
+    }
+    {
+        const auto saved = model.toJson();
+        model.fromJson(saved);
+        lane = model.getLane(t, c, l);
+        assert(lane->mutation.pitchDirection == 1 && lane->mutationGroups[0].rules.pitchDirection == 2);
+        assert(lane->mutationGroups[0].overrides & Rules::PitchDirection);
+        lane->mutation.pitchDirection = 0;
+        lane->mutationGroups[0].rules.scaleMask = 1 << 7;
+        lane->mutationGroups[0].overrides = Rules::ScaleMask;
+        lane->mutation.scaleMask = 1 << 4;
     }
     // Groups and each note's group are saved.
     {

@@ -422,6 +422,15 @@ changing the evaluation path.
   scheduled path.
 - **Piano held notes:** the held-note lookup binary-searches each voice slot.
 
+## Piano scale overlay
+
+The piano roll's Lane tab has a **Scale**: turn it on and pick the keys with
+the presets (rooted on C; the arrows transpose) or the keyboard. Keys outside
+the scale are shaded in the roll and on its keyboard. **Snap to scale** puts
+drawn and moved notes on the nearest scale key. It is an editing aid only;
+playback is unchanged. The Mutate tab's key presets offer **Lane scale** to
+copy it.
+
 ## Piano note mutation
 
 Each piano note has a **mutation** amount, set in the **MUT** strip under
@@ -436,18 +445,20 @@ The lane's **Mutate** tab sets what changes. Each aspect has a **Strength**,
 the chance it changes when a note mutates (0% turns it off):
 
 - **Pitch** (default 100%): moves the note to another allowed key within
-  **Range** semitones. Click the keyboard to allow or exclude keys, pick a
+  **Range** semitones. Right-click Range to choose the direction: up or
+  down (+/-), up only (+) or down only (-). Click the keyboard to allow or exclude keys, pick a
   preset (Chromatic, Major, Minor, pentatonics, Whole tone, or the keys the
   lane already uses), and transpose the selection with the arrows.
 - **Offset** (default off): moves the note up to **Steps** grid steps
   earlier or later (the lane's Grid).
 - **Length** (default off): makes the note up to **Up to** times shorter
   or longer, on the grid.
+- **Velocity** (default off): moves the note's velocity up to +/- **Range**.
 
 **Mutation groups** give different notes different rules, such as a narrower
 pitch range or other keys for the bass. A lane has group A (the rules above)
-and up to three more, B to D, each with its own colour (violet, teal, amber,
-pink) on the notes' MUT handles and outlines. Every note starts in A.
+and up to three more, B to D, each with its own shade of violet on the
+notes' MUT handles and outlines. Every note starts in A.
 
 - **Assign:** right-click a note's MUT handle. Next to its mutation value, the
   group chips move the note to a group, and **+** creates a group and moves
@@ -459,6 +470,20 @@ pink) on the notes' MUT handles and outlines. Every note starts in A.
   its own value; right-click a changed value and choose **Same as A** to
   follow A again.
 - **Delete:** right-click a group's chip. Its notes go back to A.
+
+**Drift** (top of the Mutate tab, for the whole lane): each repeat mutates
+the notes the previous repeat played instead of the written ones, so changes
+accumulate across repeats and loop passes. Drifting pitch stays within the
+roll's Low..High keys. Stopping the transport, or editing the notes, starts
+again from the written notes.
+
+**Mono** (monophonic, also for the whole lane): mutated timing
+never makes notes overlap. A note that is lengthened, or that runs into a
+shifted note, ends where the next note starts; a note shifted onto another
+note's start keeps its written timing.
+
+The VEL, PROB and MUT handles of every note show even when the note itself is
+outside the keys the roll shows.
 
 Rolls also depend on the lane's Seed. Voices follow the mutated notes, so
 a moved note takes its voice where it now plays; the scheduler uses the same

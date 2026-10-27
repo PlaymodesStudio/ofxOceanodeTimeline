@@ -260,7 +260,7 @@ int main() {
     {
         // Mutation: MUT strip handles, outlines and the Mutate tab.
         auto* melody=model.getLane(t,c,piano);
-        melody->pianoNotes[1].mutation=0.6f; melody->mutation.scaleMask=0xAB5;
+        melody->pianoNotes[1].mutation=0.6f; melody->mutation.scaleMask=0xAB5; melody->mutation.pitchDirection=1;
         selectTab("Mutate");
         frame(); frame(1250,ImVec2(-100,-100),false,"mutation");
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
@@ -279,7 +279,17 @@ int main() {
             lane->mutationGroups.clear(); lane->pianoNotes[1].mutationGroup=0; lane->pianoNotes[2].mutationGroup=0;
             lane->pianoNotes[2].mutation=0.0f; pianoEditor.mutationEditGroup=0;
         }
-        model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF;
+        // Scale overlay in the Lane tab and the roll.
+        {
+            auto* lane=model.getLane(t,c,piano);
+            lane->pianoScaleEnabled=true; lane->pianoScaleMask=0x5AD;
+            selectTab("Lane");
+            frame(); frame(1250,ImVec2(-100,-100),false,"scale");
+            lane=model.getLane(t,c,piano);
+            assert(lane->pianoScaleEnabled && lane->pianoScaleMask==0x5AD);
+            lane->pianoScaleEnabled=false; lane->pianoScaleMask=0xAB5;
+        }
+        model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF; model.getLane(t,c,piano)->mutation.pitchDirection=0;
     }
     selectTab("Targets"); frame();
     ui.targetsView=true;
