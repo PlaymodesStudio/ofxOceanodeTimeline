@@ -2,6 +2,7 @@
 #include "ofxOceanodeTimelineLaneEditorUi.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeParameter.h"
+#include "Nodes/ofxOceanodeGlobalPitch.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -409,6 +410,19 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
 
     const int lowPitch = ofClamp(lane->pianoLowPitch, 0, 127);
     const int highPitch = ofClamp(lane->pianoHighPitch, lowPitch, 127);
+    // Global Pitch: notes are drawn where the lane's instrument will play them
+    // (its scale and transpose, as that node's ticks say). Display only: the
+    // clip stores and sends its notes unchanged and the instrument applies
+    // Global Pitch once. A moved note leaves a ghost at its stored pitch, and
+    // editing acts on the stored notes; clicking either one picks the note.
+    ofxOceanodeNodeModel* soundingNode = timeline.pianoPitchNode(track.id, *lane);
+    auto sounding = [soundingNode](int pitch) -> int {
+        if(soundingNode == nullptr) return pitch;
+        return std::clamp((int)std::round(ofxOceanodeGlobalPitch::apply(soundingNode, (float)pitch, 0, false)), 0, 127);
+    };
+    auto atPitch = [&sounding](const ofxOceanodeTimelinePianoNote& note, int pitch) {
+        return note.pitch == pitch || sounding(note.pitch) == pitch;
+    };
     dl->AddRectFilled(ImVec2(keyboardLeft, rollTop), ImVec2(keyboardRight, rollBottom),
                       IM_COL32(205, 205, 200, 255));
     const float pitchHeight = (rollBottom - rollTop) / static_cast<float>(highPitch - lowPitch + 1);
@@ -437,7 +451,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 pianoSelectedNoteIndices.clear();
             pianoSelectionLaneId = lane->id;
             for(size_t index = 0; index < lane->pianoNotes.size(); ++index)
-                if(lane->pianoNotes[index].pitch == keyboardPitch)
+                if(atPitch(lane->pianoNotes[index], keyboardPitch))
                     pianoSelectedNoteIndices.insert(static_cast<int>(index));
             pianoDragMode = PianoDragMode::None;
             pianoDragNoteIndex = -1;
@@ -655,12 +669,20 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             const auto& note = lane->pianoNotes[noteIndex];
             // Notes outside the shown keys are not drawn, but their VEL / PROB /
             // MUT handles always are.
-            const bool shown = note.pitch >= lowPitch && note.pitch <= highPitch;
+            const int soundingPitch = sounding(note.pitch);
+            const bool shown = soundingPitch >= lowPitch && soundingPitch <= highPitch;
             const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
             const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
-            const float y2 = rollBottom - (note.pitch - lowPitch) * pitchHeight;
+            const float y2 = rollBottom - (soundingPitch - lowPitch) * pitchHeight;
             const float y1 = y2 - pitchHeight + 1.0f;
             const bool selected = isFocused && pianoSelectedNoteIndices.count(static_cast<int>(noteIndex)) > 0;
+            if(soundingPitch != note.pitch && note.pitch >= lowPitch && note.pitch <= highPitch) {
+                // the ghost: where the note is stored
+                const float gy2 = rollBottom - (note.pitch - lowPitch) * pitchHeight;
+                const float gy1 = gy2 - pitchHeight + 1.0f;
+                dl->AddRect(ImVec2(x1 + 1.0f, gy1), ImVec2(x2 - 1.0f, gy2),
+                            selected ? IM_COL32(250, 210, 90, 150) : IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 110 : 60), 2.0f, 0, 1.0f);
+            }
             if(shown) {
                 dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2),
                                   selected ? IM_COL32(250, 210, 90, 245) : IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 225 : 135), 2.0f);
@@ -697,10 +719,11 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 const auto& written = lane->pianoNotes[n];
                 if(played.pitch == written.pitch && played.startBeat == written.startBeat &&
                    played.durationBeats == written.durationBeats) continue;
-                if(played.pitch < lowPitch || played.pitch > highPitch) continue;
+                const int playedPitch = sounding(played.pitch);
+                if(playedPitch < lowPitch || playedPitch > highPitch) continue;
                 const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, played.startBeat, repeat));
                 const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, played.startBeat + played.durationBeats, repeat));
-                const float y2 = rollBottom - (played.pitch - lowPitch) * pitchHeight;
+                const float y2 = rollBottom - (playedPitch - lowPitch) * pitchHeight;
                 const float y1 = y2 - pitchHeight + 1.0f;
                 dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 70), 2.0f);
                 dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 235), 2.0f, 0, 1.5f);
@@ -771,7 +794,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         int hitIndex = -1;
         for(int i = static_cast<int>(lane->pianoNotes.size()) - 1; i >= 0; --i) {
             const auto& note = lane->pianoNotes[i];
-            if(note.pitch == pitch && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats) {
+            if(atPitch(note, pitch) && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats) {
                 hitIndex = i;
                 break;
             }
@@ -799,7 +822,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         int hitIndex = -1;
         for(int i = static_cast<int>(lane->pianoNotes.size()) - 1; i >= 0; --i) {
             const auto& note = lane->pianoNotes[i];
-            if(note.pitch == pitch && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats) {
+            if(atPitch(note, pitch) && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats) {
                 hitIndex = i;
                 break;
             }
@@ -855,7 +878,8 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                             pianoDragSnapshot.push_back({index, lane->pianoNotes[index].startBeat, lane->pianoNotes[index].pitch});
                     }
                     pianoDragAnchorStartBeat = note.startBeat;
-                    pianoDragAnchorPitch = note.pitch;
+                    // the row clicked: the note or its Global Pitch ghost, the drag moves it from there
+                    pianoDragAnchorPitch = pitch;
                     if(ImGui::GetIO().KeyAlt) {
                         // Alt+drag duplicates the whole selection in
                         // place and drags the copies instead, leaving
@@ -923,10 +947,11 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
                 for(size_t noteIndex = 0; noteIndex < lane->pianoNotes.size(); ++noteIndex) {
                     const auto& note = lane->pianoNotes[noteIndex];
-                    if(note.pitch < lowPitch || note.pitch > highPitch) continue;
+                    const int soundingPitch = sounding(note.pitch);   // the marquee picks what it shows
+                    if(soundingPitch < lowPitch || soundingPitch > highPitch) continue;
                     const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
                     const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
-                    const float y2 = rollBottom - (note.pitch - lowPitch) * pitchHeight;
+                    const float y2 = rollBottom - (soundingPitch - lowPitch) * pitchHeight;
                     const float y1 = y2 - pitchHeight + 1.0f;
                     if(x2 >= marqueeMinX && x1 <= marqueeMaxX && y2 >= marqueeMinY && y1 <= marqueeMaxY) {
                         pianoSelectedNoteIndices.insert(static_cast<int>(noteIndex));

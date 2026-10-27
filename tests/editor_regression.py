@@ -23,6 +23,9 @@ CASES = r'''
 void ofxOceanodeAbstractParameter::removeAllConnections() {
     assert(!hasInConnection() && !hasOutConnections() && !isScoped());
 }
+// the piano roll asks Global Pitch (core) about its lane's instrument, by node key
+#include "Nodes/ofxOceanodeNodeModel.h"
+std::string ofxOceanodeNodeModel::getParents() { return canvasID; }
 int main() {
     ofSeedRandom();
     ImGui::CreateContext();

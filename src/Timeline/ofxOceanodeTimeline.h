@@ -23,6 +23,7 @@
 
 class ofxOceanodeAbstractParameter;
 class ofxOceanodeContainer;
+class ofxOceanodeNodeModel;
 
 // How a binding's per-frame value should combine with whatever other
 // bindings already write to the same parameter. Replace is the classic
@@ -825,6 +826,9 @@ public:
         return parameter;
     }
     const ofxOceanodeTimelineParameterBinding* getBinding(const std::string& trackId, const std::string& bindingId) const;
+    // The node a piano lane's pitch binding drives (nullptr when it has none):
+    // what Global Pitch makes of the lane's notes depends on that node's ticks.
+    ofxOceanodeNodeModel* pianoPitchNode(const std::string& trackId, const ofxOceanodeTimelineLane& lane) const;
 
     std::string createClip(const std::string& trackId,
                            const std::string& requestedName = "Clip",

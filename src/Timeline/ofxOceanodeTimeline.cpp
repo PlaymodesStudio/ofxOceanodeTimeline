@@ -4435,6 +4435,13 @@ ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(cons
     return it == track->bindings.end() ? nullptr : &*it;
 }
 
+ofxOceanodeNodeModel* ofxOceanodeTimelineManager::pianoPitchNode(const std::string& trackId, const ofxOceanodeTimelineLane& lane) const {
+    if(lane.pianoPitchBindingId.empty()) return nullptr;
+    const auto* binding = getBinding(trackId, lane.pianoPitchBindingId);
+    auto* parameter = binding == nullptr ? nullptr : findParameterCached(binding->parameterPath);
+    return parameter == nullptr ? nullptr : parameter->getNodeModel();
+}
+
 const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) const {
     const auto* track = getTrack(trackId);
     if(track == nullptr) return nullptr;
