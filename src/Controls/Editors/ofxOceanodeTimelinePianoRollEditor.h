@@ -69,6 +69,11 @@ private:
     bool pianoMarqueeActive = false;
     float pianoMarqueeStartX = 0.0f;
     float pianoMarqueeStartY = 0.0f;
+    // Mutate tab: the group being edited (per lane), and the frame the tab
+    // was last drawn, so the roll can light that group's notes up.
+    std::string mutationEditLaneId;
+    int mutationEditGroup = 0;
+    int mutationTabFrame = -1;
     enum class PianoNumericField { None, Velocity, Probability, Mutation };
     PianoNumericField pianoNumericField = PianoNumericField::None;
     int pianoNumericNoteIndex = -1;

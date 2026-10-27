@@ -444,10 +444,26 @@ the chance it changes when a note mutates (0% turns it off):
 - **Length** (default off): makes the note up to **Up to** times shorter
   or longer, on the grid.
 
+**Mutation groups** give different notes different rules, such as a narrower
+pitch range or other keys for the bass. A lane has group A (the rules above)
+and up to three more, B to D, each with its own colour (violet, teal, amber,
+pink) on the notes' MUT handles and outlines. Every note starts in A.
+
+- **Assign:** right-click a note's MUT handle. Next to its mutation value, the
+  group chips move the note to a group, and **+** creates a group and moves
+  the note there. If the note is part of a selection, the whole selection
+  moves.
+- **Edit:** the chips at the top of the Mutate tab pick the group to edit;
+  its notes light up in the roll. A new group follows A: a value it hasn't
+  changed is shown dimmed and keeps following A. Change it to give the group
+  its own value; right-click a changed value and choose **Same as A** to
+  follow A again.
+- **Delete:** right-click a group's chip. Its notes go back to A.
+
 Rolls also depend on the lane's Seed. Voices follow the mutated notes, so
 a moved note takes its voice where it now plays; the scheduler uses the same
-mutations as the frame path. Mutation amounts and rules are saved; older
-presets load with no mutation.
+mutations as the frame path. Mutation amounts, groups and rules are saved;
+older presets load with no mutation.
 
 ## Gates, chance notes and duplicated lanes
 

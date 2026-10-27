@@ -15,6 +15,7 @@ native.fixture.CASES = r'''
 #undef private
 #include "imgui_internal.h"
 #include "Controls/Editors/ofxOceanodeTimelineEditorUi.h"
+#include "Controls/Editors/ofxOceanodeTimelinePianoRollEditor.h"
 #include <cstdlib>
 class ClarityProbe : public ofxOceanodeNodeModel {
 public:
@@ -259,11 +260,26 @@ int main() {
     {
         // Mutation: MUT strip handles, outlines and the Mutate tab.
         auto* melody=model.getLane(t,c,piano);
-        melody->pianoNotes[1].mutation=0.6f; melody->mutationScaleMask=0xAB5;
+        melody->pianoNotes[1].mutation=0.6f; melody->mutation.scaleMask=0xAB5;
         selectTab("Mutate");
         frame(); frame(1250,ImVec2(-100,-100),false,"mutation");
-        assert(model.getLane(t,c,piano)->mutationScaleMask==0xAB5);
-        model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutationScaleMask=0xFFF;
+        assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
+        // Group B: its own keys, the second and third notes in it, edited in the tab.
+        {
+            auto* lane=model.getLane(t,c,piano);
+            ofxOceanodeTimelineMutationGroup b; b.rules=lane->mutation; b.rules.scaleMask=0x295;
+            b.rules.lengthStrength=0.5f; b.overrides=ofxOceanodeTimelineMutationRules::ScaleMask|ofxOceanodeTimelineMutationRules::LengthStrength;
+            lane->mutationGroups={b};
+            lane->pianoNotes[1].mutationGroup=1; lane->pianoNotes[2].mutationGroup=1; lane->pianoNotes[2].mutation=0.3f;
+            auto& pianoEditor=static_cast<ofxOceanodeTimelinePianoRollEditor&>(ui.laneEditors.forType(ofxOceanodeTimelineLaneType::PianoRoll));
+            pianoEditor.mutationEditGroup=1;
+            frame(); frame(1250,ImVec2(-100,-100),false,"mutation-group");
+            lane=model.getLane(t,c,piano);
+            assert(lane->mutationGroups.size()==1 && lane->mutationGroups[0].overrides==b.overrides);
+            lane->mutationGroups.clear(); lane->pianoNotes[1].mutationGroup=0; lane->pianoNotes[2].mutationGroup=0;
+            lane->pianoNotes[2].mutation=0.0f; pianoEditor.mutationEditGroup=0;
+        }
+        model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF;
     }
     selectTab("Targets"); frame();
     ui.targetsView=true;

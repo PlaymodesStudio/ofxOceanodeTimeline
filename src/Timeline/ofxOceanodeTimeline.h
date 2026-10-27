@@ -187,7 +187,37 @@ struct ofxOceanodeTimelinePianoNote {
     // Chance (0..1) that the note plays changed in a repeat, by its lane's
     // mutation rules. Rolled every repeat and every time the clip starts.
     float mutation = 0.0f;
+    // Which of the lane's mutation groups' rules it follows: 0 = A (the
+    // lane's own rules), 1..3 = mutationGroups[group - 1].
+    int mutationGroup = 0;
 };
+
+// What changes in a piano note whose mutation roll passes. Each strength
+// (0..1) is the chance that aspect changes; 0 turns it off.
+struct ofxOceanodeTimelineMutationRules {
+    float pitchStrength = 1.0f;
+    int pitchRange = 7;          // up to +/- this many semitones...
+    int scaleMask = 0xFFF;       // ...onto these pitch classes (bit 0 = C)
+    float offsetStrength = 0.0f;
+    int offsetSteps = 1;         // moved up to +/- this many grid steps
+    float lengthStrength = 0.0f;
+    float lengthMax = 2.0f;      // up to this many times shorter or longer, on the grid
+    // Fields, for a group's overrides.
+    enum Field { PitchStrength = 1, PitchRange = 2, ScaleMask = 4, OffsetStrength = 8,
+                 OffsetSteps = 16, LengthStrength = 32, LengthMax = 64 };
+    bool active() const {
+        return (pitchStrength > 0.0f && pitchRange > 0 && (scaleMask & 0xFFF) != 0) ||
+               (offsetStrength > 0.0f && offsetSteps > 0) || (lengthStrength > 0.0f && lengthMax > 1.0f);
+    }
+};
+
+// Mutation groups B..D: the lane's rules (group A) with only the fields in
+// overrides replaced, so a group keeps following A everywhere else.
+struct ofxOceanodeTimelineMutationGroup {
+    ofxOceanodeTimelineMutationRules rules;
+    int overrides = 0; // ofxOceanodeTimelineMutationRules::Field bits
+};
+constexpr int kMaxMutationGroups = 4; // A plus three
 
 // One block on a MultiValue lane's row -- see ofxOceanodeTimelineLane::
 // multiValueRows. Modeled on ValueRegion from the old standalone "Multi
@@ -280,15 +310,10 @@ struct ofxOceanodeTimelineLane {
     std::string pianoVelocityBindingId;
     float pianoDefaultVelocity = 0.8f;
     bool pianoMonophonic = false;
-    // Piano mutation rules: what changes in a note whose mutation roll passes.
-    // Each strength (0..1) is the chance that aspect changes; 0 turns it off.
-    float mutationPitchStrength = 1.0f;
-    int mutationPitchRange = 7;       // up to +/- this many semitones...
-    int mutationScaleMask = 0xFFF;    // ...onto these pitch classes (bit 0 = C)
-    float mutationOffsetStrength = 0.0f;
-    int mutationOffsetSteps = 1;      // moved up to +/- this many grid steps
-    float mutationLengthStrength = 0.0f;
-    float mutationLengthMax = 2.0f;   // up to this many times shorter or longer, on the grid
+    // Piano mutation: group A's rules, then groups B..D (see
+    // ofxOceanodeTimelineMutationGroup and ofxOceanodeTimelineMutationRulesFor).
+    ofxOceanodeTimelineMutationRules mutation;
+    std::vector<ofxOceanodeTimelineMutationGroup> mutationGroups;
     bool curveClamp = true;
     std::string curveInterpolation = "Linear";
     // Curve value scale: "" = Auto (the binding's valueScale), "Linear", "dB".
@@ -363,6 +388,34 @@ struct ofxOceanodeTimelineLane {
     // only affects new edits; existing points keep their values.
     int lfoSnapMode = 0;
 };
+
+// The rules a note of this mutation group follows (0 = A; a missing group
+// falls back to A).
+inline ofxOceanodeTimelineMutationRules ofxOceanodeTimelineMutationRulesFor(const ofxOceanodeTimelineLane& lane, int group) {
+    if(group <= 0 || group > static_cast<int>(lane.mutationGroups.size())) return lane.mutation;
+    using Rules = ofxOceanodeTimelineMutationRules;
+    const auto& entry = lane.mutationGroups[group - 1];
+    const auto& own = entry.rules;
+    Rules rules = lane.mutation;
+    if(entry.overrides & Rules::PitchStrength) rules.pitchStrength = own.pitchStrength;
+    if(entry.overrides & Rules::PitchRange) rules.pitchRange = own.pitchRange;
+    if(entry.overrides & Rules::ScaleMask) rules.scaleMask = own.scaleMask;
+    if(entry.overrides & Rules::OffsetStrength) rules.offsetStrength = own.offsetStrength;
+    if(entry.overrides & Rules::OffsetSteps) rules.offsetSteps = own.offsetSteps;
+    if(entry.overrides & Rules::LengthStrength) rules.lengthStrength = own.lengthStrength;
+    if(entry.overrides & Rules::LengthMax) rules.lengthMax = own.lengthMax;
+    return rules;
+}
+
+// Removes group (1..3); its notes go back to A and later groups move down.
+inline void ofxOceanodeTimelineRemoveMutationGroup(ofxOceanodeTimelineLane& lane, int group) {
+    if(group <= 0 || group > static_cast<int>(lane.mutationGroups.size())) return;
+    lane.mutationGroups.erase(lane.mutationGroups.begin() + (group - 1));
+    for(auto& note : lane.pianoNotes) {
+        if(note.mutationGroup == group) note.mutationGroup = 0;
+        else if(note.mutationGroup > group) --note.mutationGroup;
+    }
+}
 
 struct ofxOceanodeTimelineClip {
     std::string id;

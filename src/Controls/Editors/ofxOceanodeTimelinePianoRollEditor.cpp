@@ -12,6 +12,30 @@ using namespace ofxOceanodeTimelineEditorUi;
 using namespace ofxOceanodeTimelineCurve;
 using namespace ofxOceanodeTimelineClipTime;
 
+namespace {
+// Mutation groups A..D: violet, teal, amber, pink.
+ImU32 mutationGroupColor(int group, int alpha = 255) {
+    static const int colors[kMaxMutationGroups][3] = {{185, 120, 245}, {60, 200, 190}, {240, 170, 60}, {240, 100, 170}};
+    const auto& c = colors[std::clamp(group, 0, kMaxMutationGroups - 1)];
+    return IM_COL32(c[0], c[1], c[2], alpha);
+}
+const char* mutationGroupName(int group) {
+    static const char* names[] = {"A", "B", "C", "D"};
+    return names[std::clamp(group, 0, kMaxMutationGroups - 1)];
+}
+// One coloured chip per group; returns true when clicked.
+bool mutationGroupChip(int group, bool selected) {
+    const ImU32 color = mutationGroupColor(group, selected ? 255 : 110);
+    ImGui::PushStyleColor(ImGuiCol_Button, color);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, mutationGroupColor(group, selected ? 255 : 190));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, mutationGroupColor(group));
+    ImGui::PushStyleColor(ImGuiCol_Text, selected ? IM_COL32(20, 20, 24, 255) : IM_COL32(235, 235, 240, 255));
+    const bool clicked = ImGui::SmallButton((std::string(" ") + mutationGroupName(group) + " ##mutationGroup" + ofToString(group)).c_str());
+    ImGui::PopStyleColor(4);
+    return clicked;
+}
+}
+
 void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
     const auto& track = context.track;
@@ -104,54 +128,123 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
 }
 
 void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEditorContext& context) {
+    using Rules = ofxOceanodeTimelineMutationRules;
     auto* lane = &context.lane;
-    const auto mutating = std::count_if(lane->pianoNotes.begin(), lane->pianoNotes.end(),
-                                        [](const auto& note) { return note.mutation > 0.0f; });
+    if(mutationEditLaneId != lane->id) { mutationEditLaneId = lane->id; mutationEditGroup = 0; }
+    mutationEditGroup = std::clamp(mutationEditGroup, 0, static_cast<int>(lane->mutationGroups.size()));
+    mutationTabFrame = ImGui::GetFrameCount();
+
+    // Group chips: click to edit a group, right-click B..D to delete it.
+    auto notesIn = [&](int group, bool mutatingOnly) {
+        return static_cast<int>(std::count_if(lane->pianoNotes.begin(), lane->pianoNotes.end(), [&](const auto& note) {
+            return note.mutationGroup == group && (!mutatingOnly || note.mutation > 0.0f);
+        }));
+    };
+    for(int group = 0; group <= static_cast<int>(lane->mutationGroups.size()); ++group) {
+        if(group > 0) ImGui::SameLine(0.0f, 3.0f);
+        if(mutationGroupChip(group, group == mutationEditGroup)) mutationEditGroup = group;
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Group %s: %d note%s. Right-click a note's MUT handle to move it to a group.%s",
+                              mutationGroupName(group), notesIn(group, false), notesIn(group, false) == 1 ? "" : "s",
+                              group > 0 ? "\nRight-click to delete the group (its notes go back to A)." : "");
+        if(group > 0 && ImGui::BeginPopupContextItem()) {
+            if(ImGui::MenuItem((std::string("Delete group ") + mutationGroupName(group)).c_str())) {
+                ofxOceanodeTimelineRemoveMutationGroup(*lane, group);
+                if(mutationEditGroup >= group) mutationEditGroup = std::max(0, mutationEditGroup - 1);
+            }
+            ImGui::EndPopup();
+        }
+    }
+    if(static_cast<int>(lane->mutationGroups.size()) + 1 < kMaxMutationGroups) {
+        ImGui::SameLine(0.0f, 3.0f);
+        if(ImGui::SmallButton("+##addMutationGroup")) {
+            lane->mutationGroups.push_back({lane->mutation, 0});
+            mutationEditGroup = static_cast<int>(lane->mutationGroups.size());
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("New group: follows A until you change a rule.");
+    }
+
+    const int group = mutationEditGroup;
+    auto* entry = group == 0 ? nullptr : &lane->mutationGroups[group - 1];
+    const Rules rules = ofxOceanodeTimelineMutationRulesFor(*lane, group);
     ImGui::PushTextWrapPos(0.0f);
-    if(mutating == 0) ImGui::TextDisabled("No note can mutate yet: raise a note's handle in the MUT strip.");
-    else ImGui::TextDisabled("%d note%s can mutate; rolled every repeat and every start.",
-                             static_cast<int>(mutating), mutating == 1 ? "" : "s");
+    const int mutating = notesIn(group, true);
+    if(mutating == 0) ImGui::TextDisabled("No note of %s can mutate yet: raise its handle in the MUT strip.", mutationGroupName(group));
+    else ImGui::TextDisabled("%d note%s of %s can mutate; rolled every repeat and every start.",
+                             mutating, mutating == 1 ? "" : "s", mutationGroupName(group));
     ImGui::PopTextWrapPos();
 
-    // Each aspect: a strength (its chance when a note mutates; 0 = off),
-    // then how far it may go.
-    auto strength = [&](const char* title, const char* id, float& value, const char* tooltip) {
+    // B..D show A's value (dimmed) until changed; a changed value can be
+    // set back to A's from its right-click menu.
+    auto following = [&](int field) { return entry != nullptr && !(entry->overrides & field); };
+    auto beginField = [&](int field) {
+        if(following(field)) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    };
+    auto endField = [&](int field, bool wasFollowing) {
+        if(wasFollowing) {
+            ImGui::PopStyleVar();
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Same as A. Change it to give %s its own value.", mutationGroupName(group));
+        } else if(entry != nullptr && ImGui::BeginPopupContextItem()) {
+            if(ImGui::MenuItem("Same as A")) entry->overrides &= ~field;
+            ImGui::EndPopup();
+        }
+    };
+    auto commit = [&](int field, auto member, auto value) {
+        if(entry == nullptr) lane->mutation.*member = value;
+        else { entry->rules.*member = value; entry->overrides |= field; }
+    };
+
+    auto strength = [&](const char* title, const char* id, int field, float Rules::* member, const char* tooltip) {
         ImGui::SeparatorText(title);
         propertyLabel("Strength");
-        float percent = value * 100.0f;
+        const bool wasFollowing = following(field);
+        beginField(field);
+        float percent = rules.*member * 100.0f;
         if(ImGui::SliderFloat(id, &percent, 0.0f, 100.0f, percent <= 0.0f ? "Off" : "%.0f%%"))
-            value = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nChance this changes when a note mutates. 0%%: never.", tooltip);
-        ImGui::BeginDisabled(value <= 0.0f);
+            commit(field, member, ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f));
+        if(!wasFollowing && ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nChance this changes when a note mutates. 0%%: never.", tooltip);
+        endField(field, wasFollowing);
+        ImGui::BeginDisabled(rules.*member <= 0.0f);
     };
-    strength("Pitch", "##mutationPitchStrength", lane->mutationPitchStrength,
+    auto intField = [&](const char* label, const char* id, int field, int Rules::* member, float speed, int low, int high, const char* format) {
+        propertyLabel(label);
+        const bool wasFollowing = following(field);
+        beginField(field);
+        int value = rules.*member;
+        if(ImGui::DragInt(id, &value, speed, low, high, format)) commit(field, member, std::clamp(value, low, high));
+        endField(field, wasFollowing);
+    };
+
+    strength("Pitch", "##mutationPitchStrength", Rules::PitchStrength, &Rules::pitchStrength,
              "Pitch: move the note to another allowed key within the range.");
-    propertyLabel("Range");
-    ImGui::DragInt("##mutationPitchRange", &lane->mutationPitchRange, 0.2f, 1, 48, "+/- %d st");
-    lane->mutationPitchRange = ofClamp(lane->mutationPitchRange, 0, 48);
+    intField("Range", "##mutationPitchRange", Rules::PitchRange, &Rules::pitchRange, 0.2f, 1, 48, "+/- %d st");
     {
         // Scale presets are rooted on C; the arrows transpose the selection.
         static const std::pair<const char*, int> presets[] = {
             {"Chromatic", 0xFFF}, {"Major", 0xAB5}, {"Minor", 0x5AD},
             {"Major pentatonic", 0x295}, {"Minor pentatonic", 0x4A9}, {"Whole tone", 0x555}};
         const char* current = "Custom";
-        for(const auto& preset : presets) if(preset.second == lane->mutationScaleMask) current = preset.first;
+        for(const auto& preset : presets) if(preset.second == rules.scaleMask) current = preset.first;
+        const bool wasFollowing = following(Rules::ScaleMask);
         propertyLabel("Keys", 2.0f * smallButtonReserve("<"));
+        beginField(Rules::ScaleMask);
         if(ImGui::BeginCombo("##mutationScale", current)) {
             for(const auto& preset : presets)
-                if(ImGui::Selectable(preset.first, preset.second == lane->mutationScaleMask))
-                    lane->mutationScaleMask = preset.second;
+                if(ImGui::Selectable(preset.first, preset.second == rules.scaleMask))
+                    commit(Rules::ScaleMask, &Rules::scaleMask, preset.second);
             ImGui::Separator();
-            if(ImGui::Selectable("Keys this lane uses")) {
+            if(ImGui::Selectable("Keys these notes use")) {
                 int mask = 0;
-                for(const auto& note : lane->pianoNotes) mask |= 1 << (note.pitch % 12);
-                if(mask != 0) lane->mutationScaleMask = mask;
+                for(const auto& note : lane->pianoNotes)
+                    if(note.mutationGroup == group) mask |= 1 << (note.pitch % 12);
+                if(mask != 0) commit(Rules::ScaleMask, &Rules::scaleMask, mask);
             }
             ImGui::EndCombo();
         }
+        endField(Rules::ScaleMask, wasFollowing);
         auto rotate = [&](int steps) {
-            const int mask = lane->mutationScaleMask & 0xFFF;
-            lane->mutationScaleMask = ((mask << steps) | (mask >> (12 - steps))) & 0xFFF;
+            const int mask = rules.scaleMask & 0xFFF;
+            commit(Rules::ScaleMask, &Rules::scaleMask, ((mask << steps) | (mask >> (12 - steps))) & 0xFFF);
         };
         ImGui::SameLine();
         if(ImGui::SmallButton("<##mutationDown")) rotate(11);
@@ -159,23 +252,29 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
         ImGui::SameLine();
         if(ImGui::SmallButton(">##mutationUp")) rotate(1);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Transpose the allowed keys up a semitone");
+        int mask = rules.scaleMask;
+        if(pitchClassKeyboard("##mutationKeys", mask, mutationGroupColor(group, wasFollowing ? 120 : 255)))
+            commit(Rules::ScaleMask, &Rules::scaleMask, mask);
     }
-    pitchClassKeyboard("##mutationKeys", lane->mutationScaleMask, IM_COL32(185, 120, 245, 255));
     ImGui::EndDisabled();
 
-    strength("Offset", "##mutationOffsetStrength", lane->mutationOffsetStrength,
+    strength("Offset", "##mutationOffsetStrength", Rules::OffsetStrength, &Rules::offsetStrength,
              "Offset: move the note earlier or later by whole grid steps (the lane's Grid).");
-    propertyLabel("Steps");
-    ImGui::DragInt("##mutationOffsetSteps", &lane->mutationOffsetSteps, 0.1f, 1, 64, "+/- %d");
-    lane->mutationOffsetSteps = ofClamp(lane->mutationOffsetSteps, 0, 64);
+    intField("Steps", "##mutationOffsetSteps", Rules::OffsetSteps, &Rules::offsetSteps, 0.1f, 1, 64, "+/- %d");
     ImGui::EndDisabled();
 
-    strength("Length", "##mutationLengthStrength", lane->mutationLengthStrength,
+    strength("Length", "##mutationLengthStrength", Rules::LengthStrength, &Rules::lengthStrength,
              "Length: make the note shorter or longer, on the grid.");
-    propertyLabel("Up to");
-    ImGui::DragFloat("##mutationLengthMax", &lane->mutationLengthMax, 0.02f, 1.0f, 16.0f, "x %.2f");
-    lane->mutationLengthMax = ofClamp(lane->mutationLengthMax, 1.0f, 16.0f);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("x 2: from half as long to twice as long.");
+    {
+        propertyLabel("Up to");
+        const bool wasFollowing = following(Rules::LengthMax);
+        beginField(Rules::LengthMax);
+        float value = rules.lengthMax;
+        if(ImGui::DragFloat("##mutationLengthMax", &value, 0.02f, 1.0f, 16.0f, "x %.2f"))
+            commit(Rules::LengthMax, &Rules::lengthMax, ofClamp(value, 1.0f, 16.0f));
+        if(!wasFollowing && ImGui::IsItemHovered()) ImGui::SetTooltip("x 2: from half as long to twice as long.");
+        endField(Rules::LengthMax, wasFollowing);
+    }
     ImGui::EndDisabled();
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("The lane's Seed (Lane tab) also picks the mutations.");
@@ -472,6 +571,8 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         }
     }
 
+    // While the Mutate tab shows a group, its notes light up (others dim).
+    const bool groupFocus = mutationEditLaneId == lane->id && mutationTabFrame >= ImGui::GetFrameCount() - 1;
     dl->PushClipRect(ImVec2(left, rollTop), ImVec2(right, stripsBottom), true);
     for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         for(size_t noteIndex = 0; noteIndex < lane->pianoNotes.size(); ++noteIndex) {
@@ -493,11 +594,14 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             dl->AddLine(ImVec2(handleX, probabilityBottom - 2.0f), ImVec2(handleX, probabilityY), IM_COL32(245, 185, 80, cycle == 0 ? 235 : 125), 3.0f);
             dl->AddCircleFilled(ImVec2(handleX, probabilityY), 3.5f, IM_COL32(250, 225, 150, cycle == 0 ? 245 : 135));
             const float mutationY = mutationBottom - ofClamp(note.mutation, 0.0f, 1.0f) * (mutationBottom - mutationTop - 3.0f);
-            dl->AddLine(ImVec2(handleX, mutationBottom - 2.0f), ImVec2(handleX, mutationY), IM_COL32(185, 120, 245, cycle == 0 ? 235 : 125), 3.0f);
-            dl->AddCircleFilled(ImVec2(handleX, mutationY), 3.5f, IM_COL32(220, 190, 255, cycle == 0 ? 245 : 135));
-            // A note that may mutate wears an outline in the mutation colour.
-            if(note.mutation > 0.0f)
-                dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), IM_COL32(205, 150, 255, cycle == 0 ? 220 : 120), 2.0f, 0, 1.5f);
+            const int group = note.mutationGroup;
+            dl->AddLine(ImVec2(handleX, mutationBottom - 2.0f), ImVec2(handleX, mutationY), mutationGroupColor(group, cycle == 0 ? 235 : 125), 3.0f);
+            dl->AddCircleFilled(ImVec2(handleX, mutationY), 3.5f, mutationGroupColor(group, cycle == 0 ? 255 : 135));
+            // A note that may mutate wears an outline in its group's colour.
+            const bool lit = groupFocus && group == mutationEditGroup;
+            if(note.mutation > 0.0f || lit)
+                dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2),
+                            mutationGroupColor(group, lit ? 255 : groupFocus ? 80 : cycle == 0 ? 220 : 120), 2.0f, 0, lit ? 2.5f : 1.5f);
         }
     }
     // While playing, the repeat under the playhead shows where its mutated
@@ -518,8 +622,8 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, played.startBeat + played.durationBeats, repeat));
                 const float y2 = rollBottom - (played.pitch - lowPitch) * pitchHeight;
                 const float y1 = y2 - pitchHeight + 1.0f;
-                dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), IM_COL32(185, 120, 245, 70), 2.0f);
-                dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), IM_COL32(220, 180, 255, 235), 2.0f, 0, 1.5f);
+                dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 70), 2.0f);
+                dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 235), 2.0f, 0, 1.5f);
             }
         }
     }
@@ -912,6 +1016,32 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             if(ImGui::InputFloat(labels[field], &pianoNumericValue, 0.01f, 0.1f, "%.3f")) {
                 pianoNumericValue = ofClamp(pianoNumericValue, 0.0f, 1.0f);
                 noteValue(lane->pianoNotes[pianoNumericNoteIndex], field) = pianoNumericValue;
+            }
+            if(field == 2) {
+                // The note's mutation group; a selected note moves the whole selection.
+                const bool inSelection = pianoSelectedNoteIndices.count(pianoNumericNoteIndex) > 0 &&
+                                         pianoSelectedNoteIndices.size() > 1;
+                contextMenuSection(inSelection ? "Group (selected notes)" : "Group");
+                auto assign = [&](int group) {
+                    if(inSelection) {
+                        for(int index : pianoSelectedNoteIndices)
+                            if(index >= 0 && index < static_cast<int>(lane->pianoNotes.size()))
+                                lane->pianoNotes[index].mutationGroup = group;
+                    } else lane->pianoNotes[pianoNumericNoteIndex].mutationGroup = group;
+                };
+                const int current = lane->pianoNotes[pianoNumericNoteIndex].mutationGroup;
+                for(int group = 0; group <= static_cast<int>(lane->mutationGroups.size()); ++group) {
+                    if(group > 0) ImGui::SameLine(0.0f, 3.0f);
+                    if(mutationGroupChip(group, group == current)) assign(group);
+                }
+                if(static_cast<int>(lane->mutationGroups.size()) + 1 < kMaxMutationGroups) {
+                    ImGui::SameLine(0.0f, 3.0f);
+                    if(ImGui::SmallButton("+##newMutationGroup")) {
+                        lane->mutationGroups.push_back({lane->mutation, 0});
+                        assign(static_cast<int>(lane->mutationGroups.size()));
+                    }
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New group (follows A until changed in the Mutate tab)");
+                }
             }
         }
         ImGui::EndPopup();
