@@ -173,6 +173,12 @@ private:
     ClipDragMode clipDragMode = ClipDragMode::None;
     std::string draggingTrackId;
     std::string draggingClipId;
+    // Chance knob at a clip's top-left: a vertical drag sets the clip chance.
+    std::string chanceDragTrackId;
+    std::string chanceDragClipId;
+    float chanceDragStartMouseY = 0.0f;
+    float chanceDragStartValue = 1.0f;
+    float labelWidthDragStart = 0.0f; // left-column resize handle in the ruler
     double dragOffsetBeats = 0.0;
     double dragInitialContentDuration = 4.0;
     double dragInitialContentStretch = 1.0;

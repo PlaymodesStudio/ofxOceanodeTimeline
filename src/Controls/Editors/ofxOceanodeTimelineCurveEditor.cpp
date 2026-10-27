@@ -18,8 +18,8 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
     auto* lane = &context.lane;
 
     int interpolationMode = static_cast<int>(curveInterpolationMode(lane->curveInterpolation));
-    ImGui::SetNextItemWidth(105.0f);
-    if(ImGui::Combo("Mode##curveInterpolation", &interpolationMode, kCurveInterpolationNames, 4)) {
+    propertyLabel("Mode");
+    if(ImGui::Combo("##curveInterpolation", &interpolationMode, kCurveInterpolationNames, 4)) {
         lane->curveInterpolation = kCurveInterpolationNames[interpolationMode];
         resetCurveTensions(*lane);
         curveDragPointIndex = -1;
@@ -38,8 +38,8 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
         int scale = lane->curveScale == "Linear" ? 1 : lane->curveScale == "dB" ? 2 : 0;
         const std::string autoLabel = std::string("Auto (") + (autoDb ? "dB" : "linear") + ")";
         const char* scales[] = {autoLabel.c_str(), "Linear", "dB"};
-        ImGui::SetNextItemWidth(labeledWidgetWidth(110.0f, "Scale"));
-        if(ImGui::Combo("Scale##curveScale", &scale, scales, 3)) {
+        propertyLabel("Scale");
+        if(ImGui::Combo("##curveScale", &scale, scales, 3)) {
             const bool wasDb = ofxOceanodeTimelineScale::isDecibels(*lane, scaleBinding);
             lane->curveScale = scale == 1 ? "Linear" : scale == 2 ? "dB" : "";
             const bool isDb = ofxOceanodeTimelineScale::isDecibels(*lane, scaleBinding);
@@ -65,9 +65,9 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
         ImGui::SetTooltip("Snap point values to evenly spaced levels across the range");
     ImGui::SameLine();
     int curveSteps = std::max(2, lane->valueQuantizeSteps);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(60.0f, "Steps"));
+    ImGui::SetNextItemWidth(-FLT_MIN);
     if(!lane->valueSnap) ImGui::BeginDisabled();
-    if(ImGui::DragInt("Steps##curveValueSteps", &curveSteps, 0.1f, 2, 128))
+    if(ImGui::DragInt("##curveValueSteps", &curveSteps, 0.1f, 2, 128, "%d steps"))
         lane->valueQuantizeSteps = std::max(2, std::min(128, curveSteps));
     if(!lane->valueSnap) ImGui::EndDisabled();
     if(ImGui::IsItemHovered())

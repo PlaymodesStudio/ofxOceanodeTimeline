@@ -50,6 +50,9 @@ public:
     virtual ~ofxOceanodeTimelineLaneEditor() = default;
     virtual void drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {}
+    // Lanes whose notes can mutate get a Mutate tab with their rules.
+    virtual bool hasMutation() const { return false; }
+    virtual void drawMutation(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const = 0;
     virtual void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                             const ofxOceanodeTimelineLaneCanvas& canvas) = 0;

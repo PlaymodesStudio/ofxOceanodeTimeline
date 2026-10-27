@@ -16,18 +16,18 @@ void ofxOceanodeTimelineStepEditor::drawProperties(ofxOceanodeTimelineLaneEditor
     auto* lane = &context.lane;
 
     int steps = std::max(1, lane->stepCount);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Steps"));
-    if(ImGui::DragInt("Steps", &steps, 0.2f, 1, 128)) {
+    propertyLabel("Steps");
+    if(ImGui::DragInt("##Steps", &steps, 0.2f, 1, 128)) {
         lane->stepCount = steps;
     }
     drawDivision(*lane);
     int behavior = lane->behavior == "Always" ? 1 : lane->behavior == "Mute" ? 2 : 0;
     const char* behaviors[] = {"Probability", "Always", "Mute"};
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Mode"));
-    if(ImGui::Combo("Mode", &behavior, behaviors, 3)) lane->behavior = behaviors[behavior];
+    propertyLabel("Mode");
+    if(ImGui::Combo("##Mode", &behavior, behaviors, 3)) lane->behavior = behaviors[behavior];
     ImGui::Checkbox("Probability", &lane->probabilityEnabled);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Seed"));
-    ImGui::DragInt("Seed", &lane->probabilitySeed, 1.0f, 0, 99999);
+    propertyLabel("Seed", smallButtonReserve("New##stepSeed"));
+    ImGui::DragInt("##Seed", &lane->probabilitySeed, 1.0f, 0, 99999);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Which steps a probability below 100%% lets through.\nChange it for another pattern.");
     ImGui::SameLine();
     if(ImGui::SmallButton("New##stepSeed")) lane->probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));

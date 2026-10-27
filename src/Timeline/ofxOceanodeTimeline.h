@@ -184,6 +184,9 @@ struct ofxOceanodeTimelinePianoNote {
     int pitch = 60;
     float velocity = 1.0f;
     float probability = 1.0f;
+    // Chance (0..1) that the note plays changed in a repeat, by its lane's
+    // mutation rules. Rolled every repeat and every time the clip starts.
+    float mutation = 0.0f;
 };
 
 // One block on a MultiValue lane's row -- see ofxOceanodeTimelineLane::
@@ -277,6 +280,15 @@ struct ofxOceanodeTimelineLane {
     std::string pianoVelocityBindingId;
     float pianoDefaultVelocity = 0.8f;
     bool pianoMonophonic = false;
+    // Piano mutation rules: what changes in a note whose mutation roll passes.
+    // Each strength (0..1) is the chance that aspect changes; 0 turns it off.
+    float mutationPitchStrength = 1.0f;
+    int mutationPitchRange = 7;       // up to +/- this many semitones...
+    int mutationScaleMask = 0xFFF;    // ...onto these pitch classes (bit 0 = C)
+    float mutationOffsetStrength = 0.0f;
+    int mutationOffsetSteps = 1;      // moved up to +/- this many grid steps
+    float mutationLengthStrength = 0.0f;
+    float mutationLengthMax = 2.0f;   // up to this many times shorter or longer, on the grid
     bool curveClamp = true;
     std::string curveInterpolation = "Linear";
     // Curve value scale: "" = Auto (the binding's valueScale), "Linear", "dB".
@@ -366,6 +378,11 @@ struct ofxOceanodeTimelineClip {
     double contentStretch = 1.0;
     bool repeatContent = true;
     bool muted = false; // Preserve content while removing this clip from playback.
+    // Probability (0..1) that the whole clip plays. Rolled again every time
+    // the clip starts: each play/seek and each loop pass.
+    float chance = 1.0f;
+    // Runtime result of the current roll; not saved. See applyClipChanceRolls().
+    mutable bool chanceSilenced = false;
     // An LFO clip is a self-contained continuous modulator. Its Curve lanes
     // describe the oscillator controls and this binding receives the final
     // normalized result mapped through lfoOutputMin/lfoOutputMax.
@@ -581,6 +598,8 @@ struct ofxOceanodeTimelineClipGroup {
 struct ofxOceanodeTimelineViewState {
     float pixelsPerSecond = 140.0f;
     float scrollX = 0.0f;
+    // Pinned left column width (track pads / lane properties), in pixels.
+    float labelWidth = 280.0f;
 };
 
 // Optional, addon-agnostic hook that lets a project which also includes
@@ -810,6 +829,12 @@ public:
     bool setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
     bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
     bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);
+    bool setClipChance(const std::string& trackId, const std::string& clipId, float chance);
+    // The notes a piano lane plays in one repeat of the current clip start,
+    // mutations applied (indexed like its pianoNotes). False when it has no
+    // mutating notes. For the editor's preview of the playing repeat.
+    bool pianoRepeatNotes(const std::string& trackId, const std::string& clipId, const std::string& laneId,
+                          int64_t repeat, std::vector<ofxOceanodeTimelinePianoNote>& out) const;
     bool resizeClipEnd(const std::string& trackId, const std::string& clipId,
                        double durationBeats, ofxOceanodeTimelineEndEdit operation);
     // Does not write parameters, schedule events, or change source content.
@@ -1154,14 +1179,30 @@ private:
     void computeLaneVoicing(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip,
                             const ofxOceanodeTimelineLane& lane, ofxOceanodeTimelinePianoVoicing& out,
                             const std::vector<uint8_t>* sounding = nullptr) const;
-    // The voicing of one repeat of a lane with chance notes: only the notes
-    // that sound in that repeat take a voice. Cached per lane (a few repeats).
-    const ofxOceanodeTimelinePianoVoicing& repeatVoicing(const ofxOceanodeTimelineTrack& track,
-                                                         const ofxOceanodeTimelineClip& clip,
-                                                         const ofxOceanodeTimelineLane& lane,
-                                                         const SharedPianoPlayback* shared,
-                                                         int64_t repeat) const;
-    mutable std::unordered_map<const void*, std::map<int64_t, ofxOceanodeTimelinePianoVoicing>> repeatVoicingCache;
+    // One repeat of a lane with chance or mutating notes: its notes (when
+    // mutated: same order, changed pitch / start / length) and its voicing,
+    // in which only the notes sounding in that repeat take a voice.
+    struct PianoRepeatPlayback {
+        bool mutated = false;
+        ofxOceanodeTimelineLane lane; // the repeat's notes, when mutated
+        ofxOceanodeTimelinePianoVoicing voicing;
+    };
+    // Cached per lane for a few repeats of the current clip start.
+    const PianoRepeatPlayback& repeatPlayback(const ofxOceanodeTimelineTrack& track,
+                                              const ofxOceanodeTimelineClip& clip,
+                                              const ofxOceanodeTimelineLane& lane,
+                                              const SharedPianoPlayback* shared,
+                                              int64_t repeat) const;
+    mutable std::unordered_map<const void*, std::map<std::pair<uint64_t, int64_t>, PianoRepeatPlayback>> repeatVoicingCache;
+    // Which clip start mutations roll for (from the transport generation and
+    // loop pass, set with the clip chance rolls).
+    mutable uint64_t mutationEpoch = 0;
+    // Rolls every clip's chance for one transport generation / loop pass.
+    // The frame path rolls the current pass; the scheduler rolls the next one
+    // while it probes beats past the loop end, then restores the current one.
+    void applyClipChanceRolls(uint64_t generation, uint64_t pass) const;
+    // Per-session salt so a fresh launch does not replay the same rolls.
+    uint64_t clipChanceSalt = 0;
     struct PianoPitchRangeIndex {
         std::string valueType;
         int low = 127;

@@ -14,7 +14,7 @@ constexpr float kPianoZoomButtonHeight = 14.0f;
 constexpr float kLaneResizeHandleHeight = 10.0f;
 constexpr float kLaneEditorMinHeight = 90.0f;
 constexpr float kLaneEditorMaxHeight = 640.0f;
-constexpr float kLabelWidth = ofxOceanodeTimelineEditorUi::labelWidth;
+inline float& kLabelWidth = ofxOceanodeTimelineEditorUi::labelWidth;
 const ImU32 kGrid = ofxOceanodeTimelineEditorUi::gridColor;
 const ImU32 kBar = ofxOceanodeTimelineEditorUi::barColor;
 const ImU32 kPlayhead = ofxOceanodeTimelineEditorUi::playheadColor;
@@ -51,6 +51,26 @@ int curveSnapLevels(const ofxOceanodeTimelineLane& lane);
 void resetCurveTensions(ofxOceanodeTimelineLane& lane);
 void eraseCurvePointWithTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);
 void eraseCurvePointKeepingTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);
-float labeledWidgetWidth(float desired, const char* label);
+// Lane-pad property row: the label in a left column, then sizes the next
+// widget to fill the row (less reserveRight for a trailing button).
+// Give the widget a "##id" label.
+void propertyLabel(const char* label, float reserveRight = 0.0f);
+// Width a trailing SmallButton takes, for propertyLabel's reserveRight.
+float smallButtonReserve(const char* label);
+// One octave of keys, C at the left, toggling pitch classes in mask
+// (bit 0 = C). Returns true when the mask changed.
+bool pitchClassKeyboard(const char* id, int& mask, ImU32 onColor, float height = 34.0f);
+// Text shortened with "..." to fit maxWidth.
+std::string fitText(const std::string& text, float maxWidth);
+// Indentation of a clip editor's header and lane rows under the track.
+constexpr float kClipEditorIndent = 10.0f;
+// The header row of an open clip editor, kept inside the left column:
+// fold toggle, the clip's name (shortened to fit), then "+" (add lane, when
+// asked for) and "x" (close) pinned to the column's right edge.
+struct ClipEditorHeaderActions { bool toggleFold = false, rename = false, addLane = false, close = false; };
+ClipEditorHeaderActions drawClipEditorHeader(const ImVec2& rowMin, const ImVec2& rowMax,
+                                             const ofxOceanodeTimelineTrack& track,
+                                             const ofxOceanodeTimelineClip& clip,
+                                             bool folded, const char* tag, bool addLaneButton);
 void drawDivision(ofxOceanodeTimelineLane& lane);
 }

@@ -16,15 +16,15 @@ void ofxOceanodeTimelineMultiSliderEditor::drawProperties(ofxOceanodeTimelineLan
     auto* lane = &context.lane;
 
     int steps = std::max(1, lane->stepCount);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Steps"));
-    if(ImGui::DragInt("Steps", &steps, 0.2f, 1, 128)) {
+    propertyLabel("Steps");
+    if(ImGui::DragInt("##Steps", &steps, 0.2f, 1, 128)) {
         lane->stepCount = steps;
         lane->multiSliderValues.resize(static_cast<size_t>(steps), 0.0f);
     }
     drawDivision(*lane);
     int sliderSnap = std::max(0, lane->valueQuantizeSteps);
-    ImGui::SetNextItemWidth(labeledWidgetWidth(94.0f, "Value Snap"));
-    if(ImGui::DragInt("Value Snap", &sliderSnap, 0.1f, 0, 64))
+    propertyLabel("Value Snap");
+    if(ImGui::DragInt("##Value Snap", &sliderSnap, 0.1f, 0, 64))
         lane->valueQuantizeSteps = std::max(0, sliderSnap);
     if(lane->valueQuantizeSteps >= 2) ImGui::TextDisabled("%d levels", lane->valueQuantizeSteps);
 

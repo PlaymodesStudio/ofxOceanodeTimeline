@@ -26,12 +26,12 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     // foldable through editorState.collapsedLaneIds and resizable by the same bottom
     // strip. The result view is a row like any other -- it just has no lane
     // behind it, so it borrows a key that cannot collide with a lane id.
-    const float clipIndent = 20.0f;
+    const float clipIndent = kClipEditorIndent;
     const std::string resultKey = "lfoResult:" + clip.id;
     constexpr float kDefaultResultHeight = 230.0f;
     constexpr float kDefaultLaneHeight = 120.0f;
 
-    ImGui::Dummy(ImVec2(contentWidth, 22.0f));
+    ImGui::Dummy(ImVec2(contentWidth, 24.0f));
     const ImVec2 headerMin = ImGui::GetItemRectMin();
     const ImVec2 headerMax = ImGui::GetItemRectMax();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -41,22 +41,13 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     dl->AddLine(ImVec2(headerMin.x + kLabelWidth - 1.0f, headerMin.y),
                 ImVec2(headerMin.x + kLabelWidth - 1.0f, headerMax.y),
                 IM_COL32(track.color.r, track.color.g, track.color.b, 210));
-    ImGui::SetCursorScreenPos(ImVec2(headerMin.x + 5.0f + clipIndent, headerMin.y + 2.0f));
     const bool editorFolded = editorState.foldedClipEditors.count(clip.id) > 0;
-    if(ImGui::SmallButton(editorFolded ? ">##foldLfoEditor" : "v##foldLfoEditor")) {
+    const auto header = drawClipEditorHeader(headerMin, headerMax, track, clip, editorFolded, "LFO", false);
+    if(header.toggleFold) {
         if(editorFolded) editorState.foldedClipEditors.erase(clip.id); else editorState.foldedClipEditors.insert(clip.id);
     }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip(editorFolded ? "Unfold the clip editor" : "Fold the clip editor to this header");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(track.color.r / 255.0f, track.color.g / 255.0f,
-                              track.color.b / 255.0f, 1.0f),
-                       "%s  [LFO]", clip.name.c_str());
-    if(ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Double-click to rename this clip");
-        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) renameRequested = true;
-    }
-    ImGui::SameLine();
-    if(ImGui::SmallButton("Close##closeLfoEditor")) editorState.clipEditorOpen = false;
+    if(header.rename) renameRequested = true;
+    if(header.close) editorState.clipEditorOpen = false;
     finishAbsoluteLayout(ImVec2(headerMin.x, headerMax.y));
     if(editorFolded) return renameRequested; // folded: only the header row is shown
     ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, track, clip, view, endEdit);
@@ -212,8 +203,8 @@ bool ofxOceanodeTimelineLfoEditor::draw(
             ? nullptr : timeline.getBinding(track.id, clip.lfoOutputBindingId);
         const std::string outputPreview = outputBinding == nullptr
             ? "No output target" : compactParameterName(outputBinding->parameterPath);
-        ImGui::SetNextItemWidth(-1.0f);
-        if(ImGui::BeginCombo("Output", outputPreview.c_str())) {
+        propertyLabel("Output");
+        if(ImGui::BeginCombo("##lfoOutput", outputPreview.c_str())) {
             if(ImGui::Selectable("No output target", outputBinding == nullptr)) clip.lfoOutputBindingId.clear();
             ImGui::InputText("Search parameters", targetSearch, sizeof(targetSearch));
             auto paths = availableTargetPaths;
@@ -225,11 +216,12 @@ bool ofxOceanodeTimelineLfoEditor::draw(
             }
             ImGui::EndCombo();
         }
-        ImGui::TextDisabled("The LFO result is mapped to this range.");
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::DragFloat("Min", &clip.lfoOutputMin, 0.01f, -99999.0f, 99999.0f, "%.4g");
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::DragFloat("Max", &clip.lfoOutputMax, 0.01f, -99999.0f, 99999.0f, "%.4g");
+        ImGui::TextDisabled("Output range");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The LFO result (0..1) is mapped to Min..Max.");
+        propertyLabel("Min");
+        ImGui::DragFloat("##lfoOutputMin", &clip.lfoOutputMin, 0.01f, -99999.0f, 99999.0f, "%.4g");
+        propertyLabel("Max");
+        ImGui::DragFloat("##lfoOutputMax", &clip.lfoOutputMax, 0.01f, -99999.0f, 99999.0f, "%.4g");
         if(clip.lfoOutputMax < clip.lfoOutputMin) std::swap(clip.lfoOutputMax, clip.lfoOutputMin);
         ImGui::EndChild();
 

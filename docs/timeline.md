@@ -121,9 +121,10 @@ Right-click a handle to enter an exact value.
 ## Timing tools
 
 The **Right edge** tool also controls edits to **Timeline length** in the
-lane properties pad's **Timing** tab and clip context menu. The Timing tab
-contains Mute clip, Start, Timeline length, Source length, Stretch and Repeat source;
-these settings apply to every lane in the clip. All durations are in beats:
+lane properties pad's **Clip** tab and clip context menu. The Clip tab
+contains Mute, Repeat (source), Chance, Start, Length (timeline length), Source
+(source length) and Stretch; these settings apply to every lane in the clip.
+All durations are in beats:
 
 | Tool | Effect |
 | --- | --- |
@@ -149,6 +150,28 @@ keep their content and timing, appear dimmed with a Muted label, and do not
 contribute automation, notes or audio. Mute is saved with the clip and can be
 undone. Muting a sounding piano clip releases its gates unless another clip
 or a live preview still drives them.
+
+**Clip chance** is the probability (0-100%) that the whole clip plays. It is
+rolled again each time the clip starts: every play or seek, and every loop
+pass. Within one start the result holds for the whole clip, repeats included,
+and the scheduler rolls the next loop pass ahead of the wrap so the loop's
+first beat stays on time. Set it with the knob at the clip's top-right corner on
+the timeline (drag up/down, Shift for fine steps, double-click for 100%), in the
+Clip tab, or in the clip's right-click menu. A clip below 100% shows its chance
+next to its name; during playback, a clip its roll left out is drawn dimmed.
+Chance is saved with the clip; older presets load at 100%.
+
+## Lane properties pad
+
+The left column holds each open clip editor. Its header row shows the clip's
+name with **+** (add lane) and **x** (close) at the right. Each lane's pad
+starts with fold, M/S and the lane name, then a line naming the lane type and
+how many targets it drives (orange when it has none), then three tabs:
+**Targets** (what the lane drives), **Lane** (name, type, output range and
+the editor's own settings), **Mutate** (piano rolls only, see below) and
+**Clip** (chance and timing, shared by every lane in the clip). Drag the divider in the ruler's top-left corner to make the
+column wider or narrower; double-click it for the default width. The width is
+saved with the timeline.
 
 When playback stops, piano rolls release their gates once and stop writing
 pitch, gate and velocity. The instrument's own keyboard can then play freely
@@ -398,6 +421,33 @@ changing the evaluation path.
 - **Scheduler:** it only looks for change beats in clips and lanes that drive a
   scheduled path.
 - **Piano held notes:** the held-note lookup binary-searches each voice slot.
+
+## Piano note mutation
+
+Each piano note has a **mutation** amount, set in the **MUT** strip under
+VEL and PROB (drag, paint across notes or right-click for a value, like the
+other strips). It is the chance that the note plays changed in a repeat. A
+note that can mutate has a purple outline. Mutations are rolled again every
+repeat of the clip and every time the clip starts (play, seek, each loop
+pass). The written notes never change. While playing, the repeat under the
+playhead shows where its mutated notes actually sound as purple ghosts.
+
+The lane's **Mutate** tab sets what changes. Each aspect has a **Strength**,
+the chance it changes when a note mutates (0% turns it off):
+
+- **Pitch** (default 100%): moves the note to another allowed key within
+  **Range** semitones. Click the keyboard to allow or exclude keys, pick a
+  preset (Chromatic, Major, Minor, pentatonics, Whole tone, or the keys the
+  lane already uses), and transpose the selection with the arrows.
+- **Offset** (default off): moves the note up to **Steps** grid steps
+  earlier or later (the lane's Grid).
+- **Length** (default off): makes the note up to **Up to** times shorter
+  or longer, on the grid.
+
+Rolls also depend on the lane's Seed. Voices follow the mutated notes, so
+a moved note takes its voice where it now plays; the scheduler uses the same
+mutations as the frame path. Mutation amounts and rules are saved; older
+presets load with no mutation.
 
 ## Gates, chance notes and duplicated lanes
 

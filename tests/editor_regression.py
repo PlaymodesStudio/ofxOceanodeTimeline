@@ -138,14 +138,16 @@ int main() {
         io.AddMouseButtonEvent(ImGuiMouseButton_Right,false); frame(pianoClip,pianoLane,true,point,false);
     };
     const auto pitchBefore=model.toJson();
-    selectPitch(279.5f,false);
+    // Roll 108..278 (VEL, PROB and MUT strips below it): 42.5 px per pitch,
+    // so 60, 61 and 62 are centred at 256.75, 214.25 and 171.75.
+    selectPitch(256.75f,false);
     assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{0,2,3}));
     assert(pianoEditor.pianoSelectionLaneId==pianoLane && !pianoEditor.pianoKeyboardPreviewActive);
-    io.AddKeyEvent(ImGuiMod_Shift,true); selectPitch(230.5f);
+    io.AddKeyEvent(ImGuiMod_Shift,true); selectPitch(214.25f);
     assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{0,1,2,3}));
-    io.AddKeyEvent(ImGuiMod_Shift,false); selectPitch(230.5f);
+    io.AddKeyEvent(ImGuiMod_Shift,false); selectPitch(214.25f);
     assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{1}));
-    selectPitch(181.5f); assert(pianoEditor.pianoSelectedNoteIndices.empty());
+    selectPitch(171.75f); assert(pianoEditor.pianoSelectedNoteIndices.empty());
     assert(model.toJson()==pitchBefore);
     // Mouse input is routed only to the focused editor.
     const auto stepClip = model.createClip(trackId, "Step", 0, 4);
@@ -188,7 +190,8 @@ int main() {
         endFrame();
     }
 
-    // VEL / PROB painting follows the swept mouse segment, not just the
+    // VEL / PROB / MUT strips sit 26 px higher than VEL / PROB alone did
+    // (MUT takes the bottom). VEL / PROB painting follows the swept mouse segment, not just the
     // initially grabbed note. Fast strokes include skipped handles and chords.
     const auto paintClip=model.createClip(trackId,"Paint",0,4);
     const auto paintLane=model.createLane(trackId,paintClip,"Paint",ofxOceanodeTimelineLaneType::PianoRoll);
@@ -200,31 +203,31 @@ int main() {
     auto px=[&](double beat){return 233.0f+paintView.beatToPixels(beat);};
     auto paintFrame=[&](float x,float y,bool down){frame(paintClip,paintLane,true,ImVec2(x,y),down);};
     auto close=[](float a,float b){if(std::abs(a-b)>=0.001f) std::cerr<<"Paint expected "<<b<<", got "<<a<<"\n"; assert(std::abs(a-b)<0.001f);};
-    paintFrame(px(0),330.0f,false); paintFrame(px(0),330.0f,true);
-    paintFrame(px(3),317.0f,true); paintFrame(px(3),317.0f,false);
+    paintFrame(px(0),304.0f,false); paintFrame(px(0),304.0f,true);
+    paintFrame(px(3),291.0f,true); paintFrame(px(3),291.0f,false);
     auto& painted=model.getLane(trackId,paintClip,paintLane)->pianoNotes;
     for(int i=0;i<4;++i) close(painted[i].velocity,(4.0f+i*(13.0f/3))/22.0f);
     close(painted[4].velocity,0.9f); close(painted[5].velocity,(4.0f+13.0f/3)/22.0f);
     for(const auto& note:painted) close(note.probability,1);
     // Reverse strokes interpolate probability without changing velocity.
-    paintFrame(px(3),362.0f,false); paintFrame(px(3),362.0f,true);
-    paintFrame(px(0),344.0f,true); paintFrame(px(0),344.0f,false);
+    paintFrame(px(3),336.0f,false); paintFrame(px(3),336.0f,true);
+    paintFrame(px(0),318.0f,true); paintFrame(px(0),318.0f,false);
     for(int i=0;i<4;++i) { close(painted[i].probability,(20.0f-i*6.0f)/23.0f); close(painted[i].velocity,(4.0f+i*(13.0f/3))/22.0f); }
     close(painted[4].probability,1); close(painted[5].probability,painted[1].probability);
     // Starting between handles still paints subsequent notes. A release ends
     // the gesture, so later mouse movement cannot change a value.
-    paintFrame(px(0.3),323.0f,false); paintFrame(px(0.3),323.0f,true);
-    paintFrame(px(3),323.0f,true); paintFrame(px(3),323.0f,false);
+    paintFrame(px(0.3),297.0f,false); paintFrame(px(0.3),297.0f,true);
+    paintFrame(px(3),297.0f,true); paintFrame(px(3),297.0f,false);
     close(painted[0].velocity,4.0f/22.0f);
     for(int i=1;i<4;++i) close(painted[i].velocity,0.5f);
-    const auto afterPaint=model.toJson(); paintFrame(px(1),314.0f,false); assert(model.toJson()==afterPaint);
+    const auto afterPaint=model.toJson(); paintFrame(px(1),288.0f,false); assert(model.toJson()==afterPaint);
     // Repeated, stretched copies edit their common source notes.
     model.getClip(trackId,paintClip)->contentDurationBeats=1;
     model.getClip(trackId,paintClip)->contentStretch=2;
     model.getClip(trackId,paintClip)->repeatContent=true;
     painted={{0.2,0.2,60,0.9f,1},{0.8,0.2,64,0.9f,1}};
-    paintFrame(px(2.4),323.0f,false); paintFrame(px(2.4),323.0f,true);
-    paintFrame(px(3.6),323.0f,true); paintFrame(px(3.6),323.0f,false);
+    paintFrame(px(2.4),297.0f,false); paintFrame(px(2.4),297.0f,true);
+    paintFrame(px(3.6),297.0f,true); paintFrame(px(3.6),297.0f,false);
     close(painted[0].velocity,0.5f); close(painted[1].velocity,0.5f);
 
     // Dragging a selected handle scales selected notes from a frozen snapshot,
@@ -236,22 +239,33 @@ int main() {
 
     pianoEditor.pianoSelectionLaneId=paintLane;
     pianoEditor.pianoSelectedNoteIndices={0,1};
-    paintFrame(px(0),325.0f,false); paintFrame(px(0),325.0f,true);
+    paintFrame(px(0),299.0f,false); paintFrame(px(0),299.0f,true);
     close(painted[0].velocity,0.4f); close(painted[1].velocity,0.2f);
-    paintFrame(px(2),321.0f,true);
+    paintFrame(px(2),295.0f,true);
     close(painted[0].velocity,0.4f+4.0f/22); close(painted[1].velocity,0.2f+2.0f/22); close(painted[2].velocity,0.7f);
-    paintFrame(px(2),316.0f,true);
+    paintFrame(px(2),290.0f,true);
     close(painted[0].velocity,0.4f+9.0f/22); close(painted[1].velocity,0.2f+4.5f/22);
-    paintFrame(px(2),316.0f,false);
-    paintFrame(px(0),355.0f,false); paintFrame(px(0),355.0f,true);
-    paintFrame(px(2),350.0f,true); paintFrame(px(2),350.0f,false);
+    paintFrame(px(2),290.0f,false);
+    paintFrame(px(0),329.0f,false); paintFrame(px(0),329.0f,true);
+    paintFrame(px(2),324.0f,true); paintFrame(px(2),324.0f,false);
     close(painted[0].probability,0.4f+5.0f/23); close(painted[1].probability,0.2f+2.5f/23); close(painted[2].probability,0.7f);
     close(painted[0].velocity,0.4f+9.0f/22); close(painted[1].velocity,0.2f+4.5f/22);
     // Zero-valued anchors use a shared offset and can be raised from zero.
     painted[0].velocity=0; painted[1].velocity=0.2f;
-    paintFrame(px(0),333,false); paintFrame(px(0),333,true);
-    paintFrame(px(0),322,true); paintFrame(px(0),322,false);
+    paintFrame(px(0),307,false); paintFrame(px(0),307,true);
+    paintFrame(px(0),296,true); paintFrame(px(0),296,false);
     close(painted[0].velocity,0.5f); close(painted[1].velocity,0.7f);
+    {
+        // MUT (342..364) paints the mutation amount and leaves VEL / PROB alone.
+        const auto velocities=painted[0].velocity, probabilities=painted[0].probability;
+        const auto selection=pianoEditor.pianoSelectedNoteIndices;
+        pianoEditor.pianoSelectedNoteIndices.clear(); // paint, not scale a selection
+        paintFrame(px(0),360.0f,false); paintFrame(px(0),360.0f,true);
+        paintFrame(px(0),360.0f,false);
+        close(painted[0].mutation,4.0f/19.0f);
+        close(painted[0].velocity,velocities); close(painted[0].probability,probabilities);
+        pianoEditor.pianoSelectedNoteIndices=selection;
+    }
     // Delete is owned by the focused selection even with the mouse outside the roll.
     io.AddKeyEvent(ImGuiKey_Delete,true);
     paintFrame(950,700,false);
@@ -272,20 +286,21 @@ int main() {
     monitor->pianoLowPitch=60; monitor->pianoHighPitch=63;
     assert(!monitor->pianoLiveEditSound);
     monitor->pianoLiveEditSound=true;
+    // Pitch rows as in the keyboard test above: 60 at y 256, 61 at y 214.
     auto monitorFrame=[&](float x,float y,bool down){frame(mc,ml,true,ImVec2(x,y),down); model.update();};
-    monitorFrame(265,279,false); monitorFrame(265,279,true);
+    monitorFrame(265,256,false); monitorFrame(265,256,true);
     close(monitorPitch,60); close(monitorGate,1);
-    monitorFrame(265,279,false); close(monitorGate,0);
-    monitorFrame(270,279,true); close(monitorGate,1);
-    monitorFrame(300,230,true); close(monitorPitch,61); close(monitorGate,1);
-    monitorFrame(300,230,false); close(monitorGate,0);
+    monitorFrame(265,256,false); close(monitorGate,0);
+    monitorFrame(270,256,true); close(monitorGate,1);
+    monitorFrame(300,214,true); close(monitorPitch,61); close(monitorGate,1);
+    monitorFrame(300,214,false); close(monitorGate,0);
     monitor->pianoLiveEditSound=false;
-    monitorFrame(310,230,true); model.update(); close(monitorGate,0);
-    monitorFrame(310,230,false);
+    monitorFrame(310,214,true); model.update(); close(monitorGate,0);
+    monitorFrame(310,214,false);
     monitor->pianoLiveEditSound=true;
-    monitorFrame(400,279,true); close(monitorGate,1);
+    monitorFrame(400,256,true); close(monitorGate,1);
     pianoEditor.updateMonitoring(model,""); model.update(); close(monitorGate,0);
-    monitorFrame(400,279,false);
+    monitorFrame(400,256,false);
     const auto monitorSaved=model.toJson(); model.fromJson(monitorSaved);
     assert(model.getLane(trackId,mc,ml)->pianoLiveEditSound);
     auto monitorLegacy=monitorSaved;

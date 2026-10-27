@@ -50,39 +50,63 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline,
     ImGui::PushID(clip.id.c_str());
     bool changed = false;
     bool muted = clip.muted;
-    if(ImGui::Checkbox("Mute clip", &muted))
+    if(ImGui::Checkbox("Mute", &muted))
         changed = timeline.setClipMuted(track.id, clip.id, muted);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Mute clip: keeps its content, removes it from playback.");
+    if(!track.isWaveTrack) {
+        ImGui::SameLine();
+        bool repeat = clip.repeatContent;
+        if(ImGui::Checkbox("Repeat", &repeat)) {
+            if(repeat) clip.contentStretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+            changed = timeline.setClipContentDuration(track.id, clip.id, clip.contentDurationBeats, repeat) || changed;
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Repeat source: a longer clip loops its source cycle instead of stretching it.");
+    }
     const float width = ImGui::GetContentRegionAvail().x;
     const int columns = width < 400.0f ? 1 : (tableLayout && width >= 650.0f ? 4 : 2);
-    const bool table = ImGui::BeginTable("##sharedClipTiming", columns, ImGuiTableFlags_SizingStretchSame);
-    auto field = [&](const char* label) {
+    // Narrow (a lane pad): label column on the left, short labels, details in tooltips.
+    const bool rows = columns == 1;
+    const float labelColumn = std::min(64.0f, width * 0.36f);
+    const bool table = !rows && ImGui::BeginTable("##sharedClipTiming", columns, ImGuiTableFlags_SizingStretchSame);
+    auto field = [&](const char* label, const char* shortLabel) {
         if(table) ImGui::TableNextColumn();
-        ImGui::TextWrapped("%s", label);
-        ImGui::SetNextItemWidth(-1.0f);
+        if(rows) {
+            const float startX = ImGui::GetCursorPosX();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(shortLabel);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", label);
+            ImGui::SameLine(startX + labelColumn);
+        } else ImGui::TextWrapped("%s", label);
+        ImGui::SetNextItemWidth(-FLT_MIN);
     };
-    field("Start (beats)");
+    field("Chance (%)", "Chance");
+    float chance = clip.chance * 100.0f;
+    if(ImGui::SliderFloat("##chance", &chance, 0.0f, 100.0f, "%.0f%%"))
+        changed = timeline.setClipChance(track.id, clip.id, std::round(chance) / 100.0f) || changed;
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Probability that the whole clip plays.\nRolled again each time the clip starts (play, seek, every loop pass).");
+    field("Start (beats)", "Start");
     double start = clip.startBeat;
-    if(ImGui::InputDouble("##start", &start, view.editIncrement(), 1, "%.3f") && std::isfinite(start)) {
+    if(ImGui::InputDouble("##start", &start, rows ? 0.0 : view.editIncrement(), 1, "%.3f") && std::isfinite(start)) {
         changed = timeline.setClipTiming(track.id, clip.id, view.snapBeat(start), clip.durationBeats) || changed;
     }
-    field("Timeline length (beats)");
+    field("Timeline length (beats)", "Length");
     double length = clip.durationBeats;
-    if(ImGui::InputDouble("##length", &length, view.editIncrement(), 1, "%.3f"))
+    if(ImGui::InputDouble("##length", &length, rows ? 0.0 : view.editIncrement(), 1, "%.3f"))
         changed = timeline.resizeClipEnd(track.id, clip.id, view.snapBeat(length), operation) || changed;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Uses the right-edge tool: %s. Applies to every lane in this clip.",
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Timeline length (beats). Uses the right-edge tool: %s. Applies to every lane in this clip.",
         track.isWaveTrack ? "Stretch (audio playback speed changes)" : endEditName(operation));
-    field("Source length (beats)");
+    field("Source length (beats)", "Source");
     double source = ofxOceanodeTimelineClipTime::sourceDuration(clip);
     ImGui::BeginDisabled(track.isWaveTrack);
-    if(ImGui::InputDouble("##source", &source, view.editIncrement(), 1, "%.3f") && std::isfinite(source))
+    if(ImGui::InputDouble("##source", &source, rows ? 0.0 : view.editIncrement(), 1, "%.3f") && std::isfinite(source))
         changed = timeline.setClipContentDuration(track.id, clip.id,
             std::max(1.0 / 24.0, view.snapBeat(source)), clip.repeatContent) || changed;
     ImGui::EndDisabled();
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Length of one source cycle. Notes and points stay in source beats. Hidden data is retained.");
-    field("Stretch (%)");
+        ImGui::SetTooltip("Source length (beats): one source cycle. Notes and points stay in source beats. Hidden data is retained.");
+    field("Stretch (%)", "Stretch");
     double ratio = ofxOceanodeTimelineClipTime::effectiveStretch(clip) * 100.0;
-    if(ImGui::InputDouble("##stretch", &ratio, 1, 10, "%.2f") && std::isfinite(ratio)) {
+    if(ImGui::InputDouble("##stretch", &ratio, rows ? 0.0 : 1.0, 10, "%.2f%%") && std::isfinite(ratio)) {
         ratio = std::max(100.0 / 1024.0, ratio) / 100.0;
         const bool repeat = clip.repeatContent;
         const double duration = clip.durationBeats * ratio / ofxOceanodeTimelineClipTime::effectiveStretch(clip);
@@ -91,15 +115,9 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline,
         clip.repeatContent = track.isWaveTrack ? false : repeat;
     }
     if(table) ImGui::EndTable();
-    if(!track.isWaveTrack) {
-        bool repeat = clip.repeatContent;
-        if(ImGui::Checkbox("Repeat source", &repeat)) {
-            if(repeat) clip.contentStretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
-            changed = timeline.setClipContentDuration(track.id, clip.id, clip.contentDurationBeats, repeat) || changed;
-        }
-        if(columns > 1) ImGui::SameLine();
-        ImGui::TextWrapped("One cycle: %.3f timeline beats", ofxOceanodeTimelineClipTime::sourceDuration(clip) * ofxOceanodeTimelineClipTime::effectiveStretch(clip));
-    } else ImGui::TextDisabled("Audio: length and stretch change playback speed for the full source slice.");
+    if(!track.isWaveTrack)
+        ImGui::TextDisabled("Cycle %.3f beats", ofxOceanodeTimelineClipTime::sourceDuration(clip) * ofxOceanodeTimelineClipTime::effectiveStretch(clip));
+    else ImGui::TextDisabled("Audio: length and stretch change playback speed.");
     if(changed) timeline.invalidateSchedule();
     ImGui::PopID();
     return changed;
@@ -109,8 +127,10 @@ inline void drawClipPropertiesPanel(ofxOceanodeTimelineManager& timeline,
         const ofxOceanodeTimelineEditorView& view, ofxOceanodeTimelineEndEdit operation) {
     ImGui::PushID(clip.id.c_str());
     const float width = std::max(40.0f, ImGui::GetContentRegionAvail().x);
-    const float height = ImGui::GetTextLineHeightWithSpacing() * 3.0f +
-        ImGui::GetFrameHeightWithSpacing() * (width >= 650.0f ? 3.0f : 5.0f) + 18.0f;
+    // drawClipTiming: a checkbox row, five fields (in 4, 2 or 1 columns) and a note.
+    const float fieldRows = width >= 650.0f ? 2.0f : width >= 400.0f ? 3.0f : 5.0f;
+    const float height = ImGui::GetTextLineHeightWithSpacing() * (3.0f + (width >= 400.0f ? fieldRows : 0.0f)) +
+        ImGui::GetFrameHeightWithSpacing() * (1.0f + fieldRows) + 18.0f;
     if(ImGui::BeginChild("##clipTimingPanel", ImVec2(width, height), true)) {
         ImGui::TextWrapped("Track: %s > Clip: %s", track.name.c_str(), clip.name.c_str());
         ImGui::TextDisabled("%s | Timing applies to the whole clip", clipSummary(clip, track.isWaveTrack).c_str());

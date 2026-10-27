@@ -1,5 +1,6 @@
 #pragma once
 #include "ofxOceanodeTimelineLaneEditor.h"
+#include <array>
 #include <map>
 #include <set>
 #include <string>
@@ -11,6 +12,8 @@ public:
     void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const override;
     void drawTargets(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) override;
+    bool hasMutation() const override { return true; }
+    void drawMutation(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
     void clearSelection();
@@ -37,7 +40,7 @@ private:
     std::string pianoKeyboardPreviewClipId, pianoKeyboardPreviewLaneId;
     std::string pianoKeyboardPreviewPitchBindingId;
     int pianoKeyboardPreviewPitch = -1;
-    enum class PianoDragMode { None, Move, Resize, Velocity, Probability, Stretch };
+    enum class PianoDragMode { None, Move, Resize, Velocity, Probability, Mutation, Stretch };
     PianoDragMode pianoDragMode = PianoDragMode::None;
     int pianoDragNoteIndex = -1;
     double pianoDragBeatOffset = 0.0;
@@ -58,15 +61,15 @@ private:
     // by how far the grabbed beat moved, every start and end on the grid.
     double pianoStretchOrigin = 0.0;
     double pianoStretchGrab = 0.0;
-    // The VEL / PROB strips' heights per lane (session state, like lane heights),
-    // resized by the handles above them: 0 none, 1 VEL, 2 PROB.
-    std::map<std::string, std::pair<float, float>> pianoStripHeights;
+    // The VEL / PROB / MUT strips' heights per lane (session state, like lane
+    // heights), resized by the handles above them: 0 none, 1 VEL, 2 PROB, 3 MUT.
+    std::map<std::string, std::array<float, 3>> pianoStripHeights;
     int pianoStripResize = 0;
     float pianoStripResizeStartY = 0.0f, pianoStripResizeStartHeight = 0.0f;
     bool pianoMarqueeActive = false;
     float pianoMarqueeStartX = 0.0f;
     float pianoMarqueeStartY = 0.0f;
-    enum class PianoNumericField { None, Velocity, Probability };
+    enum class PianoNumericField { None, Velocity, Probability, Mutation };
     PianoNumericField pianoNumericField = PianoNumericField::None;
     int pianoNumericNoteIndex = -1;
     float pianoNumericValue = 0.0f;

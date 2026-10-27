@@ -14,6 +14,7 @@ native.fixture.CASES = r'''
 #include "Controls/ofxOceanodeTimelineController.h"
 #undef private
 #include "imgui_internal.h"
+#include "Controls/Editors/ofxOceanodeTimelineEditorUi.h"
 #include <cstdlib>
 class ClarityProbe : public ofxOceanodeNodeModel {
 public:
@@ -162,7 +163,7 @@ int main() {
     auto& zoomView=model.getViewState();
     ui.followPlayhead=false;
     zoomView.pixelsPerSecond=80; frame();
-    const float zoomVisible=ImGui::FindWindowByName("Timeline")->WorkRect.GetWidth()-230;
+    const float zoomVisible=ImGui::FindWindowByName("Timeline")->WorkRect.GetWidth()-ofxOceanodeTimelineEditorUi::labelWidth;
     const float oldZoomMax=std::max(0.0f,static_cast<float>(model.beatToSeconds(ui.getContentEndBeat(model),120)*80)-zoomVisible);
     zoomView.scrollX=oldZoomMax; frame();
     const ImVec2 zoomPoint(ui.fileDropBounds.x+700,ui.fileDropBounds.y+25);
@@ -241,14 +242,30 @@ int main() {
     const auto before=model.toJson()["tracks"];
     frame(); frame(1250,ImVec2(-100,-100),false,"clip-editor");
     assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && model.toJson()["tracks"]==before);
-    for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i) {
-        auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i);
-        if(!bar) continue;
-        for(auto& tab:bar->Tabs)
-            if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Content") bar->NextSelectedTabId=tab.ID;
-    }
+    auto selectTab=[&](const char* name) {
+        for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i) {
+            auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i);
+            if(!bar) continue;
+            for(auto& tab:bar->Tabs)
+                if(std::string(ImGui::TabBarGetTabName(bar,&tab))==name) bar->NextSelectedTabId=tab.ID;
+        }
+    };
+    selectTab("Lane");
     frame(); frame(1250,ImVec2(-100,-100),false,"content-properties");
     assert(model.toJson()["tracks"]==before);
+    selectTab("Clip");
+    frame(); frame(1250,ImVec2(-100,-100),false,"clip-properties");
+    assert(model.toJson()["tracks"]==before);
+    {
+        // Mutation: MUT strip handles, outlines and the Mutate tab.
+        auto* melody=model.getLane(t,c,piano);
+        melody->pianoNotes[1].mutation=0.6f; melody->mutationScaleMask=0xAB5;
+        selectTab("Mutate");
+        frame(); frame(1250,ImVec2(-100,-100),false,"mutation");
+        assert(model.getLane(t,c,piano)->mutationScaleMask==0xAB5);
+        model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutationScaleMask=0xFFF;
+    }
+    selectTab("Targets"); frame();
     ui.targetsView=true;
     frame(); frame(1250,ImVec2(-100,-100),false,"targets");
     assert(ui.editorState.clipEditorOpen && ui.clipScreenRects.size()>3);
