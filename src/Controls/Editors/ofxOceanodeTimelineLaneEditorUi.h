@@ -18,7 +18,7 @@ inline float& kLabelWidth = ofxOceanodeTimelineEditorUi::labelWidth;
 const ImU32 kGrid = ofxOceanodeTimelineEditorUi::gridColor;
 const ImU32 kBar = ofxOceanodeTimelineEditorUi::barColor;
 const ImU32 kPlayhead = ofxOceanodeTimelineEditorUi::playheadColor;
-constexpr auto& kCurveInterpolationNames = ofxOceanodeTimelineEditorUi::curveInterpolationNames;
+inline constexpr auto& kCurveInterpolationNames =ofxOceanodeTimelineEditorUi::curveInterpolationNames;
 constexpr const char* kLfoInterpolationNames[] = {
     "Value", "Step", "Linear", "Log / Exp", "Sigmoid"
 };
