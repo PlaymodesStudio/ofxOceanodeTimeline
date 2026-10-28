@@ -5092,6 +5092,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         candidate.kit = instrument.kit;
         if(instrument.duration != nullptr) candidate.durationPath = container->getTimelineParameterPath(*instrument.duration);
         if(instrument.filter != nullptr) candidate.filterPath = container->getTimelineParameterPath(*instrument.filter);
+        if(instrument.stutter != nullptr) candidate.stutterPath = container->getTimelineParameterPath(*instrument.stutter);
         if(model == sourceModel) sourceInstrument = static_cast<int>(noteSetupInstruments.size());
         noteSetupInstruments.push_back(candidate);
     };
@@ -5343,10 +5344,12 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
         };
         const std::string durationId = chosen == nullptr ? std::string() : kitBinding(chosen->durationPath);
         const std::string filterId = chosen == nullptr ? std::string() : kitBinding(chosen->filterPath);
+        const std::string stutterId = chosen == nullptr ? std::string() : kitBinding(chosen->stutterPath);
         if(editing) {
             timeline.setNoteGroupRoles(trackId, noteSetupEditGroupId, roleIds[0], roleIds[1], roleIds[2]);
             if(!durationId.empty()) timeline.setNoteGroupDuration(trackId, noteSetupEditGroupId, durationId);
             if(!filterId.empty()) timeline.setNoteGroupFilter(trackId, noteSetupEditGroupId, filterId);
+            if(!stutterId.empty()) timeline.setNoteGroupStutter(trackId, noteSetupEditGroupId, stutterId);
             timeline.renameNoteGroup(trackId, noteSetupEditGroupId, name);
             timeline.setNoteGroupVoices(trackId, noteSetupEditGroupId, noteSetupVoices);
         } else {
@@ -5355,6 +5358,7 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
                 timeline.setNoteGroupVoices(trackId, groupId, noteSetupVoices);
                 if(!durationId.empty()) timeline.setNoteGroupDuration(trackId, groupId, durationId);
                 if(!filterId.empty()) timeline.setNoteGroupFilter(trackId, groupId, filterId);
+                if(!stutterId.empty()) timeline.setNoteGroupStutter(trackId, groupId, stutterId);
                 std::string laneId;
                 const std::string clipId = timeline.createNoteGroupClip(trackId, groupId, name, noteSetupClipStart,
                                                                         noteSetupClipDuration, &laneId,

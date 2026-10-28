@@ -222,16 +222,6 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     mutationEditGroup = std::clamp(mutationEditGroup, 0, static_cast<int>(lane->mutationGroups.size()));
     mutationTabFrame = ImGui::GetFrameCount();
 
-    // Strength: scales every note's mutation chance; 0 = mutation off.
-    {
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        float percent = lane->mutationStrength * 100.0f;
-        if(ImGui::SliderFloat("##mutationStrength", &percent, 0.0f, 100.0f, percent <= 0.0f ? "Strength 0%% (mutation off)" : "Strength %.0f%%"))
-            lane->mutationStrength = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Every note's mutation chance x this. 100%%: as set on the notes; 0%%: no note mutates.\nCtrl+click to type, right double-click: 100%%.");
-        if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right)) lane->mutationStrength = 1.0f;
-    }
     // Group chips: click to edit a group, right-click B..D to delete it.
     auto notesIn = [&](int group, bool mutatingOnly) {
         return static_cast<int>(std::count_if(lane->pianoNotes.begin(), lane->pianoNotes.end(), [&](const auto& note) {
@@ -263,7 +253,17 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     ImGui::Checkbox("Mono##mutationMono", &lane->mutationMonophonic);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Monophonic: shifted or lengthened notes never overlap others");
     {
-        // Same row as Mono; the slider's own text names it.
+        // Same row as Mono, Strength then Drift; the sliders' own text names them.
+        ImGui::SameLine();
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        // Strength: scales every note's mutation chance; 0 = mutation off.
+        ImGui::SetNextItemWidth(half);
+        float strength = lane->mutationStrength * 100.0f;
+        if(ImGui::SliderFloat("##mutationStrength", &strength, 0.0f, 100.0f, strength <= 0.0f ? "Strength off" : "Strength %.0f%%"))
+            lane->mutationStrength = ofClamp(std::round(strength) / 100.0f, 0.0f, 1.0f);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Every note's mutation chance x this. 100%%: as set on the notes; 0%%: no note mutates.\nCtrl+click to type, right double-click: 100%%.");
+        if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right)) lane->mutationStrength = 1.0f;
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
         float percent = lane->mutationDrift * 100.0f;

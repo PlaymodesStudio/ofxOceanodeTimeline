@@ -555,12 +555,15 @@ own optional `drumDurationBindingId` (the kit's Duration input:
 `durationBindingId`; piano lanes of the group ignore it) and `drumFilterBindingId`
 (the kit's Filter input: `ofxOceanodeTimelineInstrument::filter`, a bipolar
 -1 low-pass fully closed .. 0 open .. +1 high-pass fully closed; on the group as
-`filterBindingId`). A group that never had a Duration / Filter role (projects
+`filterBindingId`) and `drumStutterBindingId` (the kit's Stutter input:
+`ofxOceanodeTimelineInstrument::stutter`, a retrigger rate as a MIDI note while
+the hit's gate is open, 0 = off; on the group as `stutterBindingId`). A group
+that never had a Duration / Filter / Stutter role (projects
 saved before the instrument offered one) adopts it automatically as soon as its
 instrument reports the input: the binding is created, set on the group and its
 Drum Grid lanes, without an undo entry (undo history keeps working). Once a
 group has had the role, set or cleared by the user, it is never adopted again;
-groups save this as `"durationDecided"` / `"filterDecided"`. Rows are drawn in
+groups save this as `"durationDecided"` / `"filterDecided"` / `"stutterDecided"`. Rows are drawn in
 their pad's colour from `ofxOceanodeTimelineInstrument::rowColors` (index =
 slot, read every frame, never saved; rows without one use the track colour).
 `pianoVelocityBindingId` is unused, the velocity travels as the gate level.
@@ -609,9 +612,12 @@ lane):
 - Gate component = the velocity while a hit is open, else 0 (`1` for a
   non-float target). Pitch component = 60 + the hit's semitone offset, held
   after the gate closes so a tail keeps its tuning. Duration component = the
-  hit's decay multiplier (x0.1..x24, x1 = as set) and Filter component its
-  filter (-1..1, 0 = open), both held the same way. Before a row's first hit
-  they hold its last audible hit's values (60 / x1 / 0 for a row with no hits).
+  hit's decay multiplier (x0.1..x24, x1 = as set), Filter component its
+  filter (-1..1, 0 = open) and Stutter component its stutter note (0..127,
+  0 = off), all held the same way. Before a row's first hit they hold its last
+  audible hit's values (60 / x1 / 0 / 0 for a row with no hits). The stutter
+  lasts while the hit's gate is open, so its length and gate set how long it
+  buzzes.
 - A hit that starts while (or less than one retrigger gap after) the previous
   hit of its row was open opens after the retrigger gap, so ratchets,
   back-to-back hits and pattern/clip wraps always give a fresh rising edge.
@@ -625,8 +631,9 @@ lane):
 **Scheduling.** Each hit's start (pitch, duration), gate opening and close are
 change beats for the scheduler, which hands the Gate/Pitch/Duration/Filter values
 ahead to backends that execute timestamped values (the instrument's scheduled
-inputs). Pitch, Duration and Filter are prepared 2 ms ahead of Gate, so a
-hit's tuning, decay and filter are in place when it fires; the role paths are scheduled together or
+inputs; Stutter too). Pitch, Duration, Filter and Stutter are prepared 2 ms
+ahead of Gate, so a hit's tuning, decay, filter and stutter are in place when
+it fires; the role paths are scheduled together or
 not at all, like a piano lane's roles. The grid is not involved.
 
 **Editor.** Row headers (left of the timeline zone): a swatch and the name in
@@ -658,14 +665,17 @@ play. In the grid:
   of a row past its first pattern are shaded.
 
 The strip under the grid paints the focused row's Velocity, Pitch (semitones,
-bipolar), Probability, Ratchet, Gate, Duration or Filter, one bar per hit at
+bipolar), Probability, Ratchet, Gate, Duration, Filter or Stutter, one bar per hit at
 its x, in the row's colour (log scale over x0.1..x24 for Duration, bars growing
 from the x1 line, guides at x0.25..x16; painting snaps to x0.125, 0.25, 0.5, 1,
 2, 4, 8, 16 or 24, Alt paints unsnapped. Filter: bipolar around open, low-pass
 (LP, blue) below, high-pass (HP, orange) above, snapping to open near the
 centre, Alt unsnapped, double-click a bar to open it; hovering shows
-"LP 40 %" / "HP 25 %" / "open"). For the others Alt drags finely; right-click
-resets a bar.
+"LP 40 %" / "HP 25 %" / "open". Stutter: bars from the bottom, height = the
+note on a linear 0..127 scale, no bar when off; painting snaps to semitones,
+Alt unsnapped, the bottom few pixels or a double-click turn it off; labels and
+hover show the note and its rate, e.g. "C3 · 131 Hz", or "off"). For the
+others Alt drags finely; right-click resets a bar.
 The strip's parameter is picked from a row of tabs with full names on top of
 the strip (inside the timeline zone, short names only when the editor is very
 narrow) or from the **Row** properties tab, which also holds the focused row's
@@ -681,7 +691,8 @@ division), swing and its step, probability and seed, and the rows.
   "rows": [
     {"slot": 0, "name": "Kick", "length": 4.0, "gate": 0.5, "mute": false, "solo": false,
      "hits": [{"beat": 0.0, "length": 0.25, "gate": 0.5, "velocity": 0.8, "pitch": 0,
-               "probability": 1.0, "ratchet": 1, "duration": 1.0, "filter": 0.0}, ...]}
+               "probability": 1.0, "ratchet": 1, "duration": 1.0, "filter": 0.0,
+               "stutter": 0.0}, ...]}
   ]
 }
 ```
@@ -689,7 +700,7 @@ division), swing and its step, probability and seed, and the rows.
 Only Drum Grid lanes write `drumGrid`, so other lanes save exactly as before.
 The lane also saves `"drumDurationBindingId"` when set, and note groups save
 `"duration"` and `"durationDecided"`. Missing or malformed fields load as their
-defaults (a hit without `duration` plays at x1, without `filter` open) and values are clamped into
+defaults (a hit without `duration` plays at x1, without `filter` open, without `stutter` off) and values are clamped into
 range.
 
 **The first, index-based shape** (no `"format"`: rows of `"steps"` with

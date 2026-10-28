@@ -28,8 +28,8 @@ public:
     static float lengthFieldWidth();
     void clearSelection() { drag = Drag::None; popupRow = popupStep = -1; }
 
-    enum class StripMode { Velocity, Pitch, Probability, Ratchet, Gate, Duration, Filter };
-    static constexpr int kStripModeCount = 7;
+    enum class StripMode { Velocity, Pitch, Probability, Ratchet, Gate, Duration, Filter, Stutter };
+    static constexpr int kStripModeCount = 8;
 
 private:
     int focusedRow(const ofxOceanodeTimelineLane& lane) const;

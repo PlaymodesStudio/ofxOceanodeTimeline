@@ -1199,7 +1199,8 @@ ofJson drumGridToJson(const ofxOceanodeTimelineLane& lane) {
             rowJson["hits"].push_back({{"beat", step.beat}, {"length", step.length}, {"gate", step.gate},
                                        {"velocity", step.velocity}, {"pitch", step.pitch},
                                        {"probability", step.probability}, {"ratchet", step.ratchet},
-                                       {"duration", step.duration}, {"filter", step.filter}});
+                                       {"duration", step.duration}, {"filter", step.filter},
+                                       {"stutter", step.stutter}});
         json["rows"].push_back(std::move(rowJson));
     }
     return json;
@@ -1241,6 +1242,7 @@ void drumGridFromJson(const ofJson& json, ofxOceanodeTimelineLane& lane) {
             step.ratchet = static_cast<int>(number(stepJson, "ratchet", 1));
             step.duration = static_cast<float>(number(stepJson, "duration", 1.0));
             step.filter = static_cast<float>(number(stepJson, "filter", 0.0));
+            step.stutter = static_cast<float>(number(stepJson, "stutter", 0.0));
         };
         if(indexed) {
             // Steps x beatsPerStep: an on step i plays at i steps (its swing
@@ -1768,6 +1770,7 @@ void normalizeRow(ofxOceanodeTimelineDrumRow& row) {
         step.ratchet = std::max(1, std::min(step.ratchet, kMaxRatchet));
         step.duration = ofClamp(finite(step.duration, 1.0f), 0.1f, kMaxDuration);
         step.filter = ofClamp(finite(step.filter, 0.0f), -1.0f, 1.0f);
+        step.stutter = ofClamp(finite(step.stutter, 0.0f), 0.0f, 127.0f);
     }
     std::stable_sort(row.steps.begin(), row.steps.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
     if(row.steps.size() > static_cast<size_t>(kMaxHitsPerRow)) row.steps.resize(static_cast<size_t>(kMaxHitsPerRow));
@@ -1911,6 +1914,7 @@ void patternHits(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineD
             hit.pitch = kBasePitch + std::max(-24, std::min(step.pitch, 24));
             hit.duration = ofClamp(step.duration, 0.1f, kMaxDuration);
             hit.filter = ofClamp(step.filter, -1.0f, 1.0f);
+            hit.stutter = ofClamp(step.stutter, 0.0f, 127.0f);
             hit.step = static_cast<int>(i);
             out.push_back(hit);
         }
@@ -1944,11 +1948,13 @@ void resolvedHits(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimeline
 
 bool rowStateAt(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumRow& row,
                 double sourceBeat, int64_t repeat, double contentLength, double gap,
-                uint64_t epoch, float& gate, int& heldPitch, float* heldDuration, float* heldFilter) {
+                uint64_t epoch, float& gate, int& heldPitch, float* heldDuration, float* heldFilter,
+                float* heldStutter) {
     gate = 0.0f;
     heldPitch = kBasePitch;
     if(heldDuration != nullptr) *heldDuration = 1.0f;
     if(heldFilter != nullptr) *heldFilter = 0.0f;
+    if(heldStutter != nullptr) *heldStutter = 0.0f;
     if(row.steps.empty()) return false;
     const double length = ofClamp(row.length, kMinLength, kMaxLength);
     const int64_t p = static_cast<int64_t>(std::floor(sourceBeat / length));
@@ -1963,6 +1969,7 @@ bool rowStateAt(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDr
         heldPitch = current->pitch;
         if(heldDuration != nullptr) *heldDuration = current->duration;
         if(heldFilter != nullptr) *heldFilter = current->filter;
+        if(heldStutter != nullptr) *heldStutter = current->stutter;
         if(sourceBeat >= current->open - 1e-9 && sourceBeat < current->close - 1e-9) {
             gate = current->velocity;
             return true;
@@ -1979,6 +1986,7 @@ bool rowStateAt(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDr
             heldPitch = hits.back().pitch;
             if(heldDuration != nullptr) *heldDuration = hits.back().duration;
             if(heldFilter != nullptr) *heldFilter = hits.back().filter;
+            if(heldStutter != nullptr) *heldStutter = hits.back().stutter;
             return false;
         }
         if(q < 0 && repeat <= 0) break;
@@ -1989,6 +1997,7 @@ bool rowStateAt(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDr
         heldPitch = kBasePitch + std::max(-24, std::min(it->pitch, 24));
         if(heldDuration != nullptr) *heldDuration = ofClamp(it->duration, 0.1f, kMaxDuration);
         if(heldFilter != nullptr) *heldFilter = ofClamp(it->filter, -1.0f, 1.0f);
+        if(heldStutter != nullptr) *heldStutter = ofClamp(it->stutter, 0.0f, 127.0f);
         break;
     }
     return false;
@@ -2217,6 +2226,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                     for(const auto& role : {std::make_pair(&lane.pianoPitchBindingId, 0),
                                            std::make_pair(&lane.drumDurationBindingId, 0),
                                            std::make_pair(&lane.drumFilterBindingId, 0),
+                                           std::make_pair(&lane.drumStutterBindingId, 0),
                                            std::make_pair(&lane.pianoGateBindingId, 3)}) {
                         if(const auto* binding = bindingFor(*role.first)) {
                             pianoInputPriorityCache[binding->parameterPath] = role.second;
@@ -2473,7 +2483,7 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack
     for(auto& group : duplicate.noteGroups) {
         group.id = id + "_notes_" + ofToString(noteNumber++);
         remap(group.pitchBindingId); remap(group.gateBindingId); remap(group.velocityBindingId); remap(group.durationBindingId);
-        remap(group.filterBindingId);
+        remap(group.filterBindingId); remap(group.stutterBindingId);
     }
     for(auto& clip : duplicate.clips) {
         clip.id = makeUniqueClipId(); ++nextClipNumber;
@@ -2483,7 +2493,7 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack
             for(auto& binding : lane.bindingIds) remap(binding);
             lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), std::string()), lane.bindingIds.end());
             remap(lane.pianoPitchBindingId); remap(lane.pianoGateBindingId); remap(lane.pianoVelocityBindingId);
-            remap(lane.drumDurationBindingId); remap(lane.drumFilterBindingId);
+            remap(lane.drumDurationBindingId); remap(lane.drumFilterBindingId); remap(lane.drumStutterBindingId);
         }
     }
     std::rotate(tracks.begin() + index, tracks.end() - 1, tracks.end());
@@ -2540,13 +2550,13 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
         if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) copy.noteGroups.clear();
         std::set<std::string> used(lane.bindingIds.begin(), lane.bindingIds.end());
         for(const auto* role : {&lane.pianoPitchBindingId, &lane.pianoGateBindingId, &lane.pianoVelocityBindingId,
-                                &lane.drumDurationBindingId, &lane.drumFilterBindingId})
+                                &lane.drumDurationBindingId, &lane.drumFilterBindingId, &lane.drumStutterBindingId})
             if(!role->empty()) used.insert(*role);
         copy.bindings.erase(std::remove_if(copy.bindings.begin(), copy.bindings.end(),
             [&](const auto& binding) { return !used.count(binding.id); }), copy.bindings.end());
         for(auto& group : copy.noteGroups) {
             for(auto* role : {&group.pitchBindingId, &group.gateBindingId, &group.velocityBindingId, &group.durationBindingId,
-                              &group.filterBindingId})
+                              &group.filterBindingId, &group.stutterBindingId})
                 if(!used.count(*role)) role->clear();
         }
         copy.noteGroups.erase(std::remove_if(copy.noteGroups.begin(), copy.noteGroups.end(),
@@ -2802,20 +2812,22 @@ bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, cons
     } else if(role == Role::Lane) {
         addBindingToLane(trackId, clipId, laneId, bindingId);
     } else {
-        if((role == Role::Duration || role == Role::Filter) && lane->type != ofxOceanodeTimelineLaneType::DrumGrid) return false;
+        if((role == Role::Duration || role == Role::Filter || role == Role::Stutter) && lane->type != ofxOceanodeTimelineLaneType::DrumGrid) return false;
         std::string* selected = role == Role::Pitch ? &lane->pianoPitchBindingId
             : role == Role::Gate ? &lane->pianoGateBindingId
             : role == Role::Duration ? &lane->drumDurationBindingId
-            : role == Role::Filter ? &lane->drumFilterBindingId : &lane->pianoVelocityBindingId;
+            : role == Role::Filter ? &lane->drumFilterBindingId
+            : role == Role::Stutter ? &lane->drumStutterBindingId : &lane->pianoVelocityBindingId;
         const std::string previous = *selected;
         for(auto* other : {&lane->pianoPitchBindingId, &lane->pianoGateBindingId, &lane->pianoVelocityBindingId,
-                           &lane->drumDurationBindingId, &lane->drumFilterBindingId})
+                           &lane->drumDurationBindingId, &lane->drumFilterBindingId, &lane->drumStutterBindingId})
             if(other != selected && *other == bindingId) other->clear();
         *selected = bindingId;
         addBindingToLane(trackId, clipId, laneId, bindingId);
         if(!previous.empty() && previous != bindingId && previous != lane->pianoPitchBindingId &&
            previous != lane->pianoGateBindingId && previous != lane->pianoVelocityBindingId &&
-           previous != lane->drumDurationBindingId && previous != lane->drumFilterBindingId)
+           previous != lane->drumDurationBindingId && previous != lane->drumFilterBindingId &&
+           previous != lane->drumStutterBindingId)
             removeBindingFromLane(trackId, clipId, laneId, previous);
     }
     invalidateEvaluationIndexes(); invalidateSchedule();
@@ -2914,13 +2926,17 @@ void ofxOceanodeTimelineManager::normalizeNoteGroups(ofxOceanodeTimelineTrack& t
     };
     for(auto& group : track.noteGroups) {
         for(auto* role : {&group.pitchBindingId, &group.gateBindingId, &group.velocityBindingId, &group.durationBindingId,
-                          &group.filterBindingId})
+                          &group.filterBindingId, &group.stutterBindingId})
             if(!role->empty() && !hasBinding(*role)) role->clear();
         if(group.durationBindingId == group.pitchBindingId || group.durationBindingId == group.gateBindingId ||
            group.durationBindingId == group.velocityBindingId) group.durationBindingId.clear();
         if(group.filterBindingId == group.pitchBindingId || group.filterBindingId == group.gateBindingId ||
            group.filterBindingId == group.velocityBindingId || group.filterBindingId == group.durationBindingId)
             group.filterBindingId.clear();
+        if(group.stutterBindingId == group.pitchBindingId || group.stutterBindingId == group.gateBindingId ||
+           group.stutterBindingId == group.velocityBindingId || group.stutterBindingId == group.durationBindingId ||
+           group.stutterBindingId == group.filterBindingId)
+            group.stutterBindingId.clear();
         if(group.gateBindingId == group.pitchBindingId) group.gateBindingId.clear();
         if(group.velocityBindingId == group.pitchBindingId || group.velocityBindingId == group.gateBindingId)
             group.velocityBindingId.clear();
@@ -2964,8 +2980,9 @@ void ofxOceanodeTimelineManager::syncNoteGroupLanes(ofxOceanodeTimelineTrack& tr
             lane.pianoVelocityBindingId = group.velocityBindingId;
             lane.drumDurationBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group.durationBindingId : std::string();
             lane.drumFilterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group.filterBindingId : std::string();
+            lane.drumStutterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group.stutterBindingId : std::string();
             if(lane.type != ofxOceanodeTimelineLaneType::DrumGrid)
-                for(const auto* kitOnly : {&group.durationBindingId, &group.filterBindingId})
+                for(const auto* kitOnly : {&group.durationBindingId, &group.filterBindingId, &group.stutterBindingId})
                     if(!kitOnly->empty())
                         lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), *kitOnly),
                                               lane.bindingIds.end());
@@ -3037,6 +3054,8 @@ const KitRole kDurationRole{&ofxOceanodeTimelineNoteGroup::durationBindingId, &o
                             &ofxOceanodeTimelineLane::drumDurationBindingId};
 const KitRole kFilterRole{&ofxOceanodeTimelineNoteGroup::filterBindingId, &ofxOceanodeTimelineNoteGroup::filterDecided,
                           &ofxOceanodeTimelineLane::drumFilterBindingId};
+const KitRole kStutterRole{&ofxOceanodeTimelineNoteGroup::stutterBindingId, &ofxOceanodeTimelineNoteGroup::stutterDecided,
+                           &ofxOceanodeTimelineLane::drumStutterBindingId};
 }
 
 bool ofxOceanodeTimelineManager::setNoteGroupDuration(const std::string& trackId, const std::string& groupId,
@@ -3049,9 +3068,14 @@ bool ofxOceanodeTimelineManager::setNoteGroupFilter(const std::string& trackId, 
     return setNoteGroupKitRole(trackId, groupId, filterBindingId, 1);
 }
 
+bool ofxOceanodeTimelineManager::setNoteGroupStutter(const std::string& trackId, const std::string& groupId,
+                                                     const std::string& stutterBindingId) {
+    return setNoteGroupKitRole(trackId, groupId, stutterBindingId, 2);
+}
+
 bool ofxOceanodeTimelineManager::setNoteGroupKitRole(const std::string& trackId, const std::string& groupId,
                                                      const std::string& bindingId, int which) {
-    const auto& role = which == 0 ? kDurationRole : kFilterRole;
+    const auto& role = which == 0 ? kDurationRole : which == 1 ? kFilterRole : kStutterRole;
     auto* track = getTrack(trackId);
     if(track == nullptr) return false;
     auto it = std::find_if(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
@@ -3326,6 +3350,7 @@ std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& t
             lane->pianoVelocityBindingId = group.velocityBindingId;
             lane->drumDurationBindingId = group.durationBindingId;
             lane->drumFilterBindingId = group.filterBindingId;
+            lane->drumStutterBindingId = group.stutterBindingId;
             lane->bindingIds = group.members();
             int voices = 0;
             std::vector<std::string> names;
@@ -3351,6 +3376,9 @@ std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& t
         // A piano roll does not drive a kit's Duration.
         if(!group.filterBindingId.empty())
             lane->bindingIds.erase(std::remove(lane->bindingIds.begin(), lane->bindingIds.end(), group.filterBindingId),
+                                   lane->bindingIds.end());
+        if(!group.stutterBindingId.empty())
+            lane->bindingIds.erase(std::remove(lane->bindingIds.begin(), lane->bindingIds.end(), group.stutterBindingId),
                                    lane->bindingIds.end());
         if(!group.durationBindingId.empty())
             lane->bindingIds.erase(std::remove(lane->bindingIds.begin(), lane->bindingIds.end(), group.durationBindingId),
@@ -3470,6 +3498,7 @@ bool ofxOceanodeTimelineManager::removeBinding(const std::string& trackId, const
             if(lane.pianoVelocityBindingId == bindingId) lane.pianoVelocityBindingId.clear();
             if(lane.drumDurationBindingId == bindingId) lane.drumDurationBindingId.clear();
             if(lane.drumFilterBindingId == bindingId) lane.drumFilterBindingId.clear();
+            if(lane.drumStutterBindingId == bindingId) lane.drumStutterBindingId.clear();
         }
     }
     track->bindings.erase(it);
@@ -4200,6 +4229,7 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
                 lane.pianoVelocityBindingId = group->velocityBindingId;
                 lane.drumDurationBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->durationBindingId : std::string();
                 lane.drumFilterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->filterBindingId : std::string();
+                lane.drumStutterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->stutterBindingId : std::string();
                 lane.bindingIds = group->members();
             } else {
                 lane.bindingIds = {dstBindingId};
@@ -4220,6 +4250,7 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
                     lane.pianoGateBindingId = mapBinding(lane.pianoGateBindingId);
                     lane.drumDurationBindingId = mapBinding(lane.drumDurationBindingId);
                     lane.drumFilterBindingId = mapBinding(lane.drumFilterBindingId);
+                    lane.drumStutterBindingId = mapBinding(lane.drumStutterBindingId);
                     lane.pianoVelocityBindingId = mapBinding(lane.pianoVelocityBindingId);
                 }
                 if(!lane.bindingIds.empty()) kept.push_back(std::move(lane));
@@ -4668,7 +4699,8 @@ bool ofxOceanodeTimelineManager::addBindingToLane(const std::string& trackId, co
     if(lane->type == ofxOceanodeTimelineLaneType::DrumGrid) {
         // A kit is played by its gate first; pitch is optional.
         const bool alreadyRoled = lane->pianoPitchBindingId == bindingId || lane->pianoGateBindingId == bindingId ||
-                                  lane->drumDurationBindingId == bindingId || lane->drumFilterBindingId == bindingId;
+                                  lane->drumDurationBindingId == bindingId || lane->drumFilterBindingId == bindingId ||
+                                  lane->drumStutterBindingId == bindingId;
         if(!alreadyRoled) {
             if(lane->pianoGateBindingId.empty()) lane->pianoGateBindingId = bindingId;
             else if(lane->pianoPitchBindingId.empty()) lane->pianoPitchBindingId = bindingId;
@@ -4708,6 +4740,7 @@ bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackI
     if(lane->pianoVelocityBindingId == bindingId) lane->pianoVelocityBindingId.clear();
     if(lane->drumDurationBindingId == bindingId) lane->drumDurationBindingId.clear();
     if(lane->drumFilterBindingId == bindingId) lane->drumFilterBindingId.clear();
+    if(lane->drumStutterBindingId == bindingId) lane->drumStutterBindingId.clear();
     const bool removed = lane->bindingIds.size() != oldSize;
     const auto* clip = getClip(trackId, clipId);
     if(removed && clip != nullptr && clip->isStateCapture) {
@@ -5576,7 +5609,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     for(const auto& id : sourceLane.bindingIds)
                         wanted = wanted || wantsBinding(bindingFor(track, id));
                     for(const auto* id : {&sourceLane.pianoPitchBindingId, &sourceLane.pianoVelocityBindingId, &sourceLane.pianoGateBindingId,
-                                          &sourceLane.drumDurationBindingId, &sourceLane.drumFilterBindingId})
+                                          &sourceLane.drumDurationBindingId, &sourceLane.drumFilterBindingId,
+                                          &sourceLane.drumStutterBindingId})
                         wanted = wanted || wantsBinding(bindingFor(track, *id));
                     if(!wanted) continue;
                 }
@@ -5684,36 +5718,40 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     std::vector<int> pitches(static_cast<size_t>(width), ofxOceanodeTimelineDrumGrid::kBasePitch);
                     std::vector<float> durations(static_cast<size_t>(width), 1.0f);
                     std::vector<float> filters(static_cast<size_t>(width), 0.0f);
+                    std::vector<float> stutters(static_cast<size_t>(width), 0.0f);
                     std::vector<uint8_t> pitchSet(static_cast<size_t>(width), 0);
-                    float scalarGate = 0.0f, scalarDuration = 1.0f, scalarFilter = 0.0f;
+                    float scalarGate = 0.0f, scalarDuration = 1.0f, scalarFilter = 0.0f, scalarStutter = 0.0f;
                     int scalarPitch = ofxOceanodeTimelineDrumGrid::kBasePitch;
                     bool scalarSounding = false;
                     for(size_t r = 0; r < lane.drumRows.size(); ++r) {
                         const auto& row = lane.drumRows[r];
                         float gate = 0.0f;
                         int pitch = ofxOceanodeTimelineDrumGrid::kBasePitch;
-                        float duration = 1.0f, filter = 0.0f;
+                        float duration = 1.0f, filter = 0.0f, stutter = 0.0f;
                         const bool open = ofxOceanodeTimelineDrumGrid::rowStateAt(lane, row, sourceBeat, repeat, content,
-                                                                                  gap, mutationEpoch, gate, pitch, &duration, &filter) &&
+                                                                                  gap, mutationEpoch, gate, pitch, &duration, &filter, &stutter) &&
                                           isPlaying && ofxOceanodeTimelineDrumGrid::rowAudible(lane, row);
                         const size_t slot = static_cast<size_t>(std::max(0, row.slot));
                         if(open) gates[slot] = std::max(gates[slot], gate);
-                        if(!pitchSet[slot] || open) { pitches[slot] = pitch; durations[slot] = duration; filters[slot] = filter; pitchSet[slot] = 1; }
-                        if(r == 0) { scalarPitch = pitch; scalarDuration = duration; scalarFilter = filter; }
+                        if(!pitchSet[slot] || open) { pitches[slot] = pitch; durations[slot] = duration; filters[slot] = filter; stutters[slot] = stutter; pitchSet[slot] = 1; }
+                        if(r == 0) { scalarPitch = pitch; scalarDuration = duration; scalarFilter = filter; scalarStutter = stutter; }
                         if(open && !scalarSounding) {
                             scalarSounding = true; scalarGate = gate; scalarPitch = pitch; scalarDuration = duration; scalarFilter = filter;
+                            scalarStutter = stutter;
                         }
                     }
                     // Role 0 pitch, 1 gate, 2 duration, 3 filter (held like the pitch;
                     // before any hit 1 and 0).
                     const std::string roleBindingIds[] = {lane.pianoPitchBindingId, lane.pianoGateBindingId,
-                                                          lane.drumDurationBindingId, lane.drumFilterBindingId};
+                                                          lane.drumDurationBindingId, lane.drumFilterBindingId,
+                                                          lane.drumStutterBindingId};
                     auto heldText = [&](size_t role, size_t slot) {
                         if(role == 2) return slot < durations.size() ? automationText::formatFloat(durations[slot]) : std::string("1");
                         if(role == 3) return slot < filters.size() ? automationText::formatFloat(filters[slot]) : std::string("0");
+                        if(role == 4) return slot < stutters.size() ? automationText::formatFloat(stutters[slot]) : std::string("0");
                         return automationText::formatInt(slot < pitches.size() ? pitches[slot] : ofxOceanodeTimelineDrumGrid::kBasePitch);
                     };
-                    for(size_t role = 0; role < 4; ++role) {
+                    for(size_t role = 0; role < 5; ++role) {
                         const auto* binding = bindingFor(track, roleBindingIds[role]);
                         if(binding == nullptr || binding->bypass) continue;
                         const auto& type = binding->valueType;
@@ -5747,7 +5785,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                         } else {
                             value = role == 1 ? gateText(scalarSounding ? scalarGate : 0.0f)
                                   : role == 2 ? automationText::formatFloat(scalarDuration)
-                                  : role == 3 ? automationText::formatFloat(scalarFilter) : automationText::formatInt(scalarPitch);
+                                  : role == 3 ? automationText::formatFloat(scalarFilter)
+                                  : role == 4 ? automationText::formatFloat(scalarStutter) : automationText::formatInt(scalarPitch);
                         }
                         contribute(binding, std::move(value));
                     }
@@ -6007,7 +6046,7 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
     for(size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex) {
         if(tracks[trackIndex].isWaveTrack) continue;
         for(size_t groupIndex = 0; groupIndex < tracks[trackIndex].noteGroups.size(); ++groupIndex) {
-            for(const KitRole* role : {&kDurationRole, &kFilterRole}) {
+            for(const KitRole* role : {&kDurationRole, &kFilterRole, &kStutterRole}) {
                 auto& track = tracks[trackIndex];
                 const auto group = track.noteGroups[groupIndex];
                 if(group.*role->decided || !(group.*role->group).empty()) continue;
@@ -6020,7 +6059,8 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
                     ofxOceanodeTimelineInstrument instrument;
                     if(model == nullptr || !model->getTimelineInstrument(instrument)) continue;
                     if(instrument.gate != parameter && instrument.pitch != parameter) continue;
-                    input = role == &kDurationRole ? instrument.duration : instrument.filter;
+                    input = role == &kDurationRole ? instrument.duration
+                          : role == &kFilterRole ? instrument.filter : instrument.stutter;
                     break;
                 }
                 if(input == nullptr) continue;
@@ -6410,7 +6450,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     hash.add(lane.probabilityEnabled); hash.add(lane.behavior); hash.add(lane.probabilitySeed);
     hash.add(lane.pianoLowPitch); hash.add(lane.pianoHighPitch);
     hash.add(lane.pianoPitchBindingId); hash.add(lane.pianoGateBindingId); hash.add(lane.pianoVelocityBindingId);
-    hash.add(lane.drumDurationBindingId); hash.add(lane.drumFilterBindingId);
+    hash.add(lane.drumDurationBindingId); hash.add(lane.drumFilterBindingId); hash.add(lane.drumStutterBindingId);
     hash.add(lane.pianoMonophonic); hash.add(lane.probabilitySeed); hash.add(lane.mutationMonophonic); hash.add(lane.mutationDrift); hash.add(lane.mutationStrength);
     hash.add(lane.pianoScaleEnabled); hash.add(lane.pianoScaleMask); hash.add(lane.pianoScaleSnap);
     hash.add(lane.randomOctave); hash.add(lane.randomOctaveRange); hash.add(lane.randomOctaveDirection);
@@ -6470,7 +6510,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
         hash.add(row.steps.size());
         for(const auto& step : row.steps) {
             hash.add(step.beat); hash.add(step.length); hash.add(step.gate); hash.add(step.velocity); hash.add(step.pitch);
-            hash.add(step.probability); hash.add(step.ratchet); hash.add(step.duration); hash.add(step.filter);
+            hash.add(step.probability); hash.add(step.ratchet); hash.add(step.duration); hash.add(step.filter); hash.add(step.stutter);
         }
     }
     return hash.result();
@@ -6493,7 +6533,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
         hash.add(track.noteGroups.size());
         for(const auto& group : track.noteGroups) {
             hash.add(group.id); hash.add(group.pitchBindingId); hash.add(group.gateBindingId);
-            hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.voices);
+            hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.stutterBindingId); hash.add(group.voices);
         }
         hash.add(track.clips.data()); hash.add(track.clips.size());
         for(const auto& clip : track.clips) {
@@ -6644,6 +6684,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(double fromBeat, double toBe
         if(ofxOceanodeTimelineLaneUsesNoteRoles(lane.type))
             return bindingScheduled(track, lane.pianoPitchBindingId) || bindingScheduled(track, lane.pianoGateBindingId) ||
                    bindingScheduled(track, lane.drumDurationBindingId) || bindingScheduled(track, lane.drumFilterBindingId) ||
+                   bindingScheduled(track, lane.drumStutterBindingId) ||
                    bindingScheduled(track, lane.pianoVelocityBindingId);
         return std::any_of(lane.bindingIds.begin(), lane.bindingIds.end(),
                            [&](const std::string& id) { return bindingScheduled(track, id); });
@@ -7615,6 +7656,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 {"durationDecided", group.durationDecided},
                 {"filter", group.filterBindingId},
                 {"filterDecided", group.filterDecided},
+                {"stutter", group.stutterBindingId},
+                {"stutterDecided", group.stutterDecided},
                 {"expanded", group.expanded},
                 {"rowHeight", group.rowHeight},
                 {"voices", group.voices}
@@ -7669,6 +7712,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["pianoDefaultVelocity"] = lane.pianoDefaultVelocity;
                 if(!lane.drumDurationBindingId.empty()) laneJson["drumDurationBindingId"] = lane.drumDurationBindingId;
                 if(!lane.drumFilterBindingId.empty()) laneJson["drumFilterBindingId"] = lane.drumFilterBindingId;
+                if(!lane.drumStutterBindingId.empty()) laneJson["drumStutterBindingId"] = lane.drumStutterBindingId;
                 laneJson["pianoMonophonic"] = lane.pianoMonophonic;
                 laneJson["mutation"] = mutationRulesToJson(lane.mutation);
                 laneJson["mutationMonophonic"] = lane.mutationMonophonic;
@@ -8036,6 +8080,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         lane.pianoVelocityBindingId = mapBinding(laneJson.value("pianoVelocityBindingId", std::string()));
                         lane.drumDurationBindingId = mapBinding(laneJson.value("drumDurationBindingId", std::string()));
                         lane.drumFilterBindingId = mapBinding(laneJson.value("drumFilterBindingId", std::string()));
+                        lane.drumStutterBindingId = mapBinding(laneJson.value("drumStutterBindingId", std::string()));
                         lane.pianoDefaultVelocity = ofClamp(laneJson.value("pianoDefaultVelocity", 0.8f), 0.0f, 1.0f);
                         lane.pianoMonophonic = laneJson.value("pianoMonophonic", false);
                         if(laneJson.contains("mutation") && laneJson["mutation"].is_object())
@@ -8116,6 +8161,11 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         if(lane.drumFilterBindingId == lane.pianoPitchBindingId || lane.drumFilterBindingId == lane.pianoGateBindingId ||
                            lane.drumFilterBindingId == lane.pianoVelocityBindingId || lane.drumFilterBindingId == lane.drumDurationBindingId)
                             lane.drumFilterBindingId.clear();
+                        validateRole(lane.drumStutterBindingId);
+                        if(lane.drumStutterBindingId == lane.pianoPitchBindingId || lane.drumStutterBindingId == lane.pianoGateBindingId ||
+                           lane.drumStutterBindingId == lane.pianoVelocityBindingId || lane.drumStutterBindingId == lane.drumDurationBindingId ||
+                           lane.drumStutterBindingId == lane.drumFilterBindingId)
+                            lane.drumStutterBindingId.clear();
                         if(lane.pianoGateBindingId == lane.pianoPitchBindingId)
                             lane.pianoGateBindingId.clear();
                         if(lane.pianoVelocityBindingId == lane.pianoPitchBindingId ||
@@ -8290,13 +8340,16 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                     const std::string savedFilter = groupJson.value("filter", std::string());
                     group.filterBindingId = mapBinding(savedFilter);
                     group.filterDecided = groupJson.value("filterDecided", !savedFilter.empty());
+                    const std::string savedStutter = groupJson.value("stutter", std::string());
+                    group.stutterBindingId = mapBinding(savedStutter);
+                    group.stutterDecided = groupJson.value("stutterDecided", !savedStutter.empty());
                 }
                 group.expanded = groupJson.value("expanded", false);
                 group.rowHeight = ofClamp(groupJson.value("rowHeight", 48.0f), 20.0f, 300.0f);
                 group.voices = ofClamp(groupJson.value("voices", 0), 0, 128);
                 // A binding belongs to one group only.
                 for(auto* role : {&group.pitchBindingId, &group.gateBindingId, &group.velocityBindingId, &group.durationBindingId,
-                                  &group.filterBindingId})
+                                  &group.filterBindingId, &group.stutterBindingId})
                     if(findNoteGroupForBinding(track, *role) != nullptr) role->clear();
                 track.noteGroups.push_back(group);
             }
@@ -8420,6 +8473,7 @@ ofJson ofxOceanodeTimelineManager::exportClip(const std::string& trackId, const 
         used.insert(lane.pianoVelocityBindingId);
         used.insert(lane.drumDurationBindingId);
         used.insert(lane.drumFilterBindingId);
+        used.insert(lane.drumStutterBindingId);
     }
     for(const auto& binding : track->bindings)
         if(used.count(binding.id)) portable.bindings.push_back(binding);
@@ -8429,6 +8483,7 @@ ofJson ofxOceanodeTimelineManager::exportClip(const std::string& trackId, const 
         if(!used.count(group.velocityBindingId)) group.velocityBindingId.clear();
         if(!used.count(group.durationBindingId)) group.durationBindingId.clear();
         if(!used.count(group.filterBindingId)) group.filterBindingId.clear();
+        if(!used.count(group.stutterBindingId)) group.stutterBindingId.clear();
         if(!group.members().empty()) portable.noteGroups.push_back(std::move(group));
     }
     // Use the preset codec so every lane type and future lane field stays in sync.
@@ -8537,7 +8592,7 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         for(const auto& lane : copy.lanes) {
             std::set<std::string> roles;
             for(const auto* role : {&lane.pianoPitchBindingId, &lane.pianoGateBindingId, &lane.pianoVelocityBindingId,
-                                    &lane.drumDurationBindingId, &lane.drumFilterBindingId}) {
+                                    &lane.drumDurationBindingId, &lane.drumFilterBindingId, &lane.drumStutterBindingId}) {
                 const auto mapping = targetPaths.find(*role);
                 if(mapping != targetPaths.end() && !mapping->second.empty() && !roles.insert(mapping->second).second) {
                     clipFileError(error, "Choose different parameters for pitch, gate and velocity."); return {};
@@ -8583,15 +8638,17 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
             lane.pianoVelocityBindingId = mapped(lane.pianoVelocityBindingId);
             lane.drumDurationBindingId = mapped(lane.drumDurationBindingId);
             lane.drumFilterBindingId = mapped(lane.drumFilterBindingId);
+            lane.drumStutterBindingId = mapped(lane.drumStutterBindingId);
         }
         // Preserve existing note groups and their lanes. New groups are added
         // directly so importing cannot retarget piano lanes already on the track.
         for(const auto& group : source.noteGroups) {
             const auto pitch = mapped(group.pitchBindingId), gate = mapped(group.gateBindingId), velocity = mapped(group.velocityBindingId);
             const auto duration = mapped(group.durationBindingId), filter = mapped(group.filterBindingId);
+            const auto stutter = mapped(group.stutterBindingId);
             if(pitch.empty() && gate.empty() && velocity.empty()) continue;
             bool occupied = false;
-            for(const auto& id : {pitch, gate, velocity, duration, filter})
+            for(const auto& id : {pitch, gate, velocity, duration, filter, stutter})
                 if(!id.empty() && (!newBindingIds.count(id) || findNoteGroupForBinding(*destination, id))) occupied = true;
             if(!occupied) {
                 auto added = group;
@@ -8603,6 +8660,7 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
                 added.velocityBindingId = velocity;
                 added.durationBindingId = duration;
                 added.filterBindingId = filter;
+                added.stutterBindingId = stutter;
                 destination->noteGroups.push_back(std::move(added));
             }
         }

@@ -267,6 +267,28 @@ int main() {
             frame(drumClip, drumLane, true, ImVec2(256, 308.0f), true);   // double-click: open
             frame(drumClip, drumLane, true, ImVec2(256, 308.0f), false);
             assert(drums().drumRows[1].steps[1].filter == 0.0f);
+            // Stutter (after Filter): notes on 0..127 from the bottom, semitone
+            // snap, the bottom and a double-click are off.
+            float stutterTab = 0.0f, sx = 232.0f;
+            for(const char* name : {"Velocity", "Pitch", "Probability", "Ratchet", "Gate", "Duration", "Filter", "Stutter"}) {
+                const float w = ImGui::CalcTextSize(name).x + 16.0f;
+                if(std::string(name) == "Stutter") stutterTab = sx + w * 0.5f;
+                sx += w + 3.0f;
+            }
+            click(ImVec2(stutterTab, 291.0f));
+            const float halfY = 358.0f - 0.5f * (358.0f - 302.8f);       // note 63.5 -> 64
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), true);
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), false);
+            const float note = drums().drumRows[1].steps[1].stutter;
+            assert(note >= 62.0f && note <= 65.0f && note == std::round(note));
+            click(ImVec2(256, 357.0f));                                   // the bottom pixels: off
+            assert(drums().drumRows[1].steps[1].stutter == 0.0f);
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), false);
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), true);
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), false);
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), true);    // double-click: off
+            frame(drumClip, drumLane, true, ImVec2(256, halfY), false);
+            assert(drums().drumRows[1].steps[1].stutter == 0.0f);
         }
         // Dragging a hit sideways moves it by grid steps: 1.0 -> 1.5.
         frame(drumClip, drumLane, true, ImVec2(305, 170), false);

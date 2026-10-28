@@ -384,6 +384,7 @@ private:
         std::string rolePaths[3];
         std::string durationPath;  // a kit's Duration input (Drum Grid lanes write it)
         std::string filterPath;    // a kit's Filter input (Drum Grid lanes write it)
+        std::string stutterPath;   // a kit's Stutter input (Drum Grid lanes write it)
         int voices = 0;
         bool kit = false;
     };

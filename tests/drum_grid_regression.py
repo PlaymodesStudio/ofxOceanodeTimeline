@@ -28,12 +28,15 @@ struct Kit {
     ofParameter<std::vector<float>> pitchValue{"Kit Pitch", {60, 60, 60, 60}, {0}, {127}};
     ofParameter<std::vector<float>> durationValue{"Kit Duration", {1, 1, 1, 1}, {0.1f}, {24}};
     ofParameter<std::vector<float>> filterValue{"Kit Filter", {0, 0, 0, 0}, {-1}, {1}};
-    ofxOceanodeParameter<std::vector<float>> gate, pitch, duration, filter;
-    std::string track, clip, lane, group, gateBinding, pitchBinding, durationBinding, filterBinding;
+    ofParameter<std::vector<float>> stutterValue{"Kit Stutter", {0, 0, 0, 0}, {0}, {127}};
+    ofxOceanodeParameter<std::vector<float>> gate, pitch, duration, filter, stutter;
+    std::string track, clip, lane, group, gateBinding, pitchBinding, durationBinding, filterBinding, stutterBinding;
     Kit(ofxOceanodeContainer& owner, ofxOceanodeTimelineManager& model, double content = 4.0) {
         gate.bindParameter(gateValue); pitch.bindParameter(pitchValue); duration.bindParameter(durationValue);
         filter.bindParameter(filterValue);
         owner.targets[filter.getEscapedName()] = &filter;
+        stutter.bindParameter(stutterValue);
+        owner.targets[stutter.getEscapedName()] = &stutter;
         owner.targets[gate.getEscapedName()] = &gate;
         owner.targets[pitch.getEscapedName()] = &pitch;
         owner.targets[duration.getEscapedName()] = &duration;
@@ -45,6 +48,8 @@ struct Kit {
         model.setNoteGroupDuration(track, group, durationBinding);
         filterBinding = model.addBinding(track, filter);
         model.setNoteGroupFilter(track, group, filterBinding);
+        stutterBinding = model.addBinding(track, stutter);
+        model.setNoteGroupStutter(track, group, stutterBinding);
         clip = model.createNoteGroupClip(track, group, "Beat", 0.0, content, &lane, DG::DrumGrid);
     }
     ofxOceanodeTimelineLane& get(ofxOceanodeTimelineManager& model) { return *model.getLane(track, clip, lane); }
@@ -60,13 +65,16 @@ struct Kit {
     std::vector<float> filters(ofxOceanodeTimelineManager& model, double beat) {
         return values(model.inspectTarget(filter.getEscapedName(), beat, true).value);
     }
+    std::vector<float> stutters(ofxOceanodeTimelineManager& model, double beat) {
+        return values(model.inspectTarget(stutter.getEscapedName(), beat, true).value);
+    }
 };
 
 using Step = ofxOceanodeTimelineDrumStep;
 static Step hit(double beat, double length, float gate, float velocity = 0.8f, int pitch = 0, float probability = 1.0f,
-                int ratchet = 1, float duration = 1.0f, float filter = 0.0f) {
+                int ratchet = 1, float duration = 1.0f, float filter = 0.0f, float stutter = 0.0f) {
     Step s; s.beat = beat; s.length = length; s.gate = gate; s.velocity = velocity; s.pitch = pitch;
-    s.probability = probability; s.ratchet = ratchet; s.duration = duration; s.filter = filter; return s;
+    s.probability = probability; s.ratchet = ratchet; s.duration = duration; s.filter = filter; s.stutter = stutter; return s;
 }
 // The first, index-based Drum Grid's probability roll (to prove migrated
 // lanes roll exactly as before).
@@ -107,9 +115,10 @@ int main() {
         check(lane.drumStepFollow && lane.drumSwingBeats == 0.25, "New lanes follow the master grid; swing on 16ths");
         check(lane.drumDurationBindingId == kit.durationBinding, "Drum Grid takes the group's Duration role");
         check(lane.drumFilterBindingId == kit.filterBinding, "Drum Grid takes the group's Filter role");
+        check(lane.drumStutterBindingId == kit.stutterBinding, "Drum Grid takes the group's Stutter role");
         lane.drumRows.resize(3);
         // Row 0: kick at 0 (vel 0.5, +2 st, x0.5) and at beat 2 (-3 st).
-        lane.drumRows[0].steps = {hit(0.0, 0.25, 0.5f, 0.5f, 2, 1.0f, 1, 0.5f, -0.4f), hit(2.0, 0.25, 0.5f, 1.0f, -3, 1.0f, 1, 1.0f, 0.25f)};
+        lane.drumRows[0].steps = {hit(0.0, 0.25, 0.5f, 0.5f, 2, 1.0f, 1, 0.5f, -0.4f, 72.0f), hit(2.0, 0.25, 0.5f, 1.0f, -3, 1.0f, 1, 1.0f, 0.25f)};
         // Row 1: three 16ths long (0.75 beats), a hit at 0 -> every 0.75 beats.
         lane.drumRows[1].length = 0.75;
         lane.drumRows[1].steps = {hit(0.0, 0.25, 0.5f, 0.8f, 0, 1.0f, 1, 4.0f)};
@@ -139,6 +148,12 @@ int main() {
               "Filter component = the hit's value; rows without hits 0 (open)");
         check(std::abs(kit.filters(model, 0.2)[0] + 0.4f) < 1e-6f, "Filter is held after the gate closes");
         check(std::abs(kit.filters(model, 2.05)[0] - 0.25f) < 1e-6f, "The next hit brings its own filter (HP 25 %)");
+        // Stutter: the hit's note (C5 here), held after the gate; rows never played 0 (off).
+        auto st = kit.stutters(model, 0.05);
+        check(st.size() == 4 && st[0] == 72.0f && st[1] == 0.0f && st[2] == 0.0f && st[3] == 0.0f,
+              "Stutter component = the hit's value; rows without hits 0 (off)");
+        check(kit.stutters(model, 0.2)[0] == 72.0f, "Stutter is held after the gate closes");
+        check(kit.stutters(model, 2.05)[0] == 0.0f, "The next hit brings its own stutter (off)");
         // Polymeter: row 1 repeats every 0.75 beats.
         for(double beat : {0.0, 0.75, 1.5, 2.25, 3.0}) check(kit.gates(model, beat + 0.01)[1] > 0.0f, "0.75-beat row hits at " + ofToString(beat));
         for(double beat : {0.26, 0.51, 1.01}) check(kit.gates(model, beat)[1] == 0.0f, "0.75-beat row is silent at " + ofToString(beat));
@@ -179,6 +194,7 @@ int main() {
               kit.durationValue.get()[1] == 4.0f, "update() writes the Duration vector");
         check(kit.filterValue.get().size() == 4 && std::abs(kit.filterValue.get()[0] + 0.4f) < 1e-6f,
               "update() writes the Filter vector");
+        check(kit.stutterValue.get().size() == 4 && kit.stutterValue.get()[0] == 72.0f, "update() writes the Stutter vector");
         owner.transport->pause();
 
         // The grid is editing only: 1/32 hits stay put when it becomes 1/16.
@@ -328,8 +344,10 @@ int main() {
         Kit kit(owner, model);
         auto& lane = kit.get(model);
         // Two sub-hits at 0.125 and 0.1875 beats; a later x1 hit so the row starts at x1.
-        lane.drumRows[0].steps = {hit(0.125, 0.125, 0.5f, 0.6f, 0, 1.0f, 2, 2.0f, 0.5f), hit(1.5, 0.125, 0.5f, 0.6f)};
-        std::vector<ofxOceanodeScheduledParameterEvent> events, durationEvents, filterEvents;
+        lane.drumRows[0].steps = {hit(0.125, 0.125, 0.5f, 0.6f, 0, 1.0f, 2, 2.0f, 0.5f, 60.0f), hit(1.5, 0.125, 0.5f, 0.6f)};
+        std::vector<ofxOceanodeScheduledParameterEvent> events, durationEvents, filterEvents, stutterEvents;
+        ofxOceanodeScheduling::registerParameterTarget(&kit.stutter, &model,
+            [&](const auto& event) { stutterEvents.push_back(event); return true; });
         ofxOceanodeScheduling::registerParameterTarget(&kit.filter, &model,
             [&](const auto& event) { filterEvents.push_back(event); return true; });
         ofxOceanodeScheduling::registerParameterTarget(&kit.gate, &model,
@@ -355,6 +373,10 @@ int main() {
         for(const auto& event : filterEvents) if(!event.isCorrection && values(event.value)[0] == 0.5f) { filterDue = event.dueSteadyTimeUs; break; }
         check(filterDue > 0 && filterDue + 1500 <= firstGateOn && filterDue + 2500 >= firstGateOn,
               "Filter is scheduled with the pitch lead too");
+        uint64_t stutterDue = 0;
+        for(const auto& event : stutterEvents) if(!event.isCorrection && values(event.value)[0] == 60.0f) { stutterDue = event.dueSteadyTimeUs; break; }
+        check(stutterDue > 0 && stutterDue + 1500 <= firstGateOn && stutterDue + 2500 >= firstGateOn,
+              "Stutter is scheduled with the pitch lead too");
         owner.transport->pause();
         ofxOceanodeScheduling::unregisterOwner(&model);
     }
@@ -442,7 +464,7 @@ int main() {
         lane.drumRows[1].gate = 0.3f;
         lane.drumRows[1].mute = true;
         lane.drumRows[2].solo = true;
-        lane.drumRows[1].steps = {hit(0.1875, 0.0625, 0.4f, 0.4f, -7, 0.25f, 3, 16.0f, -0.75f)};
+        lane.drumRows[1].steps = {hit(0.1875, 0.0625, 0.4f, 0.4f, -7, 0.25f, 3, 16.0f, -0.75f, 49.5f)};
         const auto json = model.toJson();
         ofxOceanodeTimelineManager loaded(&owner);
         loaded.fromJson(json);
@@ -458,7 +480,9 @@ int main() {
             check(step.beat == 0.1875 && step.length == 0.0625 && std::abs(step.gate - 0.4f) < 1e-6f &&
                   std::abs(step.velocity - 0.4f) < 1e-6f && step.pitch == -7 &&
                   std::abs(step.probability - 0.25f) < 1e-6f && step.ratchet == 3 && step.duration == 16.0f &&
-                  step.filter == -0.75f, "Hit fields survive");
+                  step.filter == -0.75f && step.stutter == 49.5f, "Hit fields survive");
+            check(back->drumStutterBindingId == kit.stutterBinding &&
+                  loaded.getNoteGroup(kit.track, kit.group)->stutterBindingId == kit.stutterBinding, "Stutter role survives");
             check(back->drumFilterBindingId == kit.filterBinding &&
                   loaded.getNoteGroup(kit.track, kit.group)->filterBindingId == kit.filterBinding, "Filter role survives");
             check(back->drumDurationBindingId == kit.durationBinding, "Duration role survives");
@@ -476,8 +500,8 @@ int main() {
             laneJson["drumGrid"]["rows"][0]["length"] = 500;
             laneJson["drumGrid"]["rows"][0]["gate"] = "loud";
             laneJson["drumGrid"]["rows"][0]["hits"] = {{{"beat", 1.0}, {"ratchet", 99}, {"pitch", 80}},
-                                                      {{"beat", 2.0}, {"duration", 99.0}, {"filter", 5.0}},
-                                                      {{"beat", 3.0}, {"duration", -1.0}, {"length", "long"}, {"filter", -9.0}}};
+                                                      {{"beat", 2.0}, {"duration", 99.0}, {"filter", 5.0}, {"stutter", 300.0}},
+                                                      {{"beat", 3.0}, {"duration", -1.0}, {"length", "long"}, {"filter", -9.0}, {"stutter", -4.0}}};
             laneJson["drumGrid"]["rows"][1]["hits"] = "none";
         }
         ofxOceanodeTimelineManager clamped(&owner);
@@ -491,6 +515,8 @@ int main() {
                   c->drumRows[0].steps[2].length == 0.25, "Duration clamps to 0.1..24");
             check(c->drumRows[0].steps[0].filter == 0.0f && c->drumRows[0].steps[1].filter == 1.0f &&
                   c->drumRows[0].steps[2].filter == -1.0f, "Filter: missing 0, clamps to -1..1");
+            check(c->drumRows[0].steps[0].stutter == 0.0f && c->drumRows[0].steps[1].stutter == 127.0f &&
+                  c->drumRows[0].steps[2].stutter == 0.0f, "Stutter: missing 0, clamps to 0..127");
             check(c->drumRows[1].steps.empty(), "Malformed hits load empty");
         } else check(false, "Clamped lane missing");
         // Older files: no Drum Grid anywhere, so nothing new is written.

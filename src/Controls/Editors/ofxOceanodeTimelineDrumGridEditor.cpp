@@ -17,8 +17,8 @@ using Step = ofxOceanodeTimelineDrumStep;
 using Row = ofxOceanodeTimelineDrumRow;
 constexpr int kModes = ofxOceanodeTimelineDrumGridEditor::kStripModeCount;
 // Short forms only where the full words do not fit the zone.
-constexpr const char* kStripLabels[kModes] = {"Vel", "Pitch", "Prob", "Ratch", "Gate", "Dur", "Filt"};
-constexpr const char* kStripNames[kModes] = {"Velocity", "Pitch", "Probability", "Ratchet", "Gate", "Duration", "Filter"};
+constexpr const char* kStripLabels[kModes] = {"Vel", "Pitch", "Prob", "Ratch", "Gate", "Dur", "Filt", "Stut"};
+constexpr const char* kStripNames[kModes] = {"Velocity", "Pitch", "Probability", "Ratchet", "Gate", "Duration", "Filter", "Stutter"};
 constexpr const char* kStripHints[kModes] = {
     "How hard the hit plays (the gate level).",
     "Semitones from the piece's own tuning (60 = as tuned).",
@@ -26,7 +26,19 @@ constexpr const char* kStripHints[kModes] = {
     "Evenly spaced sub-hits inside the hit's length, each its own gate.",
     "How much of its length (of each ratchet sub-hit) the gate stays open.",
     "Multiplies the hit's decays (x1 = as set; stretch a closed hat open).",
-    "Per-hit filter: down = low-pass (LP), up = high-pass (HP), centre = open."};
+    "Per-hit filter: down = low-pass (LP), up = high-pass (HP), centre = open.",
+    "Retriggers the hit at a rate given as a note while its gate is open (0 = off):\n"
+    "the hit's length and gate set how long it buzzes."};
+// Stutter: a note (MIDI, 60 = C4) as a rate; 0 = off.
+std::string stutterText(float note) {
+    if(note < 0.5f) return "off";
+    static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    const int n = static_cast<int>(std::lround(note));
+    char text[32];
+    std::snprintf(text, sizeof(text), "%s%d \xC2\xB7 %.0f Hz", names[((n % 12) + 12) % 12], n / 12 - 1,
+                  440.0 * std::pow(2.0, (note - 69.0) / 12.0));
+    return text;
+}
 // Filter bars: low-pass below the centre, high-pass above, in two colours.
 constexpr ImU32 kLowPassColor = IM_COL32(95, 170, 255, 235);
 constexpr ImU32 kHighPassColor = IM_COL32(255, 150, 70, 235);
@@ -64,6 +76,7 @@ float stripNormalized(const Step& step, StripMode mode) {
         case StripMode::Gate: return step.gate;
         case StripMode::Duration: return durationNormalized(step.duration);
         case StripMode::Filter: return (step.filter + 1.0f) * 0.5f;
+        case StripMode::Stutter: return step.stutter / 127.0f;
     }
     return 0.0f;
 }
@@ -76,6 +89,7 @@ float stripValue(const Step& step, StripMode mode) {
         case StripMode::Gate: return step.gate;
         case StripMode::Duration: return step.duration;
         case StripMode::Filter: return step.filter;
+        case StripMode::Stutter: return step.stutter;
     }
     return 0.0f;
 }
@@ -88,6 +102,7 @@ void setStripValue(Step& step, StripMode mode, float value) {
         case StripMode::Gate: step.gate = ofClamp(value, 0.05f, 1.0f); break;
         case StripMode::Duration: step.duration = ofClamp(value, 0.1f, kDurationMax); break;
         case StripMode::Filter: step.filter = ofClamp(value, -1.0f, 1.0f); break;
+        case StripMode::Stutter: step.stutter = ofClamp(value, 0.0f, 127.0f); break;
     }
 }
 // Absolute painting: the value at height t (0 bottom .. 1 top). free: no
@@ -106,6 +121,12 @@ float stripValueAt(StripMode mode, float t, bool free = false) {
             const float v = (t - 0.5f) * 2.0f;
             if(free) return v;
             return std::abs(v) < 0.06f ? 0.0f : std::round(v * 100.0f) / 100.0f;
+        }
+        case StripMode::Stutter: {
+            // A note on a linear 0..127 scale, snapped to semitones (Alt: free); the bottom is off.
+            const float note = t * 127.0f;
+            if(note < 0.5f) return 0.0f;
+            return free ? note : std::round(note);
         }
     }
     return t;
@@ -126,12 +147,15 @@ float stripDefault(StripMode mode, const Row& row) {
         case StripMode::Gate: return row.gate;
         case StripMode::Duration: return 1.0f;
         case StripMode::Filter: return 0.0f;
+        case StripMode::Stutter: return 0.0f;
         default: return 0.0f;
     }
 }
 bool fromBaseline(StripMode mode) { return mode == StripMode::Pitch || mode == StripMode::Duration || mode == StripMode::Filter; }
 // Duration and Filter: Alt paints unsnapped (the others: Alt drags finely).
-bool altFreePaint(StripMode mode) { return mode == StripMode::Duration || mode == StripMode::Filter; }
+bool altFreePaint(StripMode mode) {
+    return mode == StripMode::Duration || mode == StripMode::Filter || mode == StripMode::Stutter;
+}
 
 std::string stripText(const Step& step, StripMode mode) {
     char text[16];
@@ -143,6 +167,7 @@ std::string stripText(const Step& step, StripMode mode) {
         case StripMode::Gate: std::snprintf(text, sizeof(text), "%.0f%%", step.gate * 100.0f); break;
         case StripMode::Duration: std::snprintf(text, sizeof(text), "x%.2f", step.duration); break;
         case StripMode::Filter: return filterText(step.filter);
+        case StripMode::Stutter: return stutterText(step.stutter);
     }
     return text;
 }
@@ -228,7 +253,7 @@ void drawRoleCombo(ofxOceanodeTimelineLaneEditorContext& context, const char* la
             roleId.clear();
             const bool stillUsed = lane.pianoPitchBindingId == previous || lane.pianoGateBindingId == previous ||
                                    lane.pianoVelocityBindingId == previous || lane.drumDurationBindingId == previous ||
-                                   lane.drumFilterBindingId == previous;
+                                   lane.drumFilterBindingId == previous || lane.drumStutterBindingId == previous;
             if(!previous.empty() && !stillUsed) timeline.removeBindingFromLane(track.id, context.clip.id, lane.id, previous);
         }
         ImGui::InputText("Search parameters", search, searchSize);
@@ -295,6 +320,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEdito
         ImGui::TextWrapped("Duration -> %s", duration == nullptr ? "No target" : duration->parameterPath.c_str());
         const auto* filter = timeline.getBinding(track.id, group->filterBindingId);
         ImGui::TextWrapped("Filter -> %s", filter == nullptr ? "No target" : filter->parameterPath.c_str());
+        const auto* stutter = timeline.getBinding(track.id, group->stutterBindingId);
+        ImGui::TextWrapped("Stutter -> %s", stutter == nullptr ? "No target" : stutter->parameterPath.c_str());
         ImGui::TextDisabled("Row n plays component (slot) n");
     } else {
         drawRoleCombo(context, "Gate", lane.pianoGateBindingId, ofxOceanodeTimelineTargetRole::Gate,
@@ -304,6 +331,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEdito
         drawRoleCombo(context, "Duration", lane.drumDurationBindingId, ofxOceanodeTimelineTargetRole::Duration,
                       targetSearch, sizeof(targetSearch));
         drawRoleCombo(context, "Filter", lane.drumFilterBindingId, ofxOceanodeTimelineTargetRole::Filter,
+                      targetSearch, sizeof(targetSearch));
+        drawRoleCombo(context, "Stutter", lane.drumStutterBindingId, ofxOceanodeTimelineTargetRole::Stutter,
                       targetSearch, sizeof(targetSearch));
         ImGui::TextDisabled("Gate: velocity while a hit is open.\nPitch: 60 + the hit's offset.\nDuration: the hit's decay multiplier.");
     }
@@ -796,6 +825,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     const float n = ofClamp(stripNormalized(step, mode), 0.0f, 1.0f);
                     const float y = stripBottom - n * (stripBottom - barsTop);
                     const int alpha = firstPass ? 225 : 90;
+                    if(mode == StripMode::Stutter && step.stutter < 0.5f) continue; // off: no bar
                     ImU32 barColor = rowAlpha(focused, alpha);
                     if(mode == StripMode::Filter && std::abs(step.filter) >= 0.005f)
                         barColor = (step.filter < 0.0f ? kLowPassColor : kHighPassColor) & (firstPass ? 0xFFFFFFFFu : 0x7FFFFFFFu);
@@ -933,6 +963,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                               kStripNames[tabUnderMouse], kStripHints[tabUnderMouse],
                               tabUnderMouse == static_cast<int>(StripMode::Duration) ? "Snaps to x0.125 .. x24; Alt: free."
                               : tabUnderMouse == static_cast<int>(StripMode::Filter) ? "Snaps to open near the centre; Alt: free. Double-click a bar: open."
+                              : tabUnderMouse == static_cast<int>(StripMode::Stutter) ? "Snaps to semitones; Alt: free. Bottom or double-click a bar: off."
                                                                                        : "Alt: fine.");
             if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 stripModes[lane.id] = mode = static_cast<StripMode>(tabUnderMouse);
@@ -1094,11 +1125,12 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     const int index = grabAt(row, sourceBeat);
                     if(index >= 0) {
                         const auto& step = row.steps[static_cast<size_t>(index)];
-                        ImGui::SetTooltip("%s at beat %.4g%s\nvel %.0f  pitch %+d  prob %.0f%%  ratchet x%d  gate %.0f%%  duration x%.2f  filter %s\n"
+                        ImGui::SetTooltip("%s at beat %.4g%s\nvel %.0f  pitch %+d  prob %.0f%%  ratchet x%d  gate %.0f%%  duration x%.2f  filter %s  stutter %s\n"
                                           "Click: remove. Drag: move / velocity. Right-click: edit",
                                           row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)",
                                           step.velocity * 100.0f, step.pitch, step.probability * 100.0f, step.ratchet,
-                                          step.gate * 100.0f, step.duration, filterText(step.filter).c_str());
+                                          step.gate * 100.0f, step.duration, filterText(step.filter).c_str(),
+                                          stutterText(step.stutter).c_str());
                     }
                 }
             }
@@ -1107,7 +1139,11 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             if(focused >= 0 && stripHeight > 0.0f) {
                 auto& row = lane.drumRows[static_cast<size_t>(focused)];
                 const bool altFree = io.KeyAlt;
-                auto valueAtY = [&](float y) { return stripValueAt(mode, (stripBottom - y) / std::max(1.0f, stripBottom - barsTop), altFree); };
+                auto valueAtY = [&](float y) {
+                    // Stutter: the bottom few pixels are off (mouse positions are whole pixels).
+                    if(mode == StripMode::Stutter && stripBottom - y < 3.0f * scale) return 0.0f;
+                    return stripValueAt(mode, (stripBottom - y) / std::max(1.0f, stripBottom - barsTop), altFree);
+                };
                 // The hit whose bar is under x: under the pointer, else in that cell.
                 auto barAt = [&](float x) {
                     double sourceBeat = 0.0;
@@ -1154,10 +1190,11 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     const int index = barAt(mouse.x);
                     if(index >= 0) setStripValue(row.steps[static_cast<size_t>(index)], mode, stripDefault(mode, row));
                 }
-                // Filter: double-click a bar opens it.
-                if(overStrip && mode == StripMode::Filter && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // Filter: double-click a bar opens it; Stutter: turns it off.
+                if(overStrip && (mode == StripMode::Filter || mode == StripMode::Stutter) &&
+                   ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     const int index = barAt(mouse.x);
-                    if(index >= 0) row.steps[static_cast<size_t>(index)].filter = 0.0f;
+                    if(index >= 0) setStripValue(row.steps[static_cast<size_t>(index)], mode, 0.0f);
                 }
                 if(overStrip && drag == Drag::None) {
                     const int index = barAt(mouse.x);
@@ -1318,6 +1355,14 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
             step.filter = ofClamp(filter / 100.0f, -1.0f, 1.0f);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n-100 low-pass fully closed .. 0 open .. +100 high-pass fully closed",
                                                      filterText(step.filter).c_str());
+    }
+    {
+        ImGui::SetNextItemWidth(140.0f);
+        if(ImGui::DragFloat("Stutter (note)##drumStep", &step.stutter, 0.1f, 0.0f, 127.0f, step.stutter < 0.5f ? "off" : "%.1f"))
+            step.stutter = ofClamp(step.stutter, 0.0f, 127.0f);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\nRetrigger rate as a note while the gate is open (0 = off).\n"
+                              "The hit's length and gate set how long it buzzes.", stutterText(step.stutter).c_str());
     }
     if(ImGui::Button("Snap to grid##drumStep")) {
         auto moved = step;

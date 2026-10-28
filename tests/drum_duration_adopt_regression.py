@@ -12,13 +12,14 @@ native.fixture.CASES = r'''
 class KitSynth : public ofxOceanodeNodeModel {
 public:
     KitSynth() : ofxOceanodeNodeModel("Kit Synth") {}
-    ofParameter<std::vector<float>> pitch, gate, duration, filter;
+    ofParameter<std::vector<float>> pitch, gate, duration, filter, stutter;
     bool offersDuration = false; // an older build of the node had no Duration
     void setup() override {
         addParameter(pitch.set("Pitch", {60, 60, 60, 60}, {0}, {127}));
         addParameter(gate.set("Gate", {0, 0, 0, 0}, {0}, {1}));
         addParameter(duration.set("Duration", {1, 1, 1, 1}, {0.1f}, {24}));
         addParameter(filter.set("Filter", {0, 0, 0, 0}, {-1}, {1}));
+        addParameter(stutter.set("Stutter", {0, 0, 0, 0}, {0}, {127}));
     }
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override {
         out = {};
@@ -26,6 +27,7 @@ public:
         out.gate = &static_cast<ofxOceanodeAbstractParameter&>(getParameterGroup().get("Gate"));
         if(offersDuration) out.duration = &static_cast<ofxOceanodeAbstractParameter&>(getParameterGroup().get("Duration"));
         if(offersDuration) out.filter = &static_cast<ofxOceanodeAbstractParameter&>(getParameterGroup().get("Filter"));
+        if(offersDuration) out.stutter = &static_cast<ofxOceanodeAbstractParameter&>(getParameterGroup().get("Stutter"));
         out.voices = 4; out.kit = true;
         out.rowNames = {"Kick", "Snare", "Hat", "Clap"};
         out.rowColors = {ofColor(255, 80, 40), ofColor(40, 200, 120)}; // shorter than voices
@@ -56,7 +58,7 @@ int main(int, char**) {
     const auto c = model.createNoteGroupClip(t, g, "Beat", 0, 4, &laneId, ofxOceanodeTimelineLaneType::DrumGrid);
     auto* lane = model.getLane(t, c, laneId);
     check(lane != nullptr && lane->drumRows.size() == 4 && lane->drumRows[0].name == "Kick", "Kit rows from the instrument");
-    { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 8.0f; h.filter = -0.5f; lane->drumRows[0].steps = {h}; }
+    { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 8.0f; h.filter = -0.5f; h.stutter = 64.0f; lane->drumRows[0].steps = {h}; }
     { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 4.0f; lane->drumRows[1].steps = {h}; }
     { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 2.0f; lane->drumRows[2].steps = {h}; }
     auto saved = model.toJson();
@@ -65,6 +67,8 @@ int main(int, char**) {
     saved["tracks"][0]["noteGroups"][0].erase("durationDecided");
     saved["tracks"][0]["noteGroups"][0].erase("filterDecided");
     saved["tracks"][0]["noteGroups"][0].erase("filter");
+    saved["tracks"][0]["noteGroups"][0].erase("stutterDecided");
+    saved["tracks"][0]["noteGroups"][0].erase("stutter");
 
     // The node is updated: it now offers Duration. Load the old project.
     synth.offersDuration = true;
@@ -90,6 +94,10 @@ int main(int, char**) {
           lane->drumFilterBindingId == group->filterBindingId, "The group adopted Filter as well");
     check(synth.filter.get().size() == 4 && synth.filter.get()[0] == -0.5f && synth.filter.get()[1] == 0.0f,
           "Filter vector carries the steps' values (-0.5 0 ...)");
+    check(group != nullptr && !group->stutterBindingId.empty() && group->stutterDecided && lane != nullptr &&
+          lane->drumStutterBindingId == group->stutterBindingId, "The group adopted Stutter as well");
+    check(synth.stutter.get().size() == 4 && synth.stutter.get()[0] == 64.0f && synth.stutter.get()[1] == 0.0f,
+          "Stutter vector carries the steps' values (64 0 ...)");
     check(!model.canUndoTimelineEdit(), "Adoption is not an undo entry");
     // Idempotent: one binding, nothing changes on later frames.
     const auto adopted = model.toJson();
