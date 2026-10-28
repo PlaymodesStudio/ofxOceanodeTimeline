@@ -1126,7 +1126,9 @@ std::string joinAutomationValues(const std::vector<std::string>& values) {
     return result;
 }
 
-bool stepProbabilityPasses(const ofxOceanodeTimelineStep& step, double cycle, int seed) {
+// epoch: the clip start being played, so a roll differs from one play,
+// seek or loop pass to the next (see applyClipChanceRolls).
+bool stepProbabilityPasses(const ofxOceanodeTimelineStep& step, double cycle, int seed, uint64_t epoch = 0) {
     const float probability = ofClamp(step.probability, 0.0f, 1.0f);
     if(probability <= 0.0f) return false;
     if(probability >= 1.0f) return true;
@@ -1138,6 +1140,7 @@ bool stepProbabilityPasses(const ofxOceanodeTimelineStep& step, double cycle, in
     const int64_t cycleIndex = static_cast<int64_t>(std::llround(cycle));
     uint64_t hash = static_cast<uint64_t>(start) ^ (static_cast<uint64_t>(cycleIndex) * 0x9e3779b97f4a7c15ULL);
     hash ^= static_cast<uint64_t>(static_cast<uint32_t>(seed)) * 0xd6e8feb86659fd93ULL;
+    hash ^= epoch * 0x94d049bb133111ebULL;
     hash ^= hash >> 30;
     hash *= 0xbf58476d1ce4e5b9ULL;
     hash ^= hash >> 27;
@@ -1147,7 +1150,7 @@ bool stepProbabilityPasses(const ofxOceanodeTimelineStep& step, double cycle, in
     return roll < probability;
 }
 
-bool pianoProbabilityPasses(const ofxOceanodeTimelinePianoNote& note, double cycle, int seed) {
+bool pianoProbabilityPasses(const ofxOceanodeTimelinePianoNote& note, double cycle, int seed, uint64_t epoch = 0) {
     const float probability = ofClamp(note.probability, 0.0f, 1.0f);
     if(probability <= 0.0f) return false;
     if(probability >= 1.0f) return true;
@@ -1157,6 +1160,7 @@ bool pianoProbabilityPasses(const ofxOceanodeTimelinePianoNote& note, double cyc
     uint64_t hash = static_cast<uint64_t>(start) ^ (static_cast<uint64_t>(pitch) * 0x9e3779b97f4a7c15ULL);
     hash ^= static_cast<uint64_t>(cycleIndex) * 0xbf58476d1ce4e5b9ULL;
     hash ^= static_cast<uint64_t>(static_cast<uint32_t>(seed)) * 0xd6e8feb86659fd93ULL;
+    hash ^= epoch * 0x94d049bb133111ebULL;
     hash ^= hash >> 30;
     hash *= 0xbf58476d1ce4e5b9ULL;
     hash ^= hash >> 27;
@@ -1176,8 +1180,11 @@ bool pianoLaneMutates(const ofxOceanodeTimelineLane& lane) {
 ofJson mutationRulesToJson(const ofxOceanodeTimelineMutationRules& rules) {
     return {{"pitch", rules.pitchStrength}, {"pitchRange", rules.pitchRange}, {"pitchDirection", rules.pitchDirection},
             {"scaleMask", rules.scaleMask}, {"offset", rules.offsetStrength},
-            {"offsetSteps", rules.offsetSteps}, {"length", rules.lengthStrength},
-            {"lengthMax", rules.lengthMax}, {"velocity", rules.velocityStrength},
+            {"offsetSteps", rules.offsetSteps}, {"offsetQuantum", rules.offsetQuantum},
+            {"offsetDirection", rules.offsetDirection}, {"velocityDirection", rules.velocityDirection},
+            {"length", rules.lengthStrength},
+            {"lengthSteps", rules.lengthSteps}, {"lengthQuantum", rules.lengthQuantum},
+            {"lengthDirection", rules.lengthDirection}, {"velocity", rules.velocityStrength},
             {"velocityRange", rules.velocityRange}};
 }
 
@@ -1189,8 +1196,13 @@ ofxOceanodeTimelineMutationRules mutationRulesFromJson(const ofJson& json) {
     rules.scaleMask = json.value("scaleMask", 0xFFF) & 0xFFF;
     rules.offsetStrength = ofClamp(json.value("offset", 0.0f), 0.0f, 1.0f);
     rules.offsetSteps = ofClamp(json.value("offsetSteps", 1), 0, 64);
+    rules.offsetQuantum = std::clamp(json.value("offsetQuantum", 1), 1, 64);
+    rules.offsetDirection = std::clamp(json.value("offsetDirection", 0), 0, 2);
+    rules.velocityDirection = std::clamp(json.value("velocityDirection", 0), 0, 2);
     rules.lengthStrength = ofClamp(json.value("length", 0.0f), 0.0f, 1.0f);
-    rules.lengthMax = ofClamp(json.value("lengthMax", 2.0f), 1.0f, 16.0f);
+    rules.lengthSteps = std::clamp(json.value("lengthSteps", 2), 0, 64);
+    rules.lengthQuantum = std::clamp(json.value("lengthQuantum", 1), 1, 64);
+    rules.lengthDirection = std::clamp(json.value("lengthDirection", 0), 0, 2);
     rules.velocityStrength = ofClamp(json.value("velocity", 0.0f), 0.0f, 1.0f);
     rules.velocityRange = ofClamp(json.value("velocityRange", 0.25f), 0.0f, 1.0f);
     return rules;
@@ -1229,27 +1241,34 @@ ofxOceanodeTimelinePianoNote mutatedPianoNote(const ofxOceanodeTimelinePianoNote
         const int lowest = rules.pitchDirection == 1 ? note.pitch : note.pitch - range;
         const int highest = rules.pitchDirection == 2 ? note.pitch : note.pitch + range;
         // Drifting pitch stays on the keys the roll shows.
-        const int floor = lane.mutationDrift ? std::clamp(lane.pianoLowPitch, 0, 127) : 0;
-        const int ceiling = lane.mutationDrift ? std::clamp(lane.pianoHighPitch, floor, 127) : 127;
+        const bool drifting = lane.mutationDrift > 0.0f;
+        const int floor = drifting ? std::clamp(lane.pianoLowPitch, 0, 127) : 0;
+        const int ceiling = drifting ? std::clamp(lane.pianoHighPitch, floor, 127) : 127;
         for(int pitch = std::max(floor, lowest); pitch <= std::min(ceiling, highest); ++pitch)
             if(pitch != note.pitch && (rules.scaleMask >> (pitch % 12)) & 1) candidates.push_back(pitch);
         if(!candidates.empty())
             mutated.pitch = candidates[std::min(candidates.size() - 1, static_cast<size_t>(unit() * candidates.size()))];
     }
+    // A direction: 0 either way, 1 up / later only, 2 down / earlier only.
+    auto sign = [&](int direction) { return direction == 1 ? 1.0 : direction == 2 ? -1.0 : (unit() < 0.5 ? -1.0 : 1.0); };
+    // Grid steps: a multiple of the quantum up to the steps (at least one quantum).
+    auto stepsOf = [&](int steps, int quantum) {
+        quantum = std::clamp(quantum, 1, 64);
+        const int multiples = std::max(1, std::min(steps, 64) / quantum);
+        return quantum * (1 + std::min(multiples - 1, static_cast<int>(unit() * multiples)));
+    };
     if(unit() < rules.offsetStrength && rules.offsetSteps > 0) {
-        const int steps = std::min(rules.offsetSteps, 64);
-        const int magnitude = 1 + std::min(steps - 1, static_cast<int>(unit() * steps));
-        const double shift = (unit() < 0.5 ? -1.0 : 1.0) * magnitude * grid;
+        const double shift = sign(rules.offsetDirection) * stepsOf(rules.offsetSteps, rules.offsetQuantum) * grid;
         mutated.startBeat = ofClamp(note.startBeat + shift, 0.0, std::max(0.0, sourceLength - grid));
     }
-    if(unit() < rules.lengthStrength && rules.lengthMax > 1.0f) {
-        const double span = std::log(std::min(16.0, static_cast<double>(rules.lengthMax)));
-        const double length = note.durationBeats * std::exp((unit() * 2.0 - 1.0) * span);
-        mutated.durationBeats = std::max(grid, std::round(length / grid) * grid);
-        if(lane.mutationDrift) mutated.durationBeats = std::min(mutated.durationBeats, std::max(grid, sourceLength));
+    if(unit() < rules.lengthStrength && rules.lengthSteps > 0) {
+        const double change = sign(rules.lengthDirection) * stepsOf(rules.lengthSteps, rules.lengthQuantum) * grid;
+        mutated.durationBeats = std::max(grid, note.durationBeats + change);
+        if(lane.mutationDrift > 0.0f) mutated.durationBeats = std::min(mutated.durationBeats, std::max(grid, sourceLength));
     }
     if(unit() < rules.velocityStrength && rules.velocityRange > 0.0f)
-        mutated.velocity = ofClamp(note.velocity + static_cast<float>(unit() * 2.0 - 1.0) * rules.velocityRange, 0.0f, 1.0f);
+        mutated.velocity = ofClamp(note.velocity + static_cast<float>(rules.velocityDirection == 0
+            ? unit() * 2.0 - 1.0 : sign(rules.velocityDirection) * unit()) * rules.velocityRange, 0.0f, 1.0f);
     return mutated;
 }
 
@@ -1320,7 +1339,8 @@ bool evaluateStepSequencer(const ofxOceanodeTimelineLane& lane,
                            std::string& value,
                            double retriggerGap = 0.0,
                            int64_t clipRepeat = 0,
-                           double contentLength = 0.0) {
+                           double contentLength = 0.0,
+                           uint64_t epoch = 0) {
     if(lane.behavior == "Mute") return false;
     const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
     const double patternLength = std::max(cellLength, lane.stepCount * cellLength);
@@ -1346,7 +1366,7 @@ bool evaluateStepSequencer(const ofxOceanodeTimelineLane& lane,
         if(patternBeat + kEpsilon < start || patternBeat >= endOf(step) - kEpsilon) continue;
         if(inRetriggerGap(steps, index, patternBeat, retriggerGap, startOf, endOf, same, patternLength)) continue;
         const bool useProbability = lane.probabilityEnabled && lane.behavior == "Probability";
-        if(useProbability && !stepProbabilityPasses(step, cycle, lane.probabilitySeed)) return false;
+        if(useProbability && !stepProbabilityPasses(step, cycle, lane.probabilitySeed, epoch)) return false;
         value = step.value.empty() ? "1" : step.value;
         return true;
     }
@@ -2637,7 +2657,7 @@ const ofxOceanodeTimelineManager::PianoRepeatPlayback& ofxOceanodeTimelineManage
     auto soundingIn = [&](const ofxOceanodeTimelineLane& part) {
         std::vector<uint8_t> sounding(part.pianoNotes.size());
         for(size_t n = 0; n < part.pianoNotes.size(); ++n)
-            sounding[n] = pianoProbabilityPasses(part.pianoNotes[n], cycle, part.probabilitySeed) ? 1 : 0;
+            sounding[n] = pianoProbabilityPasses(part.pianoNotes[n], cycle, part.probabilitySeed, mutationEpoch) ? 1 : 0;
         return sounding;
     };
     auto mutate = [&](const ofxOceanodeTimelineLane& part, bool& changed) {
@@ -2675,7 +2695,7 @@ const ofxOceanodeTimelineManager::PianoRepeatPlayback& ofxOceanodeTimelineManage
                 computeLaneVoicing(track, clip, local->second.first, local->second.second, &partSounding);
             }
             out.lane.pianoNotes[m] = local->second.first.pianoNotes[shared->noteIndex[m]];
-            sounding[m] = pianoProbabilityPasses(notes[m], cycle, part->probabilitySeed) ? 1 : 0;
+            sounding[m] = pianoProbabilityPasses(notes[m], cycle, part->probabilitySeed, mutationEpoch) ? 1 : 0;
             ends[m] = local->second.second.end[shared->noteIndex[m]];
         }
         int voices = 0, instrumentVoices = 0;
@@ -2704,14 +2724,28 @@ bool ofxOceanodeTimelineManager::pianoRepeatNotes(const std::string& trackId, co
 
 std::vector<ofxOceanodeTimelinePianoNote> ofxOceanodeTimelineManager::repeatNotes(
         const ofxOceanodeTimelineLane& lane, int64_t repeat, double sourceLength) const {
-    if(!lane.mutationDrift) return mutatedPianoNotes(lane, lane.pianoNotes, repeat, mutationEpoch, sourceLength);
+    if(lane.mutationDrift <= 0.0f) return mutatedPianoNotes(lane, lane.pianoNotes, repeat, mutationEpoch, sourceLength);
     // Repeats are asked for in play order (the scheduler's lookahead first, then
     // the frame's), so a new one drifts from the latest; known ones are kept.
     auto& steps = pianoDrift[&lane];
     const std::pair<uint64_t, int64_t> key{mutationEpoch, repeat};
     for(const auto& step : steps) if(step.first == key) return step.second;
-    const bool fresh = steps.empty() || steps.back().second.size() != lane.pianoNotes.size();
-    auto notes = mutatedPianoNotes(lane, fresh ? lane.pianoNotes : steps.back().second, repeat, mutationEpoch, sourceLength);
+    // Each note drifts (builds on the previous repeat) with the drift chance,
+    // else mutates from how it is written.
+    auto base = lane.pianoNotes;
+    if(!steps.empty() && steps.back().second.size() == base.size()) {
+        const auto& previous = steps.back().second;
+        for(size_t n = 0; n < base.size(); ++n) {
+            uint64_t z = (static_cast<uint64_t>(n) * 0x9e3779b97f4a7c15ULL) ^ (static_cast<uint64_t>(repeat) * 0xbf58476d1ce4e5b9ULL) ^
+                         (mutationEpoch * 0x94d049bb133111ebULL) ^ (static_cast<uint64_t>(static_cast<uint32_t>(lane.probabilitySeed)) << 17) ^
+                         0xd1f7a5c3ULL;
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+            z ^= z >> 31;
+            if(static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0) < lane.mutationDrift) base[n] = previous[n];
+        }
+    }
+    auto notes = mutatedPianoNotes(lane, base, repeat, mutationEpoch, sourceLength);
     steps.emplace_back(key, notes);
     if(steps.size() > 8) steps.erase(steps.begin());
     return notes;
@@ -4906,7 +4940,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     const bool hasValue = lane.type == ofxOceanodeTimelineLaneType::Step
                         ? evaluateStepSequencer(lane, sourceBeat, value, laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
                                                 ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition),
-                                                ofxOceanodeTimelineClipTime::sourceDuration(clip))
+                                                ofxOceanodeTimelineClipTime::sourceDuration(clip), mutationEpoch)
                         : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
                         ? evaluateMultiSlider(lane, sourceBeat, value)
                         : evaluateCurve(lane, sourceBeat, value);
@@ -5010,7 +5044,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                             held[slot] = static_cast<long long>(*it);
                             if(isPlaying && sourceBeat < voicing->end[*it] &&
                                pianoProbabilityPasses(lane.pianoNotes[*it], pianoCycle,
-                                   shared == nullptr ? lane.probabilitySeed : shared->noteLanes[*it]->probabilitySeed))
+                                   shared == nullptr ? lane.probabilitySeed : shared->noteLanes[*it]->probabilitySeed,
+                                   mutationEpoch))
                                 sounding[slot] = static_cast<long long>(*it);
                             break;
                         }
@@ -5517,8 +5552,9 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     hash.add(lane.pianoMonophonic); hash.add(lane.probabilitySeed); hash.add(lane.mutationMonophonic); hash.add(lane.mutationDrift);
     auto hashRules = [&](const ofxOceanodeTimelineMutationRules& rules) {
         hash.add(rules.pitchStrength); hash.add(rules.pitchRange); hash.add(rules.pitchDirection); hash.add(rules.scaleMask);
-        hash.add(rules.offsetStrength); hash.add(rules.offsetSteps); hash.add(rules.lengthStrength); hash.add(rules.lengthMax);
-        hash.add(rules.velocityStrength); hash.add(rules.velocityRange);
+        hash.add(rules.offsetStrength); hash.add(rules.offsetSteps); hash.add(rules.lengthStrength); hash.add(rules.lengthSteps); hash.add(rules.lengthQuantum); hash.add(rules.lengthDirection);
+        hash.add(rules.velocityStrength); hash.add(rules.velocityRange); hash.add(rules.offsetQuantum);
+        hash.add(rules.offsetDirection); hash.add(rules.velocityDirection);
     };
     hashRules(lane.mutation);
     hash.add(lane.mutationGroups.size());
@@ -7079,7 +7115,12 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         if(laneJson.contains("mutation") && laneJson["mutation"].is_object())
                             lane.mutation = mutationRulesFromJson(laneJson["mutation"]);
                         lane.mutationMonophonic = laneJson.value("mutationMonophonic", false);
-                        lane.mutationDrift = laneJson.value("mutationDrift", false);
+                        // Drift was a checkbox before it was an amount.
+                        if(laneJson.contains("mutationDrift")) {
+                            const auto& drift = laneJson["mutationDrift"];
+                            lane.mutationDrift = drift.is_boolean() ? (drift.get<bool>() ? 1.0f : 0.0f)
+                                : drift.is_number() ? ofClamp(drift.get<float>(), 0.0f, 1.0f) : 0.0f;
+                        }
                         if(laneJson.contains("pianoScale") && laneJson["pianoScale"].is_object()) {
                             const auto& scale = laneJson["pianoScale"];
                             lane.pianoScaleEnabled = scale.value("enabled", false);
@@ -7090,7 +7131,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                             for(const auto& groupJson : laneJson["mutationGroups"]) {
                                 if(!groupJson.is_object() || lane.mutationGroups.size() + 1 >= kMaxMutationGroups) continue;
                                 lane.mutationGroups.push_back({mutationRulesFromJson(groupJson),
-                                                               groupJson.value("overrides", 0) & 0x3FF});
+                                                               groupJson.value("overrides", 0) & 0x7FFF});
                             }
                         }
 

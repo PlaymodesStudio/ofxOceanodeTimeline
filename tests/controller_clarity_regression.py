@@ -266,7 +266,7 @@ int main() {
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
         {
             // Right-clicking Range opens its direction menu, not the lane menu.
-            const ImVec2 range(150,444);
+            const ImVec2 range(150,467);
             frame(1250,range,false);
             io.AddMouseButtonEvent(1,true); frame(1250,range,false);
             io.AddMouseButtonEvent(1,false); frame(1250,range,false);

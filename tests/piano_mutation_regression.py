@@ -75,13 +75,13 @@ int main() {
     // Saved with the note and the lane; older presets load without mutation.
     lane = model.getLane(t, c, l);
     lane->mutation.pitchStrength = 0.75f; lane->mutation.scaleMask = 0x0A5; lane->mutation.pitchRange = 5;
-    lane->mutation.lengthStrength = 0.4f; lane->mutation.lengthMax = 3.0f;
+    lane->mutation.lengthStrength = 0.4f; lane->mutation.lengthSteps = 3; lane->mutation.lengthQuantum = 3; lane->mutation.lengthDirection = 2;
     const auto saved = model.toJson();
     model.fromJson(saved);
     lane = model.getLane(t, c, l);
     near(lane->pianoNotes[0].mutation, 1.0);
     assert(std::abs(lane->mutation.pitchStrength - 0.75f) < 1e-6f && lane->mutation.scaleMask == 0x0A5 && lane->mutation.pitchRange == 5);
-    assert(std::abs(lane->mutation.lengthStrength - 0.4f) < 1e-6f && std::abs(lane->mutation.lengthMax - 3.0f) < 1e-6f && lane->mutation.offsetStrength == 0.0f);
+    assert(std::abs(lane->mutation.lengthStrength - 0.4f) < 1e-6f && lane->mutation.lengthSteps == 3 && lane->mutation.lengthQuantum == 3 && lane->mutation.lengthDirection == 2 && lane->mutation.offsetStrength == 0.0f);
     auto legacy = saved;
     for(auto& track : legacy["tracks"]) for(auto& clip : track["clips"]) for(auto& laneJson : clip["lanes"]) {
         laneJson.erase("mutation");
@@ -98,7 +98,7 @@ int main() {
         const auto savedRules = lane->mutation;
         lane->mutation = ofxOceanodeTimelineMutationRules();
         lane->mutation.pitchStrength = 0.0f;
-        lane->mutation.lengthStrength = 1.0f; lane->mutation.lengthMax = 4.0f;
+        lane->mutation.lengthStrength = 1.0f; lane->mutation.lengthSteps = 8; lane->mutation.lengthDirection = 1;
         lane->beatsPerStep = 0.25;
         lane->pianoNotes = {{0, 1, 60, 0.8f, 1, 1.0f}, {1, 1, 62, 0.8f, 1, 0.0f}};
         bool overlapped = false;
@@ -176,6 +176,53 @@ int main() {
         lane->mutationDrift = false; lane->pianoScaleEnabled = false; lane->pianoScaleSnap = false;
         lane->pianoLowPitch = 36; lane->pianoHighPitch = 84;
         lane->mutation = savedRules;
+    }
+    // Steps in multiples of q, with a direction; velocity up only; drift is an
+    // amount and older presets' drift checkbox loads as 0% / 100%.
+    {
+        lane = model.getLane(t, c, l);
+        const auto savedRules = lane->mutation;
+        lane->mutation = ofxOceanodeTimelineMutationRules();
+        lane->mutation.pitchStrength = 0.0f;
+        lane->mutation.offsetStrength = 1.0f; lane->mutation.offsetSteps = 4; lane->mutation.offsetQuantum = 2;
+        lane->mutation.offsetDirection = 1;
+        lane->mutation.lengthStrength = 1.0f; lane->mutation.lengthSteps = 2; lane->mutation.lengthDirection = 2;
+        lane->mutation.velocityStrength = 1.0f; lane->mutation.velocityRange = 0.1f; lane->mutation.velocityDirection = 1;
+        lane->beatsPerStep = 0.25;
+        lane->pianoNotes = {{0, 2, 60, 0.5f, 1, 1.0f}};
+        std::set<double> starts;
+        for(int i = 0; i < 30; ++i) {
+            playAt(0.25);
+            assert(model.pianoRepeatNotes(t, c, l, 0, preview));
+            starts.insert(preview[0].startBeat);
+            assert(std::abs(preview[0].startBeat - 0.5) < 1e-9 || std::abs(preview[0].startBeat - 1.0) < 1e-9);
+            assert(std::abs(preview[0].durationBeats - 1.75) < 1e-9 || std::abs(preview[0].durationBeats - 1.5) < 1e-9);
+            assert(preview[0].velocity >= 0.5f && preview[0].velocity <= 0.6f + 1e-6f);
+        }
+        assert(starts.size() == 2);
+        lane = model.getLane(t, c, l);
+        lane->mutationDrift = 0.35f;
+        auto saved = model.toJson(); model.fromJson(saved);
+        lane = model.getLane(t, c, l);
+        assert(std::abs(lane->mutationDrift - 0.35f) < 1e-6f);
+        assert(lane->mutation.offsetQuantum == 2 && lane->mutation.offsetDirection == 1 && lane->mutation.velocityDirection == 1);
+        for(auto& track : saved["tracks"]) for(auto& clip : track["clips"]) for(auto& laneJson : clip["lanes"])
+            if(laneJson.contains("mutationDrift")) laneJson["mutationDrift"] = true;
+        model.fromJson(saved);
+        assert(model.getLane(t, c, l)->mutationDrift == 1.0f);
+        lane = model.getLane(t, c, l);
+        lane->mutationDrift = 0.0f; lane->mutation = savedRules;
+    }
+    // Note probability re-rolls at every start too: a 90% first note plays
+    // about 90% of the time, not always or never.
+    {
+        lane = model.getLane(t, c, l);
+        const auto savedNotes = lane->pianoNotes;
+        lane->pianoNotes = {{0, 3, 60, 0.8f, 0.9f}};
+        int played = 0;
+        for(int i = 0; i < 100; ++i) { playAt(0.5); played += gates.get() > 0.5f; }
+        assert(played > 75 && played < 100);
+        model.getLane(t, c, l)->pianoNotes = savedNotes;
     }
     // Groups: B uses its own keys and follows A for everything else.
     using Rules = ofxOceanodeTimelineMutationRules;

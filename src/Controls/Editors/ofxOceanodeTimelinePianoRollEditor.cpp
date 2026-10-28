@@ -210,9 +210,13 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     }
     ImGui::Checkbox("Mono##mutationMono", &lane->mutationMonophonic);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Monophonic: shifted or lengthened notes never overlap others");
-    ImGui::SameLine();
-    ImGui::Checkbox("Drift##mutationDrift", &lane->mutationDrift);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each repeat mutates the previous one. Resets on stop.");
+    {
+        propertyLabel("Drift");
+        float percent = lane->mutationDrift * 100.0f;
+        if(ImGui::SliderFloat("##mutationDrift", &percent, 0.0f, 100.0f, percent <= 0.0f ? "Off" : "%.0f%%"))
+            lane->mutationDrift = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("How much each repeat builds on the previous one. Resets on stop.");
+    }
 
     const int group = mutationEditGroup;
     auto* entry = group == 0 ? nullptr : &lane->mutationGroups[group - 1];
@@ -249,40 +253,37 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
         endField(field, wasFollowing);
         ImGui::BeginDisabled(rules.*member <= 0.0f);
     };
-    auto intField = [&](const char* label, const char* id, int field, int Rules::* member, float speed, int low, int high, const char* format) {
-        propertyLabel(label);
-        const bool wasFollowing = following(field);
-        beginField(field);
-        int value = rules.*member;
-        if(ImGui::DragInt(id, &value, speed, low, high, format)) commit(field, member, std::clamp(value, low, high));
-        endField(field, wasFollowing);
-    };
 
-    strength("Pitch", "##mutationPitchStrength", Rules::PitchStrength, &Rules::pitchStrength);
-    {
-        // Right-click: which way the pitch may move (+/-, up only, down only).
-        static const char* directions[] = {"+/-", "+", "-"};
-        static const char* directionNames[] = {"+/-  Up or down", "+  Up only", "-  Down only"};
-        constexpr int fields = Rules::PitchRange | Rules::PitchDirection;
-        propertyLabel("Range");
-        const bool wasFollowing = entry != nullptr && !(entry->overrides & fields);
-        if(wasFollowing) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-        int value = rules.pitchRange;
-        const std::string format = std::string(directions[std::clamp(rules.pitchDirection, 0, 2)]) + " %d st";
-        if(ImGui::DragInt("##mutationPitchRange", &value, 0.2f, 1, 48, format.c_str()))
-            commit(Rules::PitchRange, &Rules::pitchRange, std::clamp(value, 1, 48));
-        if(wasFollowing) ImGui::PopStyleVar();
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip(wasFollowing ? "Same as A\nRight-click: direction" : "Right-click: direction");
-        if(ImGui::BeginPopupContextItem("##mutationPitchDirection")) {
-            for(int direction = 0; direction < 3; ++direction)
-                if(ImGui::MenuItem(directionNames[direction], nullptr, rules.pitchDirection == direction))
-                    commit(Rules::PitchDirection, &Rules::pitchDirection, direction);
+    // A range whose direction is picked from its right-click menu (pitch,
+    // offset, velocity). Call right after drawing its widget.
+    auto directionMenu = [&](const char* id, int fields, int Rules::* direction, const char* const names[3]) {
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip(following(fields) ? "Same as A\nRight-click: direction" : "Right-click: direction");
+        if(ImGui::BeginPopupContextItem(id)) {
+            for(int choice = 0; choice < 3; ++choice)
+                if(ImGui::MenuItem(names[choice], nullptr, rules.*direction == choice))
+                    commit(fields & (Rules::PitchDirection | Rules::OffsetDirection | Rules::LengthDirection | Rules::VelocityDirection), direction, choice);
             if(entry != nullptr && (entry->overrides & fields)) {
                 ImGui::Separator();
                 if(ImGui::MenuItem("Same as A")) entry->overrides &= ~fields;
             }
             ImGui::EndPopup();
         }
+    };
+    static const char* const signs[] = {"+/-", "+", "-"};
+
+    strength("Pitch", "##mutationPitchStrength", Rules::PitchStrength, &Rules::pitchStrength);
+    {
+        static const char* const names[] = {"+/-  Up or down", "+  Up only", "-  Down only"};
+        constexpr int fields = Rules::PitchRange | Rules::PitchDirection;
+        propertyLabel("Range");
+        const bool wasFollowing = following(fields);
+        beginField(fields);
+        int value = rules.pitchRange;
+        const std::string format = std::string(signs[std::clamp(rules.pitchDirection, 0, 2)]) + " %d st";
+        if(ImGui::DragInt("##mutationPitchRange", &value, 0.2f, 1, 48, format.c_str()))
+            commit(Rules::PitchRange, &Rules::pitchRange, std::clamp(value, 1, 48));
+        if(wasFollowing) ImGui::PopStyleVar();
+        directionMenu("##mutationPitchDirection", fields, &Rules::pitchDirection, names);
     }
     {
         // Scale presets are rooted on C; the arrows transpose the selection.
@@ -319,32 +320,60 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     }
     ImGui::EndDisabled();
 
+    // Grid steps (right-click: direction) and the quantum q they come in.
+    auto stepsRow = [&](const char* id, int stepsField, int directionField, int quantumField,
+                        int Rules::* steps, int Rules::* direction, int Rules::* quantum, const char* const names[3]) {
+        const int fields = stepsField | directionField;
+        const float quantumWidth = 52.0f;
+        propertyLabel("Steps", quantumWidth + ImGui::GetStyle().ItemSpacing.x);
+        const bool wasFollowing = following(fields);
+        beginField(fields);
+        int value = rules.*steps;
+        const std::string format = std::string(signs[std::clamp(rules.*direction, 0, 2)]) + " %d";
+        if(ImGui::DragInt((std::string(id) + "Steps").c_str(), &value, 0.1f, 1, 64, format.c_str()))
+            commit(stepsField, steps, std::clamp(value, 1, 64));
+        if(wasFollowing) ImGui::PopStyleVar();
+        directionMenu((std::string(id) + "Direction").c_str(), fields, direction, names);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(quantumWidth);
+        const bool quantumFollowing = following(quantumField);
+        beginField(quantumField);
+        int q = rules.*quantum;
+        if(ImGui::DragInt((std::string(id) + "Quantum").c_str(), &q, 0.1f, 1, 64, "q %d"))
+            commit(quantumField, quantum, std::clamp(q, 1, 64));
+        if(!quantumFollowing && ImGui::IsItemHovered()) ImGui::SetTooltip("In multiples of this many steps");
+        endField(quantumField, quantumFollowing);
+    };
+
     strength("Offset", "##mutationOffsetStrength", Rules::OffsetStrength, &Rules::offsetStrength);
-    intField("Steps", "##mutationOffsetSteps", Rules::OffsetSteps, &Rules::offsetSteps, 0.1f, 1, 64, "+/- %d");
+    {
+        static const char* const names[] = {"+/-  Earlier or later", "+  Later only", "-  Earlier only"};
+        stepsRow("##mutationOffset", Rules::OffsetSteps, Rules::OffsetDirection, Rules::OffsetQuantum,
+                 &Rules::offsetSteps, &Rules::offsetDirection, &Rules::offsetQuantum, names);
+    }
     ImGui::EndDisabled();
 
     strength("Length", "##mutationLengthStrength", Rules::LengthStrength, &Rules::lengthStrength);
     {
-        propertyLabel("Up to");
-        const bool wasFollowing = following(Rules::LengthMax);
-        beginField(Rules::LengthMax);
-        float value = rules.lengthMax;
-        if(ImGui::DragFloat("##mutationLengthMax", &value, 0.02f, 1.0f, 16.0f, "x %.2f"))
-            commit(Rules::LengthMax, &Rules::lengthMax, ofClamp(value, 1.0f, 16.0f));
-        if(!wasFollowing && ImGui::IsItemHovered()) ImGui::SetTooltip("x 2: half to double");
-        endField(Rules::LengthMax, wasFollowing);
+        static const char* const names[] = {"+/-  Longer or shorter", "+  Longer only", "-  Shorter only"};
+        stepsRow("##mutationLength", Rules::LengthSteps, Rules::LengthDirection, Rules::LengthQuantum,
+                 &Rules::lengthSteps, &Rules::lengthDirection, &Rules::lengthQuantum, names);
     }
     ImGui::EndDisabled();
 
     strength("Velocity", "##mutationVelocityStrength", Rules::VelocityStrength, &Rules::velocityStrength);
     {
+        static const char* const names[] = {"+/-  Up or down", "+  Up only", "-  Down only"};
+        constexpr int fields = Rules::VelocityRange | Rules::VelocityDirection;
         propertyLabel("Range");
-        const bool wasFollowing = following(Rules::VelocityRange);
-        beginField(Rules::VelocityRange);
+        const bool wasFollowing = following(fields);
+        beginField(fields);
         float value = rules.velocityRange;
-        if(ImGui::DragFloat("##mutationVelocityRange", &value, 0.005f, 0.01f, 1.0f, "+/- %.2f"))
+        const std::string format = std::string(signs[std::clamp(rules.velocityDirection, 0, 2)]) + " %.2f";
+        if(ImGui::DragFloat("##mutationVelocityRange", &value, 0.005f, 0.01f, 1.0f, format.c_str()))
             commit(Rules::VelocityRange, &Rules::velocityRange, ofClamp(value, 0.01f, 1.0f));
-        endField(Rules::VelocityRange, wasFollowing);
+        if(wasFollowing) ImGui::PopStyleVar();
+        directionMenu("##mutationVelocityDirection", fields, &Rules::velocityDirection, names);
     }
     ImGui::EndDisabled();
 }

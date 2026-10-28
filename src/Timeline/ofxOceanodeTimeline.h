@@ -201,18 +201,25 @@ struct ofxOceanodeTimelineMutationRules {
     int pitchDirection = 0;      // ...both ways (0), up only (1) or down only (2)...
     int scaleMask = 0xFFF;       // ...onto these pitch classes (bit 0 = C)
     float offsetStrength = 0.0f;
-    int offsetSteps = 1;         // moved up to +/- this many grid steps
+    int offsetSteps = 1;         // moved up to this many grid steps...
+    int offsetQuantum = 1;       // ...in multiples of this many steps...
+    int offsetDirection = 0;     // ...earlier or later (0), later only (1) or earlier only (2)
     float lengthStrength = 0.0f;
-    float lengthMax = 2.0f;      // up to this many times shorter or longer, on the grid
+    int lengthSteps = 2;         // longer or shorter by up to this many grid steps...
+    int lengthQuantum = 1;       // ...in multiples of this many steps...
+    int lengthDirection = 0;     // ...either (0), longer only (1) or shorter only (2)
     float velocityStrength = 0.0f;
-    float velocityRange = 0.25f; // velocity moves up to +/- this much (0..1)
+    float velocityRange = 0.25f; // velocity moves up to this much (0..1)...
+    int velocityDirection = 0;   // ...up or down (0), up only (1) or down only (2)
     // Fields, for a group's overrides.
     enum Field { PitchStrength = 1, PitchRange = 2, ScaleMask = 4, OffsetStrength = 8,
-                 OffsetSteps = 16, LengthStrength = 32, LengthMax = 64, PitchDirection = 128,
-                 VelocityStrength = 256, VelocityRange = 512 };
+                 OffsetSteps = 16, LengthStrength = 32, LengthSteps = 64, PitchDirection = 128,
+                 VelocityStrength = 256, VelocityRange = 512, OffsetDirection = 1024,
+                 VelocityDirection = 2048, OffsetQuantum = 4096, LengthQuantum = 8192,
+                 LengthDirection = 16384 };
     bool active() const {
         return (pitchStrength > 0.0f && pitchRange > 0 && (scaleMask & 0xFFF) != 0) ||
-               (offsetStrength > 0.0f && offsetSteps > 0) || (lengthStrength > 0.0f && lengthMax > 1.0f) ||
+               (offsetStrength > 0.0f && offsetSteps > 0) || (lengthStrength > 0.0f && lengthSteps > 0) ||
                (velocityStrength > 0.0f && velocityRange > 0.0f);
     }
 };
@@ -322,9 +329,10 @@ struct ofxOceanodeTimelineLane {
     std::vector<ofxOceanodeTimelineMutationGroup> mutationGroups;
     // Mutated timing never makes notes overlap (see mutatedPianoNotes).
     bool mutationMonophonic = false;
-    // Drift: each repeat mutates the notes the previous repeat played, so
-    // changes accumulate while playing; stopping returns to the written notes.
-    bool mutationDrift = false;
+    // Drift (0..1): the chance each note mutates from what it played in the
+    // previous repeat instead of as written, so changes accumulate while
+    // playing; stopping returns to the written notes. 0 = off.
+    float mutationDrift = 0.0f;
     // Scale overlay (editing aid): keys outside the scale are shaded in the
     // roll; with snap, drawn and moved notes land on scale keys.
     bool pianoScaleEnabled = false;
@@ -420,9 +428,14 @@ inline ofxOceanodeTimelineMutationRules ofxOceanodeTimelineMutationRulesFor(cons
     if(entry.overrides & Rules::OffsetStrength) rules.offsetStrength = own.offsetStrength;
     if(entry.overrides & Rules::OffsetSteps) rules.offsetSteps = own.offsetSteps;
     if(entry.overrides & Rules::LengthStrength) rules.lengthStrength = own.lengthStrength;
-    if(entry.overrides & Rules::LengthMax) rules.lengthMax = own.lengthMax;
+    if(entry.overrides & Rules::LengthSteps) rules.lengthSteps = own.lengthSteps;
+    if(entry.overrides & Rules::LengthQuantum) rules.lengthQuantum = own.lengthQuantum;
+    if(entry.overrides & Rules::LengthDirection) rules.lengthDirection = own.lengthDirection;
     if(entry.overrides & Rules::VelocityStrength) rules.velocityStrength = own.velocityStrength;
     if(entry.overrides & Rules::VelocityRange) rules.velocityRange = own.velocityRange;
+    if(entry.overrides & Rules::OffsetDirection) rules.offsetDirection = own.offsetDirection;
+    if(entry.overrides & Rules::VelocityDirection) rules.velocityDirection = own.velocityDirection;
+    if(entry.overrides & Rules::OffsetQuantum) rules.offsetQuantum = own.offsetQuantum;
     return rules;
 }
 
@@ -1269,8 +1282,8 @@ private:
                                               const SharedPianoPlayback* shared,
                                               int64_t repeat) const;
     mutable std::unordered_map<const void*, std::map<std::pair<uint64_t, int64_t>, PianoRepeatPlayback>> repeatVoicingCache;
-    // Which clip start mutations roll for (from the transport generation and
-    // loop pass, set with the clip chance rolls).
+    // Which clip start note/step probability and mutations roll for (from the
+    // transport generation and loop pass, set with the clip chance rolls).
     mutable uint64_t mutationEpoch = 0;
     // The notes a lane plays in one repeat of the current start, mutated
     // (and, with drift, from the repeat played before).

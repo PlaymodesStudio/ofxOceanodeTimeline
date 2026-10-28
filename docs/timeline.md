@@ -449,11 +449,15 @@ the chance it changes when a note mutates (0% turns it off):
   down (+/-), up only (+) or down only (-). Click the keyboard to allow or exclude keys, pick a
   preset (Chromatic, Major, Minor, pentatonics, Whole tone, or the keys the
   lane already uses), and transpose the selection with the arrows.
-- **Offset** (default off): moves the note up to **Steps** grid steps
-  earlier or later (the lane's Grid).
-- **Length** (default off): makes the note up to **Up to** times shorter
-  or longer, on the grid.
-- **Velocity** (default off): moves the note's velocity up to +/- **Range**.
+- **Offset** (default off): moves the note up to **Steps** grid steps (the
+  lane's Grid) earlier or later, in multiples of **q** steps (Steps 4, q 2:
+  2 or 4 steps).
+- **Length** (default off): makes the note up to **Steps** grid steps longer
+  or shorter, in multiples of **q**.
+- **Velocity** (default off): moves the note's velocity up to **Range**.
+
+Right-click a Range or Steps field to choose its direction: both ways (+/-),
+only up / later / longer (+), or only down / earlier / shorter (-).
 
 **Mutation groups** give different notes different rules, such as a narrower
 pitch range or other keys for the bass. A lane has group A (the rules above)
@@ -471,9 +475,11 @@ notes' MUT handles and outlines. Every note starts in A.
   follow A again.
 - **Delete:** right-click a group's chip. Its notes go back to A.
 
-**Drift** (top of the Mutate tab, for the whole lane): each repeat mutates
-the notes the previous repeat played instead of the written ones, so changes
-accumulate across repeats and loop passes. Drifting pitch stays within the
+**Drift** (top of the Mutate tab, for the whole lane, 0-100%): the chance
+each note mutates from what it played in the previous repeat instead of as
+written, so changes accumulate across repeats and loop passes; 100% always
+builds on the previous repeat. Presets saved with the earlier Drift checkbox
+load as 0% or 100%. Drifting pitch stays within the
 roll's Low..High keys. Stopping the transport, or editing the notes, starts
 again from the written notes.
 
@@ -496,8 +502,10 @@ older presets load with no mutation.
   nothing holds it any more. That covers playback stopping, its last clip being
   muted or removed, an undo or a preset load replacing the content, and its
   binding being bypassed. After that it is left alone for live input.
-- **Step probability:** steps roll again in every repeat of their clip, as
-  piano notes do.
+- **Step and note probability:** steps and piano notes roll again in every
+  repeat of their clip and every time the clip starts (play, seek, each loop
+  pass), so a note at 90% plays about 90% of the times, even in a clip that
+  never repeats.
 - **Chance notes:** a piano note with a probability below 1 takes a voice only
   in the repeats where it sounds. A note that fails its roll doesn't cut the
   note before it, steal its slot or move the pitch. These voicings are
