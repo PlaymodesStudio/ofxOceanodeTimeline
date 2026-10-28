@@ -173,6 +173,48 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
 
 }
 
+void ofxOceanodeTimelinePianoRollEditor::drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) {
+    auto* lane = &context.lane;
+    static const char* const signs[] = {"+/-", "+", "-"};
+    static const char* const names[] = {"+/-  Up or down", "+  Up only", "-  Down only"};
+    // Right-click on the widget just drawn: its own menu, so the lane's menu
+    // (the rest of the pad) stays where it was.
+    auto directionMenu = [&](const char* id, int& direction) {
+        if(ImGui::BeginPopupContextItem(id)) {
+            for(int choice = 0; choice < 3; ++choice)
+                if(ImGui::MenuItem(names[choice], nullptr, direction == choice)) direction = choice;
+            ImGui::EndPopup();
+        }
+    };
+    auto deviation = [&](const char* title, const char* id, float& amount, int& range, int& direction,
+                         int maxRange, const char* unit, const char* tooltip) {
+        ImGui::SeparatorText(title);
+        const std::string sign = signs[std::clamp(direction, 0, 2)];
+        propertyLabel("Deviation");
+        float percent = amount * 100.0f;
+        const std::string amountFormat = sign + " %.0f%%";
+        if(ImGui::SliderFloat((std::string("##") + id).c_str(), &percent, 0.0f, 100.0f,
+                              percent <= 0.0f ? "Off" : amountFormat.c_str()))
+            amount = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nRight-click: direction", tooltip);
+        directionMenu((std::string("##") + id + "Direction").c_str(), direction);
+        // Never disabled: a disabled widget isn't hovered, so its right-click
+        // would open the lane's menu instead.
+        propertyLabel("Range");
+        const std::string rangeFormat = sign + " %d " + unit;
+        if(ImGui::SliderInt((std::string("##") + id + "Range").c_str(), &range, 1, maxRange, rangeFormat.c_str()))
+            range = std::clamp(range, 1, maxRange);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Up to how far a note moves\nRight-click: direction");
+        directionMenu((std::string("##") + id + "RangeDirection").c_str(), direction);
+    };
+    deviation("Octave", "randomOctave", lane->randomOctave, lane->randomOctaveRange, lane->randomOctaveDirection,
+              4, "oct", "The chance each note plays whole octaves away");
+    deviation("Pitch", "randomPitch", lane->randomPitch, lane->randomPitchRange, lane->randomPitchDirection,
+              24, "st", "The chance each note plays semitones away\n(onto scale keys when the lane snaps to its scale)");
+    ImGui::TextDisabled("Rolled again every repeat and every start.");
+}
+
 void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEditorContext& context) {
     using Rules = ofxOceanodeTimelineMutationRules;
     auto* lane = &context.lane;

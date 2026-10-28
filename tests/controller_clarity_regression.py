@@ -279,6 +279,57 @@ int main() {
             assert(model.getLane(t,c,piano)->mutation.pitchDirection==2);
             assert(model.getClip(t,c)->lanes.size()==3); // no lane duplicated
         }
+        {
+            // Rndm tab: right-clicking a deviation slider opens its direction
+            // menu, not the lane menu; the pad around it still opens the lane's.
+            const auto focusedLane=ui.editorState.editorLaneId;
+            selectTab("Rndm");
+            frame(); frame(1250,ImVec2(-100,-100),false,"random");
+            ImGuiWindow* panel=nullptr;
+            for(auto* window:ImGui::GetCurrentContext()->Windows)
+                if(window->Active && std::string(window->Name).find("##clipProperties"+t+c+piano)!=std::string::npos) panel=window;
+            assert(panel);
+            // The tab's content is in the tab's id scope.
+            ImGuiID randomTab=0;
+            for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+                if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+                    for(auto& tab:bar->Tabs)
+                        if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Rndm") randomTab=tab.ID;
+            assert(randomTab);
+            const ImGuiID slider=ImHashStr("##randomOctave",0,randomTab);
+            ImVec2 point(-1,-1);
+            for(float y=panel->Pos.y;y<panel->Pos.y+panel->Size.y && point.x<0;y+=3) {
+                const ImVec2 probe(panel->Pos.x+panel->Size.x-30,y);
+                frame(1250,probe,false);
+                if(ImGui::GetCurrentContext()->HoveredId==slider) point=probe;
+            }
+            assert(point.x>=0);
+            io.AddMouseButtonEvent(1,true); frame(1250,point,false);
+            io.AddMouseButtonEvent(1,false); frame(1250,point,false);
+            frame();
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.size()==1);
+            auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window; assert(popup);
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##randomOctaveDirection",0,randomTab));
+            const ImVec2 upOnly(popup->Pos.x+30,popup->Pos.y+ImGui::GetStyle().WindowPadding.y+
+                ImGui::GetTextLineHeight()*0.5f+1*ImGui::GetTextLineHeightWithSpacing());
+            frame(1250,upOnly,false); frame(1250,upOnly,true); frame(1250,upOnly,false); frame();
+            assert(model.getLane(t,c,piano)->randomOctaveDirection==1);
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            assert(model.getClip(t,c)->lanes.size()==3); // no lane duplicated
+            // Over the lane's summary line: the lane menu.
+            const ImVec2 pad(panel->Pos.x+35,panel->Pos.y+36);
+            frame(1250,pad,false);
+            io.AddMouseButtonEvent(1,true); frame(1250,pad,false);
+            io.AddMouseButtonEvent(1,false); frame(1250,pad,false);
+            frame();
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.size()==1);
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr(("##laneMenu"+piano).c_str(),0,panel->ID));
+            ImGui::ClosePopupToLevel(0,true); frame();
+            assert(ImGui::GetCurrentContext()->OpenPopupStack.empty() && model.getClip(t,c)->lanes.size()==3);
+            model.getLane(t,c,piano)->randomOctaveDirection=0;
+            ui.editorState.editorLaneId=focusedLane;
+            selectTab("Mutate"); frame(); frame();
+        }
         // Group B: its own keys, the second and third notes in it, edited in the tab.
         {
             auto* lane=model.getLane(t,c,piano);

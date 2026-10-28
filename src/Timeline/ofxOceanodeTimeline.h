@@ -342,6 +342,19 @@ struct ofxOceanodeTimelineLane {
     bool pianoScaleEnabled = false;
     int pianoScaleMask = 0xAB5;  // bit 0 = C
     bool pianoScaleSnap = false;
+    // Random deviation (Rndm tab), rolled for every note in every repeat:
+    // with the octave chance a note moves 1..range octaves, with the pitch
+    // chance 1..range semitones (onto scale keys when snapping to the scale),
+    // both ways (0), up only (1) or down only (2). 0 = off.
+    float randomOctave = 0.0f;
+    int randomOctaveRange = 1;
+    int randomOctaveDirection = 0;
+    float randomPitch = 0.0f;
+    int randomPitchRange = 2;
+    int randomPitchDirection = 0;
+    bool randomDeviates() const {
+        return (randomOctave > 0.0f && randomOctaveRange > 0) || (randomPitch > 0.0f && randomPitchRange > 0);
+    }
     bool curveClamp = true;
     std::string curveInterpolation = "Linear";
     // Curve value scale: "" = Auto (the binding's valueScale), "Linear", "dB".

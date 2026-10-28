@@ -4930,6 +4930,14 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                 ImGui::EndTabItem();
             }
         }
+        if(laneEditor.hasRandomDeviation()) {
+            const bool randomTab = ImGui::BeginTabItem("Rndm");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Random deviation: every note may play octaves or semitones away, rolled each repeat.");
+            if(randomTab) {
+                laneEditor.drawRandomDeviation(context);
+                ImGui::EndTabItem();
+            }
+        }
         const bool clipTab = ImGui::BeginTabItem("Clip");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip: %s\nChance and timing apply to every lane in this clip.", clip->name.c_str());
         if(clipTab) {

@@ -14,6 +14,8 @@ public:
     void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) override;
     bool hasMutation() const override { return true; }
     void drawMutation(ofxOceanodeTimelineLaneEditorContext& context) override;
+    bool hasRandomDeviation() const override { return true; }
+    void drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
     void clearSelection();

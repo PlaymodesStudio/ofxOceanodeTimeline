@@ -166,10 +166,10 @@ Chance is saved with the clip; older presets load at 100%.
 The left column holds each open clip editor. Its header row shows the clip's
 name with **+** (add lane) and **x** (close) at the right. Each lane's pad
 starts with fold, M/S and the lane name, then a line naming the lane type and
-how many targets it drives (orange when it has none), then three tabs:
+how many targets it drives (orange when it has none), then its tabs:
 **Targets** (what the lane drives), **Lane** (name, type, output range and
-the editor's own settings), **Mutate** (piano rolls only, see below) and
-**Clip** (chance and timing, shared by every lane in the clip). Drag the divider in the ruler's top-left corner to make the
+the editor's own settings), **Mutate** and **Rndm** (piano rolls only, see
+below) and **Clip** (chance and timing, shared by every lane in the clip). Drag the divider in the ruler's top-left corner to make the
 column wider or narrower; double-click it for the default width. The width is
 saved with the timeline.
 
@@ -495,6 +495,30 @@ Rolls also depend on the lane's Seed. Voices follow the mutated notes, so
 a moved note takes its voice where it now plays; the scheduler uses the same
 mutations as the frame path. Mutation amounts, groups and rules are saved;
 older presets load with no mutation.
+
+## Piano random deviation
+
+A piano roll's **Rndm** tab moves every note at random, with no per-note
+amount and no groups:
+
+- **Octave Deviation** (0-100%): the chance a note plays whole octaves away;
+  **Range** (1-4 oct) is up to how many.
+- **Pitch Deviation** (0-100%): the chance a note plays semitones away;
+  **Range** (1-24 st) is up to how many. With the lane's scale overlay on and
+  **Snap to scale**, it lands only on scale keys.
+
+Right-click either slider of a deviation (Deviation or Range) for its
+direction: **+/-** (up or down), **+** (up only) or **-** (down only); the
+sliders show it. That menu belongs to the slider: right-clicking anywhere
+else on the pad still opens the lane's menu. A move that would leave MIDI
+0..127 goes the other way when both directions are allowed, else the note
+keeps its pitch.
+
+Deviation is rolled for each note in every repeat and every start (like
+mutation, and with the lane's Seed), after mutation and on top of it: Drift
+builds on mutated notes, never on deviated ones. Voices, the scheduler and the
+roll's ghosts follow the deviated notes. Saved with the lane; older presets
+load with no deviation.
 
 ## Gates, chance notes and duplicated lanes
 

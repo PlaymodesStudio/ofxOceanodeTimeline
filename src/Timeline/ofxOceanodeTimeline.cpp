@@ -1169,10 +1169,10 @@ bool pianoProbabilityPasses(const ofxOceanodeTimelinePianoNote& note, double cyc
     return static_cast<float>(hash & 0xffffULL) / 65535.0f < probability;
 }
 
-// Some note of the lane can actually change: it has a mutation amount and
-// its group's rules can change something.
+// Some note of the lane can actually change: the lane deviates at random, or
+// a note has a mutation amount and its group's rules can change something.
 bool pianoLaneMutates(const ofxOceanodeTimelineLane& lane) {
-    return std::any_of(lane.pianoNotes.begin(), lane.pianoNotes.end(), [&](const auto& note) {
+    return lane.randomDeviates() || std::any_of(lane.pianoNotes.begin(), lane.pianoNotes.end(), [&](const auto& note) {
         return note.mutation > 0.0f && ofxOceanodeTimelineMutationRulesFor(lane, note.mutationGroup).active();
     });
 }
@@ -1270,6 +1270,47 @@ ofxOceanodeTimelinePianoNote mutatedPianoNote(const ofxOceanodeTimelinePianoNote
         mutated.velocity = ofClamp(note.velocity + static_cast<float>(rules.velocityDirection == 0
             ? unit() * 2.0 - 1.0 : sign(rules.velocityDirection) * unit()) * rules.velocityRange, 0.0f, 1.0f);
     return mutated;
+}
+
+// The lane's random deviation (Rndm tab) of one repeat, on the notes as
+// they play (mutated): octave, then pitch. A move that would leave 0..127
+// goes the other way when both are allowed, else is not taken.
+void deviatePianoNotes(const ofxOceanodeTimelineLane& lane, std::vector<ofxOceanodeTimelinePianoNote>& notes,
+                       int64_t cycle, uint64_t epoch) {
+    if(!lane.randomDeviates()) return;
+    const bool onScale = lane.pianoScaleEnabled && lane.pianoScaleSnap && (lane.pianoScaleMask & 0xFFF) != 0;
+    for(size_t n = 0; n < notes.size(); ++n) {
+        auto& note = notes[n];
+        // splitmix64 stream, keyed on the note and the repeat being played.
+        uint64_t state = (static_cast<uint64_t>(n) * 0x9e3779b97f4a7c15ULL) ^
+            (static_cast<uint64_t>(cycle) * 0xbf58476d1ce4e5b9ULL) ^ (epoch * 0x94d049bb133111ebULL) ^
+            (static_cast<uint64_t>(static_cast<uint32_t>(lane.probabilitySeed)) << 20) ^ 0x5bd1e995a7c3f00dULL;
+        auto unit = [&]() {
+            uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+            z ^= z >> 31;
+            return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+        };
+        if(unit() < lane.randomOctave && lane.randomOctaveRange > 0) {
+            const int range = std::min(lane.randomOctaveRange, 4);
+            const int octaves = 1 + std::min(range - 1, static_cast<int>(unit() * range));
+            int sign = lane.randomOctaveDirection == 1 ? 1 : lane.randomOctaveDirection == 2 ? -1 : (unit() < 0.5 ? -1 : 1);
+            int pitch = note.pitch + sign * octaves * 12;
+            if((pitch < 0 || pitch > 127) && lane.randomOctaveDirection == 0) pitch = note.pitch - sign * octaves * 12;
+            if(pitch >= 0 && pitch <= 127) note.pitch = pitch;
+        }
+        if(unit() < lane.randomPitch && lane.randomPitchRange > 0) {
+            const int range = std::min(lane.randomPitchRange, 24);
+            const int lowest = lane.randomPitchDirection == 1 ? note.pitch : note.pitch - range;
+            const int highest = lane.randomPitchDirection == 2 ? note.pitch : note.pitch + range;
+            std::vector<int> candidates;
+            for(int pitch = std::max(0, lowest); pitch <= std::min(127, highest); ++pitch)
+                if(pitch != note.pitch && (!onScale || (lane.pianoScaleMask >> (pitch % 12)) & 1)) candidates.push_back(pitch);
+            if(!candidates.empty())
+                note.pitch = candidates[std::min(candidates.size() - 1, static_cast<size_t>(unit() * candidates.size()))];
+        }
+    }
 }
 
 // A lane's notes as they play in one repeat. Monophonic: a note shifted onto
@@ -1480,6 +1521,7 @@ void computePianoVoicing(const ofxOceanodeTimelineClip& clip, const ofxOceanodeT
         out.end[i] = noteEnds == nullptr ? pianoNoteEnd(notes[i]) : (*noteEnds)[i];
         if(notes[i].probability < 1.0f || notes[i].mutation > 0.0f) out.chance = true;
     }
+    if(lane.randomDeviates()) out.chance = true;
 
     std::vector<size_t> order(count);
     for(size_t i = 0; i < count; ++i) order[i] = i;
@@ -1866,6 +1908,8 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                 bool kit = false;
                 pianoLaneVoicesAndKit(track, playback->lane, voices, kit, &instrumentVoices);
                 computePianoVoicing(clip, playback->lane, voices, kit, playback->voicing, &ends);
+                for(const auto* part : entry.second)
+                    if(part->randomDeviates()) playback->voicing.chance = true;
                 playback->voicing.outputWidth = std::max(playback->voicing.width, instrumentVoices);
                 playback->voicing.instrument = instrumentVoices > 0;
             }
@@ -2729,12 +2773,17 @@ bool ofxOceanodeTimelineManager::pianoRepeatNotes(const std::string& trackId, co
 
 std::vector<ofxOceanodeTimelinePianoNote> ofxOceanodeTimelineManager::repeatNotes(
         const ofxOceanodeTimelineLane& lane, int64_t repeat, double sourceLength) const {
-    if(lane.mutationDrift <= 0.0f) return mutatedPianoNotes(lane, lane.pianoNotes, repeat, mutationEpoch, sourceLength);
+    // Random deviation goes on top: drift builds on the mutated notes only.
+    auto deviated = [&](std::vector<ofxOceanodeTimelinePianoNote> notes) {
+        deviatePianoNotes(lane, notes, repeat, mutationEpoch);
+        return notes;
+    };
+    if(lane.mutationDrift <= 0.0f) return deviated(mutatedPianoNotes(lane, lane.pianoNotes, repeat, mutationEpoch, sourceLength));
     // Repeats are asked for in play order (the scheduler's lookahead first, then
     // the frame's), so a new one drifts from the latest; known ones are kept.
     auto& steps = pianoDrift[&lane];
     const std::pair<uint64_t, int64_t> key{mutationEpoch, repeat};
-    for(const auto& step : steps) if(step.first == key) return step.second;
+    for(const auto& step : steps) if(step.first == key) return deviated(step.second);
     // Each note drifts (builds on the previous repeat) with the drift chance,
     // else mutates from how it is written.
     auto base = lane.pianoNotes;
@@ -2753,7 +2802,7 @@ std::vector<ofxOceanodeTimelinePianoNote> ofxOceanodeTimelineManager::repeatNote
     auto notes = mutatedPianoNotes(lane, base, repeat, mutationEpoch, sourceLength);
     steps.emplace_back(key, notes);
     if(steps.size() > 8) steps.erase(steps.begin());
-    return notes;
+    return deviated(std::move(notes));
 }
 
 std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& trackId, const std::string& groupId,
@@ -5557,6 +5606,9 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     hash.add(lane.pianoLowPitch); hash.add(lane.pianoHighPitch);
     hash.add(lane.pianoPitchBindingId); hash.add(lane.pianoGateBindingId); hash.add(lane.pianoVelocityBindingId);
     hash.add(lane.pianoMonophonic); hash.add(lane.probabilitySeed); hash.add(lane.mutationMonophonic); hash.add(lane.mutationDrift);
+    hash.add(lane.pianoScaleEnabled); hash.add(lane.pianoScaleMask); hash.add(lane.pianoScaleSnap);
+    hash.add(lane.randomOctave); hash.add(lane.randomOctaveRange); hash.add(lane.randomOctaveDirection);
+    hash.add(lane.randomPitch); hash.add(lane.randomPitchRange); hash.add(lane.randomPitchDirection);
     auto hashRules = [&](const ofxOceanodeTimelineMutationRules& rules) {
         hash.add(rules.pitchStrength); hash.add(rules.pitchRange); hash.add(rules.pitchDirection); hash.add(rules.scaleMask);
         hash.add(rules.offsetStrength); hash.add(rules.offsetSteps); hash.add(rules.lengthStrength); hash.add(rules.lengthSteps); hash.add(rules.lengthQuantum); hash.add(rules.lengthDirection);
@@ -6771,6 +6823,10 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["mutationDrift"] = lane.mutationDrift;
                 laneJson["pianoScale"] = {{"enabled", lane.pianoScaleEnabled}, {"mask", lane.pianoScaleMask},
                                           {"snap", lane.pianoScaleSnap}};
+                laneJson["randomDeviation"] = {{"octave", lane.randomOctave}, {"octaveRange", lane.randomOctaveRange},
+                                               {"octaveDirection", lane.randomOctaveDirection},
+                                               {"pitch", lane.randomPitch}, {"pitchRange", lane.randomPitchRange},
+                                               {"pitchDirection", lane.randomPitchDirection}};
                 laneJson["mutationGroups"] = ofJson::array();
                 for(const auto& group : lane.mutationGroups) {
                     auto groupJson = mutationRulesToJson(group.rules);
@@ -7134,6 +7190,16 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                             lane.pianoScaleEnabled = scale.value("enabled", false);
                             lane.pianoScaleMask = scale.value("mask", 0xAB5) & 0xFFF;
                             lane.pianoScaleSnap = scale.value("snap", false);
+                        }
+                        // Older presets have none: no deviation.
+                        if(laneJson.contains("randomDeviation") && laneJson["randomDeviation"].is_object()) {
+                            const auto& random = laneJson["randomDeviation"];
+                            lane.randomOctave = ofClamp(random.value("octave", 0.0f), 0.0f, 1.0f);
+                            lane.randomOctaveRange = std::clamp(random.value("octaveRange", 1), 1, 4);
+                            lane.randomOctaveDirection = std::clamp(random.value("octaveDirection", 0), 0, 2);
+                            lane.randomPitch = ofClamp(random.value("pitch", 0.0f), 0.0f, 1.0f);
+                            lane.randomPitchRange = std::clamp(random.value("pitchRange", 2), 1, 24);
+                            lane.randomPitchDirection = std::clamp(random.value("pitchDirection", 0), 0, 2);
                         }
                         if(laneJson.contains("mutationGroups") && laneJson["mutationGroups"].is_array()) {
                             for(const auto& groupJson : laneJson["mutationGroups"]) {

@@ -53,6 +53,9 @@ public:
     // Lanes whose notes can mutate get a Mutate tab with their rules.
     virtual bool hasMutation() const { return false; }
     virtual void drawMutation(ofxOceanodeTimelineLaneEditorContext& context) {}
+    // Lanes of notes get a Rndm tab: random octave and pitch deviation.
+    virtual bool hasRandomDeviation() const { return false; }
+    virtual void drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const = 0;
     virtual void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                             const ofxOceanodeTimelineLaneCanvas& canvas) = 0;
