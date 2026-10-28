@@ -1177,7 +1177,7 @@ bool pianoProbabilityPasses(const ofxOceanodeTimelinePianoNote& note, double cyc
 // a note has a mutation amount and its group's rules can change something.
 bool pianoLaneMutates(const ofxOceanodeTimelineLane& lane) {
     return lane.randomDeviates() || std::any_of(lane.pianoNotes.begin(), lane.pianoNotes.end(), [&](const auto& note) {
-        return note.mutation > 0.0f && ofxOceanodeTimelineMutationRulesFor(lane, note.mutationGroup).active();
+        return note.mutation > 0.0f && lane.mutationStrength > 0.0f && ofxOceanodeTimelineMutationRulesFor(lane, note.mutationGroup).active();
     });
 }
 
@@ -1327,7 +1327,7 @@ ofxOceanodeTimelineMutationRules mutationRulesFromJson(const ofJson& json) {
 ofxOceanodeTimelinePianoNote mutatedPianoNote(const ofxOceanodeTimelinePianoNote& note,
                                               const ofxOceanodeTimelineLane& lane, size_t index,
                                               int64_t cycle, uint64_t epoch, double sourceLength) {
-    const float amount = ofClamp(note.mutation, 0.0f, 1.0f);
+    const float amount = ofClamp(note.mutation, 0.0f, 1.0f) * ofClamp(lane.mutationStrength, 0.0f, 1.0f);
     if(amount <= 0.0f) return note;
     const auto rules = ofxOceanodeTimelineMutationRulesFor(lane, note.mutationGroup);
     if(!rules.active()) return note;
@@ -6411,7 +6411,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     hash.add(lane.pianoLowPitch); hash.add(lane.pianoHighPitch);
     hash.add(lane.pianoPitchBindingId); hash.add(lane.pianoGateBindingId); hash.add(lane.pianoVelocityBindingId);
     hash.add(lane.drumDurationBindingId); hash.add(lane.drumFilterBindingId);
-    hash.add(lane.pianoMonophonic); hash.add(lane.probabilitySeed); hash.add(lane.mutationMonophonic); hash.add(lane.mutationDrift);
+    hash.add(lane.pianoMonophonic); hash.add(lane.probabilitySeed); hash.add(lane.mutationMonophonic); hash.add(lane.mutationDrift); hash.add(lane.mutationStrength);
     hash.add(lane.pianoScaleEnabled); hash.add(lane.pianoScaleMask); hash.add(lane.pianoScaleSnap);
     hash.add(lane.randomOctave); hash.add(lane.randomOctaveRange); hash.add(lane.randomOctaveDirection);
     hash.add(lane.randomPitch); hash.add(lane.randomPitchRange); hash.add(lane.randomPitchDirection);
@@ -7673,6 +7673,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["mutation"] = mutationRulesToJson(lane.mutation);
                 laneJson["mutationMonophonic"] = lane.mutationMonophonic;
                 laneJson["mutationDrift"] = lane.mutationDrift;
+                if(lane.mutationStrength < 1.0f) laneJson["mutationStrength"] = lane.mutationStrength;
                 laneJson["pianoScale"] = {{"enabled", lane.pianoScaleEnabled}, {"mask", lane.pianoScaleMask},
                                           {"snap", lane.pianoScaleSnap}};
                 laneJson["randomDeviation"] = {{"octave", lane.randomOctave}, {"octaveRange", lane.randomOctaveRange},
@@ -8040,6 +8041,10 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         if(laneJson.contains("mutation") && laneJson["mutation"].is_object())
                             lane.mutation = mutationRulesFromJson(laneJson["mutation"]);
                         lane.mutationMonophonic = laneJson.value("mutationMonophonic", false);
+                        {
+                            const auto it = laneJson.find("mutationStrength");
+                            lane.mutationStrength = it != laneJson.end() && it->is_number() ? ofClamp(it->get<float>(), 0.0f, 1.0f) : 1.0f;
+                        }
                         // Drift was a checkbox before it was an amount.
                         if(laneJson.contains("mutationDrift")) {
                             const auto& drift = laneJson["mutationDrift"];

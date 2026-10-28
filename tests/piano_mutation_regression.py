@@ -51,6 +51,17 @@ int main() {
     int kept = 0;
     for(int i = 0; i < 200; ++i) { playAt(0.5); kept += std::lround(pitches.get()) == 60; }
     assert(kept > 60 && kept < 140);
+    // Strength scales every note's chance: 0 = never mutates, 50% x 50% ~ a quarter.
+    lane = model.getLane(t, c, l);
+    lane->mutationStrength = 0.0f;
+    for(int i = 0; i < 60; ++i) { playAt(0.5); near(pitches, 60); }
+    lane = model.getLane(t, c, l);
+    lane->mutationStrength = 0.5f;
+    kept = 0;
+    for(int i = 0; i < 400; ++i) { playAt(0.5); kept += std::lround(pitches.get()) == 60; }
+    assert(kept > 230 && kept < 370);
+    lane = model.getLane(t, c, l);
+    lane->mutationStrength = 1.0f;
     // Offset only: the note starts a grid step early or late.
     lane = model.getLane(t, c, l);
     lane->pianoNotes = {{1, 1, 60, 0.8f, 1, 1.0f}};

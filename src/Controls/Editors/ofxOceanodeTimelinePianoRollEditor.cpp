@@ -222,6 +222,16 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     mutationEditGroup = std::clamp(mutationEditGroup, 0, static_cast<int>(lane->mutationGroups.size()));
     mutationTabFrame = ImGui::GetFrameCount();
 
+    // Strength: scales every note's mutation chance; 0 = mutation off.
+    {
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        float percent = lane->mutationStrength * 100.0f;
+        if(ImGui::SliderFloat("##mutationStrength", &percent, 0.0f, 100.0f, percent <= 0.0f ? "Strength 0%% (mutation off)" : "Strength %.0f%%"))
+            lane->mutationStrength = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Every note's mutation chance x this. 100%%: as set on the notes; 0%%: no note mutates.\nCtrl+click to type, right double-click: 100%%.");
+        if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right)) lane->mutationStrength = 1.0f;
+    }
     // Group chips: click to edit a group, right-click B..D to delete it.
     auto notesIn = [&](int group, bool mutatingOnly) {
         return static_cast<int>(std::count_if(lane->pianoNotes.begin(), lane->pianoNotes.end(), [&](const auto& note) {

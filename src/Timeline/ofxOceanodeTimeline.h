@@ -453,6 +453,9 @@ struct ofxOceanodeTimelineLane {
     // previous repeat instead of as written, so changes accumulate while
     // playing; stopping returns to the written notes. 0 = off.
     float mutationDrift = 0.0f;
+    // Strength (0..1): every note's mutation chance is scaled by it; 0 turns
+    // the lane's mutation off without touching the notes, 1 = as set.
+    float mutationStrength = 1.0f;
     // Scale overlay (editing aid): keys outside the scale are shaded in the
     // roll; with snap, drawn and moved notes land on scale keys.
     bool pianoScaleEnabled = false;
