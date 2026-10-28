@@ -29,7 +29,9 @@ struct DivisionOption {
 
 constexpr DivisionOption kDivisionOptions[] = {
     {"None", 0.0},
-    {"Whole", 4.0}, {"Half", 2.0}, {"Quarter", 1.0},
+    {"Whole", 4.0},
+    {"Half", 2.0}, {"HalfD", 3.0}, {"HalfT", 4.0 / 3.0},
+    {"Quarter", 1.0}, {"QuarterD", 1.5}, {"QuarterT", 2.0 / 3.0},
     {"8th", 0.5}, {"8thD", 0.75}, {"8thT", 1.0 / 3.0},
     {"16th", 0.25}, {"16thD", 0.375}, {"16thT", 1.0 / 6.0},
     {"32nd", 0.125}, {"32ndD", 0.1875}, {"32ndT", 1.0 / 12.0},

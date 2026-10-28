@@ -543,3 +543,161 @@ load with no deviation.
 - **Non-finite values:** a non-finite number is saved as `null`. On load, a
   `null` member falls back to its default and a `null` array entry reads as 0,
   instead of discarding the track that holds it.
+
+## Drum Grid
+
+A **Drum Grid** lane (`ofxOceanodeTimelineLaneType::DrumGrid`, saved as
+`"laneType": "DrumGrid"`) is a step sequencer for a drum kit instrument: one
+row per kit piece. It plays through the same role bindings as a piano roll:
+`pianoGateBindingId` (required) and `pianoPitchBindingId` (optional), plus its
+own optional `drumDurationBindingId` (the kit's Duration input:
+`ofxOceanodeTimelineInstrument::duration`, kept on the note group as
+`durationBindingId`; piano lanes of the group ignore it) and `drumFilterBindingId`
+(the kit's Filter input: `ofxOceanodeTimelineInstrument::filter`, a bipolar
+-1 low-pass fully closed .. 0 open .. +1 high-pass fully closed; on the group as
+`filterBindingId`). A group that never had a Duration / Filter role (projects
+saved before the instrument offered one) adopts it automatically as soon as its
+instrument reports the input: the binding is created, set on the group and its
+Drum Grid lanes, without an undo entry (undo history keeps working). Once a
+group has had the role, set or cleared by the user, it is never adopted again;
+groups save this as `"durationDecided"` / `"filterDecided"`. Rows are drawn in
+their pad's colour from `ofxOceanodeTimelineInstrument::rowColors` (index =
+slot, read every frame, never saved; rows without one use the track colour).
+`pianoVelocityBindingId` is unused, the velocity travels as the gate level.
+Row `r` drives component `row.slot` of every vector.
+
+**Creating one.** "Add to Timeline as Instrument..." on a node whose
+`getTimelineInstrument()` reports `kit = true` opens the instrument dialog with
+**Editor: Drum Grid** preselected (Piano Roll stays available, and is the
+default for other instruments). The new lane gets one row per instrument voice,
+named from `ofxOceanodeTimelineInstrument::rowNames` ("Row n" past its end).
+A kit note group's row menu offers **New drum grid clip here** next to the
+piano-roll item, and "Drum Grid" is in the clip and lane type lists.
+
+**Hits are positions, the grid is for editing.** A row holds hits at beat
+positions from the start of its pattern (like a piano note's `startBeat`), not
+step indices. The lane's grid only decides where new hits snap and which
+columns are drawn: either the timeline's master grid (the toolbar's grid
+division, `getMasterGridBeats()`, saved with the timeline as
+`"masterGridBeats"`; 1/16 while it is None) or a fixed division of the lane
+(`drumStepFollow` false, `beatsPerStep`). New Drum Grid lanes, and lanes
+converted from the first format, follow the master. A following lane reads the
+master every frame, so its columns and its paint/move step change as soon as
+the toolbar grid does. The canvas shows the lane's grid next to the strip tabs
+("Grid: Master (32nd)" or "Grid: 16th (fixed)"); click it to switch between
+the master and a fixed division (also in the Lane tab). It is shown while the
+lane is tall enough for the strip. The divisions include dotted and triplet values (half, quarter, 8th,
+16th, 32nd, each plain, D and T). Changing the grid never moves a hit or
+changes what plays: hits placed on 1/32 keep their places on a 1/16 grid.
+
+**Evaluation**, per row, at the clip's source beat (clip position, stretch and
+repeats, lane and track mute/solo and binding blend modes work as for every
+lane):
+
+- A row repeats every `length` beats (1/24..64; rows of different lengths make
+  a polymeter) and restarts at every clip repeat. Hits at or past the length
+  are kept but silent ("hidden"): shortening a row never deletes hits, and
+  lengthening it back brings them back unchanged. Fills, shifts, quantize,
+  randomize and Clear leave hidden hits alone; they are saved like any hit.
+- A hit plays at its position. Swing (0..75%) delays hits on odd positions of
+  the lane's swing step (`drumSwingBeats`, 1/16 by default) by that much of the
+  step; hits off the swing step are not swung.
+- Each hit stores its own `length` (beats) and `gate` (fraction of it): its
+  gate stays open length x gate, at its velocity, so playback never depends on
+  the grid. New hits get the grid step as length and the row's gate. A ratchet
+  of N divides the hit's length into N sub-hits, each open sub-length x gate.
+- Gate component = the velocity while a hit is open, else 0 (`1` for a
+  non-float target). Pitch component = 60 + the hit's semitone offset, held
+  after the gate closes so a tail keeps its tuning. Duration component = the
+  hit's decay multiplier (x0.1..x24, x1 = as set) and Filter component its
+  filter (-1..1, 0 = open), both held the same way. Before a row's first hit
+  they hold its last audible hit's values (60 / x1 / 0 for a row with no hits).
+- A hit that starts while (or less than one retrigger gap after) the previous
+  hit of its row was open opens after the retrigger gap, so ratchets,
+  back-to-back hits and pattern/clip wraps always give a fresh rising edge.
+- Vectors are written at max(highest slot + 1, the instrument's voices, the
+  parameter's current width): nothing broadcasts. Rows without a hit hold 0
+  gate and 60 pitch.
+- Probability uses the lane's `probabilitySeed` and is rolled per pattern cycle,
+  per clip repeat and per clip start (play, seek, loop pass), like steps and
+  piano notes. "Probability" off plays every hit.
+
+**Scheduling.** Each hit's start (pitch, duration), gate opening and close are
+change beats for the scheduler, which hands the Gate/Pitch/Duration/Filter values
+ahead to backends that execute timestamped values (the instrument's scheduled
+inputs). Pitch, Duration and Filter are prepared 2 ms ahead of Gate, so a
+hit's tuning, decay and filter are in place when it fires; the role paths are scheduled together or
+not at all, like a piano lane's roles. The grid is not involved.
+
+**Editor.** Row headers (left of the timeline zone): a swatch and the name in
+the row's colour, M and S, and the length as a field with - and + (in steps of
+the current grid when it divides evenly, else beats, e.g. `1.5b`): drag the
+field like a slider, double-click / Ctrl-click to type, - / + change it by one
+grid step. Taller rows put the field on a second line. Click a header to focus
+its row, right-click for its menu (rename, length in steps or beats, gate of
+new hits, slot, clear, fill every 2/3/4/8 steps, shift by a step, quantize to
+the grid, randomize, copy/paste, add/remove). Each row's first cycle ends at a
+thick line in its colour with a handle: drag it to set the length (grid
+steps; Alt: free; the tooltip shows "5 steps" / "1.5 b"), double-click it for
+the clip's length. Its repeats after it are ghosted, with a fainter line at
+each further cycle start; hidden hits show as faint outlines where they would
+play. In the grid:
+
+- A click on an empty cell adds a hit at the cell's start; a click on a hit
+  removes it. **A cell that holds a hit (on or off the grid) grabs that hit**:
+  the click removes it, it never stacks a second hit at the snapped position.
+  A hit wider than its cell is grabbed anywhere along its drawn span.
+- Dragging from an empty cell paints hits into the empty cells it crosses;
+  Cmd/Ctrl-drag erases. Dragging a hit sideways moves it by whole grid steps,
+  keeping an off-grid offset (Alt: freely); vertically (or Shift-drag) sets its
+  velocity. Right-click a hit for its fields: beat, length, gate, velocity,
+  pitch, probability, ratchet, duration, Snap to grid, Delete.
+- Hits are drawn at their true position and length; hits off the current grid
+  have an amber outline. Fill height shows velocity, a dotted top edge a
+  probability below 100%, ticks the ratchet, numbers the pitch offset; repeats
+  of a row past its first pattern are shaded.
+
+The strip under the grid paints the focused row's Velocity, Pitch (semitones,
+bipolar), Probability, Ratchet, Gate, Duration or Filter, one bar per hit at
+its x, in the row's colour (log scale over x0.1..x24 for Duration, bars growing
+from the x1 line, guides at x0.25..x16; painting snaps to x0.125, 0.25, 0.5, 1,
+2, 4, 8, 16 or 24, Alt paints unsnapped. Filter: bipolar around open, low-pass
+(LP, blue) below, high-pass (HP, orange) above, snapping to open near the
+centre, Alt unsnapped, double-click a bar to open it; hovering shows
+"LP 40 %" / "HP 25 %" / "open"). For the others Alt drags finely; right-click
+resets a bar.
+The strip's parameter is picked from a row of tabs with full names on top of
+the strip (inside the timeline zone, short names only when the editor is very
+narrow) or from the **Row** properties tab, which also holds the focused row's
+name, slot, length and gate. The **Lane** tab holds the grid (Master or a
+division), swing and its step, probability and seed, and the rows.
+
+```json
+"drumGrid": {
+  "format": 2,
+  "stepFollow": true,
+  "swing": 0.0,
+  "swingBeats": 0.25,
+  "rows": [
+    {"slot": 0, "name": "Kick", "length": 4.0, "gate": 0.5, "mute": false, "solo": false,
+     "hits": [{"beat": 0.0, "length": 0.25, "gate": 0.5, "velocity": 0.8, "pitch": 0,
+               "probability": 1.0, "ratchet": 1, "duration": 1.0, "filter": 0.0}, ...]}
+  ]
+}
+```
+
+Only Drum Grid lanes write `drumGrid`, so other lanes save exactly as before.
+The lane also saves `"drumDurationBindingId"` when set, and note groups save
+`"duration"` and `"durationDecided"`. Missing or malformed fields load as their
+defaults (a hit without `duration` plays at x1, without `filter` open) and values are clamped into
+range.
+
+**The first, index-based shape** (no `"format"`: rows of `"steps"` with
+`"on"`, a length in steps, `"nudge"`) is converted on load so it plays
+identically: an on step i becomes a hit at i x `beatsPerStep` (a nudged one
+at the exact place it played, swing included), length `beatsPerStep`, gate the
+row's gate; row length = steps x `beatsPerStep`; the lane swings on
+`beatsPerStep` as before and edits on the master grid; on steps past a row's
+length (which never played) are kept as hidden hits. Probability rolls are keyed so converted hits roll as
+before. It is saved back in format 2 (an older build would read such a lane as
+empty rows).

@@ -13,6 +13,7 @@ inline const char* laneKind(const ofxOceanodeTimelineLane& lane) {
         case ofxOceanodeTimelineLaneType::Step: return "Step Sequencer";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
         case ofxOceanodeTimelineLaneType::PianoRoll: return "Piano Roll";
+        case ofxOceanodeTimelineLaneType::DrumGrid: return "Drum Grid";
         case ofxOceanodeTimelineLaneType::MultiValue: return "Multi Value";
         case ofxOceanodeTimelineLaneType::MultiSlider: return "Multi Slider";
         case ofxOceanodeTimelineLaneType::MultiGate: return lane.multiRowCount <= 1 ? "Toggle" : "Multi Gate";

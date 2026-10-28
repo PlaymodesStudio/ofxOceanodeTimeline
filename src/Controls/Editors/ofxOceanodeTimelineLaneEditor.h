@@ -56,6 +56,9 @@ public:
     // Lanes of notes get a Rndm tab: random octave and pitch deviation.
     virtual bool hasRandomDeviation() const { return false; }
     virtual void drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) {}
+    // An optional extra properties tab of the lane type (nullptr: none).
+    virtual const char* extraTabLabel() const { return nullptr; }
+    virtual void drawExtraTab(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const = 0;
     virtual void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                             const ofxOceanodeTimelineLaneCanvas& canvas) = 0;

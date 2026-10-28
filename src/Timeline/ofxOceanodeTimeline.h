@@ -59,8 +59,18 @@ enum class ofxOceanodeTimelineLaneType {
     // Sequences a dropdown parameter: like Number, each point holds an
     // option index until the next one, but the editor shows and picks the
     // bound parameter's option names (see ofxOceanodeTimelineDropdownOptions).
-    Dropdown
+    Dropdown,
+    // A drum kit step sequencer: one row per kit piece (a component of the
+    // instrument's Gate/Pitch vectors), see ofxOceanodeTimelineDrumRow. Uses
+    // the piano roll's role bindings (pianoGateBindingId / pianoPitchBindingId).
+    DrumGrid
 };
+
+// Lane types that drive an instrument through the note roles (pianoPitch /
+// pianoGate / pianoVelocity binding ids) instead of plain bindingIds.
+inline bool ofxOceanodeTimelineLaneUsesNoteRoles(ofxOceanodeTimelineLaneType type) {
+    return type == ofxOceanodeTimelineLaneType::PianoRoll || type == ofxOceanodeTimelineLaneType::DrumGrid;
+}
 
 // Number and Dropdown lanes hold absolute values in curvePoints, each until
 // the next point -- no normalization, no interpolation.
@@ -83,7 +93,7 @@ enum class ofxOceanodeTimelineTimebase {
 
 // Explicit right-edge operations, shared by numeric editing and mouse drags.
 enum class ofxOceanodeTimelineEndEdit { Repeat, Trim, Stretch };
-enum class ofxOceanodeTimelineTargetRole { Lane, Pitch, Gate, Velocity, LfoOutput };
+enum class ofxOceanodeTimelineTargetRole { Lane, Pitch, Gate, Velocity, LfoOutput, Duration, Filter };
 
 // A read-only explanation of the same evaluation used by playback. Shared
 // piano lanes appear as one voice-pool contribution with all source lane IDs.
@@ -262,6 +272,106 @@ struct ofxOceanodeTimelineGateRegion {
     double end() const { return startBeat + durationBeats; }
 };
 
+// Drum Grid: one hit placed in a kit piece's row. It has a position in time,
+// not a grid index: the editing grid only decides where new hits snap, so a
+// hit placed on a 1/32 keeps its place when the grid becomes 1/16.
+struct ofxOceanodeTimelineDrumStep {
+    double beat = 0.0;        // position from the start of its row's pattern, beats
+    double length = 0.25;     // the span it occupies, beats (a ratchet divides it)
+    float gate = 0.5f;        // fraction of its span (of each ratchet sub-span) the
+                              // gate stays open, 0.05..1. Open time = length x gate / ratchet.
+    float velocity = 0.8f;    // 0..1, written as the gate level
+    int pitch = 0;            // semitones from the piece's own tuning (-24..24)
+    float probability = 1.0f; // 0..1, rolled per pattern repeat
+    int ratchet = 1;          // 1..8 evenly spaced sub-hits inside its span
+    float duration = 1.0f;    // 0.1..24: multiplier of the hit's decays (the
+                              // instrument's Duration input; 1 = as set)
+    float filter = 0.0f;      // -1..1: the instrument's Filter input, -1 low-pass fully
+                              // closed .. 0 open .. +1 high-pass fully closed
+};
+
+// Drum Grid: one kit piece. Its hits repeat every `length` beats (rows of
+// different lengths make a polymeter), restarting at every clip repeat.
+struct ofxOceanodeTimelineDrumRow {
+    int slot = 0;             // gate/pitch/duration vector component (kit slot)
+    std::string name;
+    // Pattern length in beats (1/24 .. 64). Hits at or past it are kept but
+    // silent ("hidden"): shortening a row and lengthening it back restores them.
+    double length = 4.0;
+    float gate = 0.5f;        // gate of new hits placed in the row (0.05..1)
+    bool mute = false;
+    bool solo = false;
+    std::vector<ofxOceanodeTimelineDrumStep> steps; // sorted by beat
+};
+
+// One sounding hit of a drum row, in the clip's source beats.
+struct ofxOceanodeTimelineDrumHit {
+    double start = 0.0;       // where it is (its pitch and duration apply from here)
+    double open = 0.0;        // where its gate opens (later than start by the retrigger gap
+                              // when the hit before it was still open)
+    double close = 0.0;       // where its gate closes
+    float velocity = 0.0f;
+    int pitch = 60;
+    float duration = 1.0f;
+    float filter = 0.0f;
+    int step = 0;             // index of the placed hit in its row
+};
+
+struct ofxOceanodeTimelineLane;
+namespace ofxOceanodeTimelineDrumGrid {
+    constexpr int kMaxRows = 32;
+    constexpr int kMaxHitsPerRow = 512;
+    constexpr int kMaxRatchet = 8;
+    constexpr float kMaxDuration = 24.0f;   // step duration multiplier range: 0.1..24
+    constexpr double kMinLength = 1.0 / 24.0, kMaxLength = 64.0; // row length, beats
+    // Pitch the instrument plays a piece at its own tuning.
+    constexpr int kBasePitch = 60;
+    // Clamps every field into range and sorts the hits by position.
+    void normalizeRow(ofxOceanodeTimelineDrumRow& row);
+    // count rows on slots 0..count-1 named from names ("Row n" past them).
+    std::vector<ofxOceanodeTimelineDrumRow> defaultRows(int count, const std::vector<std::string>& names, double lengthBeats = 4.0);
+    // Muted rows and, when some row is soloed, the others are silent.
+    bool rowAudible(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumRow& row);
+    // Swing: a hit on an odd multiple of the lane's drumSwingBeats is delayed
+    // by drumSwing x drumSwingBeats. Hits off that grid are not swung.
+    double swingOffset(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumStep& step);
+    // Deterministic probability roll of one hit in one pattern cycle.
+    bool probabilityPasses(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumStep& step, int slot,
+                           int64_t cycle, uint64_t epoch = 0);
+    // The gate and pitch of a row at a source beat of clip repeat `repeat`.
+    // contentLength: the clip's source length (patterns restart there).
+    // gap: retrigger gap in source beats. heldPitch keeps the last played
+    // hit's pitch after its gate closes; before a row's first hit it holds
+    // its last placed hit's values (60 / x1 with no hits). heldDuration
+    // (optional) is held the same way. Returns true while the gate is open;
+    // gate is then its velocity.
+    bool rowStateAt(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumRow& row,
+                    double sourceBeat, int64_t repeat, double contentLength, double gap,
+                    uint64_t epoch, float& gate, int& heldPitch, float* heldDuration = nullptr,
+                    float* heldFilter = nullptr);
+    // Every hit of a row starting in [fromBeat, toBeat] of one repeat (for the
+    // scheduler's change beats and the editor), open/close resolved as played.
+    void rowHits(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineDrumRow& row,
+                 double fromBeat, double toBeat, int64_t repeat, double contentLength, double gap,
+                 uint64_t epoch, std::vector<ofxOceanodeTimelineDrumHit>& out);
+    // The editing grid of a lane: the master grid when it follows it (1/16
+    // while the master is None), else its own beatsPerStep. Playback never
+    // depends on it.
+    double effectiveStepBeats(const ofxOceanodeTimelineLane& lane, double masterGridBeats);
+    // Index of the hit whose position lies in [fromBeat, toBeat) of a row's
+    // pattern (the one nearest preferBeat), -1 for none.
+    int stepInRange(const ofxOceanodeTimelineDrumRow& row, double fromBeat, double toBeat, double preferBeat);
+    // Adds a hit (kept sorted) and returns its index.
+    int addStep(ofxOceanodeTimelineDrumRow& row, const ofxOceanodeTimelineDrumStep& step);
+    // A hit at or past its row's length is hidden: silent, kept for later.
+    inline bool stepHidden(const ofxOceanodeTimelineDrumRow& row, const ofxOceanodeTimelineDrumStep& step) {
+        return step.beat >= row.length - 1e-9;
+    }
+    // The colour a row is drawn in: its slot's colour from the instrument
+    // (ofxOceanodeTimelineInstrument::rowColors), else fallback.
+    ofColor rowColor(const std::vector<ofColor>& colors, const ofxOceanodeTimelineDrumRow& row, const ofColor& fallback);
+}
+
 struct ofxOceanodeTimelineParameterBinding {
     std::string id;
     std::string parameterPath;
@@ -325,6 +435,12 @@ struct ofxOceanodeTimelineLane {
     std::string pianoPitchBindingId;
     std::string pianoGateBindingId;
     std::string pianoVelocityBindingId;
+    // Drum Grid: optional per-slot decay multiplier target (the instrument's
+    // Duration), written like the pitch.
+    std::string drumDurationBindingId;
+    // Drum Grid: optional per-slot bipolar filter target (the instrument's
+    // Filter), written like the duration (0 = open before any hit).
+    std::string drumFilterBindingId;
     float pianoDefaultVelocity = 0.8f;
     bool pianoMonophonic = false;
     // Piano mutation: group A's rules, then groups B..D (see
@@ -428,6 +544,17 @@ struct ofxOceanodeTimelineLane {
     // Frequency lane grid: 0 = straight, 1 = triplet, 2 = dotted. Changing it
     // only affects new edits; existing points keep their values.
     int lfoSnapMode = 0;
+    // Drum Grid: the kit pieces (see ofxOceanodeTimelineDrumRow). Steps are
+    // beatsPerStep long; probability rolls use probabilitySeed.
+    std::vector<ofxOceanodeTimelineDrumRow> drumRows;
+    // Swing: hits on odd multiples of drumSwingBeats are delayed by
+    // drumSwing (0..0.75) of drumSwingBeats.
+    float drumSwing = 0.0f;
+    double drumSwingBeats = 0.25;
+    // Editing grid (where new hits snap, which columns are drawn): the
+    // timeline's master grid (true) or beatsPerStep. Playback never depends
+    // on it. Saved as "stepFollow" in the lane's drumGrid.
+    bool drumStepFollow = true;
 };
 
 // The rules a note of this mutation group follows (0 = A; a missing group
@@ -598,6 +725,17 @@ struct ofxOceanodeTimelineNoteGroup {
     std::string pitchBindingId;
     std::string gateBindingId;
     std::string velocityBindingId;
+    // A kit's Duration input (Drum Grid lanes only; piano lanes ignore it).
+    std::string durationBindingId;
+    // The Duration role was set (or cleared) by the user or adopted once from
+    // the instrument. While false and empty, the timeline adopts the
+    // instrument's Duration as soon as it offers one (groups saved before it
+    // existed). Saved as "durationDecided".
+    bool durationDecided = false;
+    // A kit's Filter input, adopted / decided like the Duration ("filter",
+    // "filterDecided").
+    std::string filterBindingId;
+    bool filterDecided = false;
     bool expanded = false;       // show the member rows under the group row
     float rowHeight = 48.0f;     // height of the group row in the timeline
     // Voice slots the piano roll writes to vector targets. 0 = the bound
@@ -606,13 +744,14 @@ struct ofxOceanodeTimelineNoteGroup {
     int voices = 0;
     std::vector<std::string> members() const {
         std::vector<std::string> ids;
-        for(const auto* id : {&pitchBindingId, &gateBindingId, &velocityBindingId})
+        for(const auto* id : {&pitchBindingId, &gateBindingId, &velocityBindingId, &durationBindingId, &filterBindingId})
             if(!id->empty()) ids.push_back(*id);
         return ids;
     }
     bool contains(const std::string& bindingId) const {
         return !bindingId.empty() &&
-            (pitchBindingId == bindingId || gateBindingId == bindingId || velocityBindingId == bindingId);
+            (pitchBindingId == bindingId || gateBindingId == bindingId || velocityBindingId == bindingId ||
+             durationBindingId == bindingId || filterBindingId == bindingId);
     }
 };
 
@@ -833,6 +972,12 @@ public:
     bool setNoteGroupRoles(const std::string& trackId, const std::string& groupId,
                            const std::string& pitchBindingId, const std::string& gateBindingId,
                            const std::string& velocityBindingId);
+    // A kit's Duration input (Drum Grid lanes of the group write it).
+    bool setNoteGroupDuration(const std::string& trackId, const std::string& groupId,
+                              const std::string& durationBindingId);
+    // A kit's Filter input (Drum Grid lanes of the group write it).
+    bool setNoteGroupFilter(const std::string& trackId, const std::string& groupId,
+                            const std::string& filterBindingId);
     bool renameNoteGroup(const std::string& trackId, const std::string& groupId, const std::string& name);
     // removeBindings: also remove the member parameters from the timeline;
     // otherwise they become ordinary rows again.
@@ -844,9 +989,22 @@ public:
                                                                         const std::string& bindingId);
     // Creates a clip with one piano-roll lane driving the group's roles; the
     // key range follows the pitch parameter's range when it is a note range.
+    // laneType DrumGrid: a Drum Grid lane instead, one row per kit slot of
+    // the instrument (named from its rowNames).
     std::string createNoteGroupClip(const std::string& trackId, const std::string& groupId,
                                     const std::string& requestedName, double startBeat, double durationBeats,
-                                    std::string* laneIdOut = nullptr);
+                                    std::string* laneIdOut = nullptr,
+                                    ofxOceanodeTimelineLaneType laneType = ofxOceanodeTimelineLaneType::PianoRoll);
+    // The instrument a note-role lane plays (its Gate's or Pitch's node):
+    // its voice count and kit slot names. False when it plays no instrument.
+    // colors (optional): its kit slot colours (rowColors), see
+    // ofxOceanodeTimelineDrumGrid::rowColor.
+    bool drumGridInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                            int& voices, std::vector<std::string>& names, bool* kit = nullptr,
+                            std::vector<ofColor>* colors = nullptr) const;
+    // The same for a note group's roles.
+    bool noteGroupInstrument(const std::string& trackId, const std::string& groupId,
+                             int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
     // "Add to Timeline as Piano Roll..." from a parameter's right-click menu:
     // queued here, shown by the timeline controller (like track renames).
     void requestNoteGroupSetup(ofxOceanodeAbstractParameter* parameter) { pendingNoteGroupSetupParameter = parameter; }
@@ -1070,6 +1228,15 @@ public:
     int getTimeSignatureNumerator() const { return timeSignatureNumerator; }
     int getTimeSignatureDenominator() const { return timeSignatureDenominator; }
     double getBeatsPerBar() const { return timeSignatureNumerator * (4.0 / timeSignatureDenominator); }
+    // The timeline's grid / snap division in beats (0 = None), the "master"
+    // a Drum Grid lane's editing grid may follow. Saved with the timeline
+    // ("masterGridBeats"). Editing only: no lane plays differently with it.
+    double getMasterGridBeats() const { return masterGridBeats; }
+    void setMasterGridBeats(double beats);
+    // The step length a Drum Grid lane plays with (see drumStepFollow).
+    double drumStepBeats(const ofxOceanodeTimelineLane& lane) const {
+        return ofxOceanodeTimelineDrumGrid::effectiveStepBeats(lane, masterGridBeats);
+    }
     void setTimeSignature(int numerator, int denominator);
 
     // --- Timestamped scheduling -------------------------------------------
@@ -1275,6 +1442,8 @@ private:
         std::unordered_map<const ofxOceanodeTimelineClip*, size_t> clipOrder;
         std::unordered_map<const ofxOceanodeTimelineLane*, ofxOceanodeTimelinePianoVoicing> pianoVoicing;
         std::unordered_map<const ofxOceanodeTimelineLane*, std::shared_ptr<SharedPianoPlayback>> sharedPiano;
+        // Drum Grid lanes: the voice count of the instrument they drive (0: none).
+        std::unordered_map<const ofxOceanodeTimelineLane*, int> drumOutputWidth;
     };
     // The voice count and kit mode a piano lane plays with: the lane's mono
     // switch, its note group's override, else the instrument it drives.
@@ -1377,6 +1546,13 @@ private:
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);
     void updatePianoGateOwnership(bool isPlaying);
+    // Gives note groups that never had a Duration / Filter role their
+    // instrument's input (see ofxOceanodeTimelineNoteGroup::durationDecided).
+    // Not an undoable edit: history snapshots get the same role.
+    void adoptInstrumentDurations();
+    // which: 0 Duration, 1 Filter.
+    bool setNoteGroupKitRole(const std::string& trackId, const std::string& groupId,
+                             const std::string& bindingId, int which);
     std::unordered_set<std::string> playingPianoGatePaths;
     // Gates closed by the last updatePianoGateOwnership().
     std::vector<std::string> releasedPianoGatePaths;
@@ -1411,6 +1587,7 @@ private:
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     bool schedulingEnabled = true;
+    double masterGridBeats = 0.25;
     // The longest window; the scheduler uses less while frames are short.
     double schedulingLookaheadMs = 120.0;
     bool schedulingLookaheadAdaptive = true;

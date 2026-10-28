@@ -36,6 +36,7 @@ Each automation lane type has a concrete editor class in its own header:
 | Multi Slider | `ofxOceanodeTimelineMultiSliderEditor` | Dense value grid controls, painting and preview |
 | Multi Value | `ofxOceanodeTimelineMultiValueEditor` | Shared `RegionEditor` mechanics with numeric region values |
 | Multi Gate / Toggle | `ofxOceanodeTimelineMultiGateEditor` | Shared `RegionEditor` mechanics for on/off regions |
+| Drum Grid | `ofxOceanodeTimelineDrumGridEditor` | Kit rows (headers with M/S/length left of the zone, where the piano keyboard sits), step toggling/painting, per-row velocity/pitch/probability/ratchet/nudge/duration strip with full-word tabs, Row properties tab (`extraTabLabel`/`drawExtraTab`), row and step menus, dot-grid preview |
 
 The Number/Dropdown and Multi Value/Multi Gate pairs reuse algorithms through
 small shared base classes, with a separate state instance per concrete type.
@@ -73,7 +74,8 @@ terminology, clip timing and the shared properties panel. The controller uses
 it in automation/audio editors and arrangement menus; LFO uses the same panel.
 Lane timing is never edited in lane properties. `drawTargets` on the editor
 interface lets Piano Roll own its role-specific routing controls separately
-from content settings. Generic lane targets remain in the shell.
+from content settings (Drum Grid uses the same role bindings and draws its own
+Gate/Pitch routing). Generic lane targets remain in the shell.
 
 `resizeClipEnd` is the canonical Repeat / Trim / Stretch operation for numeric
 length edits and edge drags. Drag snapshots restore the original source mapping

@@ -43,6 +43,8 @@ python3 ../ofxOceanodeTimeline/tests/target_routing_regression.py
 python3 ../ofxOceanodeTimeline/tests/clarity_regression.py
 python3 ../ofxOceanodeTimeline/tests/controller_clarity_regression.py
 python3 ../ofxOceanodeTimeline/tests/attachment_regression.py
+python3 ../ofxOceanodeTimeline/tests/drum_grid_regression.py
+python3 ../ofxOceanodeTimeline/tests/drum_duration_adopt_regression.py
 ```
 
 The runtime regressions use real OF parameters and JSON under ASan/UBSan; the editor suite also runs production editors with headless ImGui. Set `OCEANODE_TEST_OF_ROOT` to a compiled macOS OF tree if needed. `OCEANODE_CORE_ROOT` can override the default sibling core path. These checks do not verify visual appearance or exercise audio hardware.

@@ -11,14 +11,17 @@ ofxOceanodeTimelineLaneEditor& ofxOceanodeTimelineLaneEditors::forType(ofxOceano
         case ofxOceanodeTimelineLaneType::MultiSlider: return multiSlider;
         case ofxOceanodeTimelineLaneType::MultiValue: return multiValue;
         case ofxOceanodeTimelineLaneType::MultiGate: return multiGate;
+        case ofxOceanodeTimelineLaneType::DrumGrid: return drumGrid;
         default: return step; // Legacy Wave lanes are migrated by the model.
     }
 }
 float ofxOceanodeTimelineLaneEditors::keyboardReserve(ofxOceanodeTimelineLaneType type) {
     using namespace ofxOceanodeTimelineLaneEditorUi;
+    if(type == ofxOceanodeTimelineLaneType::DrumGrid) return ofxOceanodeTimelineDrumGridEditor::headerWidth();
     return type == ofxOceanodeTimelineLaneType::PianoRoll
         ? kPianoKeyboardWidth + kPianoScrollbarWidth + 9.0f : 0.0f;
 }
 float ofxOceanodeTimelineLaneEditors::defaultHeight(ofxOceanodeTimelineLaneType type) {
+    if(type == ofxOceanodeTimelineLaneType::DrumGrid) return 320.0f;
     return type == ofxOceanodeTimelineLaneType::PianoRoll ? 480.0f : 190.0f;
 }

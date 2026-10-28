@@ -15,6 +15,7 @@ CASES = r'''
 #include "Controls/Editors/ofxOceanodeTimelinePianoRollEditor.h"
 #undef private
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditors.h"
+#include "Controls/Editors/ofxOceanodeTimelineDrumGridEditor.h"
 #include "Controls/Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
 #include "imgui.h"
@@ -66,6 +67,7 @@ int main() {
         if(properties) {
             ImGui::BeginChild("Properties", ImVec2(210, 650));
             editor.drawProperties(context);
+            if(editor.extraTabLabel() != nullptr) editor.drawExtraTab(context);
             ImGui::EndChild();
         }
         ImGui::SetCursorScreenPos(ImVec2(230, 100));
@@ -101,7 +103,8 @@ int main() {
     for(auto type : {ofxOceanodeTimelineLaneType::Step, ofxOceanodeTimelineLaneType::Curve,
                     ofxOceanodeTimelineLaneType::PianoRoll, ofxOceanodeTimelineLaneType::Number,
                     ofxOceanodeTimelineLaneType::Dropdown, ofxOceanodeTimelineLaneType::MultiSlider,
-                    ofxOceanodeTimelineLaneType::MultiValue, ofxOceanodeTimelineLaneType::MultiGate}) {
+                    ofxOceanodeTimelineLaneType::MultiValue, ofxOceanodeTimelineLaneType::MultiGate,
+                    ofxOceanodeTimelineLaneType::DrumGrid}) {
         const auto clipId = model.createClip(trackId, "Content", 0, 8);
         const auto laneId = model.createLane(trackId, clipId, "Content", type);
         auto& clip = *model.getClip(trackId, clipId);
@@ -194,6 +197,183 @@ int main() {
     const auto& values = model.getLane(trackId, sliderClip, sliderLane)->multiSliderValues;
     assert(std::any_of(values.begin(), values.end(), [](float v) { return v > 0; }));
     frame(sliderClip, sliderLane, true, ImVec2(250, 200), false);
+    {
+        // Drum Grid: 4 rows of 43 px from y 104 (row 1 from 147, row 2 from 190,
+        // row 3 from 233), 1/16 cells of 17.5 px from x 230; under them the
+        // strip: parameter tabs (282..301), bars (303..358).
+        const auto drumClip = model.createClip(trackId, "Drums", 0, 4);
+        const auto drumLane = model.createLane(trackId, drumClip, "Drums", ofxOceanodeTimelineLaneType::DrumGrid);
+        auto drums = [&]() -> ofxOceanodeTimelineLane& { return *model.getLane(trackId, drumClip, drumLane); };
+        auto click = [&](ImVec2 at) {
+            frame(drumClip, drumLane, true, at, false);
+            frame(drumClip, drumLane, true, at, true);
+            frame(drumClip, drumLane, true, at, false);
+        };
+        assert(drums().drumRows.size() == 4 && drums().drumRows[0].length == 4.0);
+        frame(drumClip, drumLane, false, ImVec2(238, 120), false);
+        frame(drumClip, drumLane, false, ImVec2(238, 120), true);   // unfocused: no edit
+        frame(drumClip, drumLane, false, ImVec2(238, 120), false);
+        assert(drums().drumRows[0].steps.empty());
+        click(ImVec2(238, 120));                                    // click adds a hit on the cell
+        assert(drums().drumRows[0].steps.size() == 1 && drums().drumRows[0].steps[0].beat == 0.0 &&
+               drums().drumRows[0].steps[0].length == 0.25);
+        click(ImVec2(238, 120));                                    // ...and removes it
+        assert(drums().drumRows[0].steps.empty());
+        frame(drumClip, drumLane, true, ImVec2(238, 170), true);    // row 1, cell 0
+        frame(drumClip, drumLane, true, ImVec2(300, 170), true);    // paint through cell 4
+        frame(drumClip, drumLane, true, ImVec2(300, 170), false);
+        assert(drums().drumRows[1].steps.size() == 5);
+        for(int i = 0; i <= 4; ++i) assert(drums().drumRows[1].steps[i].beat == i * 0.25);
+        assert(drums().drumRows[0].steps.empty());
+        // Velocity strip of the focused row (row 1): half height = 0.5, on the hit under x.
+        frame(drumClip, drumLane, true, ImVec2(256, 330.4f), true);
+        frame(drumClip, drumLane, true, ImVec2(256, 330.4f), false);
+        assert(std::abs(drums().drumRows[1].steps[1].velocity - 0.5f) < 0.02f);
+        assert(std::abs(drums().drumRows[1].steps[0].velocity - 0.8f) < 1e-6f);
+        // Tabs carry full words, laid out from the zone's left edge: pick Duration.
+        float tabX = 232.0f, durationTab = 0.0f;
+        for(const char* name : {"Velocity", "Pitch", "Probability", "Ratchet", "Gate", "Duration"}) {
+            const float w = ImGui::CalcTextSize(name).x + 16.0f;
+            if(std::string(name) == "Duration") durationTab = tabX + w * 0.5f;
+            tabX += w + 3.0f;
+        }
+        click(ImVec2(durationTab, 291.0f));
+        // Log bar over x0.1 .. x24: x2 sits at log2(20) / log2(240) of the height.
+        const float twoY = 358.0f - std::log2(20.0f) / std::log2(240.0f) * 55.2f;
+        frame(drumClip, drumLane, true, ImVec2(256, twoY), true);
+        frame(drumClip, drumLane, true, ImVec2(256, twoY), false);
+        assert(drums().drumRows[1].steps[1].duration == 2.0f);
+        assert(drums().drumRows[1].steps[1].velocity < 0.6f); // still the velocity painted before
+        // Filter tab (after Duration): up is high-pass, double-click a bar opens it.
+        {
+            float filterTab = 0.0f, x = 232.0f;
+            for(const char* name : {"Velocity", "Pitch", "Probability", "Ratchet", "Gate", "Duration", "Filter"}) {
+                const float w = ImGui::CalcTextSize(name).x + 16.0f;
+                if(std::string(name) == "Filter") filterTab = x + w * 0.5f;
+                x += w + 3.0f;
+            }
+            click(ImVec2(filterTab, 291.0f));
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), true);
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), false);
+            assert(drums().drumRows[1].steps[1].filter > 0.7f && drums().drumRows[1].steps[1].filter < 0.95f);
+            frame(drumClip, drumLane, true, ImVec2(256, 340.0f), true);   // below the centre: low-pass
+            frame(drumClip, drumLane, true, ImVec2(256, 340.0f), false);
+            assert(drums().drumRows[1].steps[1].filter < -0.3f);
+            frame(drumClip, drumLane, true, ImVec2(256, 331.0f), true);   // near the centre: snaps open
+            frame(drumClip, drumLane, true, ImVec2(256, 331.0f), false);
+            assert(drums().drumRows[1].steps[1].filter == 0.0f);
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), true);
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), false);
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), true);   // double-click: open
+            frame(drumClip, drumLane, true, ImVec2(256, 308.0f), false);
+            assert(drums().drumRows[1].steps[1].filter == 0.0f);
+        }
+        // Dragging a hit sideways moves it by grid steps: 1.0 -> 1.5.
+        frame(drumClip, drumLane, true, ImVec2(305, 170), false);
+        frame(drumClip, drumLane, true, ImVec2(305, 170), true);
+        frame(drumClip, drumLane, true, ImVec2(340, 170), true);
+        frame(drumClip, drumLane, true, ImVec2(340, 170), false);
+        assert(drums().drumRows[1].steps.size() == 5 && drums().drumRows[1].steps.back().beat == 1.5);
+        // A hit off the grid (a 1/32 on a 1/16 grid) is drawn and edited where
+        // it is: clicking its cell removes it rather than stacking another.
+        ofxOceanodeTimelineDrumStep offGrid;
+        offGrid.beat = 0.125; offGrid.length = 0.125;
+        ofxOceanodeTimelineDrumGrid::addStep(drums().drumRows[2], offGrid);
+        frame(drumClip, drumLane, true, ImVec2(900, 700), false);
+        click(ImVec2(240, 210));                                    // beat 0.14, inside cell 0
+        assert(drums().drumRows[2].steps.empty());
+        ofxOceanodeTimelineDrumGrid::addStep(drums().drumRows[2], offGrid);
+        click(ImVec2(234, 210));                                    // beat 0.06: the cell still holds it
+        assert(drums().drumRows[2].steps.empty());
+        // A following lane picks up a master change at once: on 1/32, a click
+        // at beat 0.15 places a hit at 0.125 (no stale 1/16 step).
+        model.setMasterGridBeats(0.125);
+        click(ImVec2(240.5f, 120));                                 // row 0, beat 0.15
+        assert(drums().drumRows[0].steps.size() == 1 && drums().drumRows[0].steps[0].beat == 0.125 &&
+               drums().drumRows[0].steps[0].length == 0.125);
+        // ...and moves by 1/32 steps: dragged three 1/32 cells (3 x 8.75 px) to
+        // the right it lands on 0.125 + 3 x 0.125 = 0.5.
+        frame(drumClip, drumLane, true, ImVec2(241.0f, 120), false);
+        frame(drumClip, drumLane, true, ImVec2(241.0f, 120), true);
+        frame(drumClip, drumLane, true, ImVec2(241.0f + 3.0f * 8.75f, 120), true);
+        frame(drumClip, drumLane, true, ImVec2(241.0f + 3.0f * 8.75f, 120), false);
+        assert(drums().drumRows[0].steps.size() == 1 && std::abs(drums().drumRows[0].steps[0].beat - 0.5) < 1e-9);
+        drums().drumRows[0].steps.clear();
+        // A dotted-8th grid places hits at 0.75-beat steps.
+        model.setMasterGridBeats(0.75);
+        click(ImVec2(286, 250));                                    // row 3, beat 0.8 -> cell [0.75, 1.5)
+        assert(drums().drumRows[3].steps.size() == 1 && drums().drumRows[3].steps[0].beat == 0.75 &&
+               drums().drumRows[3].steps[0].length == 0.75);
+        // ...and the 1/16 hits of row 1 keep their places.
+        for(int i = 0; i < 4; ++i) assert(drums().drumRows[1].steps[i].beat == i * 0.25);
+        model.setMasterGridBeats(0.25);
+        // Row length on the canvas: drag row 0's end-of-cycle handle (at the
+        // clip end, x 510) from 16 to 5 sixteenths (x 317.5): 1.25 beats.
+        drums().drumRows[0].steps.clear();
+        ofxOceanodeTimelineDrumStep kick; kick.beat = 0.0; kick.length = 0.25;
+        ofxOceanodeTimelineDrumGrid::addStep(drums().drumRows[0], kick);
+        frame(drumClip, drumLane, true, ImVec2(510, 120), false);
+        frame(drumClip, drumLane, true, ImVec2(510, 120), true);
+        frame(drumClip, drumLane, true, ImVec2(330, 120), true);
+        frame(drumClip, drumLane, true, ImVec2(317.5f, 120), true);
+        frame(drumClip, drumLane, true, ImVec2(317.5f, 120), false);
+        assert(std::abs(drums().drumRows[0].length - 1.25) < 1e-9);
+        {
+            float level = 0; int pitch = 0;
+            auto open = [&](double beat) {
+                return ofxOceanodeTimelineDrumGrid::rowStateAt(drums(), drums().drumRows[0], beat, 0, 4.0, 0.0, 0, level, pitch);
+            };
+            assert(open(0.01) && open(1.26) && open(2.51) && !open(1.01) && !open(2.0));
+        }
+        // ...and its thick end line is drawn there in the row's colour (the track's here).
+        {
+            frame(drumClip, drumLane, true, ImVec2(900, 700), false);
+            const auto& c = model.getTrack(trackId)->color;
+            const ImU32 lineColor = IM_COL32(c.r, c.g, c.b, 255);
+            bool found = false;
+            for(int list = 0; list < ImGui::GetDrawData()->CmdListsCount; ++list)
+                for(const auto& vertex : ImGui::GetDrawData()->CmdLists[list]->VtxBuffer)
+                    if(vertex.col == lineColor && std::abs(vertex.pos.x - 317.5f) < 2.0f && vertex.pos.y > 104 && vertex.pos.y < 148)
+                        found = true;
+            assert(found);
+        }
+        // The header's length field: - and + change it by one grid step; the
+        // field drags; hits past the end are kept.
+        {
+            const float headerLeft = 230.0f - ofxOceanodeTimelineDrumGridEditor::headerWidth() + 2.0f;
+            const float controlsX = headerLeft + 7.0f;
+            const float controlsY = 104.0f + 2.0f + ImGui::GetTextLineHeight() + 2.0f + ImGui::GetTextLineHeight() * 0.5f;
+            const float minusWidth = ImGui::CalcTextSize("-").x + 6.0f;
+            const float minusX = controlsX + minusWidth * 0.5f;
+            const float fieldX = controlsX + minusWidth + 2.0f + ofxOceanodeTimelineDrumGridEditor::lengthFieldWidth() * 0.5f;
+            const float plusX = controlsX + minusWidth + 2.0f + ofxOceanodeTimelineDrumGridEditor::lengthFieldWidth() + 2.0f +
+                                (ImGui::CalcTextSize("+").x + 6.0f) * 0.5f;
+            click(ImVec2(plusX, controlsY));
+            assert(std::abs(drums().drumRows[0].length - 1.5) < 1e-9);
+            for(int i = 0; i < 4; ++i) click(ImVec2(minusX, controlsY));
+            assert(std::abs(drums().drumRows[0].length - 0.5) < 1e-9);
+            // 16 hits, shortened to 3 steps and back: nothing lost.
+            auto& row = drums().drumRows[0];
+            row.steps.clear();
+            for(int i = 0; i < 16; ++i) {
+                ofxOceanodeTimelineDrumStep s; s.beat = i * 0.25; s.length = 0.25; s.velocity = 0.5f + i * 0.01f;
+                ofxOceanodeTimelineDrumGrid::addStep(row, s);
+            }
+            row.length = 1.0;
+            click(ImVec2(minusX, controlsY));
+            assert(std::abs(drums().drumRows[0].length - 0.75) < 1e-9 && drums().drumRows[0].steps.size() == 16);
+            frame(drumClip, drumLane, true, ImVec2(fieldX, controlsY), false);
+            frame(drumClip, drumLane, true, ImVec2(fieldX, controlsY), true);
+            for(int i = 1; i <= 26; ++i) frame(drumClip, drumLane, true, ImVec2(fieldX + i * 5.0f, controlsY), true);
+            frame(drumClip, drumLane, true, ImVec2(fieldX + 130.0f, controlsY), false);
+            assert(drums().drumRows[0].length > 0.75 + 1e-9);         // dragged longer
+            drums().drumRows[0].length = 4.0;
+            assert(drums().drumRows[0].steps.size() == 16);
+            for(int i = 0; i < 16; ++i) assert(drums().drumRows[0].steps[i].beat == i * 0.25 &&
+                                               std::abs(drums().drumRows[0].steps[i].velocity - (0.5f + i * 0.01f)) < 1e-6f);
+        }
+        frame(drumClip, drumLane, true, ImVec2(900, 700), false, true); // properties + Row tab
+    }
     editors.clearSelection();
     editors.forgetTrack(trackId);
     // LFO owns its selection and reports shell requests without a controller.

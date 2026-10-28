@@ -382,12 +382,17 @@ private:
     struct NoteInstrumentCandidate {
         std::string label;       // the node's name
         std::string rolePaths[3];
+        std::string durationPath;  // a kit's Duration input (Drum Grid lanes write it)
+        std::string filterPath;    // a kit's Filter input (Drum Grid lanes write it)
         int voices = 0;
         bool kit = false;
     };
     std::vector<NoteInstrumentCandidate> noteSetupInstruments;
     int noteSetupInstrument = -1;             // index into noteSetupInstruments; -1: parameters by hand
     int noteSetupVoices = 0;                  // the group's override; 0: automatic
+    // The new clip's editor: -1 automatic (Drum Grid for a kit, else Piano
+    // Roll), 0 Drum Grid, 1 Piano Roll.
+    int noteSetupEditor = -1;
     bool requestNoteSetupPopup = false;
     // source: the parameter it was opened from (its node's parameters are
     // offered first and used to guess the roles). trackId empty: choose.

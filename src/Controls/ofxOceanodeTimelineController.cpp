@@ -253,6 +253,7 @@ const ofxOceanodeTimelineLane* laneForBinding(const ofxOceanodeTimelineClip& cli
 const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
     switch(type) {
         case ofxOceanodeTimelineLaneType::PianoRoll: return "Piano Roll";
+        case ofxOceanodeTimelineLaneType::DrumGrid: return "Drum Grid";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
@@ -280,9 +281,11 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
 // (mute, solo, an effect's on), the default for a bool parameter's clips.
 // Dropdown is the default for a dropdown parameter's clips.
 constexpr const char* kLaneTypeOptions[] = {
-    "Step Sequencer", "Curve", "Piano Roll", "Multi Value", "Multi Slider", "Multi Gate", "Toggle", "Number", "Dropdown", "LFO"
+    "Step Sequencer", "Curve", "Piano Roll", "Multi Value", "Multi Slider", "Multi Gate", "Toggle", "Number", "Dropdown",
+    "Drum Grid", "LFO"
 };
 constexpr int kToggleOptionIndex = 6;
+constexpr int kDrumGridOptionIndex = 9;
 constexpr int kClipCreationOptionCount = static_cast<int>(sizeof(kLaneTypeOptions) / sizeof(kLaneTypeOptions[0]));
 constexpr int kLaneTypeOptionCount = kClipCreationOptionCount - 1;
 constexpr int kLfoClipOptionIndex = kClipCreationOptionCount - 1;
@@ -298,6 +301,7 @@ const char* contentDescription(int option) {
         "On/off regions for a single value.",
         "Absolute numeric values held until the next change.",
         "Named parameter options held until the next change.",
+        "A drum kit step grid: one row per kit piece, with per-step velocity, pitch, probability, ratchet and nudge.",
         "An oscillator with control envelopes and one output target."
     };
     return descriptions[std::max(0, std::min(option, kClipCreationOptionCount - 1))];
@@ -312,6 +316,7 @@ ofxOceanodeTimelineLaneType laneTypeFromOptionIndex(int index) {
         case 5: return ofxOceanodeTimelineLaneType::MultiGate;
         case 7: return ofxOceanodeTimelineLaneType::Number;
         case 8: return ofxOceanodeTimelineLaneType::Dropdown;
+        case kDrumGridOptionIndex: return ofxOceanodeTimelineLaneType::DrumGrid;
         case kToggleOptionIndex: return ofxOceanodeTimelineLaneType::MultiGate;
         default: return ofxOceanodeTimelineLaneType::Step;
     }
@@ -338,6 +343,7 @@ int optionIndexForLaneType(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::MultiValue: return 3;
         case ofxOceanodeTimelineLaneType::MultiSlider: return 4;
         case ofxOceanodeTimelineLaneType::MultiGate: return 5;
+        case ofxOceanodeTimelineLaneType::DrumGrid: return kDrumGridOptionIndex;
         default: return 0;
     }
 }
@@ -1060,6 +1066,8 @@ void ofxOceanodeTimelineController::draw() {
     auto transportState = container->getTransportState();
     auto transport = container->getTransport();
     const bool externalClock = transport != nullptr && transport->hasExternalClock();
+    // The grid division is the timeline's (saved with it; Drum Grid lanes may follow it).
+    rulerSnapBeats = timeline.getMasterGridBeats();
     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
                                                    timeline.getBeatsPerBar(),
                                                    transportState.bpm,
@@ -1497,6 +1505,7 @@ void ofxOceanodeTimelineController::draw() {
             for(int i = 0; i < kDivisionOptionCount; ++i) {
                 if(ImGui::Selectable(kDivisionOptions[i].label, i == rulerDivision)) {
                     rulerSnapBeats = kDivisionOptions[i].beats;
+                    timeline.setMasterGridBeats(rulerSnapBeats);
                     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
                                                                    timeline.getBeatsPerBar(),
                                                                    transportState.bpm,
@@ -2578,7 +2587,7 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::EndMenu();
                 }
             }
-            if(selectedLane != nullptr && !clip.isLfo && selectedLane->type != ofxOceanodeTimelineLaneType::PianoRoll && !track.bindings.empty() && ImGui::BeginMenu("Lane targets")) {
+            if(selectedLane != nullptr && !clip.isLfo && !ofxOceanodeTimelineLaneUsesNoteRoles(selectedLane->type) && !track.bindings.empty() && ImGui::BeginMenu("Lane targets")) {
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(selectedLane->bindingIds.begin(), selectedLane->bindingIds.end(), candidate.id) != selectedLane->bindingIds.end();
                     if(ImGui::MenuItem(candidate.parameterPath.c_str(), nullptr, assigned, true)) {
@@ -2760,6 +2769,7 @@ void ofxOceanodeTimelineController::draw() {
             DeferredGroupAction deferredGroupAction = DeferredGroupAction::None;
             std::string deferredLeaveBindingId;
             double deferredClipBeat = 0.0;
+            bool deferredClipDrumGrid = false;
             // Row height drag (applied to the model before this frame's layout).
             if(rowResizeTrackId == track.id) {
                 if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -2922,7 +2932,7 @@ void ofxOceanodeTimelineController::draw() {
                         if(overTimelineZone) {
                             for(const auto& clip : track.clips) {
                                 for(const auto& lane : clip.lanes) {
-                                    if(lane.type != ofxOceanodeTimelineLaneType::PianoRoll) continue;
+                                    if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
                                     if(std::none_of(lane.bindingIds.begin(), lane.bindingIds.end(),
                                                     [&](const auto& id) { return group.contains(id); })) continue;
                                     if(clickedBeat >= clip.startBeat && clickedBeat <= clip.startBeat + clip.durationBeats) overClip = true;
@@ -2937,10 +2947,23 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::BeginPopup(groupMenuId.c_str())) {
                         ImGui::TextUnformatted(group.name.c_str());
                         contextMenuSection("Create and edit");
-                        if(ImGui::MenuItem("New piano roll clip here")) {
-                            deferredGroupId = group.id;
-                            deferredGroupAction = DeferredGroupAction::NewClip;
-                            deferredClipBeat = pendingStartBeat;
+                        {
+                            // A kit gets a Drum Grid first; the piano roll stays available.
+                            int kitVoices = 0;
+                            bool kit = false;
+                            timeline.noteGroupInstrument(track.id, group.id, kitVoices, kit);
+                            if(kit && ImGui::MenuItem("New drum grid clip here")) {
+                                deferredGroupId = group.id;
+                                deferredGroupAction = DeferredGroupAction::NewClip;
+                                deferredClipBeat = pendingStartBeat;
+                                deferredClipDrumGrid = true;
+                            }
+                            if(ImGui::MenuItem("New piano roll clip here")) {
+                                deferredGroupId = group.id;
+                                deferredGroupAction = DeferredGroupAction::NewClip;
+                                deferredClipBeat = pendingStartBeat;
+                                deferredClipDrumGrid = false;
+                            }
                         }
                         if(ImGui::MenuItem("Instrument / note routing...")) {
                             openNoteGroupSetup(timeline, nullptr, track.id, group.id);
@@ -2979,7 +3002,7 @@ void ofxOceanodeTimelineController::draw() {
                     // The group's piano-roll clips, drawn once.
                     auto groupLane = [&](const ofxOceanodeTimelineClip& clip) -> const ofxOceanodeTimelineLane* {
                         for(const auto& lane : clip.lanes) {
-                            if(lane.type != ofxOceanodeTimelineLaneType::PianoRoll) continue;
+                            if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
                             if(std::any_of(lane.bindingIds.begin(), lane.bindingIds.end(),
                                            [&](const auto& id) { return group.contains(id); })) return &lane;
                         }
@@ -3020,7 +3043,7 @@ void ofxOceanodeTimelineController::draw() {
                 const float memberIndent = noteGroup != nullptr ? 14.0f : 0.0f;
                 auto rowLane = [&](const ofxOceanodeTimelineClip& clip) -> const ofxOceanodeTimelineLane* {
                     const auto* lane = laneForBinding(clip, binding.id);
-                    if(lane != nullptr && noteGroup != nullptr && lane->type == ofxOceanodeTimelineLaneType::PianoRoll) return nullptr;
+                    if(lane != nullptr && noteGroup != nullptr && ofxOceanodeTimelineLaneUsesNoteRoles(lane->type)) return nullptr;
                     return lane;
                 };
                 // Bottom edge of the label column: drag to resize the row.
@@ -3329,7 +3352,8 @@ void ofxOceanodeTimelineController::draw() {
                     case DeferredGroupAction::NewClip: {
                         std::string laneId;
                         const std::string clipId = timeline.createNoteGroupClip(
-                            track.id, deferredGroupId, std::string(), deferredClipBeat, timeline.getBeatsPerBar(), &laneId);
+                            track.id, deferredGroupId, std::string(), deferredClipBeat, timeline.getBeatsPerBar(), &laneId,
+                            deferredClipDrumGrid ? ofxOceanodeTimelineLaneType::DrumGrid : ofxOceanodeTimelineLaneType::PianoRoll);
                         if(!clipId.empty()) {
                             if(const auto* group = timeline.getNoteGroup(track.id, deferredGroupId)) {
                                 const auto members = group->members();
@@ -4850,7 +4874,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     }
     if(ImGui::BeginTabBar("##clipPropertyTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
         if(ImGui::BeginTabItem("Targets")) {
-            if(lane->type == ofxOceanodeTimelineLaneType::PianoRoll) {
+            if(ofxOceanodeTimelineLaneUsesNoteRoles(lane->type)) {
                 laneEditor.drawTargets(context);
             } else {
                 ImGui::SetNextItemWidth(-1.0f);
@@ -4905,7 +4929,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                 if(type == kToggleOptionIndex) makeToggleLane(lane);
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", contentDescription(type));
-            if(lane->type != ofxOceanodeTimelineLaneType::PianoRoll &&
+            if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane->type) &&
                lane->type != ofxOceanodeTimelineLaneType::MultiGate &&
                !ofxOceanodeTimelineIsHeldValueLane(lane->type)) {
                 propertyLabel("Min");
@@ -4935,6 +4959,12 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Random deviation: every note may play octaves or semitones away, rolled each repeat.");
             if(randomTab) {
                 laneEditor.drawRandomDeviation(context);
+                ImGui::EndTabItem();
+            }
+        }
+        if(const char* extraTab = laneEditor.extraTabLabel()) {
+            if(ImGui::BeginTabItem(extraTab)) {
+                laneEditor.drawExtraTab(context);
                 ImGui::EndTabItem();
             }
         }
@@ -5020,6 +5050,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
     noteSetupInstruments.clear();
     noteSetupInstrument = -1;
     noteSetupVoices = 0;
+    noteSetupEditor = -1;
     for(auto& path : noteSetupRolePaths) path.clear();
     noteSetupFilter[0] = '\0';
     noteSetupTrackId = trackId;
@@ -5059,6 +5090,8 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         if(candidate.rolePaths[0].empty() && candidate.rolePaths[1].empty()) return;
         candidate.voices = instrument.voices;
         candidate.kit = instrument.kit;
+        if(instrument.duration != nullptr) candidate.durationPath = container->getTimelineParameterPath(*instrument.duration);
+        if(instrument.filter != nullptr) candidate.filterPath = container->getTimelineParameterPath(*instrument.filter);
         if(model == sourceModel) sourceInstrument = static_cast<int>(noteSetupInstruments.size());
         noteSetupInstruments.push_back(candidate);
     };
@@ -5192,8 +5225,22 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
             ImGui::SetTooltip("Synths and samplers that take notes. Every note keeps its own voice.");
     }
     const auto* instrument = hasInstrument ? &noteSetupInstruments[noteSetupInstrument] : nullptr;
-    if(instrument != nullptr && instrument->kit)
+    // What the new clip edits with: a kit defaults to a Drum Grid.
+    const bool kitInstrument = instrument != nullptr && instrument->kit;
+    const int editorChoice = noteSetupEditor >= 0 ? noteSetupEditor : kitInstrument ? 0 : 1;
+    if(!editing) {
+        const char* editors[] = {"Drum Grid", "Piano Roll"};
+        int choice = editorChoice;
+        ImGui::SetNextItemWidth(260.0f);
+        if(ImGui::Combo("Editor", &choice, editors, 2)) noteSetupEditor = choice;
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Drum Grid: a step grid, one row per kit piece (row n plays slot n).\n"
+                              "Piano Roll: notes on keys (a kit: C1 plays pad 1).");
+    }
+    if(kitInstrument && (editing || editorChoice == 1))
         ImGui::TextDisabled("A kit: C1 plays pad 1, C#1 pad 2...");
+    else if(kitInstrument)
+        ImGui::TextDisabled("A kit of %d pieces: one row each", std::max(1, instrument->voices));
     else {
         ImGui::SetNextItemWidth(120.0f);
         ImGui::InputInt("Voices", &noteSetupVoices);
@@ -5280,17 +5327,39 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
             if(parameter == nullptr) parameter = container->findTimelineParameter(path);
             if(parameter != nullptr) roleIds[role] = timeline.addBinding(trackId, *parameter);
         }
+        // A kit's Duration input joins the group (its Drum Grid lanes write it).
+        const auto* chosen = noteSetupInstrument >= 0 && noteSetupInstrument < static_cast<int>(noteSetupInstruments.size())
+            ? &noteSetupInstruments[noteSetupInstrument] : nullptr;
+        // The binding of a kit input path (the track's own, or a new one).
+        auto kitBinding = [&](const std::string& path) {
+            std::string id;
+            if(path.empty()) return id;
+            if(const auto* track = timeline.getTrack(trackId))
+                for(const auto& binding : track->bindings)
+                    if(binding.parameterPath == path) id = binding.id;
+            if(id.empty())
+                if(auto* parameter = container->findTimelineParameter(path)) id = timeline.addBinding(trackId, *parameter);
+            return id;
+        };
+        const std::string durationId = chosen == nullptr ? std::string() : kitBinding(chosen->durationPath);
+        const std::string filterId = chosen == nullptr ? std::string() : kitBinding(chosen->filterPath);
         if(editing) {
             timeline.setNoteGroupRoles(trackId, noteSetupEditGroupId, roleIds[0], roleIds[1], roleIds[2]);
+            if(!durationId.empty()) timeline.setNoteGroupDuration(trackId, noteSetupEditGroupId, durationId);
+            if(!filterId.empty()) timeline.setNoteGroupFilter(trackId, noteSetupEditGroupId, filterId);
             timeline.renameNoteGroup(trackId, noteSetupEditGroupId, name);
             timeline.setNoteGroupVoices(trackId, noteSetupEditGroupId, noteSetupVoices);
         } else {
             const std::string groupId = timeline.createNoteGroup(trackId, name, roleIds[0], roleIds[1], roleIds[2]);
             if(!groupId.empty()) {
                 timeline.setNoteGroupVoices(trackId, groupId, noteSetupVoices);
+                if(!durationId.empty()) timeline.setNoteGroupDuration(trackId, groupId, durationId);
+                if(!filterId.empty()) timeline.setNoteGroupFilter(trackId, groupId, filterId);
                 std::string laneId;
                 const std::string clipId = timeline.createNoteGroupClip(trackId, groupId, name, noteSetupClipStart,
-                                                                        noteSetupClipDuration, &laneId);
+                                                                        noteSetupClipDuration, &laneId,
+                                                                        editorChoice == 0 ? ofxOceanodeTimelineLaneType::DrumGrid
+                                                                                          : ofxOceanodeTimelineLaneType::PianoRoll);
                 if(auto* track = timeline.getTrack(trackId)) track->collapsed = false;
                 if(!clipId.empty()) {
                     // Open the new clip's editor right under the group row.
@@ -5402,9 +5471,11 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
     }
     ImGui::InputDouble("Start beat", &pendingStartBeat, editIncrement(), 1.0, "%.4f");
     ImGui::InputDouble("Duration", &pendingDurationBeats, editIncrement(), 1.0, "%.4f");
-    const bool pianoRollClip = !isLfoClip &&
-        laneTypeFromOptionIndex(pendingClipLaneType) == ofxOceanodeTimelineLaneType::PianoRoll;
-    if(pianoRollClip) ImGui::TextDisabled("Next: choose the pitch, gate and velocity parameters");
+    const bool drumGridClip = !isLfoClip && pendingClipLaneType == kDrumGridOptionIndex;
+    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+        laneTypeFromOptionIndex(pendingClipLaneType) == ofxOceanodeTimelineLaneType::PianoRoll);
+    if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
+                                                       : "Next: choose the pitch, gate and velocity parameters");
     if(ImGui::Button(pianoRollClip ? "Next..." : "Create Clip")) {
         const double startBeat = snapBeat(pendingStartBeat);
         const double durationBeats = std::max(1.0 / kPPQ, snapBeat(pendingDurationBeats));
@@ -5416,7 +5487,9 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
             std::string laneId;
             const std::string groupId = pianoGroup->id;
             const std::string clipId = timeline.createNoteGroupClip(pendingTrackId, groupId, pendingClipName,
-                                                                    startBeat, durationBeats, &laneId);
+                                                                    startBeat, durationBeats, &laneId,
+                                                                    drumGridClip ? ofxOceanodeTimelineLaneType::DrumGrid
+                                                                                 : ofxOceanodeTimelineLaneType::PianoRoll);
             if(!clipId.empty()) {
                 editorAnchorBindingId = pendingClipBindingId;
                 editorState.editorTrackId = pendingTrackId;
@@ -5435,7 +5508,8 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
             const auto* binding = timeline.getBinding(pendingTrackId, pendingClipBindingId);
             auto* source = binding == nullptr ? nullptr : container->findTimelineParameter(binding->parameterPath);
             openNoteGroupSetup(timeline, source, pendingTrackId, std::string(), startBeat, durationBeats);
-            if(source == nullptr && binding != nullptr) noteSetupRolePaths[0] = binding->parameterPath;
+            noteSetupEditor = drumGridClip ? 0 : 1;
+            if(source == nullptr && binding != nullptr) noteSetupRolePaths[drumGridClip ? 1 : 0] = binding->parameterPath;
             if(pendingClipName[0] != '\0') {
                 std::strncpy(noteSetupName, pendingClipName, sizeof(noteSetupName) - 1);
                 noteSetupName[sizeof(noteSetupName) - 1] = '\0';
