@@ -632,6 +632,11 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
     // at the row's length (drag it) and fainter lines at further repeats.
     constexpr int kMaxCellsDrawn = 20000;
     int cellsDrawn = 0;
+    // The grid and its hits stay inside the grid area: a hit that starts
+    // left of the view (scrolled, or the clip starts earlier) must not spill
+    // over the row headers.
+    const float gridClipLeft = std::max(left, zoneLeft);
+    dl->PushClipRect(ImVec2(gridClipLeft, canvas.min.y), ImVec2(canvas.max.x, canvas.max.y), true);
     for(int r = 0; r < rowCount; ++r) {
         const auto& row = lane.drumRows[static_cast<size_t>(r)];
         const float y1 = top + r * rowHeight + 1.0f, y2 = top + (r + 1) * rowHeight - 1.0f;
@@ -724,6 +729,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             }
         }
     }
+    dl->PopClipRect();
 
     // Parameter strip for the focused row: one bar per hit.
     if(stripHeight > 0.0f && focused >= 0) {
@@ -776,6 +782,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         if(fromBaseline(mode)) dl->AddLine(ImVec2(left, baseY), ImVec2(right, baseY), IM_COL32(110, 110, 120, 160));
         const int64_t patterns = std::max<int64_t>(1, static_cast<int64_t>(std::ceil(content / row.length - 1e-9)));
         const float gridPixels = std::abs(xOf(grid, 0) - xOf(0.0, 0));
+        dl->PushClipRect(ImVec2(gridClipLeft, barsTop), ImVec2(canvas.max.x, stripBottom), true);
         for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             for(int64_t p = 0; p < patterns; ++p) {
                 const bool firstPass = p == 0;
@@ -803,6 +810,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 }
             }
         }
+        dl->PopClipRect();
     }
     dl->PopClipRect();
 
