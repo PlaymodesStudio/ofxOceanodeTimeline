@@ -605,10 +605,14 @@ bool laneAudible(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineL
                                                   [](const auto& other) { return other.solo; }));
 }
 
+bool clipCoversBeat(const ofxOceanodeTimelineClip& clip, double globalBeat) {
+    const double duration = std::max(1.0 / 24.0, clip.durationBeats);
+    return globalBeat >= clip.startBeat - kEpsilon && globalBeat < clip.startBeat + duration - kEpsilon;
+}
+
 bool clipSourceBeat(const ofxOceanodeTimelineClip& clip, double globalBeat, double& sourceBeat) {
     if(clip.muted || clip.chanceSilenced) return false;
-    const double duration = std::max(1.0 / 24.0, clip.durationBeats);
-    if(globalBeat < clip.startBeat - kEpsilon || globalBeat >= clip.startBeat + duration - kEpsilon) return false;
+    if(!clipCoversBeat(clip, globalBeat)) return false;
 
     sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, globalBeat);
     return true;
@@ -4940,7 +4944,30 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
             contributionClip = &clip;
             contributionLanes.clear();
             double sourceBeat = 0.0;
-            if(!clipSourceBeat(clip, beatPosition, sourceBeat)) continue;
+            if(!clipSourceBeat(clip, beatPosition, sourceBeat)) {
+                // A clip its chance roll left out plays as an empty pass: the
+                // lanes that rest at 0 between their events (gates, toggles,
+                // steps, value regions) write that rest, instead of holding
+                // whatever the previous pass ended on through this one.
+                // Curves, numbers, dropdowns and sliders have no rest and hold,
+                // as they do between clips; piano gates already rest at 0.
+                if(!clip.chanceSilenced || clip.muted || clip.isLfo || !clipCoversBeat(clip, beatPosition)) continue;
+                for(const auto& lane : clip.lanes) {
+                    const bool multiRow = lane.type == ofxOceanodeTimelineLaneType::MultiGate ||
+                                          lane.type == ofxOceanodeTimelineLaneType::MultiValue;
+                    if((!multiRow && lane.type != ofxOceanodeTimelineLaneType::Step) || !laneAudible(clip, lane)) continue;
+                    if(inspection != nullptr) contributionLanes = {lane.id};
+                    const std::string rest = multiRow
+                        ? joinAutomationValues(std::vector<std::string>(static_cast<size_t>(std::max(1, lane.multiRowCount)), "0"))
+                        : "0";
+                    for(const auto& bindingId : lane.bindingIds) {
+                        const auto* binding = bindingFor(track, bindingId);
+                        if(wantsBinding(binding) && !binding->bypass)
+                            contribute(binding, multiRow ? rest : mapNormalizedLaneValue(lane, *binding, rest));
+                    }
+                }
+                continue;
+            }
             if(clip.isLfo) {
                 const auto* binding = bindingFor(track, clip.lfoOutputBindingId);
                 if(wantsBinding(binding) && !binding->bypass) {
