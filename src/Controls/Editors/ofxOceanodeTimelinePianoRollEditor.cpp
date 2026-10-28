@@ -211,9 +211,11 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
     ImGui::Checkbox("Mono##mutationMono", &lane->mutationMonophonic);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Monophonic: shifted or lengthened notes never overlap others");
     {
-        propertyLabel("Drift");
+        // Same row as Mono; the slider's own text names it.
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
         float percent = lane->mutationDrift * 100.0f;
-        if(ImGui::SliderFloat("##mutationDrift", &percent, 0.0f, 100.0f, percent <= 0.0f ? "Off" : "%.0f%%"))
+        if(ImGui::SliderFloat("##mutationDrift", &percent, 0.0f, 100.0f, percent <= 0.0f ? "Drift off" : "Drift %.0f%%"))
             lane->mutationDrift = ofClamp(std::round(percent) / 100.0f, 0.0f, 1.0f);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("How much each repeat builds on the previous one. Resets on stop.");
     }
