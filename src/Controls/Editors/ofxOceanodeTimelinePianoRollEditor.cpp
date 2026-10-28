@@ -516,8 +516,9 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // the top and pitch 0 at the bottom (matching the keyboard above).
     // Dragging pans without changing zoom; clicking the track jumps the
     // window there -- the same conventions as the horizontal timeline
-    // scrollbar drawn by hand below the whole viewport.
-    if(isFocused) {
+    // scrollbar drawn by hand below the whole viewport. Shown on every
+    // piano lane, focused or not: it only changes which keys are visible.
+    {
         const int scrollRangeSize = highPitch - lowPitch + 1;
         const int maxLowPitch = std::max(0, 128 - scrollRangeSize);
         // The zoom buttons below occupy a strip at the top and bottom of

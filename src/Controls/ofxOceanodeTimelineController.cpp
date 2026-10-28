@@ -4703,11 +4703,17 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     auto& laneEditor = laneEditors.forType(lane->type);
     auto drawLaneMenu = [&](bool propertiesPanel) {
         const std::string menuId = "##laneMenu" + lane->id;
-        // The entire properties pad owns the menu, including controls and
-        // empty space. Collapsed lanes retain their header context menu.
-        const bool open = propertiesPanel
-            ? ImGui::BeginPopupContextWindow(menuId.c_str(), ImGuiPopupFlags_MouseButtonRight)
-            : ImGui::BeginPopupContextItem(menuId.c_str());
+        // The entire properties pad owns the menu, controls included, unless
+        // the right-click opened a control's own menu (Range's direction,
+        // "Same as A"). Collapsed lanes retain their header context menu.
+        bool open = false;
+        if(propertiesPanel) {
+            if(ImGui::IsMouseReleased(ImGuiMouseButton_Right) &&
+               ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+               !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+                ImGui::OpenPopup(menuId.c_str());
+            open = ImGui::BeginPopup(menuId.c_str());
+        } else open = ImGui::BeginPopupContextItem(menuId.c_str());
         if(open) {
             editorState.editorLaneId = lane->id;
             if(ImGui::MenuItem("Duplicate lane")) {

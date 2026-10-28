@@ -264,6 +264,21 @@ int main() {
         selectTab("Mutate");
         frame(); frame(1250,ImVec2(-100,-100),false,"mutation");
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
+        {
+            // Right-clicking Range opens its direction menu, not the lane menu.
+            const ImVec2 range(150,444);
+            frame(1250,range,false);
+            io.AddMouseButtonEvent(1,true); frame(1250,range,false);
+            io.AddMouseButtonEvent(1,false); frame(1250,range,false);
+            frame();
+            assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window; assert(popup);
+            const ImVec2 downOnly(popup->Pos.x+30,popup->Pos.y+ImGui::GetStyle().WindowPadding.y+
+                ImGui::GetTextLineHeight()*0.5f+2*ImGui::GetTextLineHeightWithSpacing());
+            frame(1250,downOnly,false); frame(1250,downOnly,true); frame(1250,downOnly,false); frame();
+            assert(model.getLane(t,c,piano)->mutation.pitchDirection==2);
+            assert(model.getClip(t,c)->lanes.size()==3); // no lane duplicated
+        }
         // Group B: its own keys, the second and third notes in it, edited in the tab.
         {
             auto* lane=model.getLane(t,c,piano);
@@ -288,6 +303,22 @@ int main() {
             lane=model.getLane(t,c,piano);
             assert(lane->pianoScaleEnabled && lane->pianoScaleMask==0x5AD);
             lane->pianoScaleEnabled=false; lane->pianoScaleMask=0xAB5;
+        }
+        // The piano roll's key scrollbar and zoom buttons work on an
+        // unfocused lane too (another lane being edited).
+        {
+            assert(ui.editorState.editorLaneId!=piano);
+            auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
+            const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
+            click(ImVec2(240,302)); // "+": zoom in
+            auto* lane=model.getLane(t,c,piano);
+            assert(lane->pianoHighPitch-lane->pianoLowPitch < high-low);
+            const int zoomedLow=lane->pianoLowPitch;
+            click(ImVec2(240,600)); // track near the bottom: jump down
+            lane=model.getLane(t,c,piano);
+            assert(lane->pianoLowPitch < zoomedLow);
+            assert(ui.editorState.editorLaneId!=piano);
+            lane->pianoLowPitch=low; lane->pianoHighPitch=high;
         }
         model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF; model.getLane(t,c,piano)->mutation.pitchDirection=0;
     }
