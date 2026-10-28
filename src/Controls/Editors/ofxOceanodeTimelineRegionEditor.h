@@ -21,6 +21,8 @@ private:
     // index into that row's region vector.
     enum class RegionDragMode { None, Create, Move, ResizeRight };
     RegionDragMode regionDragMode = RegionDragMode::None;
+    // A Toggle (one-row MultiGate) drag in its velocity strip.
+    bool velocityDrag = false;
     int regionDragRow = -1;
     int regionDragIndex = -1;
     double regionDragAnchorBeat = 0.0;

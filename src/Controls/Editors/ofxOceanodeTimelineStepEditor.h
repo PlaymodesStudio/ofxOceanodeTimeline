@@ -14,4 +14,7 @@ public:
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
 
 private:
+    // Which strip the left button grabbed, so a drag stays in it.
+    enum class Drag { None, Probability, Velocity };
+    Drag drag = Drag::None;
 };

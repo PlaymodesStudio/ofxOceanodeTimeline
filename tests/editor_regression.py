@@ -162,6 +162,24 @@ int main() {
     frame(stepClip, stepLane, true, ImVec2(250, 200), true);
     assert(!model.getLane(trackId, stepClip, stepLane)->step.steps.empty());
     frame(stepClip, stepLane, true, ImVec2(250, 200), false);
+    // The velocity strip (312..360 here) sets a sounding step's velocity,
+    // and a drag there leaves its probability alone.
+    const float stepProbability = model.getLane(trackId, stepClip, stepLane)->step.steps[0].probability;
+    frame(stepClip, stepLane, true, ImVec2(250, 336), true);
+    frame(stepClip, stepLane, true, ImVec2(250, 336), false);
+    assert(std::abs(model.getLane(trackId, stepClip, stepLane)->step.steps[0].velocity - 0.5f) < 0.001f);
+    assert(model.getLane(trackId, stepClip, stepLane)->step.steps[0].probability == stepProbability);
+    // Toggle: the same strip (316..364) under each gate.
+    const auto toggleClip = model.createClip(trackId, "Toggle", 0, 4);
+    const auto toggleLane = model.createLane(trackId, toggleClip, "Toggle", ofxOceanodeTimelineLaneType::MultiGate);
+    model.getLane(trackId, toggleClip, toggleLane)->multiRowCount = 1;
+    model.getLane(trackId, toggleClip, toggleLane)->multiGateRows = {{{0.0, 1.0}}};
+    frame(toggleClip, toggleLane, true, ImVec2(250, 340), false);
+    frame(toggleClip, toggleLane, true, ImVec2(250, 340), true);
+    frame(toggleClip, toggleLane, true, ImVec2(250, 340), false);
+    const auto& toggleRow = model.getLane(trackId, toggleClip, toggleLane)->multiGateRows[0];
+    assert(toggleRow.size() == 1 && std::abs(toggleRow[0].velocity - 0.5f) < 0.001f);
+    assert(toggleRow[0].startBeat == 0.0 && toggleRow[0].durationBeats == 1.0);
     const auto curveClip = model.createClip(trackId, "Curve", 0, 4);
     const auto curveLane = model.createLane(trackId, curveClip, "Curve", ofxOceanodeTimelineLaneType::Curve);
     frame(curveClip, curveLane, true);

@@ -30,7 +30,7 @@ void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEdit
                 for(auto& region : row)
                     region.value = std::round(region.value);
         }
-    } else ImGui::TextDisabled("Drag to draw gates");
+    } else ImGui::TextDisabled(rows == 1 ? "Drag to draw gates\nDrag the strip below for velocity" : "Drag to draw gates");
 
 }
 
@@ -60,7 +60,14 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
         if(static_cast<int>(lane->multiGateRows.size()) != rowCount) lane->multiGateRows.resize(static_cast<size_t>(rowCount));
     }
     const float rowsTop = editorMin.y + 6.0f;
-    const float rowsBottom = editorMax.y - 6.0f;
+    const float laneBottom = editorMax.y - 6.0f;
+    // A Toggle (one gate row) gets a velocity slider under each gate, as the
+    // step sequencer does, when the lane is tall enough.
+    const bool showVelocity = !isValueRow && rowCount == 1 && laneBottom - rowsTop >= 60.0f;
+    const float velocityHeight = showVelocity ? ofClamp((laneBottom - rowsTop) * 0.3f, 18.0f, 48.0f) : 0.0f;
+    const float velocityBottom = laneBottom;
+    const float velocityTop = velocityBottom - velocityHeight;
+    const float rowsBottom = showVelocity ? velocityTop - 4.0f : laneBottom;
     const float rowGap = 3.0f;
     const float rowHeight = std::max(6.0f, (rowsBottom - rowsTop - rowGap * std::max(0, rowCount - 1)) / rowCount);
     auto rowTopY = [&](int r) { return rowsTop + r * (rowHeight + rowGap); };
@@ -87,7 +94,7 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
                 dl->AddLine(ImVec2(x, rowsTop), ImVec2(x, rowsBottom), bar ? kBar : kGrid, bar ? 1.5f : 1.0f);
         }
     }
-    dl->PushClipRect(ImVec2(left, rowsTop), ImVec2(right, rowsBottom), true);
+    dl->PushClipRect(ImVec2(left, rowsTop), ImVec2(right, laneBottom), true);
     for(int r = 0; r < rowCount; ++r) {
         const float rTop = rowTopY(r), rBottom = rowBottomY(r);
         dl->AddRectFilled(ImVec2(left, rTop), ImVec2(right, rBottom), IM_COL32(255, 255, 255, r % 2 ? 8 : 14));
@@ -116,6 +123,19 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
                     if(x2 < left || x1 > right) continue;
                     dl->AddRectFilled(ImVec2(std::max(x1, left) + 1, rTop + 1), ImVec2(std::min(x2, right) - 1, rBottom - 1),
                                       IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 225 : 115), 2);
+                    if(showVelocity) {
+                        const float velocity = ofClamp(region.velocity, 0.0f, 1.0f);
+                        const ImVec2 sliderMin(std::max(x1, left) + 1, velocityTop);
+                        const ImVec2 sliderMax(std::min(x2, right) - 1, velocityBottom);
+                        dl->AddRectFilled(sliderMin, sliderMax, IM_COL32(20, 20, 20, cycle == 0 ? 150 : 90), 2);
+                        dl->AddRectFilled(ImVec2(sliderMin.x, velocityBottom - velocity * velocityHeight), sliderMax,
+                                          IM_COL32(240, 240, 240, cycle == 0 ? 215 : 125), 2);
+                        if(cycle == 0 && x2 - x1 > 28.0f && velocityHeight >= ImGui::GetTextLineHeight()) {
+                            char velocityLabel[16];
+                            std::snprintf(velocityLabel, sizeof(velocityLabel), "%.0f", velocity * 100.0f);
+                            dl->AddText(ImVec2(sliderMin.x + 2, velocityTop + 1), IM_COL32(35, 35, 35, 230), velocityLabel);
+                        }
+                    }
                 }
             }
         }
@@ -131,6 +151,8 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
         }
         const bool inRegionEditor = editorCanvasHovered && mouse.x >= left && mouse.x <= right &&
             mouse.y >= rowsTop && mouse.y <= rowsBottom;
+        const bool inVelocity = showVelocity && editorCanvasHovered && mouse.x >= left && mouse.x <= right &&
+            mouse.y >= velocityTop && mouse.y <= velocityBottom;
 
         auto hitValueRegion = [&](int r, double beat) -> int {
             if(!isValueRow || r < 0 || r >= static_cast<int>(lane->multiValueRows.size())) return -1;
@@ -237,7 +259,21 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
                 }
             }
         }
+        // Velocity: click or sweep across the strip; only gates have a slider.
+        if(showVelocity) {
+            if(inVelocity && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && regionDragMode == RegionDragMode::None)
+                velocityDrag = true;
+            if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) velocityDrag = false;
+            if((velocityDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) ||
+               (inVelocity && ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
+                const int hit = hitGateRegion(0, sourceBeat);
+                if(hit >= 0) lane->multiGateRows[0][hit].velocity = ImGui::IsMouseClicked(ImGuiMouseButton_Right) ? 1.0f
+                    : ofClamp((velocityBottom - mouse.y) / velocityHeight, 0.0f, 1.0f);
+            }
+            if(inVelocity) ImGui::SetTooltip("Gate velocity. Right-click: 100%%");
+        }
         if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            velocityDrag = false;
             regionDragMode = RegionDragMode::None;
             regionDragRow = -1;
             regionDragIndex = -1;

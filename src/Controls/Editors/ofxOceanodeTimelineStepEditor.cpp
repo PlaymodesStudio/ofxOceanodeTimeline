@@ -56,7 +56,14 @@ void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCont
     const double beatsPerStep = std::max(1.0 / kPPQ, lane->beatsPerStep);
     const double patternLength = stepCount * beatsPerStep;
     const float cellTop = editorMin.y + 10.0f;
-    const float cellBottom = editorMax.y - 10.0f;
+    const float laneBottom = editorMax.y - 10.0f;
+    // Velocity sliders sit in a strip under the probability cells, when the
+    // lane is tall enough to hold both.
+    const bool showVelocity = laneBottom - cellTop >= 60.0f;
+    const float velocityHeight = showVelocity ? ofClamp((laneBottom - cellTop) * 0.3f, 18.0f, 48.0f) : 0.0f;
+    const float velocityBottom = laneBottom;
+    const float velocityTop = velocityBottom - velocityHeight;
+    const float cellBottom = showVelocity ? velocityTop - 4.0f : laneBottom;
     if(right > left) {
         dl->AddRectFilled(ImVec2(left, editorMin.y + 3),
                           ImVec2(right, editorMax.y - kLaneResizeHandleHeight),
@@ -65,7 +72,7 @@ void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCont
         const int clipCycles = clip->repeatContent
             ? std::max(1, static_cast<int>(std::ceil(clip->durationBeats / cycleDuration(*clip)))) : 1;
         const int patternCycles = std::max(1, static_cast<int>(std::ceil(content / patternLength)));
-        dl->PushClipRect(ImVec2(left, cellTop), ImVec2(right, cellBottom), true);
+        dl->PushClipRect(ImVec2(left, cellTop), ImVec2(right, laneBottom), true);
         for(int clipCycle = 0; clipCycle < clipCycles; ++clipCycle) {
             for(int patternCycle = 0; patternCycle < patternCycles; ++patternCycle) {
                 const double sourceOffset = patternCycle * patternLength;
@@ -109,6 +116,19 @@ void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCont
                         dl->AddText(ImVec2(std::max(x1, left) + 3, cellTop + 3),
                                     IM_COL32(35, 35, 35, 230), probabilityLabel);
                     }
+                    if(showVelocity && probability > 0.0f) {
+                        const float velocity = ofClamp(stepIt->velocity, 0.0f, 1.0f);
+                        const ImVec2 sliderMin(std::max(x1, left) + 1, velocityTop);
+                        const ImVec2 sliderMax(std::min(x2, right) - 1, velocityBottom);
+                        dl->AddRectFilled(sliderMin, sliderMax, IM_COL32(20, 20, 20, firstPattern ? 150 : 90), 2);
+                        dl->AddRectFilled(ImVec2(sliderMin.x, velocityBottom - velocity * velocityHeight), sliderMax,
+                                          IM_COL32(track.color.r, track.color.g, track.color.b, firstPattern ? 230 : 120), 2);
+                        if(firstPattern && x2 - x1 > 28.0f && velocityHeight >= ImGui::GetTextLineHeight()) {
+                            char velocityLabel[16];
+                            std::snprintf(velocityLabel, sizeof(velocityLabel), "%.0f", velocity * 100.0f);
+                            dl->AddText(ImVec2(sliderMin.x + 2, velocityTop + 1), IM_COL32(245, 245, 245, 220), velocityLabel);
+                        }
+                    }
                 }
             }
         }
@@ -116,42 +136,53 @@ void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCont
         if(isFocused) {
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const bool inStepEditor = hoverRect(ImVec2(left, cellTop), ImVec2(right, cellBottom));
-        if(inStepEditor && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+        const bool inVelocity = showVelocity && hoverRect(ImVec2(left, velocityTop), ImVec2(right, velocityBottom));
+        auto cellBeatAtMouse = [&]() {
             const double timelineBeat = beatAtOffset(mouse.x - timelineMin.x);
             const double sourceBeat = timelineToSourceBeat(*clip, timelineBeat);
             const double patternBeat = std::fmod(sourceBeat, patternLength);
             const int index = ofClamp(static_cast<int>(std::floor(patternBeat / beatsPerStep)), 0, stepCount - 1);
-            const double cellBeat = index * beatsPerStep;
-            std::string value = "1";
-            auto stepIt = std::find_if(lane->step.steps.begin(), lane->step.steps.end(), [&](const auto& step) {
+            return index * beatsPerStep;
+        };
+        auto findStep = [&](double cellBeat) {
+            return std::find_if(lane->step.steps.begin(), lane->step.steps.end(), [&](const auto& step) {
                 return std::abs(step.startBeat - cellBeat) < 1.0 / kPPQ;
             });
+        };
+        auto stepAtMouse = [&]() {
+            const double cellBeat = cellBeatAtMouse();
+            auto stepIt = findStep(cellBeat);
             if(stepIt == lane->step.steps.end()) {
-                timeline.setClipStep(editorTrackId, editorClipId, lane->id, cellBeat, value, beatsPerStep);
-                stepIt = std::find_if(lane->step.steps.begin(), lane->step.steps.end(), [&](const auto& step) {
-                    return std::abs(step.startBeat - cellBeat) < 1.0 / kPPQ;
-                });
+                timeline.setClipStep(editorTrackId, editorClipId, lane->id, cellBeat, "1", beatsPerStep);
+                stepIt = findStep(cellBeat);
             }
+            return stepIt;
+        };
+        if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = Drag::None;
+        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            drag = inStepEditor ? Drag::Probability : inVelocity ? Drag::Velocity : Drag::None;
+        if(drag == Drag::Probability && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+           mouse.x >= left && mouse.x <= right) {
+            const auto stepIt = stepAtMouse();
             if(stepIt != lane->step.steps.end()) {
                 stepIt->probability = ofClamp((cellBottom - mouse.y) / (cellBottom - cellTop), 0.0f, 1.0f);
             }
         }
-        if(inStepEditor && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-            const double timelineBeat = beatAtOffset(mouse.x - timelineMin.x);
-            const double sourceBeat = timelineToSourceBeat(*clip, timelineBeat);
-            const double patternBeat = std::fmod(sourceBeat, patternLength);
-            const int index = ofClamp(static_cast<int>(std::floor(patternBeat / beatsPerStep)), 0, stepCount - 1);
-            const double cellBeat = index * beatsPerStep;
-            auto stepIt = std::find_if(lane->step.steps.begin(), lane->step.steps.end(), [&](const auto& step) {
-                return std::abs(step.startBeat - cellBeat) < 1.0 / kPPQ;
-            });
-            std::string value = "1";
-            if(stepIt == lane->step.steps.end()) {
-                timeline.setClipStep(editorTrackId, editorClipId, lane->id, cellBeat, value, beatsPerStep);
-                stepIt = std::find_if(lane->step.steps.begin(), lane->step.steps.end(), [&](const auto& step) {
-                    return std::abs(step.startBeat - cellBeat) < 1.0 / kPPQ;
-                });
+        // Velocity only edits steps that can sound: an empty cell has no slider.
+        if(drag == Drag::Velocity && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+           mouse.x >= left && mouse.x <= right) {
+            const auto stepIt = findStep(cellBeatAtMouse());
+            if(stepIt != lane->step.steps.end() && stepIt->probability > 0.0f) {
+                stepIt->velocity = ofClamp((velocityBottom - mouse.y) / velocityHeight, 0.0f, 1.0f);
             }
+        }
+        if(inVelocity && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            const auto stepIt = findStep(cellBeatAtMouse());
+            if(stepIt != lane->step.steps.end() && stepIt->probability > 0.0f) stepIt->velocity = 1.0f;
+        }
+        if(inVelocity) ImGui::SetTooltip("Step velocity. Right-click: 100%%");
+        if(inStepEditor && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            const auto stepIt = stepAtMouse();
             if(stepIt != lane->step.steps.end()) stepIt->probability = stepIt->probability > 0.5f ? 0.0f : 1.0f;
         }
         } // isFocused (step interaction)

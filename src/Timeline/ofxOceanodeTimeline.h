@@ -118,6 +118,9 @@ struct ofxOceanodeTimelineStep {
     // 0 is a muted step. Keeping it on the step makes the editor genuinely
     // probabilistic instead of treating the whole lane as a single gate.
     float probability = 1.0f;
+    // Level a gate step plays at (0..1 of the lane's range); value steps
+    // ignore it.
+    float velocity = 1.0f;
 };
 
 class ofxOceanodeTimelineStepLane {
@@ -255,6 +258,7 @@ struct ofxOceanodeTimelineValueRegion {
 struct ofxOceanodeTimelineGateRegion {
     double startBeat = 0.0;
     double durationBeats = 1.0;
+    float velocity = 1.0f; // level while on (0..1)
     double end() const { return startBeat + durationBeats; }
 };
 

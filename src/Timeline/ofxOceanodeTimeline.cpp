@@ -1367,7 +1367,9 @@ bool evaluateStepSequencer(const ofxOceanodeTimelineLane& lane,
         if(inRetriggerGap(steps, index, patternBeat, retriggerGap, startOf, endOf, same, patternLength)) continue;
         const bool useProbability = lane.probabilityEnabled && lane.behavior == "Probability";
         if(useProbability && !stepProbabilityPasses(step, cycle, lane.probabilitySeed, epoch)) return false;
-        value = step.value.empty() ? "1" : step.value;
+        value = !isGate(step) ? step.value
+              : step.velocity >= 1.0f ? "1"
+              : automationText::formatFloat(ofClamp(step.velocity, 0.0f, 1.0f));
         return true;
     }
     return false;
@@ -1418,7 +1420,7 @@ bool evaluateMultiValueRow(const std::vector<ofxOceanodeTimelineValueRegion>& ro
 }
 
 bool evaluateMultiGateRow(const std::vector<ofxOceanodeTimelineGateRegion>& row, double localBeat,
-                          double retriggerGap = 0.0, double wrapLength = 0.0) {
+                          double retriggerGap = 0.0, double wrapLength = 0.0, float* velocity = nullptr) {
     auto startOf = [](const ofxOceanodeTimelineGateRegion& r) { return r.startBeat; };
     auto endOf = [](const ofxOceanodeTimelineGateRegion& r) { return r.end(); };
     auto same = [](const ofxOceanodeTimelineGateRegion&, const ofxOceanodeTimelineGateRegion&) { return true; };
@@ -1426,6 +1428,7 @@ bool evaluateMultiGateRow(const std::vector<ofxOceanodeTimelineGateRegion>& row,
         const auto& region = row[index];
         if(localBeat < region.startBeat || localBeat >= region.end()) continue;
         if(inRetriggerGap(row, index, localBeat, retriggerGap, startOf, endOf, same, wrapLength)) continue;
+        if(velocity) *velocity = ofClamp(region.velocity, 0.0f, 1.0f);
         return true;
     }
     return false;
@@ -1634,7 +1637,8 @@ ofJson ofxOceanodeTimelineStepLane::toJson() const {
             {"startBeat", step.startBeat},
             {"durationBeats", step.durationBeats},
             {"value", step.value},
-            {"probability", step.probability}
+            {"probability", step.probability},
+            {"velocity", step.velocity}
         });
     }
     return json;
@@ -1650,6 +1654,7 @@ void ofxOceanodeTimelineStepLane::fromJson(const ofJson& json) {
             step.durationBeats = std::max(0.0, stepJson.value("durationBeats", 0.0));
             step.value = stepJson.value("value", std::string());
             step.probability = ofClamp(stepJson.value("probability", 1.0f), 0.0f, 1.0f);
+            step.velocity = ofClamp(stepJson.value("velocity", 1.0f), 0.0f, 1.0f);
             steps.push_back(std::move(step));
         }
     }
@@ -4977,11 +4982,13 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                                 evaluateMultiValueRow(lane.multiValueRows[row], sourceBeat, rowValue);
                             components.push_back(active ? automationText::formatFloat(rowValue) : "0");
                         } else {
+                            float velocity = 1.0f;
                             const bool active = row < static_cast<int>(lane.multiGateRows.size()) &&
                                 evaluateMultiGateRow(lane.multiGateRows[row], sourceBeat,
                                                      laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
-                                                     clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0);
-                            components.push_back(active ? "1" : "0");
+                                                     clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0,
+                                                     &velocity);
+                            components.push_back(!active ? "0" : velocity >= 1.0f ? "1" : automationText::formatFloat(velocity));
                         }
                     }
                     const std::string value = joinAutomationValues(components);
@@ -5543,7 +5550,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     for(const auto& id : lane.bindingIds) hash.add(id);
     hash.add(lane.step.steps.size());
     for(const auto& step : lane.step.steps) {
-        hash.add(step.startBeat); hash.add(step.durationBeats); hash.add(step.value); hash.add(step.probability);
+        hash.add(step.startBeat); hash.add(step.durationBeats); hash.add(step.value); hash.add(step.probability); hash.add(step.velocity);
     }
     hash.add(lane.stepCount); hash.add(lane.beatsPerStep); hash.add(lane.valueMin); hash.add(lane.valueMax);
     hash.add(lane.probabilityEnabled); hash.add(lane.behavior); hash.add(lane.probabilitySeed);
@@ -5591,7 +5598,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     hash.add(lane.multiGateRows.size());
     for(const auto& row : lane.multiGateRows) {
         hash.add(row.size());
-        for(const auto& region : row) { hash.add(region.startBeat); hash.add(region.durationBeats); }
+        for(const auto& region : row) { hash.add(region.startBeat); hash.add(region.durationBeats); hash.add(region.velocity); }
     }
     hash.add(lane.multiValueInteger);
     hash.add(lane.multiSliderValues.size());
@@ -6801,7 +6808,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 for(const auto& row : lane.multiGateRows) {
                     ofJson rowJson = ofJson::array();
                     for(const auto& region : row) rowJson.push_back({
-                        {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats}
+                        {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats},
+                        {"velocity", region.velocity}
                     });
                     laneJson["multiGateRows"].push_back(std::move(rowJson));
                 }
@@ -7239,7 +7247,8 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                                         if(!regionJson.is_object()) continue;
                                         row.push_back({
                                             std::max(0.0, regionJson.value("startBeat", 0.0)),
-                                            std::max(1.0 / 24.0, regionJson.value("durationBeats", 1.0))
+                                            std::max(1.0 / 24.0, regionJson.value("durationBeats", 1.0)),
+                                            ofClamp(regionJson.value("velocity", 1.0f), 0.0f, 1.0f)
                                         });
                                     }
                                 }
