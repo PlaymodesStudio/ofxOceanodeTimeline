@@ -41,7 +41,7 @@ void ofxOceanodeTimelineManager::clearTimelineFlag(const ofxOceanodeTimelineTrac
 
 void ofxOceanodeTimelineManager::refreshTimelineFlag(const std::string& parameterPath) {
     if(container == nullptr) return;
-    const bool isActive = std::any_of(tracks.begin(), tracks.end(), [&](const auto& track) {
+    const bool isActive = std::any_of(mainSequence.tracks.begin(), mainSequence.tracks.end(), [&](const auto& track) {
         return std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& binding) {
             return binding.parameterPath == parameterPath && !binding.bypass;
         });
@@ -62,16 +62,16 @@ ofJson ofxOceanodeTimelineManager::timelineEditData() const {
 ofxOceanodeTimelineManager::TimelineState ofxOceanodeTimelineManager::captureTimelineEdit() const {
     TimelineState state;
     state.data = timelineEditData();
-    state.tracks = tracks;
-    state.groups = clipGroups;
+    state.tracks = mainSequence.tracks;
+    state.groups = mainSequence.clipGroups;
     state.markers = markers;
     state.tempoPoints = bpmAutomationPoints;
     state.tempoTensions = bpmCurveTensions;
-    state.nextTrack = nextTrackNumber;
-    state.nextBinding = nextBindingNumber;
-    state.nextClip = nextClipNumber;
-    state.nextLane = nextLaneNumber;
-    state.nextGroup = nextGroupNumber;
+    state.nextTrack = mainSequence.nextTrackNumber;
+    state.nextBinding = mainSequence.nextBindingNumber;
+    state.nextClip = mainSequence.nextClipNumber;
+    state.nextLane = mainSequence.nextLaneNumber;
+    state.nextGroup = mainSequence.nextGroupNumber;
     // Include the typed copy and audio caches in the history budget.
     state.bytes = state.data.dump().size() * 2;
     for(auto& track : state.tracks) {
@@ -91,16 +91,16 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     // editor data, including waveform caches for files no longer on disk.
     const auto oldView = viewState;
     clear();
-    tracks = state.tracks;
-    clipGroups = state.groups;
+    mainSequence.tracks = state.tracks;
+    mainSequence.clipGroups = state.groups;
     markers = state.markers;
     bpmAutomationPoints = state.tempoPoints;
     bpmCurveTensions = state.tempoTensions;
-    nextTrackNumber = state.nextTrack;
-    nextBindingNumber = state.nextBinding;
-    nextClipNumber = state.nextClip;
-    nextLaneNumber = state.nextLane;
-    nextGroupNumber = state.nextGroup;
+    mainSequence.nextTrackNumber = state.nextTrack;
+    mainSequence.nextBindingNumber = state.nextBinding;
+    mainSequence.nextClipNumber = state.nextClip;
+    mainSequence.nextLaneNumber = state.nextLane;
+    mainSequence.nextGroupNumber = state.nextGroup;
     const auto& data = state.data;
     timebase = data["timebase"] == "Time" ? ofxOceanodeTimelineTimebase::Time : ofxOceanodeTimelineTimebase::Beats;
     playOnPresetLoad = data["playOnPresetLoad"];
@@ -121,7 +121,7 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     masterGridBeats = data.value("masterGridBeats", 0.25);
     viewState = oldView;
     syncLoopToTransport();
-    for(const auto& track : tracks)
+    for(const auto& track : mainSequence.tracks)
         for(const auto& binding : track.bindings) refreshTimelineFlag(binding.parameterPath);
 }
 

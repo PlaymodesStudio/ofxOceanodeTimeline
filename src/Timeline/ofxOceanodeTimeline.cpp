@@ -821,11 +821,11 @@ bool ofxOceanodeTimelineManager::setMetronomeEnabled(bool enabled) {
 void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
     parameterTrackColorCache.clear();
     size_t bindingCount = 0;
-    for(const auto& track : tracks) bindingCount += track.bindings.size();
+    for(const auto& track : mainSequence.tracks) bindingCount += track.bindings.size();
     parameterTrackColorCache.reserve(bindingCount);
     // Preserve the previous first-track-wins behaviour for parameters that
     // are published to more than one track.
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         for(const auto& binding : track.bindings)
             parameterTrackColorCache.emplace(binding.parameterPath, track.color);
     }
@@ -834,118 +834,20 @@ void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
 
 void ofxOceanodeTimelineManager::setContainer(ofxOceanodeContainer* owner) {
     if(container == owner) return;
-    for(const auto& track : tracks) clearTimelineFlag(track);
+    for(const auto& track : mainSequence.tracks) clearTimelineFlag(track);
     container = owner;
     invalidateEvaluationIndexes();
     std::set<std::string> parameterPaths;
-    for(const auto& track : tracks)
+    for(const auto& track : mainSequence.tracks)
         for(const auto& binding : track.bindings)
             parameterPaths.insert(binding.parameterPath);
     for(const auto& path : parameterPaths) refreshTimelineFlag(path);
 }
 
-std::string ofxOceanodeTimelineManager::makeId(const char* prefix, uint64_t number) {
-    return std::string(prefix) + "_" + ofToString(number);
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueTrackName(const std::string& requestedName) const {
-    const std::string base = requestedName.empty() ? "Timeline Track" : requestedName;
-    auto exists = [&](const std::string& candidate) {
-        return std::any_of(tracks.begin(), tracks.end(), [&](const auto& track) { return track.name == candidate; });
-    };
-    if(!exists(base)) return base;
-    for(int suffix = 2; ; ++suffix) {
-        const std::string candidate = base + " " + ofToString(suffix);
-        if(!exists(candidate)) return candidate;
-    }
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueClipName(const ofxOceanodeTimelineTrack& track,
-                                                           const std::string& requestedName) const {
-    const std::string base = requestedName.empty() ? "Clip" : requestedName;
-    auto exists = [&](const std::string& candidate) {
-        return std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
-            return clip.name == candidate;
-        });
-    };
-    if(!exists(base)) return base;
-    for(int suffix = 2; ; ++suffix) {
-        const std::string candidate = base + " " + ofToString(suffix);
-        if(!exists(candidate)) return candidate;
-    }
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueTrackId() const {
-    std::string id;
-    uint64_t number = nextTrackNumber;
-    do {
-        id = makeId("timeline_track", number++);
-    } while(getTrack(id) != nullptr);
-    return id;
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueBindingId() const {
-    std::string id;
-    uint64_t number = nextBindingNumber;
-    do {
-        id = makeId("timeline_binding", number++);
-        bool used = false;
-        for(const auto& track : tracks) {
-            used = std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& binding) { return binding.id == id; });
-            if(used) break;
-        }
-        if(!used) return id;
-    } while(true);
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueClipId() const {
-    std::string id;
-    uint64_t number = nextClipNumber;
-    do {
-        id = makeId("timeline_clip", number++);
-        bool used = false;
-        for(const auto& track : tracks) {
-            used = std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
-                return clip.id == id;
-            });
-            if(used) break;
-        }
-        if(!used) return id;
-    } while(true);
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueLaneId() const {
-    std::string id;
-    uint64_t number = nextLaneNumber;
-    do {
-        id = makeId("timeline_lane", number++);
-        bool used = false;
-        for(const auto& track : tracks) {
-            for(const auto& clip : track.clips) {
-                used = std::any_of(clip.lanes.begin(), clip.lanes.end(), [&](const auto& lane) {
-                    return lane.id == id;
-                });
-                if(used) break;
-            }
-            if(used) break;
-        }
-        if(!used) return id;
-    } while(true);
-}
-
-std::string ofxOceanodeTimelineManager::makeUniqueGroupId() const {
-    std::string id;
-    uint64_t number = nextGroupNumber;
-    do {
-        id = makeId("timeline_group", number++);
-    } while(std::any_of(clipGroups.begin(), clipGroups.end(), [&](const auto& group) { return group.id == id; }));
-    return id;
-}
-
 std::string ofxOceanodeTimelineManager::createTrack(const std::string& requestedName) {
     ofxOceanodeTimelineTrack track;
-    track.id = makeUniqueTrackId();
-    track.name = makeUniqueTrackName(requestedName);
+    track.id = mainSequence.makeUniqueTrackId();
+    track.name = mainSequence.makeUniqueTrackName(requestedName);
     static const ofColor defaultColors[] = {
         ofColor(65, 165, 245, 255),
         ofColor(75, 190, 125, 255),
@@ -953,11 +855,11 @@ std::string ofxOceanodeTimelineManager::createTrack(const std::string& requested
         ofColor(190, 95, 220, 255),
         ofColor(235, 90, 95, 255)
     };
-    track.color = defaultColors[tracks.size() % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
-    ++nextTrackNumber;
-    tracks.push_back(std::move(track));
+    track.color = defaultColors[mainSequence.tracks.size() % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
+    ++mainSequence.nextTrackNumber;
+    mainSequence.tracks.push_back(std::move(track));
     invalidateEvaluationIndexes();
-    return tracks.back().id;
+    return mainSequence.tracks.back().id;
 }
 
 std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack copy,
@@ -970,7 +872,7 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack
     std::map<std::string, std::string> bindings;
     for(auto& binding : duplicate.bindings) {
         const auto old = binding.id;
-        binding.id = makeUniqueBindingId(); ++nextBindingNumber;
+        binding.id = mainSequence.makeUniqueBindingId(); ++mainSequence.nextBindingNumber;
         bindings[old] = binding.id;
         binding.hasLiveOverride = false;
         binding.liveOverrideValue.clear();
@@ -986,17 +888,17 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack
         remap(group.filterBindingId); remap(group.stutterBindingId);
     }
     for(auto& clip : duplicate.clips) {
-        clip.id = makeUniqueClipId(); ++nextClipNumber;
+        clip.id = mainSequence.makeUniqueClipId(); ++mainSequence.nextClipNumber;
         remap(clip.lfoOutputBindingId);
         for(auto& lane : clip.lanes) {
-            lane.id = makeUniqueLaneId(); ++nextLaneNumber;
+            lane.id = mainSequence.makeUniqueLaneId(); ++mainSequence.nextLaneNumber;
             for(auto& binding : lane.bindingIds) remap(binding);
             lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), std::string()), lane.bindingIds.end());
             remap(lane.pianoPitchBindingId); remap(lane.pianoGateBindingId); remap(lane.pianoVelocityBindingId);
             remap(lane.drumDurationBindingId); remap(lane.drumFilterBindingId); remap(lane.drumStutterBindingId);
         }
     }
-    std::rotate(tracks.begin() + index, tracks.end() - 1, tracks.end());
+    std::rotate(mainSequence.tracks.begin() + index, mainSequence.tracks.end() - 1, mainSequence.tracks.end());
     invalidateEvaluationIndexes();
     invalidateSchedule();
     return id;
@@ -1006,10 +908,10 @@ std::string ofxOceanodeTimelineManager::duplicateTrack(const std::string& trackI
     const std::string sourceId = trackId; // caller may pass the track's own id by reference
     const auto* source = getTrack(sourceId);
     if(source == nullptr) return {};
-    const auto groups = clipGroups;
+    const auto groups = mainSequence.clipGroups;
     std::vector<std::string> originals;
     for(const auto& clip : source->clips) originals.push_back(clip.id);
-    const size_t index = static_cast<size_t>(source - tracks.data()) + 1;
+    const size_t index = static_cast<size_t>(source - mainSequence.tracks.data()) + 1;
     const auto id = insertTrackCopy(*source, source->name + " copy", index);
     std::map<std::string, std::string> clips;
     const auto& copied = getTrack(id)->clips;
@@ -1033,7 +935,7 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
     const auto* sourceClip = getClip(sourceId, sourceClipId);
     if(source == nullptr || sourceClip == nullptr || source->isWaveTrack ||
        sourceClip->isLfo || sourceClip->lanes.size() < 2) return {};
-    size_t index = static_cast<size_t>(source - tracks.data()) + 1;
+    size_t index = static_cast<size_t>(source - mainSequence.tracks.data()) + 1;
     // Copy track settings without copying all the other clips for every lane.
     ofxOceanodeTimelineTrack settings;
     settings.name = source->name;
@@ -1160,7 +1062,7 @@ bool ofxOceanodeTimelineManager::renameTrack(const std::string& trackId, const s
     auto* track = getTrack(trackId);
     if(track == nullptr || requestedName.empty()) return false;
     if(track->name == requestedName) return true;
-    track->name = makeUniqueTrackName(requestedName);
+    track->name = mainSequence.makeUniqueTrackName(requestedName);
     return true;
 }
 
@@ -1182,8 +1084,8 @@ bool ofxOceanodeTimelineManager::consumePendingTrackRename(std::string& trackId,
 
 bool ofxOceanodeTimelineManager::removeTrack(const std::string& trackId) {
     invalidateSchedule(); // correct queued events while the track still exists
-    auto it = std::find_if(tracks.begin(), tracks.end(), [&](const auto& track) { return track.id == trackId; });
-    if(it == tracks.end()) return false;
+    auto it = std::find_if(mainSequence.tracks.begin(), mainSequence.tracks.end(), [&](const auto& track) { return track.id == trackId; });
+    if(it == mainSequence.tracks.end()) return false;
     std::set<std::string> affectedPaths;
     for(const auto& binding : it->bindings) {
         affectedPaths.insert(binding.parameterPath);
@@ -1202,7 +1104,7 @@ bool ofxOceanodeTimelineManager::removeTrack(const std::string& trackId) {
         removeClipFromGroups(trackId, clip.id);
         releaseWaveClipIfNeeded(trackId, clip.id);
     }
-    tracks.erase(it);
+    mainSequence.tracks.erase(it);
     invalidateEvaluationIndexes();
     for(const auto& path : affectedPaths) refreshTimelineFlag(path);
     return true;
@@ -1213,8 +1115,7 @@ ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string
         const auto cached = trackByIdCache.find(trackId);
         if(cached != trackByIdCache.end()) return cached->second;
     }
-    auto it = std::find_if(tracks.begin(), tracks.end(), [&](auto& track) { return track.id == trackId; });
-    return it == tracks.end() ? nullptr : &*it;
+    return mainSequence.findTrack(trackId);
 }
 
 const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string& trackId) const {
@@ -1222,8 +1123,7 @@ const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::
         const auto cached = trackByIdCache.find(trackId);
         if(cached != trackByIdCache.end()) return cached->second;
     }
-    auto it = std::find_if(tracks.begin(), tracks.end(), [&](const auto& track) { return track.id == trackId; });
-    return it == tracks.end() ? nullptr : &*it;
+    return mainSequence.findTrack(trackId);
 }
 
 std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
@@ -1241,7 +1141,7 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     })) return std::string();
 
     ofxOceanodeTimelineParameterBinding binding;
-    binding.id = makeUniqueBindingId();
+    binding.id = mainSequence.makeUniqueBindingId();
     binding.parameterPath = path;
     binding.valueType = parameter.valueType();
     binding.defaultValue = parameterValueForAutomation(parameter);
@@ -1264,7 +1164,7 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     // it (and surprising: it meant the *order* parameters were bound in
     // silently decided whether a clip appeared).
     parameter.setTimelined(true);
-    ++nextBindingNumber;
+    ++mainSequence.nextBindingNumber;
     return binding.id;
 }
 
@@ -1498,7 +1398,7 @@ std::string ofxOceanodeTimelineManager::createNoteGroup(const std::string& track
     ofxOceanodeTimelineNoteGroup group;
     uint64_t number = 1;
     do {
-        group.id = makeId("timeline_notes", number++);
+        group.id = ofxOceanodeTimelineSequence::makeId("timeline_notes", number++);
     } while(std::any_of(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == group.id; }));
     group.name = name.empty() ? std::string("Notes") : name;
     track->noteGroups.push_back(group);
@@ -1754,7 +1654,7 @@ float gainToNormalized(const ofxOceanodeTimelineLane& lane, float gain) {
 
 int ofxOceanodeTimelineManager::retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) {
     int changed = 0;
-    for(auto& track : tracks) {
+    for(auto& track : mainSequence.tracks) {
         for(auto& binding : track.bindings) {
             const auto it = oldToNew.find(binding.parameterPath);
             if(it == oldToNew.end() || it->second.empty() || it->second == it->first) continue;
@@ -2089,12 +1989,12 @@ std::string ofxOceanodeTimelineManager::createClip(const std::string& trackId,
     if(track == nullptr) return std::string();
 
     ofxOceanodeTimelineClip clip;
-    clip.id = makeUniqueClipId();
-    clip.name = makeUniqueClipName(*track, requestedName);
+    clip.id = mainSequence.makeUniqueClipId();
+    clip.name = ofxOceanodeTimelineSequence::makeUniqueClipName(*track, requestedName);
     clip.startBeat = std::max(0.0, startBeat);
     clip.durationBeats = std::max(1.0 / 24.0, durationBeats);
     clip.contentDurationBeats = clip.durationBeats;
-    ++nextClipNumber;
+    ++mainSequence.nextClipNumber;
     track->clips.push_back(std::move(clip));
     invalidateEvaluationIndexes();
     return track->clips.back().id;
@@ -2396,8 +2296,8 @@ std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, co
     right.name = rightName;
     *rightClip = right;
     for(auto& lane : rightLanes) {
-        const std::string laneId = makeUniqueLaneId();
-        ++nextLaneNumber;
+        const std::string laneId = mainSequence.makeUniqueLaneId();
+        ++mainSequence.nextLaneNumber;
         lane.id = laneId;
         if(auto* clip = getClip(trackId, rightId)) clip->lanes.push_back(lane);
     }
@@ -2510,8 +2410,8 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
     copy.lanes.clear();
     *newClip = std::move(copy);
     for(auto& lane : lanes) {
-        lane.id = makeUniqueLaneId();
-        ++nextLaneNumber;
+        lane.id = mainSequence.makeUniqueLaneId();
+        ++mainSequence.nextLaneNumber;
         if(auto* clip = getClip(dstTrackId, newId)) clip->lanes.push_back(std::move(lane));
     }
     invalidateSchedule();
@@ -2671,7 +2571,7 @@ bool ofxOceanodeTimelineManager::renameClip(const std::string& trackId, const st
     auto* clip = getClip(trackId, clipId);
     if(track == nullptr || clip == nullptr || requestedName.empty()) return false;
     if(clip->name == requestedName) return true;
-    clip->name = makeUniqueClipName(*track, requestedName);
+    clip->name = ofxOceanodeTimelineSequence::makeUniqueClipName(*track, requestedName);
     return true;
 }
 
@@ -2709,7 +2609,7 @@ bool ofxOceanodeTimelineManager::removeClip(const std::string& trackId, const st
 }
 
 void ofxOceanodeTimelineManager::removeClipFromGroups(const std::string& trackId, const std::string& clipId) {
-    for(auto& group : clipGroups) {
+    for(auto& group : mainSequence.clipGroups) {
         group.members.erase(std::remove_if(group.members.begin(), group.members.end(), [&](const auto& member) {
             return member.first == trackId && member.second == clipId;
         }), group.members.end());
@@ -2717,9 +2617,9 @@ void ofxOceanodeTimelineManager::removeClipFromGroups(const std::string& trackId
     // A "group" of zero or one member is meaningless -- drop it rather than
     // leave an inert record around that the UI's group outline/Ungroup
     // button would otherwise have to special-case.
-    clipGroups.erase(std::remove_if(clipGroups.begin(), clipGroups.end(), [](const auto& group) {
+    mainSequence.clipGroups.erase(std::remove_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [](const auto& group) {
         return group.members.size() < 2;
-    }), clipGroups.end());
+    }), mainSequence.clipGroups.end());
 }
 
 std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<std::string, std::string>>& members) {
@@ -2739,7 +2639,7 @@ std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<s
             groupIdsToDissolve.insert(existingGroup->id);
         }
     }
-    for(const auto& group : clipGroups) {
+    for(const auto& group : mainSequence.clipGroups) {
         if(groupIdsToDissolve.count(group.id) == 0) continue;
         for(const auto& member : group.members) {
             // Groups are persisted as references. Do not carry a stale
@@ -2755,31 +2655,31 @@ std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<s
         if(groupIdsToDissolve.size() == 1) return *groupIdsToDissolve.begin();
         return std::string();
     }
-    clipGroups.erase(std::remove_if(clipGroups.begin(), clipGroups.end(), [&](const auto& group) {
+    mainSequence.clipGroups.erase(std::remove_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [&](const auto& group) {
         return groupIdsToDissolve.count(group.id) > 0;
-    }), clipGroups.end());
+    }), mainSequence.clipGroups.end());
 
     ofxOceanodeTimelineClipGroup newGroup;
-    newGroup.id = makeUniqueGroupId();
+    newGroup.id = mainSequence.makeUniqueGroupId();
     newGroup.members = std::move(merged);
-    ++nextGroupNumber;
-    clipGroups.push_back(std::move(newGroup));
-    return clipGroups.back().id;
+    ++mainSequence.nextGroupNumber;
+    mainSequence.clipGroups.push_back(std::move(newGroup));
+    return mainSequence.clipGroups.back().id;
 }
 
 bool ofxOceanodeTimelineManager::ungroupClip(const std::string& trackId, const std::string& clipId) {
-    const auto it = std::find_if(clipGroups.begin(), clipGroups.end(), [&](const auto& group) {
+    const auto it = std::find_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [&](const auto& group) {
         return std::any_of(group.members.begin(), group.members.end(), [&](const auto& member) {
             return member.first == trackId && member.second == clipId;
         });
     });
-    if(it == clipGroups.end()) return false;
-    clipGroups.erase(it);
+    if(it == mainSequence.clipGroups.end()) return false;
+    mainSequence.clipGroups.erase(it);
     return true;
 }
 
 const ofxOceanodeTimelineClipGroup* ofxOceanodeTimelineManager::getGroupForClip(const std::string& trackId, const std::string& clipId) const {
-    for(const auto& group : clipGroups) {
+    for(const auto& group : mainSequence.clipGroups) {
         for(const auto& member : group.members) {
             if(member.first == trackId && member.second == clipId) return &group;
         }
@@ -2808,7 +2708,7 @@ std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, c
     if(clip == nullptr) return std::string();
     if(type == ofxOceanodeTimelineLaneType::Wave) return std::string();
     ofxOceanodeTimelineLane lane;
-    lane.id = makeUniqueLaneId();
+    lane.id = mainSequence.makeUniqueLaneId();
     lane.name = requestedName.empty() ? "Lane" : requestedName;
     lane.type = type;
     lane.probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));
@@ -2829,7 +2729,7 @@ std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, c
     } else if(type == ofxOceanodeTimelineLaneType::DrumGrid) {
         lane.drumRows = ofxOceanodeTimelineDrumGrid::defaultRows(4, {}, std::min(16.0, clip->contentDurationBeats));
     }
-    ++nextLaneNumber;
+    ++mainSequence.nextLaneNumber;
     clip->lanes.push_back(std::move(lane));
     return clip->lanes.back().id;
 }
@@ -2843,10 +2743,10 @@ std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId
     if(source == clip->lanes.end() || source->type == ofxOceanodeTimelineLaneType::Wave ||
        source->isWaveVolume || !source->lfoParameter.empty()) return {};
     ofxOceanodeTimelineLane copy = *source;
-    copy.id = makeUniqueLaneId();
+    copy.id = mainSequence.makeUniqueLaneId();
     // Its own rolls: a copy on the source's seed would pass and fail with it.
     copy.probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));
-    ++nextLaneNumber;
+    ++mainSequence.nextLaneNumber;
     const auto newId = copy.id;
     clip->lanes.insert(std::next(source), std::move(copy));
     invalidateEvaluationIndexes();
@@ -3114,7 +3014,7 @@ bool ofxOceanodeTimelineManager::isTrackSoloed(const ofxOceanodeTimelineTrack& t
 }
 
 bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& track) const {
-    return !track.muted && (isTrackSoloed(track) || std::none_of(tracks.begin(), tracks.end(),
+    return !track.muted && (isTrackSoloed(track) || std::none_of(mainSequence.tracks.begin(), mainSequence.tracks.end(),
                                                     [this](const auto& other) { return isTrackSoloed(other); }));
 }
 
@@ -3175,7 +3075,7 @@ bool ofxOceanodeTimelineManager::setLaneTargetProbability(const std::string& tra
 
 bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
     bool changed = false;
-    for(auto& track : tracks) {
+    for(auto& track : mainSequence.tracks) {
         if(track.isWaveTrack) continue;
         bool driven = false, on = false;
         for(const auto& clip : track.clips) {
@@ -3657,7 +3557,7 @@ std::string ofxOceanodeTimelineManager::addMarker(double beat, const std::string
     ofxOceanodeTimelineMarker marker;
     uint64_t number = markers.size() + 1;
     do {
-        marker.id = makeId("timeline_marker", number++);
+        marker.id = ofxOceanodeTimelineSequence::makeId("timeline_marker", number++);
     } while(std::any_of(markers.begin(), markers.end(), [&](const auto& m) { return m.id == marker.id; }));
     marker.beat = std::max(0.0, beat);
     marker.name = name.empty() ? "Marker " + ofToString(markers.size() + 1) : name;
@@ -3810,11 +3710,11 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
     if(container == nullptr || replayingTimelineEdit) return;
     struct Adoption { std::string trackId, groupId; const KitRole* role; ofxOceanodeTimelineParameterBinding binding; };
     std::vector<Adoption> adopted;
-    for(size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex) {
-        if(tracks[trackIndex].isWaveTrack) continue;
-        for(size_t groupIndex = 0; groupIndex < tracks[trackIndex].noteGroups.size(); ++groupIndex) {
+    for(size_t trackIndex = 0; trackIndex < mainSequence.tracks.size(); ++trackIndex) {
+        if(mainSequence.tracks[trackIndex].isWaveTrack) continue;
+        for(size_t groupIndex = 0; groupIndex < mainSequence.tracks[trackIndex].noteGroups.size(); ++groupIndex) {
             for(const KitRole* role : {&kDurationRole, &kFilterRole, &kStutterRole}) {
-                auto& track = tracks[trackIndex];
+                auto& track = mainSequence.tracks[trackIndex];
                 const auto group = track.noteGroups[groupIndex];
                 if(group.*role->decided || !(group.*role->group).empty()) continue;
                 // The instrument behind the group's gate (or pitch).
@@ -3835,7 +3735,7 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
                 std::string bindingId;
                 for(const auto& binding : track.bindings) if(binding.parameterPath == path) bindingId = binding.id;
                 if(bindingId.empty()) bindingId = addBinding(track.id, *input);
-                auto& liveTrack = tracks[trackIndex];
+                auto& liveTrack = mainSequence.tracks[trackIndex];
                 const auto* binding = bindingInTrack(liveTrack, bindingId);
                 if(binding == nullptr) continue;
                 const auto copy = *binding;
@@ -3859,9 +3759,9 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
                     changed = true;
                 }
         if(!changed) return;
-        std::swap(tracks, state.tracks);
+        std::swap(mainSequence.tracks, state.tracks);
         const auto tracksJson = toJson()["tracks"];
-        std::swap(tracks, state.tracks);
+        std::swap(mainSequence.tracks, state.tracks);
         state.data["tracks"] = tracksJson;
     };
     for(auto* stack : {&timelineUndo, &timelineRedo})
@@ -3899,7 +3799,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // becomes a live override and is committed/cleared by the next capture.
     if(transport.isPlaying) {
         if(!stateCaptureManualOverrideKeys.empty()) {
-            for(auto& track : tracks) {
+            for(auto& track : mainSequence.tracks) {
                 for(auto& binding : track.bindings) {
                     const std::string key = track.id + "\x1f" + binding.id;
                     if(stateCaptureManualOverrideKeys.count(key) == 0) continue;
@@ -3911,7 +3811,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         }
     } else {
         std::unordered_set<std::string> checkedBindings;
-        for(auto& track : tracks) {
+        for(auto& track : mainSequence.tracks) {
             if(!isTrackAudible(track)) continue;
             for(const auto& clip : track.clips) {
                 if(clip.muted || !clip.isStateCapture ||
@@ -4021,7 +3921,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Wave tracks never touch the automation binding map. They are reported
     // through the optional audio backend as clip sources instead.
     if(waveAudioProvider != nullptr) {
-        for(const auto& track : tracks) {
+        for(const auto& track : mainSequence.tracks) {
             if(!track.isWaveTrack) continue;
             for(const auto& clip : track.clips) {
                 // Wave clips always map their complete source linearly over
@@ -4181,20 +4081,20 @@ void ofxOceanodeTimelineManager::clear() {
     // know the right values still exist (afterwards a queued gate-on would
     // play with nothing to turn it off).
     invalidateSchedule();
-    for(const auto& track : tracks) clearTimelineFlag(track);
+    for(const auto& track : mainSequence.tracks) clearTimelineFlag(track);
     endParameterCache();
-    tracks.clear();
+    mainSequence.tracks.clear();
     invalidateEvaluationIndexes();
-    clipGroups.clear();
+    mainSequence.clipGroups.clear();
     markers.clear();
     viewState = {};
     playOnPresetLoad = false;
     timebase = ofxOceanodeTimelineTimebase::Beats;
-    nextTrackNumber = 1;
-    nextBindingNumber = 1;
-    nextClipNumber = 1;
-    nextLaneNumber = 1;
-    nextGroupNumber = 1;
+    mainSequence.nextTrackNumber = 1;
+    mainSequence.nextBindingNumber = 1;
+    mainSequence.nextClipNumber = 1;
+    mainSequence.nextLaneNumber = 1;
+    mainSequence.nextGroupNumber = 1;
     pendingParameterLanes.clear();
     pendingTrackRenameId.clear();
     pendingTrackRenameIsNew = false;
@@ -4240,7 +4140,7 @@ void ofxOceanodeTimelineManager::retimeForBpmChange(float oldBpm, float newBpm) 
     loopStartBeat *= scale;
     loopEndBeat = std::max(loopStartBeat + 1.0 / 24.0, loopEndBeat * scale);
 
-    for(auto& track : tracks) {
+    for(auto& track : mainSequence.tracks) {
         for(auto& point : track.waveVolumePoints) point.beat *= scale;
         for(auto& clip : track.clips) {
             clip.startBeat *= scale;

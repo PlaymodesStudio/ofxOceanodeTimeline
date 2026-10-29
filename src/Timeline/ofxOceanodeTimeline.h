@@ -917,6 +917,46 @@ public:
     virtual void releaseWaveClip(const std::string& trackId, const std::string& clipId) = 0;
 };
 
+// The arrangement of one timeline: its tracks (with their bindings, clips and
+// lanes), clip groups and the counters new ids start from. The main timeline
+// is one; a macro will own one. Data and plain lookups only: parameters,
+// playback, scheduling and undo stay with the manager.
+class ofxOceanodeTimelineSequence {
+public:
+    std::vector<ofxOceanodeTimelineTrack> tracks;
+    std::vector<ofxOceanodeTimelineClipGroup> clipGroups;
+    // First number tried for each kind of new id.
+    uint64_t nextTrackNumber = 1;
+    uint64_t nextBindingNumber = 1;
+    uint64_t nextClipNumber = 1;
+    uint64_t nextLaneNumber = 1;
+    uint64_t nextGroupNumber = 1;
+
+    // Linear lookups by id (nullptr when missing).
+    ofxOceanodeTimelineTrack* findTrack(const std::string& trackId);
+    const ofxOceanodeTimelineTrack* findTrack(const std::string& trackId) const;
+    ofxOceanodeTimelineClip* findClip(const std::string& trackId, const std::string& clipId);
+    const ofxOceanodeTimelineClip* findClip(const std::string& trackId, const std::string& clipId) const;
+    ofxOceanodeTimelineLane* findLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
+    const ofxOceanodeTimelineLane* findLane(const std::string& trackId, const std::string& clipId,
+                                            const std::string& laneId) const;
+    ofxOceanodeTimelineParameterBinding* findBinding(const std::string& trackId, const std::string& bindingId);
+    const ofxOceanodeTimelineParameterBinding* findBinding(const std::string& trackId,
+                                                           const std::string& bindingId) const;
+
+    // "prefix_number", the form of every timeline id.
+    static std::string makeId(const char* prefix, uint64_t number);
+    // Ids not used anywhere in this sequence, from the counters on.
+    std::string makeUniqueTrackId() const;
+    std::string makeUniqueBindingId() const;
+    std::string makeUniqueClipId() const;
+    std::string makeUniqueLaneId() const;
+    std::string makeUniqueGroupId() const;
+    // The requested name, or it with the first free " 2", " 3"... suffix.
+    std::string makeUniqueTrackName(const std::string& requestedName) const;
+    static std::string makeUniqueClipName(const ofxOceanodeTimelineTrack& track, const std::string& requestedName);
+};
+
 class ofxOceanodeTimelineManager {
 public:
     explicit ofxOceanodeTimelineManager(ofxOceanodeContainer* container = nullptr);
@@ -964,7 +1004,7 @@ public:
     bool removeTrack(const std::string& trackId);
     ofxOceanodeTimelineTrack* getTrack(const std::string& trackId);
     const ofxOceanodeTimelineTrack* getTrack(const std::string& trackId) const;
-    const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return tracks; }
+    const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return mainSequence.tracks; }
 
     std::string addBinding(const std::string& trackId,
                           ofxOceanodeAbstractParameter& parameter,
@@ -1224,7 +1264,7 @@ public:
     std::string groupClips(const std::vector<std::pair<std::string, std::string>>& members);
     bool ungroupClip(const std::string& trackId, const std::string& clipId);
     const ofxOceanodeTimelineClipGroup* getGroupForClip(const std::string& trackId, const std::string& clipId) const;
-    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return clipGroups; }
+    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return mainSequence.clipGroups; }
 
     ofxOceanodeTimelineViewState& getViewState() { return viewState; }
     const ofxOceanodeTimelineViewState& getViewState() const { return viewState; }
@@ -1387,15 +1427,7 @@ private:
     std::unique_ptr<ofxOceanodeTimelineMetronome> metronome;
     static std::string laneTypeToString(ofxOceanodeTimelineLaneType laneType);
     static ofxOceanodeTimelineLaneType laneTypeFromString(const std::string& laneType);
-    static std::string makeId(const char* prefix, uint64_t number);
-    std::string makeUniqueTrackName(const std::string& requestedName) const;
-    std::string makeUniqueClipName(const ofxOceanodeTimelineTrack& track, const std::string& requestedName) const;
     std::string insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
-    std::string makeUniqueBindingId() const;
-    std::string makeUniqueTrackId() const;
-    std::string makeUniqueClipId() const;
-    std::string makeUniqueLaneId() const;
-    std::string makeUniqueGroupId() const;
     // Keeps clipGroups' invariants (every member clip still exists, every
     // group has at least two members) after a clip is removed -- called
     // from removeClip/removeTrack rather than left to every caller.
@@ -1475,16 +1507,12 @@ private:
     };
 
     ofxOceanodeContainer* container = nullptr;
-    std::vector<ofxOceanodeTimelineTrack> tracks;
-    std::vector<ofxOceanodeTimelineClipGroup> clipGroups;
+    // The main timeline's arrangement. Tempo, markers, loop, time signature
+    // and view settings belong to the main timeline only and stay here.
+    ofxOceanodeTimelineSequence mainSequence;
     std::vector<ofxOceanodeTimelineMarker> markers; // sorted by beat
     ofxOceanodeTimelineViewState viewState;
     ofxOceanodeTimelineTimebase timebase = ofxOceanodeTimelineTimebase::Beats;
-    uint64_t nextTrackNumber = 1;
-    uint64_t nextBindingNumber = 1;
-    uint64_t nextClipNumber = 1;
-    uint64_t nextLaneNumber = 1;
-    uint64_t nextGroupNumber = 1;
     std::vector<std::pair<std::string, std::string>> pendingParameterLanes;
     std::string pendingTrackRenameId;
     bool pendingTrackRenameIsNew = false;

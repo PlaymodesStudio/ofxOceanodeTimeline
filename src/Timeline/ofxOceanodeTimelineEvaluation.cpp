@@ -626,12 +626,12 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     playback.clearRolls();
 
     size_t bindingCount = 0;
-    for(const auto& track : tracks) bindingCount += track.bindings.size();
+    for(const auto& track : mainSequence.tracks) bindingCount += track.bindings.size();
     bindingsByPathCache.reserve(bindingCount);
-    trackByIdCache.reserve(tracks.size());
-    trackEvaluationIndexes.reserve(tracks.size());
+    trackByIdCache.reserve(mainSequence.tracks.size());
+    trackEvaluationIndexes.reserve(mainSequence.tracks.size());
 
-    for(auto& track : tracks) {
+    for(auto& track : mainSequence.tracks) {
         trackByIdCache.emplace(track.id, &track);
         auto& index = trackEvaluationIndexes[&track];
         index.bindingById.reserve(track.bindings.size());
@@ -647,7 +647,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     // These properties depend only on the timeline structure. Cache them once
     // for the current update instead of rediscovering them for the playhead and
     // again for every scheduler lookahead probe.
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         if(!isTrackAudible(track)) continue;
         const auto trackIt = trackEvaluationIndexes.find(&track);
         if(trackIt == trackEvaluationIndexes.end()) continue;
@@ -1175,7 +1175,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     const auto wantsBinding = [&](const ofxOceanodeTimelineParameterBinding* binding) {
         return binding != nullptr && (onlyPaths == nullptr || onlyPaths->count(binding->parameterPath) > 0);
     };
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         if(!isTrackAudible(track)) continue;
         contributionTrack = &track;
         for(const auto& clip : track.clips) {
@@ -1570,7 +1570,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     // clip that starts latest (then the later one in the track) is the one
     // heard. Finally, expose one contribution per binding for
     // cross-track/cross-binding blending.
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         const auto trackIndexIt = trackEvaluationIndexes.find(&track);
         for(const auto& binding : track.bindings) {
             if(!wantsBinding(&binding)) continue;
@@ -1763,8 +1763,8 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
 // (voice count and kit come from the node, not the timeline).
 uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
     ChangeHash hash;
-    hash.add(tracks.data()); hash.add(tracks.size());
-    for(const auto& track : tracks) {
+    hash.add(mainSequence.tracks.data()); hash.add(mainSequence.tracks.size());
+    for(const auto& track : mainSequence.tracks) {
         hash.add(track.id); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
         hash.add(track.bindings.data()); hash.add(track.bindings.size());
         for(const auto& binding : track.bindings) {
@@ -1834,7 +1834,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
         return std::any_of(lane.bindingIds.begin(), lane.bindingIds.end(),
                            [&](const std::string& id) { return bindingScheduled(track, id); });
     };
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         if(track.isWaveTrack || !isTrackAudible(track)) continue; // audio, not automation
         for(const auto& clip : track.clips) {
             if(clip.muted || clip.isLfo) continue;

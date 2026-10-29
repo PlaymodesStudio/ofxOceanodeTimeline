@@ -308,7 +308,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         {"adaptive", schedulingLookaheadAdaptive}
     };
     json["tracks"] = ofJson::array();
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         ofJson trackJson;
         trackJson["id"] = track.id;
         trackJson["name"] = track.name;
@@ -495,7 +495,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         json["tracks"].push_back(std::move(trackJson));
     }
     json["clipGroups"] = ofJson::array();
-    for(const auto& group : clipGroups) {
+    for(const auto& group : mainSequence.clipGroups) {
         ofJson groupJson;
         groupJson["id"] = group.id;
         groupJson["members"] = ofJson::array();
@@ -569,7 +569,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                               uint64_t& counter, std::set<std::string>& usedIds) {
         if(!candidate.empty() && usedIds.insert(candidate).second) return candidate;
         do {
-            candidate = makeId(prefix, counter++);
+            candidate = ofxOceanodeTimelineSequence::makeId(prefix, counter++);
         } while(!usedIds.insert(candidate).second);
         return candidate;
     };
@@ -657,9 +657,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             return it == bindingRemap.end() ? savedId : it->second;
         };
         const std::string originalTrackId = trackJson.value("id", std::string());
-        track.id = uniqueLoadedId(originalTrackId, "timeline_track", nextTrackNumber, loadedTrackIds);
+        track.id = uniqueLoadedId(originalTrackId, "timeline_track", mainSequence.nextTrackNumber, loadedTrackIds);
         if(!originalTrackId.empty()) loadedTrackIdRemap[originalTrackId] = track.id;
-        track.name = makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
+        track.name = mainSequence.makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
         track.collapsed = trackJson.value("collapsed", false);
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
@@ -717,7 +717,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                     if(!savedBindingId.empty()) bindingRemap[savedBindingId] = duplicate->id;
                     continue;
                 }
-                binding.id = uniqueLoadedId(savedBindingId, "timeline_binding", nextBindingNumber, loadedBindingIds);
+                binding.id = uniqueLoadedId(savedBindingId, "timeline_binding", mainSequence.nextBindingNumber, loadedBindingIds);
                 if(!savedBindingId.empty()) bindingRemap[savedBindingId] = binding.id;
                 binding.valueType = bindingJson.value("valueType", std::string());
                 binding.defaultValue = bindingJson.value("defaultValue", std::string());
@@ -736,9 +736,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 if(!clipJson.is_object()) continue;
                 ofxOceanodeTimelineClip clip;
                 const std::string originalClipId = clipJson.value("id", std::string());
-                clip.id = uniqueLoadedId(originalClipId, "timeline_clip", nextClipNumber, loadedClipIds);
+                clip.id = uniqueLoadedId(originalClipId, "timeline_clip", mainSequence.nextClipNumber, loadedClipIds);
                 if(!originalClipId.empty()) loadedClipIdRemap[originalClipId] = clip.id;
-                clip.name = makeUniqueClipName(track, clipJson.value("name", std::string("Clip")));
+                clip.name = ofxOceanodeTimelineSequence::makeUniqueClipName(track, clipJson.value("name", std::string("Clip")));
                 clip.startBeat = std::max(0.0, clipJson.value("startBeat", 0.0));
                 clip.durationBeats = std::max(1.0 / 24.0, clipJson.value("durationBeats", 4.0));
                 clip.contentDurationBeats = std::max(1.0 / 24.0, clipJson.value("contentDurationBeats", clip.durationBeats));
@@ -767,7 +767,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         if(!laneJson.is_object()) continue;
                         ofxOceanodeTimelineLane lane;
                         lane.id = uniqueLoadedId(laneJson.value("id", std::string()),
-                                                 "timeline_lane", nextLaneNumber, loadedLaneIds);
+                                                 "timeline_lane", mainSequence.nextLaneNumber, loadedLaneIds);
                         lane.name = laneJson.value("name", std::string("Lane"));
                         lane.muted = laneJson.value("muted", false);
                         lane.solo = laneJson.value("solo", false);
@@ -1074,7 +1074,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             normalizeNoteGroups(track);
         }
 
-        tracks.push_back(std::move(track));
+        mainSequence.tracks.push_back(std::move(track));
         } catch(const std::exception& e) {
             ofLogError("ofxOceanodeTimeline") << "Skipped a timeline track that could not be read: " << e.what();
         }
@@ -1090,22 +1090,22 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         if(digits.size() > 18) return current;
         return std::max<uint64_t>(current, std::stoull(digits) + 1);
     };
-    nextTrackNumber = tracks.size() + 1;
-    nextBindingNumber = 1;
-    nextClipNumber = 1;
-    nextLaneNumber = 1;
-    for(const auto& track : tracks) {
-        nextTrackNumber = nextAfter(track.id, nextTrackNumber);
-        for(const auto& binding : track.bindings) nextBindingNumber = nextAfter(binding.id, nextBindingNumber);
+    mainSequence.nextTrackNumber = mainSequence.tracks.size() + 1;
+    mainSequence.nextBindingNumber = 1;
+    mainSequence.nextClipNumber = 1;
+    mainSequence.nextLaneNumber = 1;
+    for(const auto& track : mainSequence.tracks) {
+        mainSequence.nextTrackNumber = nextAfter(track.id, mainSequence.nextTrackNumber);
+        for(const auto& binding : track.bindings) mainSequence.nextBindingNumber = nextAfter(binding.id, mainSequence.nextBindingNumber);
         for(const auto& clip : track.clips) {
-            nextClipNumber = nextAfter(clip.id, nextClipNumber);
-            for(const auto& lane : clip.lanes) nextLaneNumber = nextAfter(lane.id, nextLaneNumber);
+            mainSequence.nextClipNumber = nextAfter(clip.id, mainSequence.nextClipNumber);
+            for(const auto& lane : clip.lanes) mainSequence.nextLaneNumber = nextAfter(lane.id, mainSequence.nextLaneNumber);
         }
     }
 
     // Rebuild waveform caches after loading, once ids and clip storage are
     // final. Legacy Wave lanes were migrated to their containing clip above.
-    for(auto& track : tracks) {
+    for(auto& track : mainSequence.tracks) {
         for(auto& clip : track.clips) {
             if(track.isWaveTrack && !clip.waveFilePath.empty()) reloadWaveform(track.id, clip.id);
         }
@@ -1116,7 +1116,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             if(!groupJson.is_object()) continue;
             ofxOceanodeTimelineClipGroup group;
             group.id = uniqueLoadedId(groupJson.value("id", std::string()),
-                                      "timeline_group", nextGroupNumber, loadedGroupIds);
+                                      "timeline_group", mainSequence.nextGroupNumber, loadedGroupIds);
             if(groupJson.contains("members") && groupJson["members"].is_array()) {
                 for(const auto& memberJson : groupJson["members"]) {
                     if(!memberJson.is_object()) continue;
@@ -1133,16 +1133,16 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         group.members.emplace_back(resolvedTrackId, resolvedClipId);
                 }
             }
-            if(group.members.size() >= 2) clipGroups.push_back(std::move(group));
+            if(group.members.size() >= 2) mainSequence.clipGroups.push_back(std::move(group));
         }
     }
-    nextGroupNumber = clipGroups.size() + 1;
-    for(const auto& group : clipGroups) nextGroupNumber = nextAfter(group.id, nextGroupNumber);
+    mainSequence.nextGroupNumber = mainSequence.clipGroups.size() + 1;
+    for(const auto& group : mainSequence.clipGroups) mainSequence.nextGroupNumber = nextAfter(group.id, mainSequence.nextGroupNumber);
 
     // Give loaded LFO clips any control lane they are missing (collect ids first:
     // adding lanes must not happen while iterating the clip containers).
     std::vector<std::pair<std::string, std::string>> lfoClipIds;
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         for(const auto& clip : track.clips) {
             if(clip.isLfo) lfoClipIds.emplace_back(track.id, clip.id);
         }
@@ -1206,7 +1206,7 @@ ofJson ofxOceanodeTimelineManager::exportClip(const std::string& trackId, const 
     }
     // Use the preset codec so every lane type and future lane field stays in sync.
     ofxOceanodeTimelineManager isolated;
-    isolated.tracks.push_back(std::move(portable));
+    isolated.mainSequence.tracks.push_back(std::move(portable));
     return {{"format", "ofxOceanodeTimelineClip"}, {"version", 1},
             {"timelineVersion", kPresetVersion}, {"track", isolated.toJson()["tracks"][0]}};
 }
@@ -1253,10 +1253,10 @@ ofJson ofxOceanodeTimelineManager::readClipFile(const std::string& path, std::st
         encoded["clips"][0]["waveFilePath"] = "";
         ofxOceanodeTimelineManager isolated;
         isolated.fromJson({{"version", kPresetVersion}, {"tracks", ofJson::array({encoded})}});
-        if(isolated.tracks.size() != 1 || isolated.tracks.front().clips.size() != 1) {
+        if(isolated.mainSequence.tracks.size() != 1 || isolated.mainSequence.tracks.front().clips.size() != 1) {
             clipFileError(error, "The clip contents could not be read."); return ofJson();
         }
-        document = isolated.exportClip(isolated.tracks.front().id, isolated.tracks.front().clips.front().id);
+        document = isolated.exportClip(isolated.mainSequence.tracks.front().id, isolated.mainSequence.tracks.front().clips.front().id);
         if(!audioPath.empty()) {
             std::filesystem::path media(audioPath);
             if(media.is_relative()) media = std::filesystem::absolute(path).parent_path() / media;
@@ -1284,10 +1284,10 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         encodedTrack["clips"][0]["waveFilePath"] = "";
         ofxOceanodeTimelineManager isolated;
         isolated.fromJson({{"version", kPresetVersion}, {"tracks", ofJson::array({encodedTrack})}});
-        if(isolated.tracks.size() != 1 || isolated.tracks.front().clips.size() != 1) {
+        if(isolated.mainSequence.tracks.size() != 1 || isolated.mainSequence.tracks.front().clips.size() != 1) {
             clipFileError(error, "The clip contents could not be read."); return {};
         }
-        auto source = std::move(isolated.tracks.front());
+        auto source = std::move(isolated.mainSequence.tracks.front());
         auto copy = std::move(source.clips.front());
         copy.waveFilePath = audioPath;
         copy.isStateCapture = false;
@@ -1390,7 +1390,7 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         copy.lanes.clear();
         *getClip(destinationId, id) = std::move(copy);
         for(auto& lane : lanes) {
-            lane.id = makeUniqueLaneId(); ++nextLaneNumber;
+            lane.id = mainSequence.makeUniqueLaneId(); ++mainSequence.nextLaneNumber;
             getClip(destinationId, id)->lanes.push_back(std::move(lane));
         }
         if(source.isWaveTrack && !audioPath.empty()) reloadWaveform(destinationId, id);

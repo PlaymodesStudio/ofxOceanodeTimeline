@@ -377,7 +377,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // window reaches further ahead by the earliest offset.
     std::unordered_map<std::string, int64_t> latencyOffsetUs;
     int64_t earliestOffsetUs = 0;
-    for(const auto& track : tracks) {
+    for(const auto& track : mainSequence.tracks) {
         if(track.latencyOffsetMs == 0.0f) continue;
         const int64_t offsetUs = static_cast<int64_t>(std::llround(
             ofClamp(track.latencyOffsetMs, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs) * 1000.0));
