@@ -452,6 +452,12 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         parameter_source = (ROOT / "src/ofxOceanodeParameter.cpp").read_text()
         destructor_start = parameter_source.index("ofxOceanodeAbstractParameter::~ofxOceanodeAbstractParameter()")
         destructor_end = parameter_source.index("\nvoid ofxOceanodeAbstractParameter::", destructor_start)
+        # Macro timelines walk real macro nodes, which this mock container has
+        # none of: no macro timeline is ever played here.
+        (folder / "macro_stub.cpp").write_text(
+            '#include "Timeline/ofxOceanodeTimeline.h"\n'
+            'std::vector<ofxOceanodeTimelineManager::MacroSource> '
+            'ofxOceanodeTimelineManager::collectMacroSources() const { return {}; }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
@@ -459,9 +465,8 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         command = [os.environ.get("CXX", "clang++"), "-std=c++17", "-O0", "-g", "-w",
                    "-fsanitize=address,undefined", "-fno-sanitize=vptr", "-fno-omit-frame-pointer", "-DOF_NO_FMOD",
                    "-I" + str(folder), *["-I" + str(path) for path in includes], str(cpp),
-                   # Macro timelines walk real macro nodes, which this mock container has none of.
                    *[str(path) for path in sorted((ADDON / "src/Timeline").glob("*.cpp"))
-                     if path.name != "ofxOceanodeTimelineMacroSequences.cpp"],
+                     if path.name != "ofxOceanodeTimelineMacroSequences.cpp"], str(folder / "macro_stub.cpp"),
                    str(ADDON / "src/Controls/Editors/ofxOceanodeTimelineEditorView.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeScheduling.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeTransport.cpp"),

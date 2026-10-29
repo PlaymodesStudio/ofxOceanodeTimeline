@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Macro clips play their macro's timeline.
+
+Uses real macro nodes (core's native headless fixture). A macro clip places
+the macro's timeline through its repeats, tempo and content offset; the
+macro's bindings reach the parameters inside that macro; the main timeline
+layers on top of it with its bindings' modes; mute and solo stay inside
+their own sequence; and an edit to the macro's timeline is heard at once.
+"""
+import attachment_regression as native
+
+native.fixture.CASES = r'''
+#include "ofxOceanodeTimeline.h"
+#include "Nodes/ofxOceanodeNodeMacro.h"
+class Probe : public ofxOceanodeNodeModel {
+public:
+    Probe() : ofxOceanodeNodeModel("Probe") {}
+    ofParameter<float> level, other;
+    void setup() override {
+        addParameter(level.set("Level", -1, -1, 4));
+        addParameter(other.set("Other", -1, -1, 4));
+    }
+};
+static int failures = 0;
+static float levelNow = 0, otherNow = 0;
+static void check(bool condition, const std::string& message) {
+    if(!condition) { std::cerr << "FAIL: " << message << " (level " << levelNow << ", other " << otherNow << ")\n"; ++failures; }
+}
+int main(int, char**) {
+    ofDisableDataPath(); ofSeedRandom();
+    auto window = std::make_shared<ofAppNoWindow>(); ofGetMainLoop()->setCurrentWindow(window);
+    auto registry = std::make_shared<ofxOceanodeNodeRegistry>();
+    auto types = std::make_shared<ofxOceanodeTypesRegistry>();
+    auto owner = std::make_shared<ofxOceanodeContainer>(registry, types); owner->setCanvasID("Canvas");
+    auto& model = ofxOceanodeTimeline::attach(*owner);
+    model.setSchedulingEnabled(false);
+    auto& macroNode = owner->createNode(std::make_unique<ofxOceanodeNodeMacro>(), 1);
+    auto inside = static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
+    auto& probeNode = inside->createNode(std::make_unique<Probe>(), 1);
+    auto& probe = static_cast<Probe&>(probeNode.getNodeModel());
+    auto& level = static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Level"));
+    auto& other = static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Other"));
+
+    // The macro's timeline: Level ramps 0 -> 1 over 4 beats; Other holds 2.
+    auto* pattern = model.getMacroSequence(*inside);
+    const auto pt = model.createTrack(*pattern, "Ramp");
+    const auto pb = model.addBinding(*pattern, pt, level);
+    const auto pc = model.createClip(*pattern, pt, "Phrase", 0, 4);
+    const auto pl = model.createLane(*pattern, pt, pc, "Level", ofxOceanodeTimelineLaneType::Curve);
+    model.addBindingToLane(*pattern, pt, pc, pl, pb);
+    auto* ramp = model.getLane(*pattern, pt, pc, pl);
+    ramp->curveInterpolation = "Linear";
+    ramp->curvePoints = {{0, 0.0f}, {4, 1.0f}};
+    ramp->curveTensions = {{}};
+    const auto ot = model.createTrack(*pattern, "Hold");
+    const auto ob = model.addBinding(*pattern, ot, other);
+    const auto oc = model.createClip(*pattern, ot, "Hold", 0, 4);
+    const auto ol = model.createLane(*pattern, ot, oc, "Other", ofxOceanodeTimelineLaneType::Number);
+    model.addBindingToLane(*pattern, ot, oc, ol, ob);
+    model.setClipNumber(*pattern, ot, oc, ol, 0, 2.0f);
+    // The curve's own range is 0..1 (the lane's, not the parameter's).
+    auto expectedLevel = [](double value) { return static_cast<float>(value); };
+
+    // Main timeline: a macro clip at beat 8, two repeats of its 4 beats.
+    const auto mt = model.createMacroTrack(*inside);
+    const auto mc = model.createMacroClip(mt, 8.0, 8.0);
+    check(!mc.empty() && std::abs(model.getClip(mt, mc)->contentDurationBeats - 4.0) < 1e-9, "Macro clip content is the macro timeline's 4 beats");
+    owner->getTransport()->play();
+    auto at = [&](double beat) {
+        owner->getTransport()->seekToBeat(beat);
+        model.update(); model.applyAutomation();
+        levelNow = probe.level.get(); otherNow = probe.other.get();
+        return probe.level.get();
+    };
+    auto near = [](float a, float b) { return std::abs(a - b) < 0.02f; };
+
+    check(near(at(2.0), -1.0f), "Before the macro clip nothing is written");
+    check(near(probe.other.get(), -1.0f), "...on any target");
+    check(near(at(9.0), expectedLevel(0.25)), "First repeat, one beat in: a quarter of the ramp");
+    check(near(probe.other.get(), 2.0f), "The other track of the macro timeline plays too");
+    check(near(at(13.0), expectedLevel(0.25)), "Second repeat starts the ramp again");
+    check(near(at(15.5), expectedLevel(0.875)), "Near the end of the second repeat");
+    check(near(at(17.0), expectedLevel(0.875)) || near(probe.level.get(), expectedLevel(1.0)), "After the clip the value holds");
+
+    // Tempo: the macro timeline at half speed (stretch 2): one beat in is an eighth.
+    auto* clip = model.getClip(mt, mc);
+    clip->contentStretch = 2.0;
+    check(near(at(10.0), expectedLevel(0.25)), "Half speed: two beats in is a quarter");
+    clip->contentStretch = 1.0;
+    // Content offset: the clip starts one beat into the macro timeline.
+    model.setClipContentOffset(mt, mc, 1.0);
+    clip = model.getClip(mt, mc);
+    check(near(at(8.0 + 1e-3), expectedLevel(0.25)), "Offset 1: starts a quarter in");
+    check(near(at(11.5), expectedLevel(0.125)), "...and wraps to the start after three beats");
+    model.setClipContentOffset(mt, mc, 0.0);
+
+    // The main timeline layers on top: an Add binding on the same parameter.
+    const auto lt = model.createTrack("Layer");
+    const auto lb = model.addBinding(lt, level);
+    check(model.getBinding(lt, lb)->parameterPath == inside->getCanvasID() + "::Probe_1/Level", "Main binding path is absolute");
+    model.getBinding(lt, lb)->mode = ofxOceanodeTimelineAutomationMode::Add;
+    const auto lc = model.createClip(lt, "Add", 8, 8);
+    const auto ll = model.createLane(lt, lc, "Level", ofxOceanodeTimelineLaneType::Number);
+    model.addBindingToLane(lt, lc, ll, lb);
+    model.setClipNumber(lt, lc, ll, 0, 0.5f);
+    check(near(at(9.0), expectedLevel(0.25) + 0.5f), "Main Add layers on the macro value");
+    model.getBinding(lt, lb)->mode = ofxOceanodeTimelineAutomationMode::Replace;
+    check(near(at(9.0), 0.5f), "Main Replace wins over the macro value");
+    model.removeTrack(lt);
+
+    // Mute and solo: the macro track's own, and solo scoped per sequence.
+    model.setTrackMuted(mt, true);
+    probe.level = -1.0f; probe.other = -1.0f;
+    at(9.0);
+    check(near(probe.level.get(), -1.0f) && near(probe.other.get(), -1.0f), "A muted macro track writes nothing");
+    model.setTrackMuted(mt, false);
+    model.setTrackSolo(*pattern, ot, true); // a solo inside the macro timeline
+    probe.level = -1.0f;
+    at(9.0);
+    check(near(probe.level.get(), -1.0f) && near(probe.other.get(), 2.0f), "A solo inside the macro silences only its siblings");
+    const auto st = model.createTrack("Solo");
+    model.setTrackSolo(st, true); // a solo on the main timeline
+    probe.other = -1.0f;
+    at(9.5);
+    check(near(probe.other.get(), -1.0f), "A main-timeline solo silences the macro track");
+    model.removeTrack(st);
+    model.setTrackSolo(*pattern, ot, false);
+
+    // Editing the macro's timeline is heard at once (no explicit invalidation).
+    model.setClipNumber(*pattern, ot, oc, ol, 0, 3.0f);
+    at(9.0);
+    check(near(probe.other.get(), 3.0f), "An edit to the macro timeline plays at once");
+    model.getLane(*pattern, pt, pc, pl)->curvePoints = {{0, 1.0f}, {4, 1.0f}};
+    check(near(at(9.5), expectedLevel(1.0)), "...curve edits too");
+
+    // The inspector sees the macro's binding under its absolute path.
+    const auto inspection = model.inspectTarget(inside->getCanvasID() + "::Probe_1/Level", 9.0, true);
+    check(inspection.writesValue && near(static_cast<float>(ofToFloat(inspection.value)), expectedLevel(1.0)), "Inspector agrees with playback");
+
+    // A macro inside the macro, with its own timeline, placed by the outer
+    // macro's timeline: beats 1..3 of each outer repeat, at its own half speed.
+    auto& innerNode = inside->createNode(std::make_unique<ofxOceanodeNodeMacro>(), 1);
+    auto innerInside = static_cast<ofxOceanodeNodeMacro&>(innerNode.getNodeModel()).getContainer();
+    auto& innerProbeNode = innerInside->createNode(std::make_unique<Probe>(), 1);
+    auto& innerProbe = static_cast<Probe&>(innerProbeNode.getNodeModel());
+    auto* innerPattern = model.getMacroSequence(*innerInside);
+    const auto it = model.createTrack(*innerPattern, "Inner");
+    const auto ib = model.addBinding(*innerPattern, it, static_cast<ofxOceanodeAbstractParameter&>(innerProbeNode.getParameters().get("Level")));
+    const auto ic = model.createClip(*innerPattern, it, "Ramp", 0, 4);
+    const auto il = model.createLane(*innerPattern, it, ic, "Level", ofxOceanodeTimelineLaneType::Curve);
+    model.addBindingToLane(*innerPattern, it, ic, il, ib);
+    model.getLane(*innerPattern, it, ic, il)->curveInterpolation = "Linear";
+    model.getLane(*innerPattern, it, ic, il)->curvePoints = {{0, 0.0f}, {4, 1.0f}};
+    model.getLane(*innerPattern, it, ic, il)->curveTensions = {{}};
+    const auto imt = model.createMacroTrack(*pattern, *innerInside);
+    check(!imt.empty() && model.getTrack(*pattern, imt)->macroCanvas == innerInside->getCanvasID().substr(inside->getCanvasID().size() + 3),
+          "Inner macro track's canvas is relative to the outer macro");
+    const auto imc = model.createMacroClip(*pattern, imt, 1.0, 2.0);
+    model.getClip(*pattern, imt, imc)->contentStretch = 2.0; // half speed, one 4-beat pass would take 8
+    innerProbe.level = -1.0f;
+    at(8.5);
+    check(near(innerProbe.level.get(), -1.0f), "Inner macro silent before its clip in the outer timeline");
+    at(10.0);
+    check(near(innerProbe.level.get(), 0.125f), "Inner ramp one outer beat into its clip, at half speed: an eighth");
+    at(14.0);
+    check(near(innerProbe.level.get(), 0.125f), "...and again in the outer clip's second repeat");
+    innerProbe.level = -1.0f;
+    at(11.5);
+    check(near(innerProbe.level.get(), -1.0f), "Silent after its clip ends inside the outer repeat");
+
+    // The macro goes away: its timeline stops playing, nothing dangles.
+    owner->getTransport()->stop();
+    inside.reset();
+    macroNode.deleteSelf();
+    model.update(); model.applyAutomation();
+    owner->getTransport()->play();
+    owner->getTransport()->seekToBeat(9.0);
+    model.update(); model.applyAutomation();
+    if(failures > 0) return 1;
+    std::cout << "Macro playback passed: placement, repeats, tempo, content offset, main layer (Add, Replace), "
+                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, macro removed.\n";
+}
+'''
+
+if __name__ == '__main__':
+    sources = [str(p) for p in (native.ADDON / 'src').rglob('*.cpp')]
+    sources += ['src/Managers/ofxOceanodeScheduling.cpp', 'src/Controls/ofxOceanodeBaseController.cpp']
+    includes = [native.ADDON / 'src', *sorted({p.parent for p in (native.ADDON / 'src').rglob('*.h')})]
+    native.fixture.main(extra_sources=sources, extra_includes=includes)

@@ -3381,37 +3381,44 @@ bool ofxOceanodeTimelineManager::setClipTiming(ofxOceanodeTimelineSequence& sequ
 }
 
 bool ofxOceanodeTimelineManager::isTrackSoloed(const ofxOceanodeTimelineTrack& track) const {
-    if(playback.drivenSolo.empty()) return track.solo;
+    // Toggle lanes drive the main timeline's solos only.
+    if(playback.drivenSolo.empty() || &sequenceOf(track) != &mainSequence) return track.solo;
     const auto it = playback.drivenSolo.find(PlayKey{0, track.id});
     return it == playback.drivenSolo.end() ? track.solo : it->second;
 }
 
 bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& track) const {
     if(isTrackMutedWithFolders(track)) return false;
+    // Solo is scoped to the track's own sequence (a macro timeline's solo
+    // leaves the main timeline alone, and the other way round).
     // Without any solo (the usual case) skip the walk up each track's folders.
-    const bool anySolo = std::any_of(mainSequence.tracks.begin(), mainSequence.tracks.end(),
+    const auto& sequence = sequenceOf(track);
+    const bool anySolo = std::any_of(sequence.tracks.begin(), sequence.tracks.end(),
                                      [this](const auto& other) { return isTrackSoloed(other); });
     return !anySolo || isTrackSoloedWithFolders(track);
 }
 
 bool ofxOceanodeTimelineManager::isTrackMutedWithFolders(const ofxOceanodeTimelineTrack& track) const {
+    const auto& sequence = sequenceOf(track);
     size_t steps = 0;
-    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+    for(const auto* at = &track; at != nullptr && steps <= sequence.tracks.size(); at = sequence.parentOf(*at), ++steps)
         if(at->muted) return true;
     return false;
 }
 
 bool ofxOceanodeTimelineManager::isTrackSoloedWithFolders(const ofxOceanodeTimelineTrack& track) const {
+    const auto& sequence = sequenceOf(track);
     size_t steps = 0;
-    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+    for(const auto* at = &track; at != nullptr && steps <= sequence.tracks.size(); at = sequence.parentOf(*at), ++steps)
         if(isTrackSoloed(*at)) return true;
     return false;
 }
 
 float ofxOceanodeTimelineManager::trackLatencyWithFolders(const ofxOceanodeTimelineTrack& track) const {
     float total = 0.0f;
+    const auto& sequence = sequenceOf(track);
     size_t steps = 0;
-    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+    for(const auto* at = &track; at != nullptr && steps <= sequence.tracks.size(); at = sequence.parentOf(*at), ++steps)
         total += at->latencyOffsetMs;
     return ofClamp(total, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
 }
@@ -4424,7 +4431,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Wave tracks never touch the automation binding map. They are reported
     // through the optional audio backend as clip sources instead.
     if(waveAudioProvider != nullptr) {
-        for(const auto& placement : playedSequences(transport.beatPosition, transport.beatPosition)) {
+        for(const auto& placement : playedSequences(playContext, transport.beatPosition, transport.beatPosition)) {
             // Voices are keyed by track and clip id: copies of a sequence would
             // share them, so only the main timeline plays Wave clips for now.
             if(placement.instanceKey != 0) continue;

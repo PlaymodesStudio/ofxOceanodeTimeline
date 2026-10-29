@@ -200,3 +200,30 @@ std::string ofxOceanodeTimelineManager::createMacroTrack(ofxOceanodeContainer& m
 std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& trackId, double startBeat, double durationBeats) {
     return createMacroClip(mainSequence, trackId, startBeat, durationBeats);
 }
+
+std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager::collectMacroSources() const {
+    std::vector<MacroSource> sources;
+    if(container == nullptr) return sources;
+    pruneMacroSequences();
+    constexpr size_t kMaximumSources = 64;
+    // Breadth first: the main timeline's macro tracks, then theirs. A macro
+    // reached twice is one source (and a sequence never reaches itself).
+    for(int parent = -1; parent < static_cast<int>(sources.size()) && sources.size() < kMaximumSources; ++parent) {
+        const auto& sequence = parent < 0 ? mainSequence : *sources[static_cast<size_t>(parent)].sequence;
+        const std::string baseCanvas = parent < 0 ? std::string() : sources[static_cast<size_t>(parent)].canvas;
+        for(size_t trackIndex = 0; trackIndex < sequence.tracks.size(); ++trackIndex) {
+            const auto& track = sequence.tracks[trackIndex];
+            if(!track.isMacroTrack()) continue;
+            const std::string canvas = baseCanvas.empty() ? track.macroCanvas : baseCanvas + " / " + track.macroCanvas;
+            if(std::any_of(sources.begin(), sources.end(), [&](const auto& source) { return source.canvas == canvas; })) continue;
+            const auto* macroContainer = containerWithCanvas(*container, canvas);
+            if(macroContainer == nullptr) continue;
+            const auto entry = std::find_if(macroSequences.begin(), macroSequences.end(),
+                [&](const auto& candidate) { return candidate.address == macroContainer; });
+            if(entry == macroSequences.end()) continue; // no timeline yet: nothing to play
+            sources.push_back({macroContainer, canvas, entry->sequence.get(), parent, trackIndex});
+            if(sources.size() >= kMaximumSources) break;
+        }
+    }
+    return sources;
+}

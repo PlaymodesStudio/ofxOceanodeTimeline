@@ -377,9 +377,14 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // window reaches further ahead by the earliest offset.
     std::unordered_map<std::string, int64_t> latencyOffsetUs;
     int64_t earliestOffsetUs = 0;
-    for(const auto& track : mainSequence.tracks) {
+    // Macro timelines first: on a path both drive, the macro timeline's
+    // offset decides. Inside one, the macro tracks' around it add up.
+    for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         // A track's own offset plus its folders' (see trackLatencyWithFolders).
-        const float latencyMs = trackLatencyWithFolders(track);
+        float latencyMs = trackLatencyWithFolders(track);
+        for(const auto& played : playedMacros)
+            if(played.sequence.get() == sequence)
+                latencyMs = ofClamp(latencyMs + played.outerLatencyMs, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
         if(latencyMs == 0.0f) continue;
         const int64_t offsetUs = static_cast<int64_t>(std::llround(
             latencyMs * 1000.0));

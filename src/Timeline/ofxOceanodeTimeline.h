@@ -709,8 +709,8 @@ namespace ofxOceanodeTimelineClipTime {
 
 // Where a sequence's beats sit on the main timeline: sequence beat b plays at
 // offset + b * ratio. The main timeline plays through the identity map; a
-// macro clip will give its sequence the map of the repeat cycle under the
-// playhead (its own Repeat stays in ofxOceanodeTimelineClipTime). Both
+// macro clip gives its macro's sequence the map of each of its repeats
+// (matching ofxOceanodeTimelineClipTime). Both
 // evaluation walks and the Wave pass convert through it, in one place.
 struct ofxOceanodeTimelineTimeMap {
     double offset = 0.0;  // main-timeline beat of sequence beat 0
@@ -1706,6 +1706,33 @@ private:
         std::string libraryFolder; // a library macro's definition: shared by every copy
     };
     mutable std::vector<MacroSequenceEntry> macroSequences;
+    // Macro timelines as the main timeline plays them: a copy of each one
+    // its macro tracks reach, with absolute paths and canvases (from the
+    // root container), so indexes, apply and the scheduler handle its
+    // bindings like the main timeline's. Rebuilt with the evaluation indexes.
+    struct PlayedMacro {
+        const ofxOceanodeContainer* macroContainer = nullptr;
+        std::string canvas; // absolute canvas id
+        std::unique_ptr<ofxOceanodeTimelineSequence> sequence;
+        float outerLatencyMs = 0.0f; // the macro tracks' around it, added up
+    };
+    std::vector<PlayedMacro> playedMacros;
+    // A macro timeline the main timeline reaches: through the macro track
+    // `trackIndex` of `parent` (-1: the main timeline, else a source index).
+    struct MacroSource {
+        const ofxOceanodeContainer* macroContainer = nullptr;
+        std::string canvas;
+        const ofxOceanodeTimelineSequence* sequence = nullptr;
+        int parent = -1;
+        size_t trackIndex = 0;
+    };
+    std::vector<MacroSource> collectMacroSources() const;
+    void rebuildPlayedMacros();
+    const PlayedMacro* playedMacroAt(const std::string& canvas) const;
+    // The played copies, then the main timeline: what evaluation walks.
+    std::vector<ofxOceanodeTimelineSequence*> evaluatedSequences() const;
+    // The sequence a track belongs to (main, a played copy or a macro's own).
+    const ofxOceanodeTimelineSequence& sequenceOf(const ofxOceanodeTimelineTrack& track) const;
     // Drops entries of deleted macros and keeps each shared sequence's base
     // on a live copy's container.
     void pruneMacroSequences() const;
@@ -1773,10 +1800,27 @@ private:
         ofxOceanodeTimelineTimeMap map;
         uint64_t instanceKey = 0;
         ofxOceanodeTimelineResolver resolver; // where its paths point
+        // Main-timeline beats it plays in: the stretch of one macro clip
+        // repeat (split where its content offset wraps). The main timeline
+        // plays everywhere.
+        double windowFrom = -std::numeric_limits<double>::infinity();
+        double windowTo = std::numeric_limits<double>::infinity();
+        // Mixed into the pass: each macro clip repeat rolls anew (0: main).
+        uint64_t passMix = 0;
+        // The context its lanes roll with.
+        ofxOceanodeTimelinePlayContext contextFrom(const ofxOceanodeTimelinePlayContext& context) const {
+            auto copy = context;
+            copy.instanceKey = instanceKey;
+            copy.pass ^= passMix;
+            return copy;
+        }
     };
-    // The sequences heard between two main-timeline beats. For now only the
-    // main timeline itself; nested macro sequences will be added here.
-    std::vector<PlayedSequence> playedSequences(double fromBeat, double toBeat) const;
+    // The sequences heard between two main-timeline beats: the main timeline,
+    // then the macro timelines its macro tracks' clips place there (and
+    // theirs), each through its map. Asked for one beat, only the placements
+    // playing at that beat, one per macro track.
+    std::vector<PlayedSequence> playedSequences(const ofxOceanodeTimelinePlayContext& context,
+                                                double fromBeat, double toBeat) const;
     // The context a transport position plays with; passOffset 1 is the
     // next loop pass, which the scheduler reaches before the wrap.
     ofxOceanodeTimelinePlayContext playContextFor(const ofxOceanodeTransportState& transport,

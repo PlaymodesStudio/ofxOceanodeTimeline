@@ -11,7 +11,7 @@ An LFO is a self-contained clip with its own control lanes.
 | --- | --- |
 | `Timeline/ofxOceanodeTimeline.*` | Serializable tracks, clips and lanes; editing operations; the per-frame engine (update, apply, overrides), tempo, markers and loop |
 | `Timeline/ofxOceanodeTimelineSequence.cpp` | `ofxOceanodeTimelineSequence`: one timeline's tracks, clip groups and id counters, with lookups and new ids. The manager keeps the main timeline in `mainSequence`; each editing operation also has an overload taking the Sequence to edit (undo, playback and per-frame caches follow the main timeline only) |
-| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls. Both walks (and the Wave pass) visit `playedSequences()`, each sequence in its own beats through its `ofxOceanodeTimelineTimeMap`; today that is only the main timeline, through the identity map |
+| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls. Both walks (and the Wave pass) visit `playedSequences()`, each sequence in its own beats through its `ofxOceanodeTimelineTimeMap`: the main timeline through the identity map, then each macro clip repeat's placement of a macro timeline (see Macro timelines below) |
 | `Timeline/ofxOceanodeTimelineScheduler.cpp` | Sample-accurate scheduling ahead of the playhead, corrections and latency offsets |
 | `Timeline/ofxOceanodeTimelinePersistence.cpp` | `timeline.json`, clip files and presets |
 | `Timeline/ofxOceanodeTimelineHistory.cpp` | Undo history of timeline edits |
@@ -86,7 +86,24 @@ binding paths are relative to the macro's container, and it is saved as
 definition, through the core's `loadMacroPreset`/`saveMacroPreset` hooks).
 Copies of a library macro share one sequence; entries follow the macro's
 container through a `weak_ptr`, so a deleted macro's sequence goes with it.
-Macro sequences are edited, not played, until macro clips exist.
+
+A macro track (`macroCanvas`, the macro's canvas relative to its sequence)
+has macro clips that place the macro's timeline: start, length, repeat,
+tempo (stretch) and content offset as on any clip. To play them, the
+evaluation index rebuild copies every macro timeline the main timeline
+reaches (`playedMacros`, also through macros inside macros) and makes the
+copies' paths and canvases absolute, so bindings, the apply pass, the
+scheduler and the inspector treat them like main-timeline bindings.
+`playedSequences()` gives each macro clip repeat a placement: a time map,
+a window of main-timeline beats (split where the content offset wraps) and
+its own instance key, with the repeat mixed into the pass so each repeat
+rolls anew. The value walk evaluates one placement per macro timeline per
+beat, and combines the copies' bindings before the main timeline's, so the
+main timeline layers on top with its bindings' modes. Mute, solo and
+latency are read within each track's own sequence (`sequenceOf`); the
+macro tracks' latencies add up around a copy, and a copy's offset wins on a
+path the main timeline also drives. Wave tracks play on the main timeline
+only.
 
 The controller edits one sequence at a time, its scope: the main timeline, or
 a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
