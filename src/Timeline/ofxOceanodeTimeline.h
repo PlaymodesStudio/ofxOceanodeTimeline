@@ -684,6 +684,22 @@ namespace ofxOceanodeTimelineClipTime {
                        double timelineBeat);
 }
 
+// Where a sequence's beats sit on the main timeline: sequence beat b plays at
+// offset + b * ratio. The main timeline plays through the identity map; a
+// macro clip will give its sequence the map of the repeat cycle under the
+// playhead (its own Repeat stays in ofxOceanodeTimelineClipTime). Both
+// evaluation walks and the Wave pass convert through it, in one place.
+struct ofxOceanodeTimelineTimeMap {
+    double offset = 0.0;  // main-timeline beat of sequence beat 0
+    double ratio = 1.0;   // main-timeline beats per sequence beat (> 0)
+    double toTimeline(double sequenceBeat) const { return offset + sequenceBeat * ratio; }
+    double toSequence(double timelineBeat) const { return (timelineBeat - offset) / ratio; }
+    // The map of a sequence placed inside this one by `inner`.
+    ofxOceanodeTimelineTimeMap then(const ofxOceanodeTimelineTimeMap& inner) const {
+        return {toTimeline(inner.offset), ratio * inner.ratio};
+    }
+};
+
 // What evaluation rolls for: clip chance, step/note/gate probability,
 // mutation and drift. Playback state, passed to evaluation and never stored
 // on the timeline data, so the scheduler can probe the next loop pass without
@@ -1578,6 +1594,16 @@ private:
     void collectChangeBeats(const ofxOceanodeTimelinePlayContext& context,
                             double fromBeat, double toBeat, bool inclusiveStart,
                             std::vector<double>& outBeats) const;
+    // A sequence as it sounds on the main timeline: where (its time map) and
+    // which copy (the instance key its rolls mix in).
+    struct PlayedSequence {
+        const ofxOceanodeTimelineSequence* sequence = nullptr;
+        ofxOceanodeTimelineTimeMap map;
+        uint64_t instanceKey = 0;
+    };
+    // The sequences heard between two main-timeline beats. For now only the
+    // main timeline itself; nested macro sequences will be added here.
+    std::vector<PlayedSequence> playedSequences(double fromBeat, double toBeat) const;
     // The context a transport position plays with; passOffset 1 is the
     // next loop pass, which the scheduler reaches before the wrap.
     ofxOceanodeTimelinePlayContext playContextFor(const ofxOceanodeTransportState& transport,

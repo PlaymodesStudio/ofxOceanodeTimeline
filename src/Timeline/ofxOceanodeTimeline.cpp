@@ -3934,39 +3934,47 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Wave tracks never touch the automation binding map. They are reported
     // through the optional audio backend as clip sources instead.
     if(waveAudioProvider != nullptr) {
-        for(const auto& track : mainSequence.tracks) {
-            if(!track.isWaveTrack) continue;
-            for(const auto& clip : track.clips) {
-                // Wave clips always map their complete source linearly over
-                // the visible clip, independent of repeatContent and of the
-                // cached contentStretch. Position and rate are derived from
-                // the same ratio so the synth's audio-rate read head reaches
-                // the slice end exactly when the playhead reaches the clip end.
-                const double visibleDuration = std::max(1.0 / 24.0, clip.durationBeats);
-                const double sourceDuration = std::max(1.0 / 24.0, clip.contentDurationBeats);
-                const double sourcePerTimelineBeat = sourceDuration / visibleDuration;
-                const double localBeat = transport.beatPosition - clip.startBeat;
-                const bool active = isTrackAudible(track) && !clip.muted && !isClipChanceSilenced(clip) && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
-                const double waveSourceBeat = active
-                    ? ofClamp(localBeat * sourcePerTimelineBeat, 0.0, sourceDuration) : 0.0;
-                const float volume = ofClamp(evaluateWaveClipVolume(track.id, clip.id,
-                                                                     transport.beatPosition), 0.0f, 4.0f);
-                // wavePlaybackRate is a user multiplier; the stretch ratio is
-                // applied here once and nowhere else.
-                const float clipPlaybackRate = ofClamp(
-                    static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
-                    0.01f, 16.0f);
-                waveAudioProvider->updateWaveClip(track.id, clip.id, clip.waveFilePath, clip.waveGain,
-                                                  volume, clip.waveNumChannels, waveSourceBeat,
-                                                  clip.contentDurationBeats,
-                                                  clip.waveSourceStartBeat,
-                                                  std::max(1.0 / 24.0,
-                                                           clip.waveFileDurationBeats > 0.0
-                                                               ? clip.waveFileDurationBeats
-                                                               : clip.waveFileDurationMs * transport.bpm / 60000.0),
-                                                  clipPlaybackRate, clip.waveReverse, transport.bpm,
-                                                  transport.isPlaying, active,
-                                                  loopWrappedThisFrame);
+        for(const auto& placement : playedSequences(transport.beatPosition, transport.beatPosition)) {
+            // Voices are keyed by track and clip id: copies of a sequence would
+            // share them, so only the main timeline plays Wave clips for now.
+            if(placement.instanceKey != 0) continue;
+            const double beat = placement.map.toSequence(transport.beatPosition);
+            for(const auto& track : placement.sequence->tracks) {
+                if(!track.isWaveTrack) continue;
+                for(const auto& clip : track.clips) {
+                    // Wave clips always map their complete source linearly over
+                    // the visible clip, independent of repeatContent and of the
+                    // cached contentStretch. Position and rate are derived from
+                    // the same ratio so the synth's audio-rate read head reaches
+                    // the slice end exactly when the playhead reaches the clip end.
+                    const double visibleDuration = std::max(1.0 / 24.0, clip.durationBeats);
+                    const double sourceDuration = std::max(1.0 / 24.0, clip.contentDurationBeats);
+                    const double sourcePerBeat = sourceDuration / visibleDuration;
+                    // Read faster where the sequence plays faster (its map's ratio).
+                    const double sourcePerTimelineBeat = sourcePerBeat / placement.map.ratio;
+                    const double localBeat = beat - clip.startBeat;
+                    const bool active = isTrackAudible(track) && !clip.muted && !isClipChanceSilenced(clip) && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
+                    const double waveSourceBeat = active
+                        ? ofClamp(localBeat * sourcePerBeat, 0.0, sourceDuration) : 0.0;
+                    const float volume = ofClamp(evaluateWaveClipVolume(track.id, clip.id,
+                                                                         transport.beatPosition), 0.0f, 4.0f);
+                    // wavePlaybackRate is a user multiplier; the stretch ratio is
+                    // applied here once and nowhere else.
+                    const float clipPlaybackRate = ofClamp(
+                        static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
+                        0.01f, 16.0f);
+                    waveAudioProvider->updateWaveClip(track.id, clip.id, clip.waveFilePath, clip.waveGain,
+                                                      volume, clip.waveNumChannels, waveSourceBeat,
+                                                      clip.contentDurationBeats,
+                                                      clip.waveSourceStartBeat,
+                                                      std::max(1.0 / 24.0,
+                                                               clip.waveFileDurationBeats > 0.0
+                                                                   ? clip.waveFileDurationBeats
+                                                                   : clip.waveFileDurationMs * transport.bpm / 60000.0),
+                                                      clipPlaybackRate, clip.waveReverse, transport.bpm,
+                                                      transport.isPlaying, active,
+                                                      loopWrappedThisFrame);
+                }
             }
         }
     }

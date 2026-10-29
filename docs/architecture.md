@@ -11,7 +11,7 @@ An LFO is a self-contained clip with its own control lanes.
 | --- | --- |
 | `Timeline/ofxOceanodeTimeline.*` | Serializable tracks, clips and lanes; editing operations; the per-frame engine (update, apply, overrides), tempo, markers and loop |
 | `Timeline/ofxOceanodeTimelineSequence.cpp` | `ofxOceanodeTimelineSequence`: one timeline's tracks, clip groups and id counters, with lookups and new ids. The manager keeps the main timeline in `mainSequence`; each editing operation also has an overload taking the Sequence to edit (undo, playback and per-frame caches follow the main timeline only) |
-| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls |
+| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls. Both walks (and the Wave pass) visit `playedSequences()`, each sequence in its own beats through its `ofxOceanodeTimelineTimeMap`; today that is only the main timeline, through the identity map |
 | `Timeline/ofxOceanodeTimelineScheduler.cpp` | Sample-accurate scheduling ahead of the playhead, corrections and latency offsets |
 | `Timeline/ofxOceanodeTimelinePersistence.cpp` | `timeline.json`, clip files and presets |
 | `Timeline/ofxOceanodeTimelineHistory.cpp` | Undo history of timeline edits |
