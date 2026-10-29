@@ -47,8 +47,10 @@ bool hoverRect(const ImVec2& min, const ImVec2& max);
 std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
                                              const std::string& trackId, const ofxOceanodeTimelineLane& lane);
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value);
-int insertLinearCurvePoint(ofxOceanodeTimelineLane& lane,
-                           const ofxOceanodeTimelineCurvePoint& point);
+// Inserts a point in beat order; a segment it cuts keeps its bend in both
+// parts (ofxOceanodeTimelineCurve::fitSegmentShape). Returns its index.
+int insertCurvePoint(ofxOceanodeTimelineLane& lane,
+                     const ofxOceanodeTimelineCurvePoint& point);
 int curveSnapLevels(const ofxOceanodeTimelineLane& lane);
 void resetCurveTensions(ofxOceanodeTimelineLane& lane);
 void eraseCurvePointWithTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);

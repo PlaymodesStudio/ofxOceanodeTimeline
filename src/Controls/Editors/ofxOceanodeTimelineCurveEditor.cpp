@@ -293,7 +293,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         }
         if(curveDragPointIndex < 0 && curveTensionSegment < 0 &&
            !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift) {
-            curveDragPointIndex = insertLinearCurvePoint(*lane, {
+            curveDragPointIndex = insertCurvePoint(*lane, {
                 std::max(0.0, std::min(content, view.snapBeat(curveSourceBeat))), curveValue
             });
         }

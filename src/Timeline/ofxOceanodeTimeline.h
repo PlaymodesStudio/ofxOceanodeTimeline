@@ -190,6 +190,13 @@ namespace ofxOceanodeTimelineCurve {
     float valueAtBeat(const std::vector<ofxOceanodeTimelineCurvePoint>& points,
                       const std::vector<ofxOceanodeTimelineCurveTension>& tensions,
                       const std::string& interpolation, double beat, float fallback = 0.0f);
+    // The segment shape that best reproduces the curve between two beats.
+    // When a point cuts a segment in two, each part gets its piece of the
+    // original bend instead of a straight line. Neutral for Step/Linear and
+    // for flat stretches. Points must be sorted by beat.
+    ofxOceanodeTimelineCurveTension fitSegmentShape(const std::vector<ofxOceanodeTimelineCurvePoint>& points,
+                                                    const std::vector<ofxOceanodeTimelineCurveTension>& tensions,
+                                                    const std::string& interpolation, double fromBeat, double toBeat);
 }
 
 struct ofxOceanodeTimelinePianoNote {

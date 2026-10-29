@@ -58,21 +58,30 @@ std::string dropdownOptionLabel(const std::vector<std::string>& options, float v
     return index >= 0 && index < static_cast<int>(options.size()) ? options[index] : ofToString(index);
 }
 
-int insertLinearCurvePoint(ofxOceanodeTimelineLane& lane,
-                           const ofxOceanodeTimelineCurvePoint& point) {
+int insertCurvePoint(ofxOceanodeTimelineLane& lane,
+                     const ofxOceanodeTimelineCurvePoint& point) {
     const size_t oldPointCount = lane.curvePoints.size();
     auto oldTensions = lane.curveTensions;
     oldTensions.resize(oldPointCount > 0 ? oldPointCount - 1 : 0);
     const auto insertion = std::lower_bound(lane.curvePoints.begin(), lane.curvePoints.end(), point.beat,
         [](const auto& existing, double beat) { return existing.beat < beat; });
     const size_t insertionIndex = static_cast<size_t>(insertion - lane.curvePoints.begin());
+    // A point inside a segment cuts it in two: each part keeps its piece of
+    // the segment's bend (Sigmoid, Log/Exp) instead of becoming a straight line.
+    ofxOceanodeTimelineCurveTension before{}, after{};
+    if(insertionIndex > 0 && insertionIndex < oldPointCount) {
+        before = ofxOceanodeTimelineCurve::fitSegmentShape(lane.curvePoints, oldTensions, lane.curveInterpolation,
+                                                           lane.curvePoints[insertionIndex - 1].beat, point.beat);
+        after = ofxOceanodeTimelineCurve::fitSegmentShape(lane.curvePoints, oldTensions, lane.curveInterpolation,
+                                                          point.beat, lane.curvePoints[insertionIndex].beat);
+    }
     lane.curvePoints.insert(insertion, point);
 
     std::vector<ofxOceanodeTimelineCurveTension> newTensions(
         lane.curvePoints.size() > 0 ? lane.curvePoints.size() - 1 : 0);
     for(size_t segment = 0; segment < newTensions.size(); ++segment) {
-        // Both segments touching the inserted point use the neutral sigmoid.
-        if((insertionIndex > 0 && segment == insertionIndex - 1) || segment == insertionIndex) continue;
+        if(insertionIndex > 0 && segment == insertionIndex - 1) { newTensions[segment] = before; continue; }
+        if(segment == insertionIndex) { newTensions[segment] = after; continue; }
         const size_t oldSegment = segment < insertionIndex ? segment : segment - 1;
         if(oldSegment < oldTensions.size()) newTensions[segment] = oldTensions[oldSegment];
     }

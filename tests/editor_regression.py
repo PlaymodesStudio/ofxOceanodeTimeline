@@ -29,6 +29,44 @@ void ofxOceanodeAbstractParameter::removeAllConnections() {
 std::string ofxOceanodeNodeModel::getParents() { return canvasID; }
 int main() {
     ofSeedRandom();
+    {
+        // A point added inside a shaped segment keeps its bend on both sides,
+        // in Sigmoid and in Log/Exp.
+        for(const char* mode : {"Sigmoid", "Log / Exp"}) {
+            ofxOceanodeTimelineLane curve;
+            curve.type = ofxOceanodeTimelineLaneType::Curve;
+            curve.curveInterpolation = mode;
+            curve.curvePoints = {{0.0, 0.0f}, {4.0, 1.0f}, {8.0, 0.0f}};
+            curve.curveTensions = {{0.3f, 4.0f}, {0.7f, 0.4f}};
+            const auto original = curve;
+            auto at = [](const ofxOceanodeTimelineLane& lane, double beat) {
+                return ofxOceanodeTimelineCurve::valueAtBeat(lane.curvePoints, lane.curveTensions, lane.curveInterpolation, beat);
+            };
+            const float onCurve = at(original, 1.5);
+            const int index = ofxOceanodeTimelineLaneEditorUi::insertCurvePoint(curve, {1.5, onCurve});
+            assert(index == 1 && curve.curvePoints.size() == 4 && curve.curveTensions.size() == 3);
+            // Neither half fell back to a straight line, and the untouched segment kept its shape.
+            for(int s = 0; s < 2; ++s)
+                assert(std::abs(curve.curveTensions[s].steepness - 1.0f) > 0.05f ||
+                       std::abs(curve.curveTensions[s].inflection - 0.5f) > 0.05f);
+            assert(curve.curveTensions[2].inflection == 0.7f && curve.curveTensions[2].steepness == 0.4f);
+            // The curve still follows the original shape closely on both sides of the new point.
+            for(double beat : {0.4, 0.9, 1.2, 2.0, 2.8, 3.5, 5.0, 7.0})
+                if(std::abs(at(curve, beat) - at(original, beat)) > 0.03f) {
+                    std::cerr << mode << ": at beat " << beat << " " << at(curve, beat) << " vs " << at(original, beat) << "\n";
+                    std::abort();
+                }
+        }
+        // Linear stays linear; a point after the last one adds a neutral segment.
+        ofxOceanodeTimelineLane line;
+        line.curveInterpolation = "Linear";
+        line.curvePoints = {{0.0, 0.0f}, {4.0, 1.0f}};
+        line.curveTensions = {{}};
+        ofxOceanodeTimelineLaneEditorUi::insertCurvePoint(line, {2.0, 0.5f});
+        ofxOceanodeTimelineLaneEditorUi::insertCurvePoint(line, {6.0, 0.0f});
+        assert(line.curveTensions.size() == 3);
+        for(const auto& tension : line.curveTensions) assert(tension.inflection == 0.5f && tension.steepness == 1.0f);
+    }
     ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;

@@ -95,6 +95,53 @@ float valueAtBeat(const std::vector<ofxOceanodeTimelineCurvePoint>& points,
     const auto tension = i - 1 < tensions.size() ? tensions[i - 1] : ofxOceanodeTimelineCurveTension{};
     return ofLerp(points[i - 1].value, points[i].value, curveSegmentShape(t, mode, tension));
 }
+
+ofxOceanodeTimelineCurveTension fitSegmentShape(const std::vector<ofxOceanodeTimelineCurvePoint>& points,
+                                                const std::vector<ofxOceanodeTimelineCurveTension>& tensions,
+                                                const std::string& interpolation, double x0, double x1) {
+    const auto mode = curveInterpolationMode(interpolation);
+    const float fallback = points.empty() ? 0.0f : points.front().value;
+    auto valueAt = [&](double beat) { return valueAtBeat(points, tensions, interpolation, beat, fallback); };
+    ofxOceanodeTimelineCurveTension best{};
+    if(mode == CurveInterpolationMode::Linear || mode == CurveInterpolationMode::Step) return best;
+    const float v0 = valueAt(x0), v1 = valueAt(x1);
+    if(std::abs(v1 - v0) < 1e-6f) return best;
+    constexpr int kSamples = 16;
+    float target[kSamples];
+    for(int i = 0; i < kSamples; ++i) target[i] = valueAt(x0 + (x1 - x0) * (i + 1) / (kSamples + 1.0));
+    double bestError = 1e30;
+    for(int a = 0; a < 50; ++a) {
+        const float inflection = 0.01f + a * (0.98f / 49.0f);
+        for(int b = 0; b < 48; ++b) {
+            const float steepness = 0.1f * std::pow(100.0f, b / 47.0f); // 0.1 .. 10
+            const ofxOceanodeTimelineCurveTension candidate{inflection, steepness};
+            double error = 0.0;
+            for(int i = 0; i < kSamples && error < bestError; ++i) {
+                const float u = static_cast<float>((i + 1) / (kSamples + 1.0));
+                const float d = ofLerp(v0, v1, curveSegmentShape(u, mode, candidate)) - target[i];
+                error += d * d;
+            }
+            if(error < bestError) { bestError = error; best = candidate; }
+        }
+    }
+    // Refine around the best grid point.
+    const ofxOceanodeTimelineCurveTension coarse = best;
+    for(int a = -20; a <= 20; ++a) {
+        const float inflection = ofClamp(coarse.inflection + a * 0.001f, 0.01f, 0.99f);
+        for(int b = -20; b <= 20; ++b) {
+            const float steepness = ofClamp(coarse.steepness * std::pow(1.005f, static_cast<float>(b)), 0.1f, 10.0f);
+            const ofxOceanodeTimelineCurveTension candidate{inflection, steepness};
+            double error = 0.0;
+            for(int i = 0; i < kSamples && error < bestError; ++i) {
+                const float u = static_cast<float>((i + 1) / (kSamples + 1.0));
+                const float d = ofLerp(v0, v1, curveSegmentShape(u, mode, candidate)) - target[i];
+                error += d * d;
+            }
+            if(error < bestError) { bestError = error; best = candidate; }
+        }
+    }
+    return best;
+}
 } // namespace ofxOceanodeTimelineCurve
 namespace {
 
@@ -2098,45 +2145,7 @@ void appendCurveWindow(const ofxOceanodeTimelineLane& lane, double from, double 
     };
     const auto mode = curveInterpolationMode(lane.curveInterpolation);
     auto fitTension = [&](double x0, double x1) {
-        ofxOceanodeTimelineCurveTension best{};
-        if(mode == CurveInterpolationMode::Linear || mode == CurveInterpolationMode::Step) return best;
-        const float v0 = valueAt(x0), v1 = valueAt(x1);
-        if(std::abs(v1 - v0) < 1e-6f) return best;
-        constexpr int kSamples = 16;
-        float target[kSamples];
-        for(int i = 0; i < kSamples; ++i) target[i] = valueAt(x0 + (x1 - x0) * (i + 1) / (kSamples + 1.0));
-        double bestError = 1e30;
-        for(int a = 0; a < 50; ++a) {
-            const float inflection = 0.01f + a * (0.98f / 49.0f);
-            for(int b = 0; b < 48; ++b) {
-                const float steepness = 0.1f * std::pow(100.0f, b / 47.0f); // 0.1 .. 10
-                const ofxOceanodeTimelineCurveTension candidate{inflection, steepness};
-                double error = 0.0;
-                for(int i = 0; i < kSamples && error < bestError; ++i) {
-                    const float u = static_cast<float>((i + 1) / (kSamples + 1.0));
-                    const float d = ofLerp(v0, v1, curveSegmentShape(u, mode, candidate)) - target[i];
-                    error += d * d;
-                }
-                if(error < bestError) { bestError = error; best = candidate; }
-            }
-        }
-        // Refine around the best grid point.
-        const ofxOceanodeTimelineCurveTension coarse = best;
-        for(int a = -20; a <= 20; ++a) {
-            const float inflection = ofClamp(coarse.inflection + a * 0.001f, 0.01f, 0.99f);
-            for(int b = -20; b <= 20; ++b) {
-                const float steepness = ofClamp(coarse.steepness * std::pow(1.005f, static_cast<float>(b)), 0.1f, 10.0f);
-                const ofxOceanodeTimelineCurveTension candidate{inflection, steepness};
-                double error = 0.0;
-                for(int i = 0; i < kSamples && error < bestError; ++i) {
-                    const float u = static_cast<float>((i + 1) / (kSamples + 1.0));
-                    const float d = ofLerp(v0, v1, curveSegmentShape(u, mode, candidate)) - target[i];
-                    error += d * d;
-                }
-                if(error < bestError) { bestError = error; best = candidate; }
-            }
-        }
-        return best;
+        return ofxOceanodeTimelineCurve::fitSegmentShape(points, lane.curveTensions, lane.curveInterpolation, x0, x1);
     };
     // Emitted points with their original beat and index (-1: a boundary point).
     struct WindowPoint { double originalBeat; float value; int index; };

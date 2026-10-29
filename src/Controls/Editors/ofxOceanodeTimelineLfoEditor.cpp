@@ -488,7 +488,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                     break;
                 }
             } else if(!alt) {
-                lfoDragPointIndex = insertLinearCurvePoint(lane, {beat, value});
+                lfoDragPointIndex = insertCurvePoint(lane, {beat, value});
                 selectLfoPoint(lfoDragPointIndex);
             }
         }
