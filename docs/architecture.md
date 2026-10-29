@@ -70,6 +70,15 @@ cleanup and track removal to the editors without accessing their private state.
 
 ## Arrangement and scope presentation
 
+Track folders are tracks with `isFolder` (no bindings or clips); a track's
+`parentId` names the folder it is in, and the sequence keeps each folder
+followed by its contents (`normalizeFolders`). Playback reads mute, solo and
+latency through the folders (`isTrackMutedWithFolders`,
+`isTrackSoloedWithFolders`, `trackLatencyWithFolders`). The controller draws a
+folder as one row with a summary of its contents, hides what is inside a
+folded folder, and applies header drags and the Arrange menu through
+deferred `moveTrack` requests after the track loop.
+
 Clips and Targets are session-only projections of the same model, selected by
 `targetsView` in the controller. Clips draws one arrangement rectangle per clip;
 Targets projects clips onto binding rows. Neither projection changes clip

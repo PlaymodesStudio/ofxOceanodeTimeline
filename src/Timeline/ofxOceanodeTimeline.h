@@ -874,6 +874,12 @@ struct ofxOceanodeTimelineTrack {
     // events reach their backend (positive later, negative earlier). Only
     // sample-accurate targets move; frame-rate parameters cannot be shifted.
     float latencyOffsetMs = 0.0f;
+    // Folders: a folder is a track with no bindings or clips that holds the
+    // tracks whose parentId is its id (folders nest). Its mute, solo and
+    // latency apply to everything inside it. The sequence keeps each folder
+    // followed by its contents (see ofxOceanodeTimelineSequence::normalizeFolders).
+    bool isFolder = false;
+    std::string parentId; // empty: at the top level
 };
 constexpr float kMaxTrackLatencyOffsetMs = 250.0f;
 
@@ -978,6 +984,20 @@ public:
     // The requested name, or it with the first free " 2", " 3"... suffix.
     std::string makeUniqueTrackName(const std::string& requestedName) const;
     static std::string makeUniqueClipName(const ofxOceanodeTimelineTrack& track, const std::string& requestedName);
+
+    // ---- Folders ----
+    // The folder a track is in (nullptr at the top level).
+    const ofxOceanodeTimelineTrack* parentOf(const ofxOceanodeTimelineTrack& track) const;
+    // How many folders a track is inside.
+    int depthOf(const ofxOceanodeTimelineTrack& track) const;
+    // True when trackId is folderId or anywhere inside it.
+    bool isWithin(const std::string& trackId, const std::string& folderId) const;
+    // Index one past the last track inside the track at `index` (its whole subtree).
+    size_t subtreeEnd(size_t index) const;
+    // Clears parents that are missing, not folders, or would make a cycle,
+    // and reorders tracks so each folder is followed by its contents, keeping
+    // the relative order of siblings. A list without folders is unchanged.
+    void normalizeFolders();
 };
 
 class ofxOceanodeTimelineManager {
@@ -1039,6 +1059,8 @@ public:
     const ofxOceanodeTimelineTrack* getTrack(const std::string& trackId) const;
     const ofxOceanodeTimelineTrack* getTrack(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId) const;
     const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return mainSequence.tracks; }
+    // The main timeline's arrangement, read-only (folder depth, parents...).
+    const ofxOceanodeTimelineSequence& getMainSequence() const { return mainSequence; }
 
     std::string addBinding(const std::string& trackId,
                           ofxOceanodeAbstractParameter& parameter,
@@ -1278,6 +1300,26 @@ public:
     bool setClipTiming(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                        double startBeat, double durationBeats);
     bool isTrackAudible(const ofxOceanodeTimelineTrack& track) const;
+    // ---- Folders (see ofxOceanodeTimelineTrack::isFolder) ----
+    std::string createFolder(const std::string& requestedName = "Folder", const std::string& parentId = std::string());
+    std::string createFolder(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Folder",
+                             const std::string& parentId = std::string());
+    // Moves a track (a folder with everything inside it) into parentId (empty:
+    // the top level), at `index` among that folder's tracks (clamped).
+    // Refused into the track itself or into anything inside it.
+    bool moveTrack(const std::string& trackId, const std::string& parentId, size_t index);
+    bool moveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                   const std::string& parentId, size_t index);
+    // keepTracks: what was inside moves up to the folder's own parent;
+    // otherwise it is removed with the folder.
+    bool removeFolder(const std::string& folderId, bool keepTracks);
+    bool removeFolder(ofxOceanodeTimelineSequence& sequence, const std::string& folderId, bool keepTracks);
+    // Mute, solo and latency as playback uses them: the track's own, with
+    // the folders it is in (any of them muted mutes it, soloed solos it,
+    // latencies add up, clamped to +-kMaxTrackLatencyOffsetMs).
+    bool isTrackMutedWithFolders(const ofxOceanodeTimelineTrack& track) const;
+    bool isTrackSoloedWithFolders(const ofxOceanodeTimelineTrack& track) const;
+    float trackLatencyWithFolders(const ofxOceanodeTimelineTrack& track) const;
     // The solo playback uses: the one a Toggle lane last drove, else the
     // track's own (saved) solo.
     bool isTrackSoloed(const ofxOceanodeTimelineTrack& track) const;

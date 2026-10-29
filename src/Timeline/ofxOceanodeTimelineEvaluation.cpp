@@ -1779,6 +1779,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
     hash.add(mainSequence.tracks.data()); hash.add(mainSequence.tracks.size());
     for(const auto& track : mainSequence.tracks) {
         hash.add(track.id); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
+        hash.add(track.isFolder); hash.add(track.parentId);
         hash.add(track.bindings.data()); hash.add(track.bindings.size());
         for(const auto& binding : track.bindings) {
             hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);

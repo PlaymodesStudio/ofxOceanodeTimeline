@@ -44,6 +44,9 @@ public:
 private:
     void drawSynthNavigation(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
                              const ofxOceanodeTimelineClip* clip = nullptr);
+    // Arrange items of the track and folder menus: order among siblings,
+    // filing into a folder, moving out of one (applied after the track loop).
+    void drawTrackArrangeMenu(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
     std::string pendingSynthWindowFocus;
     int pendingSynthWindowFocusFrames = 0;
     void filesDropped(ofDragInfo& info);
@@ -242,6 +245,22 @@ private:
     // invalidate the current track and every clip/lane reference below it.
     std::pair<std::string, std::string> breakClipLanesRequest;
     std::string duplicateTrackId; // deferred until iteration has finished
+    // Folders and track order, also applied after the track iteration.
+    struct TrackMoveRequest { std::string trackId, parentId; size_t index = 0; };
+    std::vector<TrackMoveRequest> trackMoveRequests;
+    bool requestNewFolder = false;
+    std::string newFolderParentId;
+    std::string newFolderAroundTrackId; // put this track in the new folder
+    bool requestFolderDeletion = false;
+    std::string folderDeletionId;
+    bool folderDeletionKeepsTracks = true;
+    // Dragging a track header to reorder it or drop it into a folder: the
+    // track, where the press started, and the header rows drawn this frame.
+    std::string trackHeaderDragId;
+    ImVec2 trackHeaderDragStart;
+    bool trackHeaderDragging = false;
+    struct TrackHeaderRow { std::string trackId; bool isFolder = false; int depth = 0; float minY = 0, maxY = 0; };
+    std::vector<TrackHeaderRow> trackHeaderRows;
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
     bool requestClipDeletion = false;

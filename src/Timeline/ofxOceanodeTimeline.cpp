@@ -914,6 +914,7 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineSeque
         }
     }
     std::rotate(sequence.tracks.begin() + index, sequence.tracks.end() - 1, sequence.tracks.end());
+    sequence.normalizeFolders(); // a copy placed next to a folder goes after its contents
     invalidateEvaluationIndexes();
     invalidateSchedule();
     return id;
@@ -940,6 +941,15 @@ std::string ofxOceanodeTimelineManager::duplicateTrack(ofxOceanodeTimelineSequen
         }
         if(members.size() > 1) groupClips(sequence, members);
     }
+    if(getTrack(sequence, id)->isFolder) {
+        // A folder's copy holds copies of everything inside the original.
+        std::vector<std::string> children;
+        for(const auto& track : sequence.tracks) if(track.parentId == sourceId) children.push_back(track.id);
+        for(const auto& child : children) {
+            const auto childCopy = duplicateTrack(sequence, child);
+            if(!childCopy.empty()) moveTrack(sequence, childCopy, id, std::numeric_limits<size_t>::max());
+        }
+    }
     return id;
 }
 
@@ -958,6 +968,7 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
     settings.collapsed = source->collapsed;
     settings.bindings = source->bindings;
     settings.noteGroups = source->noteGroups;
+    settings.parentId = source->parentId; // the new tracks stay in the source's folder
     auto clip = *sourceClip;
     auto lanes = std::move(clip.lanes);
     clip.lanes.clear();
@@ -1120,6 +1131,7 @@ bool ofxOceanodeTimelineManager::removeTrack(ofxOceanodeTimelineSequence& sequen
         if(isMainSequence(sequence)) releaseWaveClipIfNeeded(trackId, clip.id);
     }
     sequence.tracks.erase(it);
+    sequence.normalizeFolders(); // a removed folder's tracks move to the top level
     invalidateEvaluationIndexes();
     for(const auto& path : affectedPaths) refreshTimelineFlag(path);
     return true;
@@ -1147,7 +1159,7 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
                                                    ofxOceanodeAbstractParameter& parameter,
                                                    ofxOceanodeTimelineAutomationMode mode) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isFolder || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
     const std::string path = container->getTimelineParameterPath(parameter);
     // A parameter may be published to several tracks. Each track owns an
@@ -2003,7 +2015,7 @@ std::string ofxOceanodeTimelineManager::createClip(ofxOceanodeTimelineSequence& 
                                                    double startBeat,
                                                    double durationBeats) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr) return std::string();
+    if(track == nullptr || track->isFolder) return std::string();
 
     ofxOceanodeTimelineClip clip;
     clip.id = sequence.makeUniqueClipId();
@@ -3051,8 +3063,103 @@ bool ofxOceanodeTimelineManager::isTrackSoloed(const ofxOceanodeTimelineTrack& t
 }
 
 bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& track) const {
-    return !track.muted && (isTrackSoloed(track) || std::none_of(mainSequence.tracks.begin(), mainSequence.tracks.end(),
-                                                    [this](const auto& other) { return isTrackSoloed(other); }));
+    if(isTrackMutedWithFolders(track)) return false;
+    // Without any solo (the usual case) skip the walk up each track's folders.
+    const bool anySolo = std::any_of(mainSequence.tracks.begin(), mainSequence.tracks.end(),
+                                     [this](const auto& other) { return isTrackSoloed(other); });
+    return !anySolo || isTrackSoloedWithFolders(track);
+}
+
+bool ofxOceanodeTimelineManager::isTrackMutedWithFolders(const ofxOceanodeTimelineTrack& track) const {
+    size_t steps = 0;
+    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+        if(at->muted) return true;
+    return false;
+}
+
+bool ofxOceanodeTimelineManager::isTrackSoloedWithFolders(const ofxOceanodeTimelineTrack& track) const {
+    size_t steps = 0;
+    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+        if(isTrackSoloed(*at)) return true;
+    return false;
+}
+
+float ofxOceanodeTimelineManager::trackLatencyWithFolders(const ofxOceanodeTimelineTrack& track) const {
+    float total = 0.0f;
+    size_t steps = 0;
+    for(const auto* at = &track; at != nullptr && steps <= mainSequence.tracks.size(); at = mainSequence.parentOf(*at), ++steps)
+        total += at->latencyOffsetMs;
+    return ofClamp(total, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
+}
+
+std::string ofxOceanodeTimelineManager::createFolder(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName,
+                                                     const std::string& parentId) {
+    const auto id = createTrack(sequence, requestedName.empty() ? "Folder" : requestedName);
+    auto* folder = getTrack(sequence, id);
+    folder->isFolder = true;
+    const auto* parent = parentId.empty() ? nullptr : sequence.findTrack(parentId);
+    folder->parentId = parent != nullptr && parent->isFolder ? parentId : std::string();
+    sequence.normalizeFolders();
+    invalidateEvaluationIndexes();
+    return id;
+}
+
+bool ofxOceanodeTimelineManager::moveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                           const std::string& parentId, size_t index) {
+    const std::string movedId = trackId, targetParent = parentId; // callers may pass ids that move
+    auto* track = sequence.findTrack(movedId);
+    if(track == nullptr) return false;
+    if(!targetParent.empty()) {
+        const auto* parent = sequence.findTrack(targetParent);
+        if(parent == nullptr || !parent->isFolder || sequence.isWithin(targetParent, movedId)) return false;
+    }
+    sequence.normalizeFolders();
+    // Take the track out with everything inside it.
+    const size_t from = static_cast<size_t>(sequence.findTrack(movedId) - sequence.tracks.data());
+    const size_t to = sequence.subtreeEnd(from);
+    std::vector<ofxOceanodeTimelineTrack> block(std::make_move_iterator(sequence.tracks.begin() + from),
+                                                std::make_move_iterator(sequence.tracks.begin() + to));
+    sequence.tracks.erase(sequence.tracks.begin() + from, sequence.tracks.begin() + to);
+    block.front().parentId = targetParent;
+    // Insert before the index-th track of the new folder, or after its last one.
+    std::vector<size_t> siblings;
+    for(size_t i = 0; i < sequence.tracks.size(); ++i)
+        if(sequence.tracks[i].parentId == targetParent) siblings.push_back(i);
+    size_t insertAt;
+    if(index < siblings.size()) insertAt = siblings[index];
+    else if(!siblings.empty()) insertAt = sequence.subtreeEnd(siblings.back());
+    else if(!targetParent.empty())
+        insertAt = static_cast<size_t>(sequence.findTrack(targetParent) - sequence.tracks.data()) + 1;
+    else insertAt = sequence.tracks.size();
+    sequence.tracks.insert(sequence.tracks.begin() + insertAt,
+                           std::make_move_iterator(block.begin()), std::make_move_iterator(block.end()));
+    sequence.normalizeFolders();
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::removeFolder(ofxOceanodeTimelineSequence& sequence, const std::string& folderId, bool keepTracks) {
+    const std::string removedId = folderId;
+    const auto* folder = sequence.findTrack(removedId);
+    if(folder == nullptr || !folder->isFolder) return false;
+    const std::string outerParent = folder->parentId;
+    if(keepTracks) {
+        for(auto& track : sequence.tracks) if(track.parentId == removedId) track.parentId = outerParent;
+    } else {
+        // Innermost first, so every removal finds its track.
+        std::vector<std::string> inside;
+        for(const auto& track : sequence.tracks)
+            if(track.id != removedId && sequence.isWithin(track.id, removedId)) inside.push_back(track.id);
+        std::sort(inside.begin(), inside.end(), [&](const auto& a, const auto& b) {
+            return sequence.depthOf(*sequence.findTrack(a)) > sequence.depthOf(*sequence.findTrack(b));
+        });
+        for(const auto& id : inside) removeTrack(sequence, id);
+    }
+    removeTrack(sequence, removedId);
+    sequence.normalizeFolders();
+    invalidateEvaluationIndexes();
+    return true;
 }
 
 bool ofxOceanodeTimelineManager::setTrackMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, bool muted) {
@@ -3118,7 +3225,14 @@ bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
                                       [](const auto& track) { return track.solo; });
     for(auto& track : mainSequence.tracks) {
         if(track.isWaveTrack) continue;
-        if(track.muted || (handSolo && !track.solo)) {
+        // Folders count: a solo set on a folder is the user's for all inside.
+        const auto soloedByHand = [&](const ofxOceanodeTimelineTrack& at) {
+            size_t steps = 0;
+            for(const auto* t = &at; t != nullptr && steps <= mainSequence.tracks.size(); t = mainSequence.parentOf(*t), ++steps)
+                if(t->solo) return true;
+            return false;
+        };
+        if(isTrackMutedWithFolders(track) || (handSolo && !soloedByHand(track))) {
             const bool wasSoloed = isTrackSoloed(track);
             playback.drivenSolo.erase(PlayKey{0, track.id});
             if(isTrackSoloed(track) != wasSoloed) changed = true;
@@ -4543,4 +4657,16 @@ const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBindin
 
 bool ofxOceanodeTimelineManager::setClipContentOffset(const std::string& trackId, const std::string& clipId, double offsetBeats) {
     return setClipContentOffset(mainSequence, trackId, clipId, offsetBeats);
+}
+
+std::string ofxOceanodeTimelineManager::createFolder(const std::string& requestedName, const std::string& parentId) {
+    return createFolder(mainSequence, requestedName, parentId);
+}
+
+bool ofxOceanodeTimelineManager::moveTrack(const std::string& trackId, const std::string& parentId, size_t index) {
+    return moveTrack(mainSequence, trackId, parentId, index);
+}
+
+bool ofxOceanodeTimelineManager::removeFolder(const std::string& folderId, bool keepTracks) {
+    return removeFolder(mainSequence, folderId, keepTracks);
 }

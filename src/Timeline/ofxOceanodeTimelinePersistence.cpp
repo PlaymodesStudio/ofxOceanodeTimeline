@@ -319,6 +319,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         trackJson["waveVolume"] = track.waveVolume;
         trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
         if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
+        if(track.isFolder) trackJson["isFolder"] = true;
+        if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
         trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
         trackJson["waveVolumePoints"] = ofJson::array();
         for(const auto& point : track.waveVolumePoints)
@@ -672,6 +674,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.waveVolumeAutomationEnabled = track.isWaveTrack ||
             trackJson.value("waveVolumeAutomationEnabled", false);
         track.latencyOffsetMs = ofClamp(trackJson.value("latencyOffsetMs", 0.0f), -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
+        // Older files have no folders: every track at the top level.
+        track.isFolder = trackJson.value("isFolder", false);
+        track.parentId = trackJson.value("parentId", std::string());
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));
         if(trackJson.contains("waveVolumePoints") && trackJson["waveVolumePoints"].is_array()) {
             for(const auto& pointJson : trackJson["waveVolumePoints"]) {
@@ -1083,6 +1088,13 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             ofLogError("ofxOceanodeTimeline") << "Skipped a timeline track that could not be read: " << e.what();
         }
     }
+    // Folders refer to tracks by their saved ids: follow any renaming, then
+    // put each folder's contents after it (a missing folder: top level).
+    for(auto& track : mainSequence.tracks) {
+        const auto renamed = loadedTrackIdRemap.find(track.parentId);
+        if(renamed != loadedTrackIdRemap.end()) track.parentId = renamed->second;
+    }
+    mainSequence.normalizeFolders();
 
     // Continue numbering after the highest id in use, so an id is never
     // handed out again while something may still remember it.

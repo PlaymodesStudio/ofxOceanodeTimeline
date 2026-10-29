@@ -3,6 +3,7 @@
 #include "Timeline/ofxOceanodeTimeline.h"
 
 #include <algorithm>
+#include <functional>
 
 ofxOceanodeTimelineTrack* ofxOceanodeTimelineSequence::findTrack(const std::string& trackId) {
     auto it = std::find_if(tracks.begin(), tracks.end(), [&](auto& track) { return track.id == trackId; });
@@ -157,4 +158,65 @@ std::string ofxOceanodeTimelineSequence::makeUniqueGroupId() const {
         id = makeId("timeline_group", number++);
     } while(std::any_of(clipGroups.begin(), clipGroups.end(), [&](const auto& group) { return group.id == id; }));
     return id;
+}
+
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineSequence::parentOf(const ofxOceanodeTimelineTrack& track) const {
+    if(track.parentId.empty()) return nullptr;
+    const auto* parent = findTrack(track.parentId);
+    return parent != nullptr && parent->isFolder ? parent : nullptr;
+}
+
+int ofxOceanodeTimelineSequence::depthOf(const ofxOceanodeTimelineTrack& track) const {
+    int depth = 0;
+    for(const auto* parent = parentOf(track); parent != nullptr && depth <= static_cast<int>(tracks.size()); parent = parentOf(*parent))
+        ++depth;
+    return depth;
+}
+
+bool ofxOceanodeTimelineSequence::isWithin(const std::string& trackId, const std::string& folderId) const {
+    if(trackId == folderId) return true;
+    const auto* track = findTrack(trackId);
+    for(size_t steps = 0; track != nullptr && steps <= tracks.size(); ++steps) {
+        track = parentOf(*track);
+        if(track != nullptr && track->id == folderId) return true;
+    }
+    return false;
+}
+
+size_t ofxOceanodeTimelineSequence::subtreeEnd(size_t index) const {
+    if(index >= tracks.size()) return tracks.size();
+    const int depth = depthOf(tracks[index]);
+    size_t end = index + 1;
+    while(end < tracks.size() && depthOf(tracks[end]) > depth) ++end;
+    return end;
+}
+
+void ofxOceanodeTimelineSequence::normalizeFolders() {
+    // Parents must exist, be folders and never contain their own child.
+    for(auto& track : tracks) {
+        if(track.parentId.empty()) continue;
+        const auto* parent = findTrack(track.parentId);
+        if(parent == nullptr || !parent->isFolder || isWithin(track.parentId, track.id)) track.parentId.clear();
+    }
+    if(std::none_of(tracks.begin(), tracks.end(), [](const auto& track) { return !track.parentId.empty(); })) return;
+    // Depth-first, siblings in their current order.
+    std::vector<size_t> order;
+    order.reserve(tracks.size());
+    std::vector<bool> placed(tracks.size(), false);
+    std::function<void(const std::string&)> place = [&](const std::string& parentId) {
+        for(size_t i = 0; i < tracks.size(); ++i) {
+            if(placed[i] || tracks[i].parentId != parentId) continue;
+            placed[i] = true;
+            order.push_back(i);
+            if(tracks[i].isFolder) place(tracks[i].id);
+        }
+    };
+    place(std::string());
+    bool moved = false;
+    for(size_t i = 0; i < order.size(); ++i) moved = moved || order[i] != i;
+    if(!moved) return; // already in order: tracks (and pointers to them) stay put
+    std::vector<ofxOceanodeTimelineTrack> ordered;
+    ordered.reserve(tracks.size());
+    for(const size_t i : order) ordered.push_back(std::move(tracks[i]));
+    tracks = std::move(ordered);
 }

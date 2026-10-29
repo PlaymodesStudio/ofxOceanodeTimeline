@@ -199,6 +199,8 @@ constexpr float kRulerHeight = 64.0f;
 constexpr float kHeaderHeight = 25.0f;
 constexpr float kRowHeight = 28.0f;
 constexpr float kCollapsedHeight = 38.0f;
+// Horizontal step per folder level in the track pads.
+constexpr float kFolderIndent = 12.0f;
 constexpr float kWaveTrackMinHeight = 48.0f;
 constexpr float kWaveTrackMaxHeight = 360.0f;
 constexpr float kWaveTrackResizeHandleHeight = 8.0f;
@@ -976,6 +978,45 @@ void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& t
     markerDragId.clear();
     loopDragMode = LoopDragMode::None;
     pendingJump = false;
+}
+
+void ofxOceanodeTimelineController::drawTrackArrangeMenu(ofxOceanodeTimelineManager& timeline,
+                                                         const ofxOceanodeTimelineTrack& track) {
+    const auto& arrangement = timeline.getMainSequence();
+    auto placeAmongSiblings = [&](const ofxOceanodeTimelineTrack& of, size_t& index, size_t& count) {
+        index = 0; count = 0;
+        for(const auto& other : timeline.getTracks()) {
+            if(other.parentId != of.parentId) continue;
+            if(other.id == of.id) index = count;
+            ++count;
+        }
+    };
+    size_t index = 0, siblings = 0;
+    placeAmongSiblings(track, index, siblings);
+    if(ImGui::MenuItem("Move up", nullptr, false, index > 0))
+        trackMoveRequests.push_back({track.id, track.parentId, index - 1});
+    if(ImGui::MenuItem("Move down", nullptr, false, index + 1 < siblings))
+        trackMoveRequests.push_back({track.id, track.parentId, index + 1});
+    const bool anyFolder = std::any_of(timeline.getTracks().begin(), timeline.getTracks().end(), [&](const auto& other) {
+        return other.isFolder && other.id != track.parentId && !arrangement.isWithin(other.id, track.id);
+    });
+    if(ImGui::BeginMenu("Move to folder", anyFolder)) {
+        for(const auto& folder : timeline.getTracks()) {
+            // Not into itself, anything inside it, or where it already is.
+            if(!folder.isFolder || folder.id == track.parentId || arrangement.isWithin(folder.id, track.id)) continue;
+            const std::string label = std::string(static_cast<size_t>(arrangement.depthOf(folder)) * 2, ' ') + folder.name + "##" + folder.id;
+            if(ImGui::MenuItem(label.c_str()))
+                trackMoveRequests.push_back({track.id, folder.id, std::numeric_limits<size_t>::max()});
+        }
+        ImGui::EndMenu();
+    }
+    if(const auto* folder = arrangement.parentOf(track)) {
+        if(ImGui::MenuItem("Move out of folder")) {
+            size_t folderIndex = 0, folderSiblings = 0;
+            placeAmongSiblings(*folder, folderIndex, folderSiblings);
+            trackMoveRequests.push_back({track.id, folder->parentId, folderIndex + 1});
+        }
+    }
 }
 
 void ofxOceanodeTimelineController::drawSynthNavigation(ofxOceanodeTimelineManager& timeline,
@@ -1837,7 +1878,162 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
 
+    trackHeaderRows.clear();
+    const auto& arrangement = timeline.getMainSequence();
+    // Where tracks go when dragged: a sibling position, or into a folder.
+    auto siblingIndex = [&](const ofxOceanodeTimelineTrack& of) {
+        size_t index = 0;
+        for(const auto& other : timeline.getTracks()) {
+            if(&other == &of) break;
+            if(other.parentId == of.parentId) ++index;
+        }
+        return index;
+    };
+    // A press on a header pad may become a drag (reorder / into a folder).
+    auto beginHeaderDrag = [&](const ofxOceanodeTimelineTrack& pressed) {
+        trackHeaderDragId = pressed.id;
+        trackHeaderDragStart = ImGui::GetIO().MousePos;
+        trackHeaderDragging = false;
+    };
     for(const auto& track : timeline.getTracks()) {
+        // Whatever is inside a collapsed folder is not drawn.
+        bool insideCollapsed = false;
+        for(const auto* parent = arrangement.parentOf(track); parent != nullptr && !insideCollapsed;
+            parent = arrangement.parentOf(*parent))
+            insideCollapsed = parent->collapsed;
+        if(insideCollapsed) continue;
+        const int folderDepth = arrangement.depthOf(track);
+        const float folderIndent = folderDepth * kFolderIndent;
+        if(track.isFolder) {
+            // ---- Folder row: header pad, then a summary of what is inside ----
+            const float rowY = ImGui::GetCursorPosY();
+            const float rowHeight = kCollapsedHeight;
+            ImGui::SetCursorPos(ImVec2(0, rowY));
+            ImGui::Dummy(ImVec2(contentWidth, rowHeight));
+            const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
+            trackHeaderRows.push_back({track.id, true, folderDepth, rowMin.y, rowMax.y});
+            const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
+            dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.10f));
+            dl->AddRectFilled(rowMin, padMax, mutedTrackColor(track.color, 0.34f, 0.5f));
+            dl->AddRectFilled(ImVec2(rowMin.x + folderIndent, rowMin.y), ImVec2(rowMin.x + folderIndent + 3.0f, rowMax.y),
+                              IM_COL32(track.color.r, track.color.g, track.color.b, 255));
+            const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+            dl->AddText(ImVec2(rowMin.x + folderIndent + 7, textY), IM_COL32(235, 235, 235, 255), track.collapsed ? ">" : "v");
+            size_t inside = 0;
+            for(const auto& other : timeline.getTracks())
+                if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) ++inside;
+            const std::string label = track.name + "  (" + ofToString(inside) + ")";
+            dl->PushClipRect(rowMin, ImVec2(rowMin.x + kLabelWidth - 85, rowMax.y), true);
+            dl->AddText(ImVec2(rowMin.x + folderIndent + 22, textY), IM_COL32(235, 235, 235, 255), label.c_str());
+            dl->PopClipRect();
+            if(selectedTracks.count(track.id)) {
+                dl->AddRectFilled(rowMin, padMax, IM_COL32(120, 170, 255, 35));
+                dl->AddRect(ImVec2(rowMin.x + 1, rowMin.y + 1), ImVec2(rowMax.x - 1, rowMax.y - 1), IM_COL32(150, 190, 255, 255), 0.0f, 0, 2.0f);
+            }
+            const ImVec2 folderPadMax(rowMin.x + kLabelWidth - 85, rowMax.y);
+            if(hoverRect(rowMin, folderPadMax)) {
+                if(!ImGui::IsAnyItemActive())
+                    ImGui::SetTooltip("Folder: mute, solo and latency apply to everything inside.\nClick the arrow to fold. Drag tracks onto it to file them; drag it to move it.\nDouble-click to rename. Right-click for folder actions.");
+                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    pendingTrackId = track.id;
+                    pendingNewTrackDialog = false;
+                    std::strncpy(pendingTrackName, track.name.c_str(), sizeof(pendingTrackName) - 1);
+                    pendingTrackName[sizeof(pendingTrackName) - 1] = '\0';
+                    requestRenamePopup = true;
+                } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    trackPadClickedThisFrame = true;
+                    selectedClips.clear();
+                    if(ImGui::GetIO().MousePos.x < rowMin.x + folderIndent + 22) {
+                        if(auto* editFolder = timeline.getTrack(track.id)) editFolder->collapsed = !track.collapsed;
+                    } else {
+                        const auto& io = ImGui::GetIO();
+                        if(io.KeyShift || io.KeyCtrl || io.KeySuper) {
+                            if(selectedTracks.count(track.id)) selectedTracks.erase(track.id);
+                            else selectedTracks.insert(track.id);
+                        } else selectedTracks = {track.id};
+                        beginHeaderDrag(track);
+                    }
+                } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    selectedClips.clear();
+                    selectedTracks = {track.id};
+                    ImGui::OpenPopup(("##folderMenu" + track.id).c_str());
+                }
+            }
+            ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kLabelWidth - 82, rowMin.y + (rowHeight - 19.0f) * 0.5f));
+            if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute everything in this folder"))
+                timeline.setTrackMuted(track.id, !track.muted);
+            ImGui::SameLine();
+            if(playbackToggle("trackSolo" + track.id, "S", track.solo, "Solo everything in this folder"))
+                timeline.setTrackSolo(track.id, !track.solo);
+            // What is inside, one thin row per track, in each track's color.
+            std::vector<const ofxOceanodeTimelineTrack*> contents;
+            for(const auto& other : timeline.getTracks())
+                if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) contents.push_back(&other);
+            const ImVec2 laneMin(rowMin.x + kLabelWidth - timelineScrollX, rowMin.y);
+            dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), rowMax, true);
+            const float stripTop = rowMin.y + 4.0f, stripHeight = rowHeight - 8.0f;
+            const float barHeight = contents.empty() ? 0.0f : std::max(1.0f, stripHeight / contents.size());
+            for(size_t i = 0; i < contents.size(); ++i) {
+                const auto& inner = *contents[i];
+                const float y1 = stripTop + i * barHeight, y2 = y1 + std::max(1.0f, barHeight - 1.0f);
+                const bool heard = timeline.isTrackAudible(inner);
+                for(const auto& clip : inner.clips) {
+                    const float x1 = laneMin.x + beatOffset(clip.startBeat);
+                    const float x2 = laneMin.x + beatOffset(clip.startBeat + clip.durationBeats);
+                    dl->AddRectFilled(ImVec2(x1, y1), ImVec2(std::max(x1 + 1.0f, x2 - 1.0f), y2),
+                                      IM_COL32(inner.color.r, inner.color.g, inner.color.b, clip.muted || !heard ? 60 : 200));
+                }
+            }
+            const float playheadX = laneMin.x + beatOffset(transportState.beatPosition);
+            if(playheadX >= zoneLeft && playheadX <= rowMax.x)
+                dl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2);
+            dl->PopClipRect();
+            // A click on a folded folder's summary unfolds it.
+            if(track.collapsed && hoverRect(ImVec2(zoneLeft, rowMin.y), rowMax) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                if(auto* editFolder = timeline.getTrack(track.id)) editFolder->collapsed = false;
+                emptyTrackAreaClickedThisFrame = false;
+            }
+            if(ImGui::BeginPopup(("##folderMenu" + track.id).c_str())) {
+                ImGui::TextUnformatted(track.name.c_str());
+                contextMenuSection("Appearance");
+                const ImVec4 folderColor(track.color.r / 255.0f, track.color.g / 255.0f, track.color.b / 255.0f, track.color.a / 255.0f);
+                float menuColor[4] = {folderColor.x, folderColor.y, folderColor.z, folderColor.w};
+                if(ImGui::ColorEdit4("Folder color", menuColor, ImGuiColorEditFlags_AlphaBar)) {
+                    if(auto* editFolder = timeline.getTrack(track.id)) editFolder->color = ofColor(
+                        static_cast<unsigned char>(ofClamp(menuColor[0] * 255.0f, 0.0f, 255.0f)),
+                        static_cast<unsigned char>(ofClamp(menuColor[1] * 255.0f, 0.0f, 255.0f)),
+                        static_cast<unsigned char>(ofClamp(menuColor[2] * 255.0f, 0.0f, 255.0f)),
+                        static_cast<unsigned char>(ofClamp(menuColor[3] * 255.0f, 0.0f, 255.0f)));
+                }
+                if(ImGui::MenuItem(track.collapsed ? "Unfold" : "Fold")) {
+                    if(auto* editFolder = timeline.getTrack(track.id)) editFolder->collapsed = !track.collapsed;
+                }
+                if(ImGui::MenuItem("Rename...")) {
+                    pendingTrackId = track.id;
+                    pendingNewTrackDialog = false;
+                    std::strncpy(pendingTrackName, track.name.c_str(), sizeof(pendingTrackName) - 1);
+                    pendingTrackName[sizeof(pendingTrackName) - 1] = '\0';
+                    requestRenamePopup = true;
+                }
+                contextMenuSection("Arrange");
+                if(ImGui::MenuItem("New folder inside")) {
+                    requestNewFolder = true;
+                    newFolderParentId = track.id;
+                    newFolderAroundTrackId.clear();
+                }
+                drawTrackArrangeMenu(timeline, track);
+                if(ImGui::MenuItem("Duplicate folder")) duplicateTrackId = track.id;
+                contextMenuSection("Remove");
+                if(ImGui::MenuItem("Delete folder (keep its tracks)")) {
+                    requestFolderDeletion = true; folderDeletionId = track.id; folderDeletionKeepsTracks = true;
+                }
+                if(ImGui::MenuItem("Delete folder and its tracks")) {
+                    requestFolderDeletion = true; folderDeletionId = track.id; folderDeletionKeepsTracks = false;
+                }
+                ImGui::EndPopup();
+            }
+            continue;
+        }
         const float headerY = ImGui::GetCursorPosY();
         // Keep layout state immutable for this frame. Clicking collapse mutates
         // the model, but mixing the old Dummy height with the new branch later
@@ -1859,6 +2055,7 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::Dummy(ImVec2(contentWidth, trackHeaderHeight));
         const ImVec2 headerMin = ImGui::GetItemRectMin();
         const ImVec2 headerMax = ImGui::GetItemRectMax();
+        trackHeaderRows.push_back({track.id, false, folderDepth, headerMin.y, headerMax.y});
         if(singleRowTrack) {
             dl->AddRectFilled(headerMin, headerMax, mutedTrackColor(track.color, 0.17f));
             dl->AddRectFilled(headerMin, ImVec2(headerMin.x + kLabelWidth, headerMax.y),
@@ -1866,13 +2063,19 @@ void ofxOceanodeTimelineController::draw() {
         } else {
             dl->AddRectFilled(headerMin, headerMax, mutedTrackColor(track.color, 0.27f, 0.42f));
         }
+        // Inside a folder: a stripe in the folder's color at its indent.
+        if(const auto* folder = arrangement.parentOf(track)) {
+            const float stripeX = headerMin.x + folderIndent - kFolderIndent;
+            dl->AddRectFilled(ImVec2(stripeX, headerMin.y), ImVec2(stripeX + 3.0f, headerMax.y),
+                              IM_COL32(folder->color.r, folder->color.g, folder->color.b, 255));
+        }
         const float headerTextY = headerMin.y + (trackHeaderHeight - ImGui::GetTextLineHeight()) * 0.5f;
         // A Wave Track has nothing to expand/collapse, so it gets no
         // chevron -- just its name, flush where the chevron would be.
         if(targetsView && !track.isWaveTrack)
-            dl->AddText(ImVec2(headerMin.x + 7, headerTextY), IM_COL32(235, 235, 235, 255), trackCollapsed ? ">" : "v");
+            dl->AddText(ImVec2(headerMin.x + folderIndent + 7, headerTextY), IM_COL32(235, 235, 235, 255), trackCollapsed ? ">" : "v");
         dl->PushClipRect(headerMin, ImVec2(headerMin.x + kLabelWidth - 85, headerMax.y), true);
-        dl->AddText(ImVec2(headerMin.x + 22, headerTextY), IM_COL32(235, 235, 235, 255), track.name.c_str());
+        dl->AddText(ImVec2(headerMin.x + folderIndent + 22, headerTextY), IM_COL32(235, 235, 235, 255), track.name.c_str());
         dl->PopClipRect();
         // A binding's target parameter can disappear (node deleted, preset
         // loaded on a different graph, ...). The manager keeps the binding
@@ -1883,7 +2086,7 @@ void ofxOceanodeTimelineController::draw() {
             [](const auto& binding) { return binding.missingTarget && !binding.bypass; });
         if(hasMissingTarget) {
             const float nameWidth = ImGui::CalcTextSize(track.name.c_str()).x;
-            dl->AddText(ImVec2(headerMin.x + 22 + nameWidth + 6, headerTextY),
+            dl->AddText(ImVec2(headerMin.x + folderIndent + 22 + nameWidth + 6, headerTextY),
                        IM_COL32(255, 165, 60, 255), "[missing target]");
         }
 
@@ -1898,6 +2101,7 @@ void ofxOceanodeTimelineController::draw() {
             } else {
                 selectedTracks = {track.id};
             }
+            beginHeaderDrag(track);
         }
         if(trackPadHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             selectedClips.clear();
@@ -1923,7 +2127,7 @@ void ofxOceanodeTimelineController::draw() {
                 std::strncpy(pendingTrackName, track.name.c_str(), sizeof(pendingTrackName) - 1);
                 pendingTrackName[sizeof(pendingTrackName) - 1] = '\0';
                 requestRenamePopup = true;
-            } else if(targetsView && !track.isWaveTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + 22) {
+            } else if(targetsView && !track.isWaveTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
                 if(auto* editTrack = timeline.getTrack(track.id)) editTrack->collapsed = !trackCollapsed;
             } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 pendingTrackId = track.id;
@@ -2097,6 +2301,13 @@ void ofxOceanodeTimelineController::draw() {
                 requestRenamePopup = true;
                 ImGui::CloseCurrentPopup();
             }
+            contextMenuSection("Arrange");
+            if(ImGui::MenuItem("New folder containing this track")) {
+                requestNewFolder = true;
+                newFolderParentId = track.parentId;
+                newFolderAroundTrackId = track.id;
+            }
+            drawTrackArrangeMenu(timeline, track);
             if(ImGui::MenuItem("Duplicate track")) {
                 duplicateTrackId = track.id;
                 ImGui::CloseCurrentPopup();
@@ -3457,6 +3668,60 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
 
+    // ---- Track header drag: reorder, or drop into a folder ----------------
+    if(!trackHeaderDragId.empty()) {
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        if(!trackHeaderDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+           std::abs(mouse.y - trackHeaderDragStart.y) > 5.0f) trackHeaderDragging = true;
+        // Where the dragged track would land under the mouse: before or after
+        // a row, or (the middle of a folder row) inside that folder.
+        struct Drop { std::string parentId; size_t index = 0; float lineY = 0; float lineX = 0; const TrackHeaderRow* into = nullptr; bool valid = false; };
+        Drop drop;
+        if(trackHeaderDragging && !trackHeaderRows.empty()) {
+            const TrackHeaderRow* row = nullptr;
+            for(const auto& candidate : trackHeaderRows)
+                if(mouse.y >= candidate.minY && mouse.y < candidate.maxY) row = &candidate;
+            if(row == nullptr) row = mouse.y < trackHeaderRows.front().minY ? &trackHeaderRows.front() : &trackHeaderRows.back();
+            const auto* rowTrack = timeline.getTrack(row->trackId);
+            if(rowTrack != nullptr) {
+                const float height = std::max(1.0f, row->maxY - row->minY);
+                const float t = (mouse.y - row->minY) / height;
+                const float rowLeft = ImGui::GetWindowPos().x;
+                if(row->isFolder && t > 0.25f && t < 0.75f) {
+                    drop.parentId = row->trackId;
+                    drop.index = std::numeric_limits<size_t>::max();
+                    drop.into = row;
+                } else {
+                    drop.parentId = rowTrack->parentId;
+                    drop.index = siblingIndex(*rowTrack) + (t >= 0.5f ? 1 : 0);
+                    drop.lineY = t >= 0.5f ? row->maxY : row->minY;
+                    drop.lineX = rowLeft + row->depth * kFolderIndent;
+                }
+                const auto* dragged = timeline.getTrack(trackHeaderDragId);
+                drop.valid = dragged != nullptr &&
+                    (drop.parentId.empty() || !arrangement.isWithin(drop.parentId, trackHeaderDragId));
+                // Among its own siblings, the dragged track's old place closes up.
+                if(drop.valid && dragged->parentId == drop.parentId && drop.index != std::numeric_limits<size_t>::max() &&
+                   siblingIndex(*dragged) < drop.index) --drop.index;
+            }
+            ImDrawList* overlay = ImGui::GetWindowDrawList();
+            const ImU32 color = drop.valid ? IM_COL32(150, 200, 255, 255) : IM_COL32(255, 110, 110, 200);
+            if(drop.into != nullptr)
+                overlay->AddRect(ImVec2(ImGui::GetWindowPos().x + 1, drop.into->minY + 1),
+                                 ImVec2(ImGui::GetWindowPos().x + kLabelWidth - 1, drop.into->maxY - 1), color, 0.0f, 0, 2.0f);
+            else
+                overlay->AddLine(ImVec2(drop.lineX, drop.lineY), ImVec2(ImGui::GetWindowPos().x + kLabelWidth, drop.lineY), color, 2.0f);
+            if(const auto* dragged = timeline.getTrack(trackHeaderDragId))
+                ImGui::SetTooltip("%s", drop.into != nullptr ? ("Move " + dragged->name + " into " +
+                    timeline.getTrack(drop.into->trackId)->name).c_str() : ("Move " + dragged->name).c_str());
+        }
+        if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if(trackHeaderDragging && drop.valid) trackMoveRequests.push_back({trackHeaderDragId, drop.parentId, drop.index});
+            trackHeaderDragId.clear();
+            trackHeaderDragging = false;
+        }
+    }
+
     // Empty track space: a click moves the playhead (on release), a drag
     // draws a box that selects the clips it touches (Shift adds to the
     // selection).
@@ -3560,10 +3825,33 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
 
-    if(requestTrackDeletion) {
+    // Folders and track order (after the track iteration, like the others).
+    for(const auto& move : trackMoveRequests) timeline.moveTrack(move.trackId, move.parentId, move.index);
+    trackMoveRequests.clear();
+    if(requestNewFolder) {
+        requestNewFolder = false;
+        const auto folderId = timeline.createFolder("Folder", newFolderParentId);
+        if(const auto* around = newFolderAroundTrackId.empty() ? nullptr : timeline.getTrack(newFolderAroundTrackId)) {
+            // In the track's place, holding it.
+            size_t index = 0;
+            for(const auto& other : timeline.getTracks()) {
+                if(other.id == around->id) break;
+                if(other.parentId == around->parentId && other.id != folderId) ++index;
+            }
+            const std::string aroundId = around->id;
+            timeline.moveTrack(folderId, newFolderParentId, index);
+            timeline.moveTrack(aroundId, folderId, 0);
+        }
+        newFolderAroundTrackId.clear();
+        selectedClips.clear();
+        selectedTracks = {folderId};
+    }
+
+    // Controller-only state of a track about to be removed.
+    auto forgetTrackInEditor = [&](const std::string& deletedId) {
         // Clear controller-only state before the manager destroys all of the
         // track's bindings, clips and lanes.
-        if(const auto* deletedTrack = timeline.getTrack(trackDeletionId)) {
+        if(const auto* deletedTrack = timeline.getTrack(deletedId)) {
             for(const auto& clip : deletedTrack->clips) {
                 for(const auto& lane : clip.lanes) {
                     editorState.collapsedLaneIds.erase(lane.id);
@@ -3571,30 +3859,44 @@ void ofxOceanodeTimelineController::draw() {
                 }
             }
         }
-        if(editorState.clipEditorOpen && editorState.editorTrackId == trackDeletionId) {
+        if(editorState.clipEditorOpen && editorState.editorTrackId == deletedId) {
             editorState.clipEditorOpen = false;
             editorState.editorTrackId.clear();
             editorState.editorClipId.clear();
             editorState.editorLaneId.clear();
             laneEditors.clearSelection();
         }
-        if(draggingTrackId == trackDeletionId) {
+        if(draggingTrackId == deletedId) {
             clipDragMode = ClipDragMode::None;
             draggingTrackId.clear();
             draggingClipId.clear();
             groupDragSnapshot.clear();
         }
-        laneEditors.forgetTrack(trackDeletionId);
+        laneEditors.forgetTrack(deletedId);
         // Persistent group membership for this track's clips is cleaned up
         // inside timeline.removeTrack() itself; only the ephemeral
         // selection is this controller's own responsibility.
         for(auto it = selectedClips.begin(); it != selectedClips.end();) {
-            if(it->first == trackDeletionId) it = selectedClips.erase(it); else ++it;
+            if(it->first == deletedId) it = selectedClips.erase(it); else ++it;
         }
-        selectedTracks.erase(trackDeletionId);
+        selectedTracks.erase(deletedId);
+    };
+    if(requestTrackDeletion) {
+        forgetTrackInEditor(trackDeletionId);
         timeline.removeTrack(trackDeletionId);
         requestTrackDeletion = false;
         trackDeletionId.clear();
+    }
+    if(requestFolderDeletion) {
+        requestFolderDeletion = false;
+        if(!folderDeletionKeepsTracks) {
+            const auto& arrangement = timeline.getMainSequence();
+            for(const auto& inside : timeline.getTracks())
+                if(inside.id != folderDeletionId && arrangement.isWithin(inside.id, folderDeletionId)) forgetTrackInEditor(inside.id);
+        }
+        forgetTrackInEditor(folderDeletionId);
+        timeline.removeFolder(folderDeletionId, folderDeletionKeepsTracks);
+        folderDeletionId.clear();
     }
 
     if(requestClipDeletion) {
@@ -4082,7 +4384,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
     if(ImGui::BeginCombo("Destination track", destination ? destination->name.c_str() : "New track")) {
         if(ImGui::Selectable("New track", clipFileTrackId.empty())) clipFileTrackId.clear();
         for(const auto& candidate : timeline.getTracks()) {
-            if(candidate.isWaveTrack != wave) continue;
+            if(candidate.isWaveTrack != wave || candidate.isFolder) continue;
             if(ImGui::Selectable((candidate.name + "##" + candidate.id).c_str(), clipFileTrackId == candidate.id))
                 clipFileTrackId = candidate.id;
         }
@@ -5237,7 +5539,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         // Default to a track where one of these parameters already is, else a new track.
         if(noteSetupTrackId.empty()) {
             for(const auto& track : timeline.getTracks()) {
-                if(track.isWaveTrack) continue;
+                if(track.isWaveTrack || track.isFolder) continue;
                 if(std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& b) {
                        return !b.parameterPath.empty() && std::find(std::begin(noteSetupRolePaths), std::end(noteSetupRolePaths),
                                                                     b.parameterPath) != std::end(noteSetupRolePaths);
@@ -5268,7 +5570,7 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
         if(ImGui::BeginCombo("Track", currentTrack == nullptr ? "New track" : currentTrack->name.c_str())) {
             if(ImGui::Selectable("New track", currentTrack == nullptr)) noteSetupTrackId.clear();
             for(const auto& track : timeline.getTracks()) {
-                if(track.isWaveTrack) continue;
+                if(track.isWaveTrack || track.isFolder) continue;
                 if(ImGui::Selectable((track.name + "##" + track.id).c_str(), track.id == noteSetupTrackId))
                     noteSetupTrackId = track.id;
             }

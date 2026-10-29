@@ -710,10 +710,52 @@ int main() {
     assert(model.getClip(dt,dc) && model.getLane(dt,dc,dl)->pianoNotes.size()==1);
     assert(model.getLane(dt,dc,dl)->pianoNotes.front().pitch==64);
     io.AddKeyEvent(ImGuiKey_Delete,false); frame();
+
+    // Track folders: drag a header into a folder, fold it, drag it back out.
+    for(int i=0;i<25;++i) frame(); // no double-click with the clicks above
+    const auto folder=model.createFolder("Group");
+    frame(); frame();
+    auto headerRow=[&](const std::string& id) {
+        const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),[&](const auto& r){return r.trackId==id;});
+        return row==ui.trackHeaderRows.end() ? nullptr : &*row;
+    };
+    assert(headerRow(folder) && headerRow(folder)->isFolder);
+    auto dragHeader=[&](const std::string& id,ImVec2 to) {
+        const auto* from=headerRow(id); assert(from);
+        const ImVec2 start(ui.fileDropBounds.x-150,(from->minY+from->maxY)*0.5f);
+        frame(1250,start,false); frame(1250,start,true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(start.x,start.y+(to.y-start.y)*i/6.0f),true);
+        frame(1250,to,false); frame(); frame();
+    };
+    const auto* folderRow=headerRow(folder);
+    dragHeader(dt,ImVec2(ui.fileDropBounds.x-150,(folderRow->minY+folderRow->maxY)*0.5f));
+    assert(model.getTrack(dt)->parentId==folder);
+    assert(headerRow(dt) && headerRow(dt)->depth==1);
+    frame(1250,ImVec2(-100,-100),false,"track-folder");
+    // Fold: the track inside is no longer drawn; a click on the summary unfolds.
+    for(int i=0;i<25;++i) frame();
+    folderRow=headerRow(folder);
+    const ImVec2 chevron(8,(folderRow->minY+folderRow->maxY)*0.5f);
+    frame(1250,chevron,false); frame(1250,chevron,true); frame(1250,chevron,false); frame();
+    assert(model.getTrack(folder)->collapsed && headerRow(dt)==nullptr);
+    for(int i=0;i<25;++i) frame();
+    folderRow=headerRow(folder);
+    const ImVec2 summary(ui.fileDropBounds.getRight()-40,(folderRow->minY+folderRow->maxY)*0.5f);
+    frame(1250,summary,false); frame(1250,summary,true); frame(1250,summary,false); frame();
+    assert(!model.getTrack(folder)->collapsed && headerRow(dt)!=nullptr);
+    // Drag it above the first row: back at the top level, first.
+    for(int i=0;i<25;++i) frame();
+    dragHeader(dt,ImVec2(ui.fileDropBounds.x-150,ui.trackHeaderRows.front().minY+2.0f));
+    assert(model.getTrack(dt)->parentId.empty() && model.getTracks().front().id==dt);
+    // Never into itself: a folder dropped on its own row stays where it was.
+    folderRow=headerRow(folder);
+    dragHeader(folder,ImVec2(ui.fileDropBounds.x-150,(folderRow->minY+folderRow->maxY)*0.5f+20.0f));
+    assert(model.getTrack(folder)->parentId.empty());
+
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 

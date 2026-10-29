@@ -378,9 +378,11 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     std::unordered_map<std::string, int64_t> latencyOffsetUs;
     int64_t earliestOffsetUs = 0;
     for(const auto& track : mainSequence.tracks) {
-        if(track.latencyOffsetMs == 0.0f) continue;
+        // A track's own offset plus its folders' (see trackLatencyWithFolders).
+        const float latencyMs = trackLatencyWithFolders(track);
+        if(latencyMs == 0.0f) continue;
         const int64_t offsetUs = static_cast<int64_t>(std::llround(
-            ofClamp(track.latencyOffsetMs, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs) * 1000.0));
+            latencyMs * 1000.0));
         for(const auto& binding : track.bindings) {
             if(activePaths.count(binding.parameterPath) == 0) continue;
             latencyOffsetUs.emplace(binding.parameterPath, offsetUs);
