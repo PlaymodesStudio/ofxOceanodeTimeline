@@ -711,6 +711,26 @@ int main() {
     assert(model.getLane(dt,dc,dl)->pianoNotes.front().pitch==64);
     io.AddKeyEvent(ImGuiKey_Delete,false); frame();
 
+    {
+        // Grouped clips on one track move together.
+        for(int i=0;i<25;++i) frame();
+        model.groupClips({{t,c},{t,lc}});
+        frame(); frame();
+        auto rectOf=[&](const std::string& clipId) {
+            const auto it=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==clipId;});
+            assert(it!=ui.clipScreenRects.end()); return *it;
+        };
+        const double introStart=model.getClip(t,c)->startBeat, lfoStart=model.getClip(t,lc)->startBeat;
+        const auto rect=rectOf(c);
+        const ImVec2 from((rect.x1+rect.x2)*0.5f,(rect.y1+rect.y2)*0.5f);
+        const float beatPixels=(rect.x2-rect.x1)/static_cast<float>(model.getClip(t,c)->durationBeats);
+        frame(1250,from,false); frame(1250,from,true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(from.x+beatPixels*i/6.0f,from.y),true);
+        frame(1250,ImVec2(from.x+beatPixels,from.y),false); frame();
+        assert(std::abs(model.getClip(t,c)->startBeat-(introStart+1.0))<1e-6);
+        assert(std::abs(model.getClip(t,lc)->startBeat-(lfoStart+1.0))<1e-6);
+        model.ungroupClip(t,c);
+    }
     // Track folders: drag a header into a folder, fold it, drag it back out.
     for(int i=0;i<25;++i) frame(); // no double-click with the clicks above
     const auto folder=model.createFolder("Group");

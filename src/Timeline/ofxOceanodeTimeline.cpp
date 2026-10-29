@@ -2210,6 +2210,58 @@ void appendEventWindow(const std::vector<Event>& events, double from, double to,
         out.push_back(piece);
     }
 }
+
+// ---- Clip merging helpers --------------------------------------------------
+// A clip's lane laid out as the clip plays it, on a span that starts `placeAt`
+// beats into the merged clip and lasts the clip's own length: the content
+// offset is baked in by the caller, repeats are unrolled and the stretch is
+// applied, so one merged beat is one timeline beat. Pattern lanes (Step,
+// Multi Slider, Drum Grid) become a single pattern as long as the merged clip
+// (`total` beats), holding events only over this clip's span.
+struct ClipLayout {
+    double placeAt = 0.0; // where the clip starts in the merged clip
+    double length = 0.0;  // its timeline length
+    double content = 1.0; // source beats per repeat
+    double stretch = 1.0; // timeline beats per source beat
+    // Each repeat k as source range [0, to) placed at k * content (unrolled source beats).
+    template<class F> void forEachRepeat(F&& f) const {
+        for(int64_t k = 0; static_cast<double>(k) * content * stretch < length - kEpsilon; ++k)
+            f(static_cast<double>(k) * content, std::min(content, (length - static_cast<double>(k) * content * stretch) / stretch));
+    }
+    double toMerged(double unrolledSourceBeat) const { return placeAt + unrolledSourceBeat * stretch; }
+    // Pattern occurrences of position q (pattern `period` long) inside the
+    // played span, as unrolled source beats.
+    template<class F> void forEachOccurrence(double period, double q, F&& f) const {
+        forEachRepeat([&](double base, double to) {
+            for(double patternStart = 0.0; patternStart < to - kEpsilon; patternStart += period)
+                if(patternStart + q < to - kEpsilon) f(base + patternStart + q, base + to);
+        });
+    }
+};
+
+void layOutCurve(const ofxOceanodeTimelineLane& lane, const ClipLayout& layout,
+                 std::vector<ofxOceanodeTimelineCurvePoint>& points, std::vector<ofxOceanodeTimelineCurveTension>& tensions) {
+    points.clear(); tensions.clear();
+    layout.forEachRepeat([&](double base, double to) { appendCurveWindow(lane, 0.0, to, base, points, tensions); });
+    for(auto& point : points) point.beat = layout.toMerged(point.beat);
+}
+
+template<class Event>
+std::vector<Event> layOutEvents(const std::vector<Event>& events, const ClipLayout& layout) {
+    std::vector<Event> out;
+    layout.forEachRepeat([&](double base, double to) { appendEventWindow(events, 0.0, to, base, out); });
+    for(auto& event : out) {
+        event.startBeat = layout.toMerged(event.startBeat);
+        event.durationBeats *= layout.stretch;
+    }
+    return out;
+}
+
+// Value of a placed curve at a merged beat (the points' own interpolation).
+float placedCurveValue(const ofxOceanodeTimelineLane& lane, const std::vector<ofxOceanodeTimelineCurvePoint>& points,
+                       const std::vector<ofxOceanodeTimelineCurveTension>& tensions, double beat) {
+    return valueAtBeat(points, tensions, lane.curveInterpolation, beat, points.empty() ? 0.0f : points.front().value);
+}
 } // namespace
 
 bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip& placed, double timelineBeat,
@@ -2348,6 +2400,224 @@ void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip
     ofxOceanodeTimelineClip left = clip, rotated = clip;
     cutClipContent(clip, offset, true, left, rotated);
     clip.lanes = std::move(rotated.lanes);
+}
+
+std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                   const std::string& firstClipId, const std::string& secondClipId) {
+    const auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || track->isWaveTrack || firstClipId == secondClipId) return std::string();
+    const auto* first = getClip(sequence, trackId, firstClipId);
+    const auto* second = getClip(sequence, trackId, secondClipId);
+    if(first == nullptr || second == nullptr) return std::string();
+    for(const auto* clip : {first, second})
+        if(clip->isLfo || clip->isStateCapture) return std::string();
+    // The earlier clip leads: it keeps its id and settings, and the later
+    // one's content wins where they overlap (as overlapping clips play).
+    auto order = [&](const std::string& id) {
+        return std::find_if(track->clips.begin(), track->clips.end(), [&](const auto& c) { return c.id == id; }) - track->clips.begin();
+    };
+    ofxOceanodeTimelineClip a = *first, b = *second;
+    if(b.startBeat < a.startBeat - kEpsilon ||
+       (std::abs(b.startBeat - a.startBeat) <= kEpsilon && order(b.id) < order(a.id))) std::swap(a, b);
+    bakeContentOffset(a);
+    bakeContentOffset(b);
+    const double start = a.startBeat;
+    const double total = std::max(a.startBeat + a.durationBeats, b.startBeat + b.durationBeats) - start;
+    auto layoutOf = [&](const ofxOceanodeTimelineClip& clip) {
+        ClipLayout layout;
+        layout.placeAt = clip.startBeat - start;
+        layout.length = clip.durationBeats;
+        layout.content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+        layout.stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+        return layout;
+    };
+    const ClipLayout firstLayout = layoutOf(a), secondLayout = layoutOf(b);
+    const double cut = secondLayout.placeAt; // the second clip's data starts here
+    auto isCurve = [](const ofxOceanodeTimelineLane& lane) {
+        return lane.type == ofxOceanodeTimelineLaneType::Curve || ofxOceanodeTimelineIsHeldValueLane(lane.type);
+    };
+
+    // "The same parameters with the same kind of lane": one lane in the result.
+    auto keyOf = [&](const ofxOceanodeTimelineLane& lane, const ClipLayout& layout) {
+        auto ids = lane.bindingIds;
+        std::sort(ids.begin(), ids.end());
+        std::string key = ofToString(static_cast<int>(lane.type)) + "|" + lane.curveInterpolation + "|" +
+            ofToString(lane.valueMin, 6) + "|" + ofToString(lane.valueMax, 6) + "|";
+        for(const auto& id : ids) key += id + ",";
+        key += "|" + lane.pianoPitchBindingId + "," + lane.pianoGateBindingId + "," + lane.pianoVelocityBindingId + "," +
+               lane.drumDurationBindingId + "," + lane.drumFilterBindingId + "," + lane.drumStutterBindingId;
+        // Pattern lanes share one grid: the same cell once stretched.
+        if(lane.type == ofxOceanodeTimelineLaneType::Step || lane.type == ofxOceanodeTimelineLaneType::MultiSlider)
+            key += "|" + ofToString(std::max(1.0 / 24.0, lane.beatsPerStep) * layout.stretch, 6);
+        return key;
+    };
+
+    bool refused = false;
+    auto layOut = [&](const ofxOceanodeTimelineLane& source, const ClipLayout& layout) {
+        ofxOceanodeTimelineLane lane = source;
+        if(isCurve(source)) {
+            if(!source.curvePoints.empty()) layOutCurve(source, layout, lane.curvePoints, lane.curveTensions);
+        } else if(source.type == ofxOceanodeTimelineLaneType::PianoRoll) {
+            lane.pianoNotes = layOutEvents(source.pianoNotes, layout);
+        } else if(source.type == ofxOceanodeTimelineLaneType::MultiGate) {
+            for(size_t row = 0; row < source.multiGateRows.size(); ++row) lane.multiGateRows[row] = layOutEvents(source.multiGateRows[row], layout);
+        } else if(source.type == ofxOceanodeTimelineLaneType::MultiValue) {
+            for(size_t row = 0; row < source.multiValueRows.size(); ++row) lane.multiValueRows[row] = layOutEvents(source.multiValueRows[row], layout);
+        } else if(source.type == ofxOceanodeTimelineLaneType::Step) {
+            const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
+            const double period = std::max(cell, source.stepCount * cell);
+            lane.step.steps.clear();
+            for(const auto& step : source.step.steps) {
+                if(step.startBeat >= period - kEpsilon) continue;
+                layout.forEachOccurrence(period, step.startBeat, [&](double at, double limit) {
+                    auto piece = step;
+                    const double length = std::min(step.durationBeats > kEpsilon ? step.durationBeats : cell, limit - at);
+                    piece.startBeat = layout.toMerged(at);
+                    piece.durationBeats = length * layout.stretch;
+                    lane.step.steps.push_back(piece);
+                });
+            }
+            lane.beatsPerStep = cell * layout.stretch;
+            lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
+            lane.step.sortSteps();
+        } else if(source.type == ofxOceanodeTimelineLaneType::MultiSlider) {
+            const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
+            const int count = std::max(1, source.stepCount);
+            lane.beatsPerStep = cell * layout.stretch;
+            lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
+            // Cells outside this clip's span are filled in after joining (NaN until then).
+            lane.multiSliderValues.assign(static_cast<size_t>(lane.stepCount), std::numeric_limits<float>::quiet_NaN());
+            for(int m = 0; m < lane.stepCount; ++m) {
+                const double local = (m + 0.5) * lane.beatsPerStep - layout.placeAt;
+                if(local < 0.0 || local >= layout.length) continue;
+                const double sourceBeat = positiveModulo(local / layout.stretch, layout.content);
+                const int index = std::min(count - 1, static_cast<int>(std::floor(positiveModulo(sourceBeat, cell * count) / cell)));
+                if(index < static_cast<int>(source.multiSliderValues.size())) lane.multiSliderValues[static_cast<size_t>(m)] = source.multiSliderValues[static_cast<size_t>(index)];
+            }
+        } else if(source.type == ofxOceanodeTimelineLaneType::DrumGrid) {
+            // Each row becomes one pattern as long as the merged clip.
+            if(total > ofxOceanodeTimelineDrumGrid::kMaxLength + kEpsilon) refused = true;
+            for(size_t r = 0; r < source.drumRows.size(); ++r) {
+                const auto& row = source.drumRows[r];
+                auto& placedRow = lane.drumRows[r];
+                placedRow.steps.clear();
+                placedRow.length = std::min(total, ofxOceanodeTimelineDrumGrid::kMaxLength);
+                const double period = ofClamp(row.length, ofxOceanodeTimelineDrumGrid::kMinLength, ofxOceanodeTimelineDrumGrid::kMaxLength);
+                for(const auto& step : row.steps) {
+                    if(ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) continue;
+                    layout.forEachOccurrence(period, step.beat, [&](double at, double) {
+                        auto piece = step;
+                        piece.beat = layout.toMerged(at);
+                        piece.length = step.length * layout.stretch;
+                        placedRow.steps.push_back(piece);
+                    });
+                }
+                ofxOceanodeTimelineDrumGrid::normalizeRow(placedRow);
+            }
+            lane.drumSwingBeats = source.drumSwingBeats * layout.stretch;
+        }
+        return lane;
+    };
+
+    // Joining the second clip's lane into the first's: the first gives way at `cut`.
+    auto cropEvents = [&](auto& events) {
+        events.erase(std::remove_if(events.begin(), events.end(), [&](const auto& e) { return e.startBeat >= cut - kEpsilon; }), events.end());
+        for(auto& e : events) e.durationBeats = std::min(e.durationBeats, cut - e.startBeat);
+    };
+    auto join = [&](ofxOceanodeTimelineLane& into, const ofxOceanodeTimelineLane& from) {
+        if(isCurve(into)) {
+            if(from.curvePoints.empty()) return;
+            if(into.curvePoints.empty()) { into.curvePoints = from.curvePoints; into.curveTensions = from.curveTensions; return; }
+            // The first clip's value holds until the second starts (or is cut there).
+            const float held = placedCurveValue(into, into.curvePoints, into.curveTensions, cut);
+            while(!into.curvePoints.empty() && into.curvePoints.back().beat > cut + kEpsilon) into.curvePoints.pop_back();
+            into.curveTensions.resize(into.curvePoints.empty() ? 0 : into.curvePoints.size() - 1);
+            if(into.curvePoints.empty() || into.curvePoints.back().beat < cut - kEpsilon) {
+                if(!into.curvePoints.empty()) into.curveTensions.push_back({});
+                into.curvePoints.push_back({cut, held});
+            }
+            into.curveTensions.push_back({}); // a step from the held value to the second clip's first point
+            into.curvePoints.insert(into.curvePoints.end(), from.curvePoints.begin(), from.curvePoints.end());
+            into.curveTensions.insert(into.curveTensions.end(), from.curveTensions.begin(), from.curveTensions.end());
+            into.curveTensions.resize(into.curvePoints.size() - 1);
+        } else if(into.type == ofxOceanodeTimelineLaneType::PianoRoll) {
+            cropEvents(into.pianoNotes);
+            into.pianoNotes.insert(into.pianoNotes.end(), from.pianoNotes.begin(), from.pianoNotes.end());
+        } else if(into.type == ofxOceanodeTimelineLaneType::MultiGate || into.type == ofxOceanodeTimelineLaneType::MultiValue) {
+            into.multiRowCount = std::max(into.multiRowCount, from.multiRowCount);
+            into.multiGateRows.resize(std::max(into.multiGateRows.size(), from.multiGateRows.size()));
+            into.multiValueRows.resize(std::max(into.multiValueRows.size(), from.multiValueRows.size()));
+            for(size_t row = 0; row < into.multiGateRows.size(); ++row) {
+                cropEvents(into.multiGateRows[row]);
+                if(row < from.multiGateRows.size())
+                    into.multiGateRows[row].insert(into.multiGateRows[row].end(), from.multiGateRows[row].begin(), from.multiGateRows[row].end());
+            }
+            for(size_t row = 0; row < into.multiValueRows.size(); ++row) {
+                cropEvents(into.multiValueRows[row]);
+                if(row < from.multiValueRows.size())
+                    into.multiValueRows[row].insert(into.multiValueRows[row].end(), from.multiValueRows[row].begin(), from.multiValueRows[row].end());
+            }
+        } else if(into.type == ofxOceanodeTimelineLaneType::Step) {
+            cropEvents(into.step.steps);
+            into.step.steps.insert(into.step.steps.end(), from.step.steps.begin(), from.step.steps.end());
+            into.step.sortSteps();
+        } else if(into.type == ofxOceanodeTimelineLaneType::MultiSlider) {
+            for(size_t m = 0; m < into.multiSliderValues.size() && m < from.multiSliderValues.size(); ++m)
+                if(!std::isnan(from.multiSliderValues[m])) into.multiSliderValues[m] = from.multiSliderValues[m];
+        } else if(into.type == ofxOceanodeTimelineLaneType::DrumGrid) {
+            for(const auto& fromRow : from.drumRows) {
+                auto row = std::find_if(into.drumRows.begin(), into.drumRows.end(), [&](const auto& r) { return r.slot == fromRow.slot; });
+                if(row == into.drumRows.end()) { into.drumRows.push_back(fromRow); continue; }
+                row->steps.erase(std::remove_if(row->steps.begin(), row->steps.end(), [&](const auto& s) { return s.beat >= cut - kEpsilon; }), row->steps.end());
+                row->steps.insert(row->steps.end(), fromRow.steps.begin(), fromRow.steps.end());
+                ofxOceanodeTimelineDrumGrid::normalizeRow(*row);
+            }
+        }
+    };
+
+    ofxOceanodeTimelineClip merged = a;
+    merged.startBeat = start;
+    merged.durationBeats = total;
+    merged.contentDurationBeats = total;
+    merged.contentStretch = 1.0;
+    merged.repeatContent = false;
+    merged.contentOffsetBeats = 0.0;
+    merged.lanes.clear();
+    std::vector<std::string> firstKeys;
+    std::vector<bool> joined;
+    for(const auto& lane : a.lanes) {
+        merged.lanes.push_back(layOut(lane, firstLayout));
+        firstKeys.push_back(keyOf(lane, firstLayout));
+        joined.push_back(false);
+    }
+    for(const auto& lane : b.lanes) {
+        auto placed = layOut(lane, secondLayout);
+        const auto key = keyOf(lane, secondLayout);
+        size_t match = firstKeys.size();
+        for(size_t i = 0; i < firstKeys.size(); ++i)
+            if(!joined[i] && firstKeys[i] == key) { match = i; break; }
+        if(match == firstKeys.size()) { merged.lanes.push_back(std::move(placed)); continue; } // keeps its own lane id
+        join(merged.lanes[match], placed);
+        joined[match] = true;
+    }
+    if(refused) return std::string();
+    // Slider cells no clip covers hold the nearest covered value.
+    for(auto& lane : merged.lanes) {
+        if(lane.type != ofxOceanodeTimelineLaneType::MultiSlider) continue;
+        auto& values = lane.multiSliderValues;
+        float last = std::numeric_limits<float>::quiet_NaN();
+        for(auto& value : values) { if(std::isnan(value)) value = last; else last = value; }
+        float next = std::numeric_limits<float>::quiet_NaN();
+        for(auto it = values.rbegin(); it != values.rend(); ++it) { if(std::isnan(*it)) *it = next; else next = *it; }
+        for(auto& value : values) if(std::isnan(value)) value = 0.0f;
+    }
+
+    const std::string mergedId = a.id, removedId = b.id;
+    *getClip(sequence, trackId, mergedId) = std::move(merged);
+    removeClip(sequence, trackId, removedId);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return mergedId;
 }
 
 std::string ofxOceanodeTimelineManager::splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat) {
@@ -4699,4 +4969,9 @@ bool ofxOceanodeTimelineManager::moveTrack(const std::string& trackId, const std
 
 bool ofxOceanodeTimelineManager::removeFolder(const std::string& folderId, bool keepTracks) {
     return removeFolder(mainSequence, folderId, keepTracks);
+}
+
+std::string ofxOceanodeTimelineManager::mergeClips(const std::string& trackId, const std::string& firstClipId,
+                                                   const std::string& secondClipId) {
+    return mergeClips(mainSequence, trackId, firstClipId, secondClipId);
 }

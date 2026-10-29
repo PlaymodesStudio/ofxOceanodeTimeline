@@ -100,6 +100,12 @@ offset into the lanes (`bakeContentOffset`), and arrangement previews draw
 `clipAsPlayed()`, so nothing draws across the wrap. The Tempo field is the
 same setting as Stretch, shown as a speed ratio.
 
+`mergeClips` joins two clips of one track into one plain clip (stretch 1, no
+repeat or offset): each clip's lanes are laid out as they played (repeats
+unrolled, stretch applied, pattern lanes as one pattern over the whole clip),
+lanes on the same parameters with the same kind of lane become one lane, and
+the later clip's data wins where the clips overlap.
+
 `resizeClipEnd` is the canonical Repeat / Trim / Stretch operation for numeric
 length edits and edge drags. Drag snapshots restore the original source mapping
 before each application, including group edits, to avoid accumulating rounding

@@ -1257,6 +1257,17 @@ public:
     // the original played. Repeating clips are cut anywhere (the right part
     // keeps repeating from the phase it was cut at). Not for Wave clips.
     std::string splitClip(const std::string& trackId, const std::string& clipId, double timelineBeat);
+    // Joins two clips of one track into one plain clip spanning both (no
+    // repeat, stretch or offset: each clip's content is laid out as it
+    // plays). Lanes driving the same parameters with the same kind of lane
+    // become one lane; the others are kept as separate lanes holding data only
+    // over their own clip's span. The earlier clip keeps its id and settings,
+    // the other is removed. Refused for Wave, LFO and state-capture clips, and
+    // for a Drum Grid that would need a row longer than its maximum.
+    // Returns the merged clip's id ("" when refused).
+    std::string mergeClips(const std::string& trackId, const std::string& firstClipId, const std::string& secondClipId);
+    std::string mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                           const std::string& firstClipId, const std::string& secondClipId);
     std::string splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat);
     // Copies a clip, with fresh clip/lane ids, to dstTrackId at newStartBeat
     // and returns the new clip's id ("" when it cannot go there).

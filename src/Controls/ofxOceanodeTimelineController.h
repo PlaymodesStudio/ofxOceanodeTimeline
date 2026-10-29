@@ -263,6 +263,8 @@ private:
     std::vector<TrackHeaderRow> trackHeaderRows;
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
+    // Two clips of one track to merge (applied after the track iteration).
+    std::string mergeTrackId, mergeFirstClipId, mergeSecondClipId;
     bool requestClipDeletion = false;
     std::string clipDeletionTrackId;
     std::string clipDeletionClipId;
