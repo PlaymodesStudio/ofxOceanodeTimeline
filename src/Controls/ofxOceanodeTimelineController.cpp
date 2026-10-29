@@ -1054,7 +1054,7 @@ void ofxOceanodeTimelineController::drawScopeBreadcrumb(ofxOceanodeTimelineManag
         }
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("  macro timeline: saved with the macro, not played yet");
+    ImGui::TextDisabled("  macro timeline: saved with the macro, played by its macro clips");
     (void)timeline;
 }
 
@@ -1191,10 +1191,15 @@ void ofxOceanodeTimelineController::draw() {
     const float zoomBeforeToolbar = pixelsPerSecond;
     float& timelineScrollX = viewState.scrollX;
     auto transportState = container->getTransportState();
-    // A macro timeline has no place for the main playhead until macro clips
-    // map it (each copy plays it somewhere else): keep it off screen.
+    // In a macro timeline the playhead is where the macro clip playing this
+    // macro now has it; off screen when no clip plays it here.
     constexpr double kHiddenPlayheadBeat = -1.0e6;
-    if(inMacroScope()) transportState.beatPosition = kHiddenPlayheadBeat;
+    auto macroScopeBeat = [&]() {
+        double beat = kHiddenPlayheadBeat;
+        if(!timeline.macroPlayheadBeat(*scopes.back().container, beat)) beat = kHiddenPlayheadBeat;
+        return beat;
+    };
+    if(inMacroScope()) transportState.beatPosition = macroScopeBeat();
     auto transport = container->getTransport();
     const bool externalClock = transport != nullptr && transport->hasExternalClock();
     // The grid division is the timeline's (saved with it; Drum Grid lanes may follow it).
@@ -1210,7 +1215,7 @@ void ofxOceanodeTimelineController::draw() {
        ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
         transport->togglePlay();
         transportState = container->getTransportState();
-        if(inMacroScope()) transportState.beatPosition = kHiddenPlayheadBeat;
+        if(inMacroScope()) transportState.beatPosition = macroScopeBeat();
     }
 
     // S is deliberately a timeline-level shortcut rather than a text-field
@@ -4887,8 +4892,11 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     }
 
     // A macro timeline counts its own beats: the main timeline's loop, markers,
-    // seeking and tempo lane do not apply to it.
+    // seeking and tempo lane do not apply to it. Its playhead is the main
+    // one as the macro clip playing it now maps it (off screen when none).
     if(inMacroScope()) {
+        const float px = laneMin.x + beatToPixels(timeline, beatPosition, bpm);
+        if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2.5f);
         dl->PopClipRect();
         return;
     }

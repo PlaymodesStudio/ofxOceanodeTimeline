@@ -1127,6 +1127,11 @@ public:
     // One pass of a macro timeline: the end of its last clip, at least a bar.
     double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
 
+    // Where the main playhead is in this macro's timeline, through the macro
+    // clip playing that macro there (repeat, tempo, offset). False when no
+    // clip plays it at the playhead (or its macro track is silent).
+    bool macroPlayheadBeat(const ofxOceanodeContainer& macroContainer, double& beat);
+
     // ---- Encapsulation (nodes moved into a new macro) ----
     // Paths old -> new, absolute: every timeline (main and each macro's)
     // follows. Returns the bindings changed.

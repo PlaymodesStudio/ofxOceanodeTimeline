@@ -894,6 +894,14 @@ int main() {
             frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(1250,at,true); frame(1250,at,false);
             frame(); frame();
             assert(ui.inMacroScope() && &ui.scope(model)==model.getMacroSequence(*inside)); // double-click opens it
+            {
+                // The main playhead shows where the macro clip has the macro's timeline.
+                double macroBeat=-1;
+                owner->getTransport()->seekToBeat(1.5);
+                assert(model.macroPlayheadBeat(*inside,macroBeat) && std::abs(macroBeat-1.5)<1e-6);
+                frame(); frame(1250,ImVec2(-100,-100),false,"macro-scope-playhead");
+                owner->getTransport()->seekToBeat(0.0);
+            }
             ui.leaveScopesTo(0); frame();
             // Saved and read back; a renumbered macro carries its tracks along.
             const auto saved=model.toJson();

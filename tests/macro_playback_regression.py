@@ -83,16 +83,30 @@ int main(int, char**) {
     check(near(at(15.5), expectedLevel(0.875)), "Near the end of the second repeat");
     check(near(at(17.0), expectedLevel(0.875)) || near(probe.level.get(), expectedLevel(1.0)), "After the clip the value holds");
 
+    // The main playhead as the macro's timeline view shows it.
+    auto playheadIn = [&](double mainBeat, double& beat) {
+        owner->getTransport()->seekToBeat(mainBeat);
+        return model.macroPlayheadBeat(*inside, beat);
+    };
+    double macroBeat = 0.0;
+    check(!playheadIn(2.0, macroBeat), "Macro view: no playhead before the macro clip");
+    check(playheadIn(9.0, macroBeat) && std::abs(macroBeat - 1.0) < 1e-6, "Macro view: one beat in");
+    check(playheadIn(13.5, macroBeat) && std::abs(macroBeat - 1.5) < 1e-6, "Macro view: the second repeat starts over");
+    check(!playheadIn(16.5, macroBeat), "Macro view: no playhead after the clip");
+
     // Tempo: the macro timeline at half speed (stretch 2): one beat in is an eighth.
     auto* clip = model.getClip(mt, mc);
     clip->contentStretch = 2.0;
     check(near(at(10.0), expectedLevel(0.25)), "Half speed: two beats in is a quarter");
+    check(playheadIn(10.0, macroBeat) && std::abs(macroBeat - 1.0) < 1e-6, "Macro view at half speed: two beats in is beat one");
     clip->contentStretch = 1.0;
     // Content offset: the clip starts one beat into the macro timeline.
     model.setClipContentOffset(mt, mc, 1.0);
     clip = model.getClip(mt, mc);
     check(near(at(8.0 + 1e-3), expectedLevel(0.25)), "Offset 1: starts a quarter in");
     check(near(at(11.5), expectedLevel(0.125)), "...and wraps to the start after three beats");
+    check(playheadIn(8.5, macroBeat) && std::abs(macroBeat - 1.5) < 1e-6, "Macro view with offset 1: half a beat in is 1.5");
+    check(playheadIn(11.5, macroBeat) && std::abs(macroBeat - 0.5) < 1e-6, "...and 0.5 after the wrap");
     model.setClipContentOffset(mt, mc, 0.0);
 
     // The main timeline layers on top: an Add binding on the same parameter.
@@ -114,6 +128,7 @@ int main(int, char**) {
     probe.level = -1.0f; probe.other = -1.0f;
     at(9.0);
     check(near(probe.level.get(), -1.0f) && near(probe.other.get(), -1.0f), "A muted macro track writes nothing");
+    check(!playheadIn(9.0, macroBeat), "...and shows no playhead in the macro view");
     model.setTrackMuted(mt, false);
     model.setTrackSolo(*pattern, ot, true); // a solo inside the macro timeline
     probe.level = -1.0f;
@@ -236,7 +251,7 @@ int main(int, char**) {
     model.update(); model.applyAutomation();
     if(failures > 0) return 1;
     std::cout << "Macro playback passed: placement, repeats, tempo, content offset, main layer (Add, Replace), "
-                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
+                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, playhead in the macro view, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
 }
 '''
 

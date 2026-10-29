@@ -674,6 +674,20 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
     return result;
 }
 
+bool ofxOceanodeTimelineManager::macroPlayheadBeat(const ofxOceanodeContainer& macroContainer, double& beat) {
+    if(container == nullptr) return false;
+    ensureEvaluationIndexes();
+    const double playhead = container->getTransportState().beatPosition;
+    // As evaluation plays it: the first placement of this macro's copy.
+    for(const auto& placement : playedSequences(playContext, playhead, playhead))
+        for(const auto& played : playedMacros)
+            if(played.sequence.get() == placement.sequence && played.macroContainer == &macroContainer) {
+                beat = placement.map.toSequence(playhead);
+                return true;
+            }
+    return false;
+}
+
 bool ofxOceanodeTimelineManager::isGatedMacroActive(const ofxOceanodeAbstractParameter& parameter) {
     if(parameter.getName() != "Active") return false;
     ensureEvaluationIndexes();
