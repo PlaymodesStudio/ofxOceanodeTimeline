@@ -774,6 +774,45 @@ int main() {
     assert(model.getTrack(folder)->parentId.empty());
 
     {
+        // Track heights: a normal track's bottom edge resizes every normal
+        // track at once (saved with the view); a Wave track resizes alone.
+        // The edge wins over the clip under it, which does not move.
+        const bool wasTargets=ui.targetsView; ui.targetsView=false;
+        for(int i=0;i<25;++i) frame();
+        auto height=[&](const std::string& id){ const auto* r=headerRow(id); assert(r); return r->maxY-r->minY; };
+        const float waveBefore=height(wt);
+        assert(std::abs(height(t)-80.0f)<0.5f && std::abs(height(dt)-80.0f)<0.5f);
+        const auto rect=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.trackId==t && r.clipId==c;});
+        assert(rect!=ui.clipScreenRects.end());
+        const double startBefore=model.getClip(t,c)->startBeat;
+        const ImVec2 edge((rect->x1+rect->x2)*0.5f,headerRow(t)->maxY-2.0f);
+        frame(1250,edge,false); frame(1250,edge,true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(edge.x+i*10.0f,edge.y+40.0f*i/6.0f),true);
+        frame(1250,ImVec2(edge.x+60.0f,edge.y+40.0f),false); frame(); frame();
+        assert(std::abs(model.getViewState().trackHeight-120.0f)<1.0f);
+        assert(std::abs(height(t)-120.0f)<1.0f && std::abs(height(dt)-120.0f)<1.0f); // all at once
+        assert(std::abs(height(wt)-waveBefore)<0.5f);                               // the Wave track keeps its own
+        assert(model.getClip(t,c)->startBeat==startBefore);                          // the clip stayed put
+        frame(1250,ImVec2(-100,-100),false,"track-height");
+        // The Wave track's edge resizes it alone (the others made small so it is in view).
+        model.getViewState().trackHeight=kMinTrackHeight;
+        for(int i=0;i<25;++i) frame();
+        const ImVec2 waveEdge(ui.fileDropBounds.getRight()-40.0f,headerRow(wt)->maxY-2.0f);
+        frame(1250,waveEdge,false); frame(1250,waveEdge,true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(waveEdge.x,waveEdge.y+30.0f*i/6.0f),true);
+        frame(1250,ImVec2(waveEdge.x,waveEdge.y+30.0f),false); frame(); frame();
+        assert(std::abs(height(wt)-(waveBefore+30.0f))<1.0f && std::abs(height(t)-kMinTrackHeight)<1.0f);
+        // Both saved and read back.
+        const auto saved=model.toJson();
+        model.getViewState().trackHeight=80.0f; model.fromJson(saved);
+        assert(std::abs(model.getViewState().trackHeight-kMinTrackHeight)<1.0f);
+        assert(std::abs(model.getTrack(wt)->waveTrackHeight-(waveBefore+30.0f))<1.0f);
+        model.getViewState().trackHeight=80.0f; model.getTrack(wt)->waveTrackHeight=waveBefore;
+        ui.targetsView=wasTargets;
+        for(int i=0;i<25;++i) frame();
+    }
+
+    {
         // A macro's own timeline: opened from its node menu, edited in its own
         // scope with its own history, saved with the macro.
         auto& macroNode=owner->createNode(std::make_unique<ofxOceanodeNodeMacro>(),1);
@@ -874,7 +913,7 @@ int main() {
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, track heights (all at once, Wave alone), macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 

@@ -152,9 +152,11 @@ private:
     std::string pendingTrackId;
     std::string pendingClipId;
     std::string pendingLaneId;
-    std::string waveTrackResizeId;
-    float waveTrackResizeStartMouseY = 0.0f;
-    float waveTrackResizeStartHeight = 0.0f;
+    // Dragging a track's bottom edge: a Wave track's own height, or the
+    // height every other track shares (viewState.trackHeight).
+    std::string trackResizeId;
+    float trackResizeStartMouseY = 0.0f;
+    float trackResizeStartHeight = 0.0f;
     char pendingTrackName[128] = {};
     char pendingClipName[128] = {};
     char pendingClipRenameName[128] = {};

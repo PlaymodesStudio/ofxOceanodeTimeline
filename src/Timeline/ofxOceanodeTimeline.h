@@ -939,7 +939,11 @@ struct ofxOceanodeTimelineViewState {
     float scrollX = 0.0f;
     // Pinned left column width (track pads / lane properties), in pixels.
     float labelWidth = 280.0f;
+    // Height of every track row in the Clips view (Wave tracks have their own).
+    float trackHeight = 80.0f;
 };
+constexpr float kMinTrackHeight = 40.0f;
+constexpr float kMaxTrackHeight = 240.0f;
 
 // Optional, addon-agnostic hook that lets a project which also includes
 // ofxOceanodeSuperCollider drive REAL audio playback for Wave tracks,

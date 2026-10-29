@@ -205,7 +205,7 @@ constexpr float kCollapsedHeight = 38.0f;
 constexpr float kFolderIndent = 12.0f;
 constexpr float kWaveTrackMinHeight = 48.0f;
 constexpr float kWaveTrackMaxHeight = 360.0f;
-constexpr float kWaveTrackResizeHandleHeight = 8.0f;
+constexpr float kTrackResizeHandleHeight = 6.0f;
 constexpr float kEdgePixels = 8.0f;
 // Parameter rows are indented under their track header by half the clip
 // editor's indent (20 px), so the hierarchy reads track > row > editor.
@@ -2138,7 +2138,10 @@ void ofxOceanodeTimelineController::draw() {
         const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isMacroTrack();
         const float trackHeaderHeight = track.isWaveTrack
             ? ofClamp(track.waveTrackHeight, kWaveTrackMinHeight, kWaveTrackMaxHeight)
-            : (singleRowTrack ? (!targetsView ? 80.0f : kCollapsedHeight) : kHeaderHeight);
+            : (singleRowTrack ? (!targetsView ? ofClamp(timeline.getViewState().trackHeight, kMinTrackHeight, kMaxTrackHeight)
+                                              : kCollapsedHeight) : kHeaderHeight);
+        // Wave tracks resize alone; the other tracks' rows (Clips view) all at once.
+        const bool resizableTrack = track.isWaveTrack || (singleRowTrack && !targetsView);
         bool expandTrackForEditor = false;
         ImGui::SetCursorPos(ImVec2(0, headerY));
         // Keep the header as a visual/layout item only. A full-width
@@ -3094,6 +3097,24 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 }
             }
+            // The bottom edge resizes the track, before any clip under it.
+            const ImVec2 resizeMin(headerMin.x, headerMax.y - kTrackResizeHandleHeight);
+            const bool resizeHovered = resizableTrack && trackResizeId.empty() && clipDragMode == ClipDragMode::None &&
+                                       hoverRect(resizeMin, headerMax);
+            if(resizeHovered || trackResizeId == track.id) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                dl->AddLine(ImVec2(headerMin.x, headerMax.y - 1.0f), ImVec2(headerMax.x, headerMax.y - 1.0f),
+                            IM_COL32(220, 220, 245, 220), 2.0f);
+                if(resizeHovered)
+                    ImGui::SetTooltip(track.isWaveTrack ? "Drag to resize this Wave track" : "Drag to resize all tracks");
+            }
+            if(resizeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
+                clipInteractionClaimedThisFrame = true;
+                anyClipInteractionClaimedThisFrame = true;
+                trackResizeId = track.id;
+                trackResizeStartMouseY = ImGui::GetIO().MousePos.y;
+                trackResizeStartHeight = trackHeaderHeight;
+            }
             // Later clips are drawn on top, so hit-test in reverse order and
             // let the visually topmost overlapping clip own the gesture.
             clipDropRows.push_back({track.id, std::string(), min.y, max.y});
@@ -3104,8 +3125,7 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                !clipInteractionClaimedThisFrame &&
                hoverRect(min, max) &&
-               ImGui::GetIO().MousePos.x >= zoneLeft &&
-               !(track.isWaveTrack && ImGui::GetIO().MousePos.y >= max.y - kWaveTrackResizeHandleHeight)) {
+               ImGui::GetIO().MousePos.x >= zoneLeft) {
                 emptyTrackAreaClickedThisFrame = true;
             }
             // Let a right-click in empty arrangement space open the track
@@ -3125,34 +3145,15 @@ void ofxOceanodeTimelineController::draw() {
             if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2);
             dl->PopClipRect();
             for(const auto& clip : track.clips) drawClipMenu(clip);
-            if(track.isWaveTrack) {
-                const ImVec2 resizeMin(headerMin.x, headerMax.y - kWaveTrackResizeHandleHeight);
-                const ImVec2 resizeMax(headerMax.x, headerMax.y);
-                const bool resizeHovered = hoverRect(resizeMin, resizeMax);
-                if(resizeHovered || waveTrackResizeId == track.id) {
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-                    dl->AddLine(ImVec2(headerMin.x, headerMax.y - 1.0f),
-                                ImVec2(headerMax.x, headerMax.y - 1.0f),
-                                resizeHovered || waveTrackResizeId == track.id
-                                    ? IM_COL32(220, 220, 245, 220)
-                                    : IM_COL32(150, 150, 170, 150), 2.0f);
+            if(trackResizeId == track.id) {
+                if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    const float height = trackResizeStartHeight + (ImGui::GetIO().MousePos.y - trackResizeStartMouseY);
+                    if(!track.isWaveTrack)
+                        timeline.getViewState().trackHeight = ofClamp(height, kMinTrackHeight, kMaxTrackHeight);
+                    else if(auto* editTrack = timeline.getTrack(scope(timeline), track.id))
+                        editTrack->waveTrackHeight = ofClamp(height, kWaveTrackMinHeight, kWaveTrackMaxHeight);
                 }
-                if(resizeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    waveTrackResizeId = track.id;
-                    waveTrackResizeStartMouseY = ImGui::GetIO().MousePos.y;
-                    waveTrackResizeStartHeight = trackHeaderHeight;
-                }
-                if(waveTrackResizeId == track.id) {
-                    if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                        if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) {
-                            editTrack->waveTrackHeight = ofClamp(
-                                waveTrackResizeStartHeight +
-                                    (ImGui::GetIO().MousePos.y - waveTrackResizeStartMouseY),
-                                kWaveTrackMinHeight, kWaveTrackMaxHeight);
-                        }
-                    }
-                    if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) waveTrackResizeId.clear();
-                }
+                if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) trackResizeId.clear();
             }
             ImGui::SetCursorPosY(headerY + trackHeaderHeight);
             if(track.isWaveTrack) {

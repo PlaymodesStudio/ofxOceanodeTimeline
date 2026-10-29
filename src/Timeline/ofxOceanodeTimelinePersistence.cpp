@@ -272,6 +272,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     json["view"] = {
         {"pixelsPerSecond", viewState.pixelsPerSecond},
         {"labelWidth", viewState.labelWidth},
+        {"trackHeight", viewState.trackHeight},
         {"scrollX", viewState.scrollX}
     };
     json["tempo"] = {
@@ -316,6 +317,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         trackJson["muted"] = track.muted;
         trackJson["solo"] = track.solo;
         trackJson["isWaveTrack"] = track.isWaveTrack;
+        if(track.isWaveTrack) trackJson["waveTrackHeight"] = track.waveTrackHeight;
         trackJson["waveVolume"] = track.waveVolume;
         trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
         if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
@@ -554,6 +556,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
         viewState.scrollX = std::max(0.0f, view.value("scrollX", 0.0f));
         viewState.labelWidth = ofClamp(view.value("labelWidth", 280.0f), 200.0f, 520.0f);
+        viewState.trackHeight = ofClamp(view.value("trackHeight", 80.0f), kMinTrackHeight, kMaxTrackHeight);
     }
     playOnPresetLoad = json.value("playOnPresetLoad", false);
     if(!json.contains("tracks") || !json["tracks"].is_array()) return;
@@ -669,6 +672,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
         track.isWaveTrack = trackJson.value("isWaveTrack", false);
+        track.waveTrackHeight = trackJson.value("waveTrackHeight", 96.0f);
         track.waveVolume = ofClamp(trackJson.value("waveVolume", 1.0f), 0.0f, 4.0f);
         // Track automation is always present for Wave Tracks. The old flag is
         // still read for compatibility, but it must not make legacy presets
