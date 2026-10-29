@@ -844,10 +844,10 @@ void ofxOceanodeTimelineManager::setContainer(ofxOceanodeContainer* owner) {
     for(const auto& path : parameterPaths) refreshTimelineFlag(path);
 }
 
-std::string ofxOceanodeTimelineManager::createTrack(const std::string& requestedName) {
+std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
     ofxOceanodeTimelineTrack track;
-    track.id = mainSequence.makeUniqueTrackId();
-    track.name = mainSequence.makeUniqueTrackName(requestedName);
+    track.id = sequence.makeUniqueTrackId();
+    track.name = sequence.makeUniqueTrackName(requestedName);
     static const ofColor defaultColors[] = {
         ofColor(65, 165, 245, 255),
         ofColor(75, 190, 125, 255),
@@ -855,24 +855,24 @@ std::string ofxOceanodeTimelineManager::createTrack(const std::string& requested
         ofColor(190, 95, 220, 255),
         ofColor(235, 90, 95, 255)
     };
-    track.color = defaultColors[mainSequence.tracks.size() % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
-    ++mainSequence.nextTrackNumber;
-    mainSequence.tracks.push_back(std::move(track));
+    track.color = defaultColors[sequence.tracks.size() % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
+    ++sequence.nextTrackNumber;
+    sequence.tracks.push_back(std::move(track));
     invalidateEvaluationIndexes();
-    return mainSequence.tracks.back().id;
+    return sequence.tracks.back().id;
 }
 
-std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack copy,
+std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack copy,
     const std::string& name, size_t index) {
-    const auto id = createTrack(name);
-    copy.name = getTrack(id)->name;
+    const auto id = createTrack(sequence, name);
+    copy.name = getTrack(sequence, id)->name;
     copy.id = id;
-    *getTrack(id) = std::move(copy);
-    auto& duplicate = *getTrack(id);
+    *getTrack(sequence, id) = std::move(copy);
+    auto& duplicate = *getTrack(sequence, id);
     std::map<std::string, std::string> bindings;
     for(auto& binding : duplicate.bindings) {
         const auto old = binding.id;
-        binding.id = mainSequence.makeUniqueBindingId(); ++mainSequence.nextBindingNumber;
+        binding.id = sequence.makeUniqueBindingId(); ++sequence.nextBindingNumber;
         bindings[old] = binding.id;
         binding.hasLiveOverride = false;
         binding.liveOverrideValue.clear();
@@ -888,33 +888,33 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack
         remap(group.filterBindingId); remap(group.stutterBindingId);
     }
     for(auto& clip : duplicate.clips) {
-        clip.id = mainSequence.makeUniqueClipId(); ++mainSequence.nextClipNumber;
+        clip.id = sequence.makeUniqueClipId(); ++sequence.nextClipNumber;
         remap(clip.lfoOutputBindingId);
         for(auto& lane : clip.lanes) {
-            lane.id = mainSequence.makeUniqueLaneId(); ++mainSequence.nextLaneNumber;
+            lane.id = sequence.makeUniqueLaneId(); ++sequence.nextLaneNumber;
             for(auto& binding : lane.bindingIds) remap(binding);
             lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), std::string()), lane.bindingIds.end());
             remap(lane.pianoPitchBindingId); remap(lane.pianoGateBindingId); remap(lane.pianoVelocityBindingId);
             remap(lane.drumDurationBindingId); remap(lane.drumFilterBindingId); remap(lane.drumStutterBindingId);
         }
     }
-    std::rotate(mainSequence.tracks.begin() + index, mainSequence.tracks.end() - 1, mainSequence.tracks.end());
+    std::rotate(sequence.tracks.begin() + index, sequence.tracks.end() - 1, sequence.tracks.end());
     invalidateEvaluationIndexes();
     invalidateSchedule();
     return id;
 }
 
-std::string ofxOceanodeTimelineManager::duplicateTrack(const std::string& trackId) {
+std::string ofxOceanodeTimelineManager::duplicateTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId) {
     const std::string sourceId = trackId; // caller may pass the track's own id by reference
-    const auto* source = getTrack(sourceId);
+    const auto* source = getTrack(sequence, sourceId);
     if(source == nullptr) return {};
-    const auto groups = mainSequence.clipGroups;
+    const auto groups = sequence.clipGroups;
     std::vector<std::string> originals;
     for(const auto& clip : source->clips) originals.push_back(clip.id);
-    const size_t index = static_cast<size_t>(source - mainSequence.tracks.data()) + 1;
-    const auto id = insertTrackCopy(*source, source->name + " copy", index);
+    const size_t index = static_cast<size_t>(source - sequence.tracks.data()) + 1;
+    const auto id = insertTrackCopy(sequence, *source, source->name + " copy", index);
     std::map<std::string, std::string> clips;
-    const auto& copied = getTrack(id)->clips;
+    const auto& copied = getTrack(sequence, id)->clips;
     for(size_t i = 0; i < originals.size(); ++i) clips[originals[i]] = copied[i].id;
     // Independent groups only; never link copies back to another track.
     for(const auto& group : groups) {
@@ -923,19 +923,19 @@ std::string ofxOceanodeTimelineManager::duplicateTrack(const std::string& trackI
             const auto found = clips.find(member.second);
             if(member.first == sourceId && found != clips.end()) members.emplace_back(id, found->second);
         }
-        if(members.size() > 1) groupClips(members);
+        if(members.size() > 1) groupClips(sequence, members);
     }
     return id;
 }
 
-std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::breakClipLanesIntoTracks(
+std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::breakClipLanesIntoTracks(ofxOceanodeTimelineSequence& sequence, 
     const std::string& trackId, const std::string& clipId) {
     const std::string sourceId = trackId, sourceClipId = clipId;
-    const auto* source = getTrack(sourceId);
-    const auto* sourceClip = getClip(sourceId, sourceClipId);
+    const auto* source = getTrack(sequence, sourceId);
+    const auto* sourceClip = getClip(sequence, sourceId, sourceClipId);
     if(source == nullptr || sourceClip == nullptr || source->isWaveTrack ||
        sourceClip->isLfo || sourceClip->lanes.size() < 2) return {};
-    size_t index = static_cast<size_t>(source - mainSequence.tracks.data()) + 1;
+    size_t index = static_cast<size_t>(source - sequence.tracks.data()) + 1;
     // Copy track settings without copying all the other clips for every lane.
     ofxOceanodeTimelineTrack settings;
     settings.name = source->name;
@@ -965,16 +965,16 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
             [](const auto& group) { return group.members().empty(); }), copy.noteGroups.end());
         copy.clips.push_back(clip);
         copy.clips.front().lanes.push_back(lane);
-        const auto id = insertTrackCopy(std::move(copy), settings.name + " / " + lane.name, index++);
-        result.emplace_back(id, getTrack(id)->clips.front().id);
+        const auto id = insertTrackCopy(sequence, std::move(copy), settings.name + " / " + lane.name, index++);
+        result.emplace_back(id, getTrack(sequence, id)->clips.front().id);
     }
-    removeClip(sourceId, sourceClipId);
+    removeClip(sequence, sourceId, sourceClipId);
     return result;
 }
 
-std::string ofxOceanodeTimelineManager::createWaveTrack(const std::string& requestedName) {
-    const auto trackId = createTrack(requestedName);
-    if(auto* track = getTrack(trackId)) {
+std::string ofxOceanodeTimelineManager::createWaveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    const auto trackId = createTrack(sequence, requestedName);
+    if(auto* track = getTrack(sequence, trackId)) {
         track->isWaveTrack = true;
         track->waveTrackHeight = 96.0f;
         track->waveVolumeAutomationEnabled = true;
@@ -984,14 +984,14 @@ std::string ofxOceanodeTimelineManager::createWaveTrack(const std::string& reque
     return trackId;
 }
 
-std::string ofxOceanodeTimelineManager::createWaveVolumeLane(const std::string& trackId,
+std::string ofxOceanodeTimelineManager::createWaveVolumeLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                              const std::string& clipId) {
-    const auto* track = getTrack(trackId);
-    auto* clip = getClip(trackId, clipId);
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr || !track->isWaveTrack) return {};
     // Compatibility shim for older callers. Volume belongs to the whole
     // Wave Track now, so never create a lane inside this clip.
-    auto* editableTrack = getTrack(trackId);
+    auto* editableTrack = getTrack(sequence, trackId);
     editableTrack->waveVolumeAutomationEnabled = true;
     if(editableTrack->waveVolumePoints.empty()) {
         const double endBeat = std::max(1.0 / 24.0, clip->startBeat + clip->durationBeats);
@@ -1022,20 +1022,20 @@ float ofxOceanodeTimelineManager::evaluateWaveTrackVolume(const std::string& tra
                                track->waveVolumeInterpolation, beat, track->waveVolume), 0.0f, 4.0f);
 }
 
-std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(const std::string& trackId) {
+std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(ofxOceanodeTimelineSequence& sequence, const std::string& trackId) {
     static std::vector<ofxOceanodeTimelineCurvePoint> empty;
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     return track != nullptr ? track->waveVolumePoints : empty;
 }
 
-const std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(const std::string& trackId) const {
+const std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId) const {
     static const std::vector<ofxOceanodeTimelineCurvePoint> empty;
-    const auto* track = getTrack(trackId);
+    const auto* track = getTrack(sequence, trackId);
     return track != nullptr ? track->waveVolumePoints : empty;
 }
 
-bool ofxOceanodeTimelineManager::addWaveTrackVolumePoint(const std::string& trackId, double beat, float value) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::addWaveTrackVolumePoint(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat, float value) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || !track->isWaveTrack) return false;
     track->waveVolumeAutomationEnabled = true;
     track->waveVolumePoints.push_back({std::max(0.0, beat), ofClamp(value, 0.0f, 4.0f)});
@@ -1048,8 +1048,8 @@ bool ofxOceanodeTimelineManager::addWaveTrackVolumePoint(const std::string& trac
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeWaveTrackVolumePoint(const std::string& trackId, double beat, double epsilon) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::removeWaveTrackVolumePoint(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat, double epsilon) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || !track->isWaveTrack) return false;
     const auto oldSize = track->waveVolumePoints.size();
     track->waveVolumePoints.erase(std::remove_if(track->waveVolumePoints.begin(), track->waveVolumePoints.end(),
@@ -1058,11 +1058,11 @@ bool ofxOceanodeTimelineManager::removeWaveTrackVolumePoint(const std::string& t
     return oldSize != track->waveVolumePoints.size();
 }
 
-bool ofxOceanodeTimelineManager::renameTrack(const std::string& trackId, const std::string& requestedName) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::renameTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& requestedName) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || requestedName.empty()) return false;
     if(track->name == requestedName) return true;
-    track->name = mainSequence.makeUniqueTrackName(requestedName);
+    track->name = sequence.makeUniqueTrackName(requestedName);
     return true;
 }
 
@@ -1082,15 +1082,15 @@ bool ofxOceanodeTimelineManager::consumePendingTrackRename(std::string& trackId,
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeTrack(const std::string& trackId) {
+bool ofxOceanodeTimelineManager::removeTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId) {
     invalidateSchedule(); // correct queued events while the track still exists
-    auto it = std::find_if(mainSequence.tracks.begin(), mainSequence.tracks.end(), [&](const auto& track) { return track.id == trackId; });
-    if(it == mainSequence.tracks.end()) return false;
+    auto it = std::find_if(sequence.tracks.begin(), sequence.tracks.end(), [&](const auto& track) { return track.id == trackId; });
+    if(it == sequence.tracks.end()) return false;
     std::set<std::string> affectedPaths;
     for(const auto& binding : it->bindings) {
         affectedPaths.insert(binding.parameterPath);
-        stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + binding.id);
-        stateCaptureLastAppliedValues.erase(binding.parameterPath);
+        if(isMainSequence(sequence)) stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + binding.id);
+        if(isMainSequence(sequence)) stateCaptureLastAppliedValues.erase(binding.parameterPath);
     }
     // Every clip on this track is about to disappear along with it -- drop
     // it from any group first so removeClipFromGroups' bookkeeping
@@ -1101,35 +1101,37 @@ bool ofxOceanodeTimelineManager::removeTrack(const std::string& trackId) {
     // provider would keep a synth/buffer alive for a lane that no longer
     // exists anywhere in this manager.
     for(const auto& clip : it->clips) {
-        removeClipFromGroups(trackId, clip.id);
-        releaseWaveClipIfNeeded(trackId, clip.id);
+        removeClipFromGroups(sequence, trackId, clip.id);
+        if(isMainSequence(sequence)) releaseWaveClipIfNeeded(trackId, clip.id);
     }
-    mainSequence.tracks.erase(it);
+    sequence.tracks.erase(it);
     invalidateEvaluationIndexes();
     for(const auto& path : affectedPaths) refreshTimelineFlag(path);
     return true;
 }
 
-ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string& trackId) {
-    if(evaluationIndexesValid) {
+ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId) {
+    // The id cache indexes the main timeline only; ids repeat between sequences.
+    if(evaluationIndexesValid && isMainSequence(sequence)) {
         const auto cached = trackByIdCache.find(trackId);
         if(cached != trackByIdCache.end()) return cached->second;
     }
-    return mainSequence.findTrack(trackId);
+    return sequence.findTrack(trackId);
 }
 
-const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string& trackId) const {
-    if(evaluationIndexesValid) {
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId) const {
+    // The id cache indexes the main timeline only; ids repeat between sequences.
+    if(evaluationIndexesValid && isMainSequence(sequence)) {
         const auto cached = trackByIdCache.find(trackId);
         if(cached != trackByIdCache.end()) return cached->second;
     }
-    return mainSequence.findTrack(trackId);
+    return sequence.findTrack(trackId);
 }
 
-std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
+std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    ofxOceanodeAbstractParameter& parameter,
                                                    ofxOceanodeTimelineAutomationMode mode) {
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
     const std::string path = container->getTimelineParameterPath(parameter);
@@ -1141,7 +1143,7 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     })) return std::string();
 
     ofxOceanodeTimelineParameterBinding binding;
-    binding.id = mainSequence.makeUniqueBindingId();
+    binding.id = sequence.makeUniqueBindingId();
     binding.parameterPath = path;
     binding.valueType = parameter.valueType();
     binding.defaultValue = parameterValueForAutomation(parameter);
@@ -1164,7 +1166,7 @@ std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId,
     // it (and surprising: it meant the *order* parameters were bound in
     // silently decided whether a clip appeared).
     parameter.setTimelined(true);
-    ++mainSequence.nextBindingNumber;
+    ++sequence.nextBindingNumber;
     return binding.id;
 }
 
@@ -1185,11 +1187,11 @@ bool ofxOceanodeTimelineManager::requestParameterLane(const std::string& trackId
     return true;
 }
 
-bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::bindClipTarget(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
     const std::string& laneId, const std::string& path, ofxOceanodeTimelineTargetRole role) {
-    auto* track = getTrack(trackId);
-    auto* clip = getClip(trackId, clipId);
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     auto* parameter = container == nullptr ? nullptr : container->findTimelineParameter(path);
     if(track == nullptr || track->isWaveTrack || clip == nullptr || parameter == nullptr ||
        !isStepLaneCompatible(*parameter) || (parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly)) return false;
@@ -1198,7 +1200,7 @@ bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, cons
     else if(lane == nullptr || clip->isLfo || (role != Role::Lane && !ofxOceanodeTimelineLaneUsesNoteRoles(lane->type))) return false;
     std::string bindingId;
     for(const auto& binding : track->bindings) if(binding.parameterPath == path) bindingId = binding.id;
-    if(bindingId.empty()) bindingId = addBinding(trackId, *parameter);
+    if(bindingId.empty()) bindingId = addBinding(sequence, trackId, *parameter);
     if(bindingId.empty()) return false;
     if(role == Role::LfoOutput) {
         clip->lfoOutputBindingId = bindingId;
@@ -1210,7 +1212,7 @@ bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, cons
             clip->lfoOutputMax = parameter->cast<int>().getParameter().getMax();
         }
     } else if(role == Role::Lane) {
-        addBindingToLane(trackId, clipId, laneId, bindingId);
+        addBindingToLane(sequence, trackId, clipId, laneId, bindingId);
     } else {
         if((role == Role::Duration || role == Role::Filter || role == Role::Stutter) && lane->type != ofxOceanodeTimelineLaneType::DrumGrid) return false;
         std::string* selected = role == Role::Pitch ? &lane->pianoPitchBindingId
@@ -1223,12 +1225,12 @@ bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, cons
                            &lane->drumDurationBindingId, &lane->drumFilterBindingId, &lane->drumStutterBindingId})
             if(other != selected && *other == bindingId) other->clear();
         *selected = bindingId;
-        addBindingToLane(trackId, clipId, laneId, bindingId);
+        addBindingToLane(sequence, trackId, clipId, laneId, bindingId);
         if(!previous.empty() && previous != bindingId && previous != lane->pianoPitchBindingId &&
            previous != lane->pianoGateBindingId && previous != lane->pianoVelocityBindingId &&
            previous != lane->drumDurationBindingId && previous != lane->drumFilterBindingId &&
            previous != lane->drumStutterBindingId)
-            removeBindingFromLane(trackId, clipId, laneId, previous);
+            removeBindingFromLane(sequence, trackId, clipId, laneId, previous);
     }
     invalidateEvaluationIndexes(); invalidateSchedule();
     return true;
@@ -1271,8 +1273,8 @@ bool ofxOceanodeTimelineManager::isStepLaneCompatible(const ofxOceanodeAbstractP
            type == typeid(std::vector<std::string>).name();
 }
 
-bool ofxOceanodeTimelineManager::moveBinding(const std::string& trackId, const std::string& bindingId, int newIndex) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::moveBinding(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId, int newIndex) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->bindings.empty()) return false;
     auto it = std::find_if(track->bindings.begin(), track->bindings.end(),
                            [&](const auto& binding) { return binding.id == bindingId; });
@@ -1289,8 +1291,8 @@ bool ofxOceanodeTimelineManager::moveBinding(const std::string& trackId, const s
 }
 
 
-bool ofxOceanodeTimelineManager::setBindingOrder(const std::string& trackId, const std::vector<std::string>& orderedBindingIds) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::setBindingOrder(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::vector<std::string>& orderedBindingIds) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     std::vector<ofxOceanodeTimelineParameterBinding> ordered;
     ordered.reserve(track->bindings.size());
@@ -1313,8 +1315,8 @@ const ofxOceanodeTimelineNoteGroup* ofxOceanodeTimelineManager::findNoteGroupFor
     return nullptr;
 }
 
-ofxOceanodeTimelineNoteGroup* ofxOceanodeTimelineManager::getNoteGroup(const std::string& trackId, const std::string& groupId) {
-    auto* track = getTrack(trackId);
+ofxOceanodeTimelineNoteGroup* ofxOceanodeTimelineManager::getNoteGroup(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& groupId) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return nullptr;
     for(auto& group : track->noteGroups) if(group.id == groupId) return &group;
     return nullptr;
@@ -1390,10 +1392,10 @@ void ofxOceanodeTimelineManager::syncNoteGroupLanes(ofxOceanodeTimelineTrack& tr
     }
 }
 
-std::string ofxOceanodeTimelineManager::createNoteGroup(const std::string& trackId, const std::string& name,
+std::string ofxOceanodeTimelineManager::createNoteGroup(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& name,
                                                         const std::string& pitchBindingId, const std::string& gateBindingId,
                                                         const std::string& velocityBindingId) {
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack) return std::string();
     ofxOceanodeTimelineNoteGroup group;
     uint64_t number = 1;
@@ -1403,14 +1405,14 @@ std::string ofxOceanodeTimelineManager::createNoteGroup(const std::string& track
     group.name = name.empty() ? std::string("Notes") : name;
     track->noteGroups.push_back(group);
     const std::string id = group.id;
-    if(!setNoteGroupRoles(trackId, id, pitchBindingId, gateBindingId, velocityBindingId)) return std::string();
-    return getNoteGroup(trackId, id) != nullptr ? id : std::string();
+    if(!setNoteGroupRoles(sequence, trackId, id, pitchBindingId, gateBindingId, velocityBindingId)) return std::string();
+    return getNoteGroup(sequence, trackId, id) != nullptr ? id : std::string();
 }
 
-bool ofxOceanodeTimelineManager::setNoteGroupRoles(const std::string& trackId, const std::string& groupId,
+bool ofxOceanodeTimelineManager::setNoteGroupRoles(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& groupId,
                                                    const std::string& pitchBindingId, const std::string& gateBindingId,
                                                    const std::string& velocityBindingId) {
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     auto groupIt = std::find_if(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
     if(groupIt == track->noteGroups.end()) return false;
@@ -1473,10 +1475,10 @@ bool ofxOceanodeTimelineManager::setNoteGroupStutter(const std::string& trackId,
     return setNoteGroupKitRole(trackId, groupId, stutterBindingId, 2);
 }
 
-bool ofxOceanodeTimelineManager::setNoteGroupKitRole(const std::string& trackId, const std::string& groupId,
+bool ofxOceanodeTimelineManager::setNoteGroupKitRole(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& groupId,
                                                      const std::string& bindingId, int which) {
     const auto& role = which == 0 ? kDurationRole : which == 1 ? kFilterRole : kStutterRole;
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     auto it = std::find_if(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
     if(it == track->noteGroups.end()) return false;
@@ -1503,15 +1505,15 @@ bool ofxOceanodeTimelineManager::renameNoteGroup(const std::string& trackId, con
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeNoteGroup(const std::string& trackId, const std::string& groupId, bool removeBindings) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::removeNoteGroup(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& groupId, bool removeBindings) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     auto it = std::find_if(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
     if(it == track->noteGroups.end()) return false;
     const auto members = it->members();
     track->noteGroups.erase(it);
     if(removeBindings) {
-        for(const auto& id : members) removeBinding(trackId, id);
+        for(const auto& id : members) removeBinding(sequence, trackId, id);
     }
     return true;
 }
@@ -1525,19 +1527,19 @@ bool ofxOceanodeTimelineManager::setNoteGroupVoices(const std::string& trackId, 
     return true;
 }
 
-std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& trackId, const std::string& groupId,
+std::string ofxOceanodeTimelineManager::createNoteGroupClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& groupId,
                                                             const std::string& requestedName, double startBeat,
                                                             double durationBeats, std::string* laneIdOut,
                                                             ofxOceanodeTimelineLaneType laneType) {
-    const auto* groupPtr = getNoteGroup(trackId, groupId);
+    const auto* groupPtr = getNoteGroup(sequence, trackId, groupId);
     if(groupPtr == nullptr) return std::string();
     const auto group = *groupPtr;
-    const std::string clipId = createClip(trackId, requestedName.empty() ? group.name : requestedName, startBeat, durationBeats);
+    const std::string clipId = createClip(sequence, trackId, requestedName.empty() ? group.name : requestedName, startBeat, durationBeats);
     if(clipId.empty()) return clipId;
     if(laneType == ofxOceanodeTimelineLaneType::DrumGrid) {
-        const std::string laneId = createLane(trackId, clipId, group.name, ofxOceanodeTimelineLaneType::DrumGrid);
+        const std::string laneId = createLane(sequence, trackId, clipId, group.name, ofxOceanodeTimelineLaneType::DrumGrid);
         if(laneId.empty()) return clipId;
-        if(auto* lane = getLane(trackId, clipId, laneId)) {
+        if(auto* lane = getLane(sequence, trackId, clipId, laneId)) {
             lane->pianoPitchBindingId = group.pitchBindingId;
             lane->pianoGateBindingId = group.gateBindingId;
             lane->pianoVelocityBindingId = group.velocityBindingId;
@@ -1547,10 +1549,10 @@ std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& t
             lane->bindingIds = group.members();
             int voices = 0;
             std::vector<std::string> names;
-            const auto* track = getTrack(trackId);
+            const auto* track = getTrack(sequence, trackId);
             if(track == nullptr || !drumGridInstrument(*track, *lane, voices, names) || voices <= 0) voices = 4;
             if(group.voices > 0) voices = group.voices;
-            const auto* clip = getClip(trackId, clipId);
+            const auto* clip = getClip(sequence, trackId, clipId);
             // Rows as long as the clip's content (at most 16 beats).
             const double length = std::min(16.0, clip == nullptr ? 4.0 : clip->contentDurationBeats);
             lane->drumRows = ofxOceanodeTimelineDrumGrid::defaultRows(voices, names, length);
@@ -1559,9 +1561,9 @@ std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& t
         if(laneIdOut != nullptr) *laneIdOut = laneId;
         return clipId;
     }
-    const std::string laneId = createLane(trackId, clipId, group.name, ofxOceanodeTimelineLaneType::PianoRoll);
+    const std::string laneId = createLane(sequence, trackId, clipId, group.name, ofxOceanodeTimelineLaneType::PianoRoll);
     if(laneId.empty()) return clipId;
-    if(auto* lane = getLane(trackId, clipId, laneId)) {
+    if(auto* lane = getLane(sequence, trackId, clipId, laneId)) {
         lane->pianoPitchBindingId = group.pitchBindingId;
         lane->pianoGateBindingId = group.gateBindingId;
         lane->pianoVelocityBindingId = group.velocityBindingId;
@@ -1580,14 +1582,14 @@ std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& t
         // note range narrower than the whole keyboard; a kit shows its pads.
         lane->pianoLowPitch = 36;
         lane->pianoHighPitch = 84;
-        const auto* track = getTrack(trackId);
+        const auto* track = getTrack(sequence, trackId);
         int voices = 0;
         bool kit = false;
         if(track != nullptr) pianoLaneVoicesAndKit(*track, *lane, voices, kit);
         if(kit) {
             lane->pianoLowPitch = 36;
             lane->pianoHighPitch = 36 + std::max(12, voices) - 1;
-        } else if(const auto* pitchBinding = getBinding(trackId, group.pitchBindingId)) {
+        } else if(const auto* pitchBinding = getBinding(sequence, trackId, group.pitchBindingId)) {
             if(auto* parameter = container == nullptr ? nullptr : container->findTimelineParameter(pitchBinding->parameterPath)) {
                 float minimum = 0.0f, maximum = 0.0f;
                 bool numeric = true;
@@ -1652,9 +1654,9 @@ float gainToNormalized(const ofxOceanodeTimelineLane& lane, float gain) {
 }
 } // namespace ofxOceanodeTimelineScale
 
-int ofxOceanodeTimelineManager::retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) {
+int ofxOceanodeTimelineManager::retargetParameterPaths(ofxOceanodeTimelineSequence& sequence, const std::map<std::string, std::string>& oldToNew) {
     int changed = 0;
-    for(auto& track : mainSequence.tracks) {
+    for(auto& track : sequence.tracks) {
         for(auto& binding : track.bindings) {
             const auto it = oldToNew.find(binding.parameterPath);
             if(it == oldToNew.end() || it->second.empty() || it->second == it->first) continue;
@@ -1670,15 +1672,15 @@ int ofxOceanodeTimelineManager::retargetParameterPaths(const std::map<std::strin
     return changed;
 }
 
-bool ofxOceanodeTimelineManager::removeBinding(const std::string& trackId, const std::string& bindingId) {
+bool ofxOceanodeTimelineManager::removeBinding(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId) {
     invalidateSchedule(); // correct queued events while the binding still exists
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     auto it = std::find_if(track->bindings.begin(), track->bindings.end(), [&](const auto& binding) { return binding.id == bindingId; });
     if(it == track->bindings.end()) return false;
     const std::string parameterPath = it->parameterPath;
-    stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + bindingId);
-    stateCaptureLastAppliedValues.erase(parameterPath);
+    if(isMainSequence(sequence)) stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + bindingId);
+    if(isMainSequence(sequence)) stateCaptureLastAppliedValues.erase(parameterPath);
     for(auto& clip : track->clips) {
         // An LFO clip points at its output binding from the clip itself, not
         // through a lane -- without this it kept a dangling id and silently
@@ -1701,28 +1703,28 @@ bool ofxOceanodeTimelineManager::removeBinding(const std::string& trackId, const
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setBindingMode(const std::string& trackId,
+bool ofxOceanodeTimelineManager::setBindingMode(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                 const std::string& bindingId,
                                                 ofxOceanodeTimelineAutomationMode mode) {
-    auto* binding = getBinding(trackId, bindingId);
+    auto* binding = getBinding(sequence, trackId, bindingId);
     if(binding == nullptr) return false;
     binding->mode = mode;
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setBindingClamp(const std::string& trackId,
+bool ofxOceanodeTimelineManager::setBindingClamp(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                  const std::string& bindingId,
                                                  bool clampToParameterRange) {
-    auto* binding = getBinding(trackId, bindingId);
+    auto* binding = getBinding(sequence, trackId, bindingId);
     if(binding == nullptr) return false;
     binding->clampToParameterRange = clampToParameterRange;
     return true;
 }
 
-int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& trackId,
+int ofxOceanodeTimelineManager::captureStateAsCurvePoints(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                           const std::string& bindingId,
                                                           double timelineBeat) {
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack || container == nullptr) return 0;
 
     struct CaptureTarget {
@@ -1818,8 +1820,8 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
         break;
     }
     if(fallbackCaptureClipId.empty()) {
-        fallbackCaptureClipId = createClip(trackId, "Captured State", timelineBeat, captureTail);
-        auto* created = getClip(trackId, fallbackCaptureClipId);
+        fallbackCaptureClipId = createClip(sequence, trackId, "Captured State", timelineBeat, captureTail);
+        auto* created = getClip(sequence, trackId, fallbackCaptureClipId);
         if(created == nullptr) return 0;
         created->isStateCapture = true;
         created->repeatContent = false;
@@ -1832,7 +1834,7 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
     targetClipIds.reserve(targets.size());
     for(const auto& target : targets) {
         std::string exactClipId;
-        if(const auto* currentTrack = getTrack(trackId)) {
+        if(const auto* currentTrack = getTrack(sequence, trackId)) {
             for(const auto& clip : currentTrack->clips) {
                 if(!clip.isStateCapture) continue;
                 const bool ownsBinding = std::any_of(clip.lanes.begin(), clip.lanes.end(), [&](const auto& lane) {
@@ -1854,7 +1856,7 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
     std::unordered_map<std::string, double> captureSourceBeats;
     for(const auto& captureClipId : targetClipIds) {
         if(captureSourceBeats.count(captureClipId) > 0) continue;
-        auto* captureClip = getClip(trackId, captureClipId);
+        auto* captureClip = getClip(sequence, trackId, captureClipId);
         if(captureClip == nullptr) continue;
         std::vector<std::vector<double>> absolutePointBeats(captureClip->lanes.size());
         for(size_t laneIndex = 0; laneIndex < captureClip->lanes.size(); ++laneIndex) {
@@ -1918,7 +1920,7 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
     for(size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
         const auto& target = targets[targetIndex];
         const auto& captureClipId = targetClipIds[targetIndex];
-        auto* captureClip = getClip(trackId, captureClipId); // createLane may move lane storage.
+        auto* captureClip = getClip(sequence, trackId, captureClipId); // createLane may move lane storage.
         const auto sourceBeatIt = captureSourceBeats.find(captureClipId);
         if(captureClip == nullptr || sourceBeatIt == captureSourceBeats.end()) continue;
         const double sourceBeat = sourceBeatIt->second;
@@ -1931,10 +1933,10 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
             }
         }
         if(lane == nullptr) {
-            const auto laneId = createLane(trackId, captureClipId, target.parameterPath,
+            const auto laneId = createLane(sequence, trackId, captureClipId, target.parameterPath,
                                            ofxOceanodeTimelineLaneType::Curve);
-            if(laneId.empty() || !addBindingToLane(trackId, captureClipId, laneId, target.bindingId)) continue;
-            lane = getLane(trackId, captureClipId, laneId);
+            if(laneId.empty() || !addBindingToLane(sequence, trackId, captureClipId, laneId, target.bindingId)) continue;
+            lane = getLane(sequence, trackId, captureClipId, laneId);
             if(lane == nullptr) continue;
             lane->curvePoints.clear(); // remove createLane's generic diagonal.
             lane->curveTensions.clear();
@@ -1952,25 +1954,25 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
         }
 
         const float span = lane->valueMax - lane->valueMin;
-        const bool decibels = ofxOceanodeTimelineScale::isDecibels(*lane, getBinding(trackId, target.bindingId));
+        const bool decibels = ofxOceanodeTimelineScale::isDecibels(*lane, getBinding(sequence, trackId, target.bindingId));
         const float normalized = decibels ? ofxOceanodeTimelineScale::gainToNormalized(*lane, target.value)
             : std::abs(span) < 1e-9f ? 0.0f
             : ofClamp((target.value - lane->valueMin) / span, 0.0f, 1.0f);
         setCurvePoint(*lane, sourceBeat, normalized);
 
         const std::string overrideKey = trackId + "\x1f" + target.bindingId;
-        if(stateCaptureManualOverrideKeys.erase(overrideKey) > 0) {
-            if(auto* binding = getBinding(trackId, target.bindingId)) {
+        if(isMainSequence(sequence) && stateCaptureManualOverrideKeys.erase(overrideKey) > 0) {
+            if(auto* binding = getBinding(sequence, trackId, target.bindingId)) {
                 binding->hasLiveOverride = false;
                 binding->liveOverrideValue.clear();
             }
         }
-        if(auto* parameter = container->findTimelineParameter(target.parameterPath))
+        if(auto* parameter = isMainSequence(sequence) ? container->findTimelineParameter(target.parameterPath) : nullptr)
             stateCaptureLastAppliedValues[target.parameterPath] = parameterValueForAutomation(*parameter);
         ++captured;
     }
 
-    if(auto* sortedTrack = getTrack(trackId)) {
+    if(auto* sortedTrack = getTrack(sequence, trackId)) {
         std::sort(sortedTrack->clips.begin(), sortedTrack->clips.end(), [](const auto& a, const auto& b) {
             if(std::abs(a.startBeat - b.startBeat) > 1e-9) return a.startBeat < b.startBeat;
             return a.id < b.id;
@@ -1981,37 +1983,37 @@ int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& tra
     return captured;
 }
 
-std::string ofxOceanodeTimelineManager::createClip(const std::string& trackId,
+std::string ofxOceanodeTimelineManager::createClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    const std::string& requestedName,
                                                    double startBeat,
                                                    double durationBeats) {
-    auto* track = getTrack(trackId);
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return std::string();
 
     ofxOceanodeTimelineClip clip;
-    clip.id = mainSequence.makeUniqueClipId();
+    clip.id = sequence.makeUniqueClipId();
     clip.name = ofxOceanodeTimelineSequence::makeUniqueClipName(*track, requestedName);
     clip.startBeat = std::max(0.0, startBeat);
     clip.durationBeats = std::max(1.0 / 24.0, durationBeats);
     clip.contentDurationBeats = clip.durationBeats;
-    ++mainSequence.nextClipNumber;
+    ++sequence.nextClipNumber;
     track->clips.push_back(std::move(clip));
     invalidateEvaluationIndexes();
     return track->clips.back().id;
 }
 
-std::string ofxOceanodeTimelineManager::createLfoClip(const std::string& trackId,
+std::string ofxOceanodeTimelineManager::createLfoClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                       const std::string& outputBindingId,
                                                       const std::string& requestedName,
                                                       double startBeat,
                                                       double durationBeats) {
-    const auto clipId = createClip(trackId, requestedName, startBeat, durationBeats);
-    auto* clip = getClip(trackId, clipId);
+    const auto clipId = createClip(sequence, trackId, requestedName, startBeat, durationBeats);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return std::string();
 
     clip->isLfo = true;
     clip->lfoOutputBindingId = outputBindingId;
-    if(const auto* binding = getBinding(trackId, outputBindingId)) {
+    if(const auto* binding = getBinding(sequence, trackId, outputBindingId)) {
         if(container != nullptr) {
             if(auto* parameter = container->findTimelineParameter(binding->parameterPath)) {
                 if(binding->valueType == typeid(float).name()) {
@@ -2025,20 +2027,20 @@ std::string ofxOceanodeTimelineManager::createLfoClip(const std::string& trackId
         }
     }
 
-    ensureLfoLanes(trackId, clipId);
+    ensureLfoLanes(sequence, trackId, clipId);
     return clipId;
 }
 
-void ofxOceanodeTimelineManager::ensureLfoLanes(const std::string& trackId, const std::string& clipId) {
-    auto* clip = getClip(trackId, clipId);
+void ofxOceanodeTimelineManager::ensureLfoLanes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr || !clip->isLfo) return;
     for(const auto& definition : kLfoParameters) {
         const bool present = std::any_of(clip->lanes.begin(), clip->lanes.end(),
             [&](const auto& lane) { return lane.lfoParameter == definition.id; });
         if(present) continue;
-        const auto laneId = createLane(trackId, clipId, definition.name, ofxOceanodeTimelineLaneType::Curve);
-        clip = getClip(trackId, clipId); // createLane may reallocate
-        if(auto* lane = getLane(trackId, clipId, laneId)) {
+        const auto laneId = createLane(sequence, trackId, clipId, definition.name, ofxOceanodeTimelineLaneType::Curve);
+        clip = getClip(sequence, trackId, clipId); // createLane may reallocate
+        if(auto* lane = getLane(sequence, trackId, clipId, laneId)) {
             lane->lfoParameter = definition.id;
             lane->valueMin = definition.minimum;
             lane->valueMax = definition.maximum;
@@ -2272,9 +2274,9 @@ bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip&
     return true;
 }
 
-std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, const std::string& clipId, double timelineBeat) {
-    auto* track = getTrack(trackId);
-    const auto* sourceClip = getClip(trackId, clipId);
+std::string ofxOceanodeTimelineManager::splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat) {
+    auto* track = getTrack(sequence, trackId);
+    const auto* sourceClip = getClip(sequence, trackId, clipId);
     if(track == nullptr || sourceClip == nullptr || track->isWaveTrack) return std::string();
     const ofxOceanodeTimelineClip original = *sourceClip;
     ofxOceanodeTimelineClip left, right;
@@ -2284,11 +2286,11 @@ std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, co
     right.isStateCapture = false;
 
     // Splitting dissolves a clip group: the halves become independent.
-    if(getGroupForClip(trackId, clipId) != nullptr) ungroupClip(trackId, clipId);
+    if(getGroupForClip(sequence, trackId, clipId) != nullptr) ungroupClip(sequence, trackId, clipId);
 
-    const std::string rightId = createClip(trackId, original.name, right.startBeat, right.durationBeats);
+    const std::string rightId = createClip(sequence, trackId, original.name, right.startBeat, right.durationBeats);
     if(rightId.empty()) return std::string();
-    auto* rightClip = getClip(trackId, rightId);
+    auto* rightClip = getClip(sequence, trackId, rightId);
     const std::string rightName = rightClip->name;
     auto rightLanes = std::move(right.lanes);
     right.lanes.clear();
@@ -2296,14 +2298,14 @@ std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, co
     right.name = rightName;
     *rightClip = right;
     for(auto& lane : rightLanes) {
-        const std::string laneId = mainSequence.makeUniqueLaneId();
-        ++mainSequence.nextLaneNumber;
+        const std::string laneId = sequence.makeUniqueLaneId();
+        ++sequence.nextLaneNumber;
         lane.id = laneId;
-        if(auto* clip = getClip(trackId, rightId)) clip->lanes.push_back(lane);
+        if(auto* clip = getClip(sequence, trackId, rightId)) clip->lanes.push_back(lane);
     }
-    if(auto* leftClip = getClip(trackId, clipId)) *leftClip = left;
+    if(auto* leftClip = getClip(sequence, trackId, clipId)) *leftClip = left;
 
-    if(auto* sortedTrack = getTrack(trackId)) {
+    if(auto* sortedTrack = getTrack(sequence, trackId)) {
         std::sort(sortedTrack->clips.begin(), sortedTrack->clips.end(), [](const auto& a, const auto& b) {
             if(std::abs(a.startBeat - b.startBeat) > 1e-9) return a.startBeat < b.startBeat;
             return a.id < b.id;
@@ -2314,13 +2316,13 @@ std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, co
     return rightId;
 }
 
-std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrackId, const std::string& clipId,
+std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequence& sequence, const std::string& srcTrackId, const std::string& clipId,
                                                       const std::string& dstTrackId, double newStartBeat,
                                                       const std::string& srcLaneId,
                                                       const std::string& dstBindingId) {
-    const auto* srcTrack = getTrack(srcTrackId);
-    const auto* dstTrack = getTrack(dstTrackId);
-    const auto* sourceClip = getClip(srcTrackId, clipId);
+    const auto* srcTrack = getTrack(sequence, srcTrackId);
+    const auto* dstTrack = getTrack(sequence, dstTrackId);
+    const auto* sourceClip = getClip(sequence, srcTrackId, clipId);
     if(srcTrack == nullptr || dstTrack == nullptr || sourceClip == nullptr) return std::string();
     if(srcTrack->isWaveTrack != dstTrack->isWaveTrack) return std::string();
     // A value copy: createClip below may reallocate the source track's clips.
@@ -2333,7 +2335,7 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
     // The destination track's binding for the parameter a source binding drives.
     auto mapBinding = [&](const std::string& bindingId) -> std::string {
         if(bindingId.empty() || sameTrack) return bindingId;
-        const auto* binding = getBinding(srcTrackId, bindingId);
+        const auto* binding = getBinding(sequence, srcTrackId, bindingId);
         if(binding == nullptr) return std::string();
         for(const auto& candidate : dstTrack->bindings)
             if(candidate.parameterPath == binding->parameterPath) return candidate.id;
@@ -2349,7 +2351,7 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
     };
 
     if(!dstBindingId.empty()) {
-        if(dstTrack->isWaveTrack || getBinding(dstTrackId, dstBindingId) == nullptr) return std::string();
+        if(dstTrack->isWaveTrack || getBinding(sequence, dstTrackId, dstBindingId) == nullptr) return std::string();
         if(copy.isLfo) {
             // The lanes are the oscillator's own controls; only the output moves.
             copy.lfoOutputBindingId = dstBindingId;
@@ -2398,8 +2400,8 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
         }
     }
 
-    const std::string newId = createClip(dstTrackId, copy.name, newStartBeat, copy.durationBeats);
-    auto* newClip = getClip(dstTrackId, newId);
+    const std::string newId = createClip(sequence, dstTrackId, copy.name, newStartBeat, copy.durationBeats);
+    auto* newClip = getClip(sequence, dstTrackId, newId);
     if(newClip == nullptr) return std::string();
     copy.id = newId;
     copy.name = newClip->name;
@@ -2410,18 +2412,18 @@ std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrac
     copy.lanes.clear();
     *newClip = std::move(copy);
     for(auto& lane : lanes) {
-        lane.id = mainSequence.makeUniqueLaneId();
-        ++mainSequence.nextLaneNumber;
-        if(auto* clip = getClip(dstTrackId, newId)) clip->lanes.push_back(std::move(lane));
+        lane.id = sequence.makeUniqueLaneId();
+        ++sequence.nextLaneNumber;
+        if(auto* clip = getClip(sequence, dstTrackId, newId)) clip->lanes.push_back(std::move(lane));
     }
     invalidateSchedule();
     return newId;
 }
 
-int ofxOceanodeTimelineManager::separateStateCaptureClip(const std::string& trackId,
+int ofxOceanodeTimelineManager::separateStateCaptureClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                          const std::string& clipId) {
-    const auto* source = getClip(trackId, clipId);
-    const auto* track = getTrack(trackId);
+    const auto* source = getClip(sequence, trackId, clipId);
+    const auto* track = getTrack(sequence, trackId);
     if(source == nullptr || track == nullptr || track->isWaveTrack || source->isLfo ||
        !source->isStateCapture || source->lanes.size() < 2) return 0;
 
@@ -2435,26 +2437,26 @@ int ofxOceanodeTimelineManager::separateStateCaptureClip(const std::string& trac
     std::vector<std::string> createdClipIds;
     createdClipIds.reserve(lanes.size() - 1);
     for(size_t laneIndex = 1; laneIndex < lanes.size(); ++laneIndex) {
-        const auto newClipId = duplicateClip(trackId, clipId, trackId, startBeat,
+        const auto newClipId = duplicateClip(sequence, trackId, clipId, trackId, startBeat,
                                              lanes[laneIndex].id,
                                              lanes[laneIndex].bindingIds.front());
         if(newClipId.empty()) {
-            for(const auto& createdId : createdClipIds) removeClip(trackId, createdId);
+            for(const auto& createdId : createdClipIds) removeClip(sequence, trackId, createdId);
             return 0;
         }
-        if(getClip(trackId, newClipId) != nullptr) {
+        if(getClip(sequence, trackId, newClipId) != nullptr) {
             createdClipIds.push_back(newClipId);
         } else {
-            removeClip(trackId, newClipId);
-            for(const auto& createdId : createdClipIds) removeClip(trackId, createdId);
+            removeClip(sequence, trackId, newClipId);
+            for(const auto& createdId : createdClipIds) removeClip(sequence, trackId, createdId);
             return 0;
         }
     }
 
     for(const auto& createdId : createdClipIds)
-        if(auto* created = getClip(trackId, createdId)) created->isStateCapture = true;
-    if(getGroupForClip(trackId, clipId) != nullptr) ungroupClip(trackId, clipId);
-    if(auto* original = getClip(trackId, clipId)) {
+        if(auto* created = getClip(sequence, trackId, createdId)) created->isStateCapture = true;
+    if(getGroupForClip(sequence, trackId, clipId) != nullptr) ungroupClip(sequence, trackId, clipId);
+    if(auto* original = getClip(sequence, trackId, clipId)) {
         original->lanes = {lanes.front()};
         original->isStateCapture = true;
     }
@@ -2463,9 +2465,9 @@ int ofxOceanodeTimelineManager::separateStateCaptureClip(const std::string& trac
     return static_cast<int>(createdClipIds.size() + 1);
 }
 
-bool ofxOceanodeTimelineManager::trimClipStart(const std::string& trackId, const std::string& clipId, double newStartBeat) {
-    auto* track = getTrack(trackId);
-    auto* clip = getClip(trackId, clipId);
+bool ofxOceanodeTimelineManager::trimClipStart(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double newStartBeat) {
+    auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr || track->isWaveTrack) return false;
     ofxOceanodeTimelineClip base = *clip;
     newStartBeat = std::max(0.0, newStartBeat);
@@ -2498,12 +2500,12 @@ bool ofxOceanodeTimelineManager::trimClipStart(const std::string& trackId, const
     return true;
 }
 
-bool ofxOceanodeTimelineManager::extendClipStart(const std::string& trackId, const std::string& clipId, double newStartBeat) {
-    auto* track = getTrack(trackId);
-    auto* clip = getClip(trackId, clipId);
+bool ofxOceanodeTimelineManager::extendClipStart(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double newStartBeat) {
+    auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr || track->isWaveTrack) return false;
     newStartBeat = std::max(0.0, newStartBeat);
-    if(newStartBeat >= clip->startBeat - 1e-9 || clip->isLfo) return trimClipStart(trackId, clipId, newStartBeat);
+    if(newStartBeat >= clip->startBeat - 1e-9 || clip->isLfo) return trimClipStart(sequence, trackId, clipId, newStartBeat);
 
     const double stretch = ofxOceanodeTimelineClipTime::stretch(*clip);
     auto isGridLane = [](const ofxOceanodeTimelineLane& lane) {
@@ -2565,32 +2567,32 @@ bool ofxOceanodeTimelineManager::extendClipStart(const std::string& trackId, con
     return true;
 }
 
-bool ofxOceanodeTimelineManager::renameClip(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::renameClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                             const std::string& requestedName) {
-    auto* track = getTrack(trackId);
-    auto* clip = getClip(trackId, clipId);
+    auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr || requestedName.empty()) return false;
     if(clip->name == requestedName) return true;
     clip->name = ofxOceanodeTimelineSequence::makeUniqueClipName(*track, requestedName);
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeClip(const std::string& trackId, const std::string& clipId) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::removeClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
-    if(const auto* clip = getClip(trackId, clipId)) {
-        releaseWaveClipIfNeeded(trackId, clip->id);
+    if(const auto* clip = getClip(sequence, trackId, clipId)) {
+        if(isMainSequence(sequence)) releaseWaveClipIfNeeded(trackId, clip->id);
         if(clip->isStateCapture) {
             for(const auto& lane : clip->lanes) {
                 for(const auto& bindingId : lane.bindingIds) {
                     const std::string key = trackId + "\x1f" + bindingId;
-                    if(stateCaptureManualOverrideKeys.erase(key) > 0) {
-                        if(auto* binding = getBinding(trackId, bindingId)) {
+                    if(isMainSequence(sequence) && stateCaptureManualOverrideKeys.erase(key) > 0) {
+                        if(auto* binding = getBinding(sequence, trackId, bindingId)) {
                             binding->hasLiveOverride = false;
                             binding->liveOverrideValue.clear();
                         }
                     }
-                    if(const auto* binding = getBinding(trackId, bindingId))
+                    if(const auto* binding = isMainSequence(sequence) ? getBinding(sequence, trackId, bindingId) : nullptr)
                         stateCaptureLastAppliedValues.erase(binding->parameterPath);
                 }
             }
@@ -2602,14 +2604,14 @@ bool ofxOceanodeTimelineManager::removeClip(const std::string& trackId, const st
     }), track->clips.end());
     const bool removed = track->clips.size() != oldSize;
     if(removed) {
-        removeClipFromGroups(trackId, clipId);
+        removeClipFromGroups(sequence, trackId, clipId);
         invalidateEvaluationIndexes();
     }
     return removed;
 }
 
-void ofxOceanodeTimelineManager::removeClipFromGroups(const std::string& trackId, const std::string& clipId) {
-    for(auto& group : mainSequence.clipGroups) {
+void ofxOceanodeTimelineManager::removeClipFromGroups(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    for(auto& group : sequence.clipGroups) {
         group.members.erase(std::remove_if(group.members.begin(), group.members.end(), [&](const auto& member) {
             return member.first == trackId && member.second == clipId;
         }), group.members.end());
@@ -2617,12 +2619,12 @@ void ofxOceanodeTimelineManager::removeClipFromGroups(const std::string& trackId
     // A "group" of zero or one member is meaningless -- drop it rather than
     // leave an inert record around that the UI's group outline/Ungroup
     // button would otherwise have to special-case.
-    mainSequence.clipGroups.erase(std::remove_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [](const auto& group) {
+    sequence.clipGroups.erase(std::remove_if(sequence.clipGroups.begin(), sequence.clipGroups.end(), [](const auto& group) {
         return group.members.size() < 2;
-    }), mainSequence.clipGroups.end());
+    }), sequence.clipGroups.end());
 }
 
-std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<std::string, std::string>>& members) {
+std::string ofxOceanodeTimelineManager::groupClips(ofxOceanodeTimelineSequence& sequence, const std::vector<std::pair<std::string, std::string>>& members) {
     std::vector<std::pair<std::string, std::string>> merged;
     auto addUnique = [&](const std::pair<std::string, std::string>& member) {
         if(std::find(merged.begin(), merged.end(), member) == merged.end()) merged.push_back(member);
@@ -2633,19 +2635,19 @@ std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<s
     // dissolved and its members pulled into the new group.
     std::set<std::string> groupIdsToDissolve;
     for(const auto& member : members) {
-        if(getClip(member.first, member.second) == nullptr) continue; // stale reference -- skip rather than fail the whole call
+        if(getClip(sequence, member.first, member.second) == nullptr) continue; // stale reference -- skip rather than fail the whole call
         addUnique(member);
-        if(const auto* existingGroup = getGroupForClip(member.first, member.second)) {
+        if(const auto* existingGroup = getGroupForClip(sequence, member.first, member.second)) {
             groupIdsToDissolve.insert(existingGroup->id);
         }
     }
-    for(const auto& group : mainSequence.clipGroups) {
+    for(const auto& group : sequence.clipGroups) {
         if(groupIdsToDissolve.count(group.id) == 0) continue;
         for(const auto& member : group.members) {
             // Groups are persisted as references. Do not carry a stale
             // reference into a newly merged group if a clip was deleted by
             // another path before the group metadata was refreshed.
-            if(getClip(member.first, member.second) != nullptr) addUnique(member);
+            if(getClip(sequence, member.first, member.second) != nullptr) addUnique(member);
         }
     }
     // Do not dissolve an existing group when the requested selection did not
@@ -2655,31 +2657,31 @@ std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<s
         if(groupIdsToDissolve.size() == 1) return *groupIdsToDissolve.begin();
         return std::string();
     }
-    mainSequence.clipGroups.erase(std::remove_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [&](const auto& group) {
+    sequence.clipGroups.erase(std::remove_if(sequence.clipGroups.begin(), sequence.clipGroups.end(), [&](const auto& group) {
         return groupIdsToDissolve.count(group.id) > 0;
-    }), mainSequence.clipGroups.end());
+    }), sequence.clipGroups.end());
 
     ofxOceanodeTimelineClipGroup newGroup;
-    newGroup.id = mainSequence.makeUniqueGroupId();
+    newGroup.id = sequence.makeUniqueGroupId();
     newGroup.members = std::move(merged);
-    ++mainSequence.nextGroupNumber;
-    mainSequence.clipGroups.push_back(std::move(newGroup));
-    return mainSequence.clipGroups.back().id;
+    ++sequence.nextGroupNumber;
+    sequence.clipGroups.push_back(std::move(newGroup));
+    return sequence.clipGroups.back().id;
 }
 
-bool ofxOceanodeTimelineManager::ungroupClip(const std::string& trackId, const std::string& clipId) {
-    const auto it = std::find_if(mainSequence.clipGroups.begin(), mainSequence.clipGroups.end(), [&](const auto& group) {
+bool ofxOceanodeTimelineManager::ungroupClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    const auto it = std::find_if(sequence.clipGroups.begin(), sequence.clipGroups.end(), [&](const auto& group) {
         return std::any_of(group.members.begin(), group.members.end(), [&](const auto& member) {
             return member.first == trackId && member.second == clipId;
         });
     });
-    if(it == mainSequence.clipGroups.end()) return false;
-    mainSequence.clipGroups.erase(it);
+    if(it == sequence.clipGroups.end()) return false;
+    sequence.clipGroups.erase(it);
     return true;
 }
 
-const ofxOceanodeTimelineClipGroup* ofxOceanodeTimelineManager::getGroupForClip(const std::string& trackId, const std::string& clipId) const {
-    for(const auto& group : mainSequence.clipGroups) {
+const ofxOceanodeTimelineClipGroup* ofxOceanodeTimelineManager::getGroupForClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) const {
+    for(const auto& group : sequence.clipGroups) {
         for(const auto& member : group.members) {
             if(member.first == trackId && member.second == clipId) return &group;
         }
@@ -2687,28 +2689,28 @@ const ofxOceanodeTimelineClipGroup* ofxOceanodeTimelineManager::getGroupForClip(
     return nullptr;
 }
 
-ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(const std::string& trackId, const std::string& clipId) {
-    auto* track = getTrack(trackId);
+ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return nullptr;
     auto it = std::find_if(track->clips.begin(), track->clips.end(), [&](auto& clip) { return clip.id == clipId; });
     return it == track->clips.end() ? nullptr : &*it;
 }
 
-const ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(const std::string& trackId, const std::string& clipId) const {
-    const auto* track = getTrack(trackId);
+const ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) const {
+    const auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return nullptr;
     auto it = std::find_if(track->clips.begin(), track->clips.end(), [&](const auto& clip) { return clip.id == clipId; });
     return it == track->clips.end() ? nullptr : &*it;
 }
 
-std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, const std::string& clipId,
+std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                    const std::string& requestedName,
                                                    ofxOceanodeTimelineLaneType type) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return std::string();
     if(type == ofxOceanodeTimelineLaneType::Wave) return std::string();
     ofxOceanodeTimelineLane lane;
-    lane.id = mainSequence.makeUniqueLaneId();
+    lane.id = sequence.makeUniqueLaneId();
     lane.name = requestedName.empty() ? "Lane" : requestedName;
     lane.type = type;
     lane.probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));
@@ -2729,24 +2731,24 @@ std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, c
     } else if(type == ofxOceanodeTimelineLaneType::DrumGrid) {
         lane.drumRows = ofxOceanodeTimelineDrumGrid::defaultRows(4, {}, std::min(16.0, clip->contentDurationBeats));
     }
-    ++mainSequence.nextLaneNumber;
+    ++sequence.nextLaneNumber;
     clip->lanes.push_back(std::move(lane));
     return clip->lanes.back().id;
 }
 
-std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId, const std::string& clipId,
+std::string ofxOceanodeTimelineManager::duplicateLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                        const std::string& laneId) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr || clip->isLfo) return {};
     const auto source = std::find_if(clip->lanes.begin(), clip->lanes.end(),
                                      [&](const auto& lane) { return lane.id == laneId; });
     if(source == clip->lanes.end() || source->type == ofxOceanodeTimelineLaneType::Wave ||
        source->isWaveVolume || !source->lfoParameter.empty()) return {};
     ofxOceanodeTimelineLane copy = *source;
-    copy.id = mainSequence.makeUniqueLaneId();
+    copy.id = sequence.makeUniqueLaneId();
     // Its own rolls: a copy on the source's seed would pass and fail with it.
     copy.probabilitySeed = static_cast<int>(ofRandom(1.0f, 100000.0f));
-    ++mainSequence.nextLaneNumber;
+    ++sequence.nextLaneNumber;
     const auto newId = copy.id;
     clip->lanes.insert(std::next(source), std::move(copy));
     invalidateEvaluationIndexes();
@@ -2754,17 +2756,17 @@ std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId
     return newId;
 }
 
-bool ofxOceanodeTimelineManager::removeLane(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::removeLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                             const std::string& laneId) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
-    if(const auto* lane = getLane(trackId, clipId, laneId)) {
-        if(lane->type == ofxOceanodeTimelineLaneType::Wave) releaseWaveClipIfNeeded(trackId, clipId);
+    if(const auto* lane = getLane(sequence, trackId, clipId, laneId)) {
+        if(isMainSequence(sequence) && lane->type == ofxOceanodeTimelineLaneType::Wave) releaseWaveClipIfNeeded(trackId, clipId);
         if(clip->isStateCapture) {
             for(const auto& bindingId : lane->bindingIds) {
                 const std::string key = trackId + "\x1f" + bindingId;
-                if(stateCaptureManualOverrideKeys.erase(key) == 0) continue;
-                if(auto* binding = getBinding(trackId, bindingId)) {
+                if(!isMainSequence(sequence) || stateCaptureManualOverrideKeys.erase(key) == 0) continue;
+                if(auto* binding = getBinding(sequence, trackId, bindingId)) {
                     binding->hasLiveOverride = false;
                     binding->liveOverrideValue.clear();
                 }
@@ -2784,9 +2786,9 @@ void ofxOceanodeTimelineManager::releaseWaveClipIfNeeded(const std::string& trac
     if(waveAudioProvider != nullptr) waveAudioProvider->releaseWaveClip(trackId, clipId);
 }
 
-bool ofxOceanodeTimelineManager::setLaneMultiRowCount(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setLaneMultiRowCount(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                       const std::string& laneId, int rowCount) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr) return false;
     rowCount = ofClamp(rowCount, 1, 16);
     lane->multiRowCount = rowCount;
@@ -2800,8 +2802,8 @@ bool ofxOceanodeTimelineManager::setLaneMultiRowCount(const std::string& trackId
     return true;
 }
 
-bool ofxOceanodeTimelineManager::reloadWaveform(const std::string& trackId, const std::string& clipId) {
-    auto* clip = getClip(trackId, clipId);
+bool ofxOceanodeTimelineManager::reloadWaveform(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
     const bool result = readWaveformCache(clip->waveFilePath, clip->waveNumChannels,
                                           clip->waveFileDurationMs, clip->waveformPeaks);
@@ -2827,11 +2829,11 @@ bool ofxOceanodeTimelineManager::reloadWaveform(const std::string& trackId, cons
     return result;
 }
 
-bool ofxOceanodeTimelineManager::addBindingToLane(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::addBindingToLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                   const std::string& laneId, const std::string& bindingId) {
-    auto* track = getTrack(trackId);
-    auto* lane = getLane(trackId, clipId, laneId);
-    if(track == nullptr || lane == nullptr || getBinding(trackId, bindingId) == nullptr) return false;
+    auto* track = getTrack(sequence, trackId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
+    if(track == nullptr || lane == nullptr || getBinding(sequence, trackId, bindingId) == nullptr) return false;
     if(std::find(lane->bindingIds.begin(), lane->bindingIds.end(), bindingId) != lane->bindingIds.end()) return true;
     lane->bindingIds.push_back(bindingId);
     if(lane->type == ofxOceanodeTimelineLaneType::DrumGrid) {
@@ -2867,9 +2869,9 @@ bool ofxOceanodeTimelineManager::addBindingToLane(const std::string& trackId, co
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::removeBindingFromLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                        const std::string& laneId, const std::string& bindingId) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr) return false;
     const auto oldSize = lane->bindingIds.size();
     lane->bindingIds.erase(std::remove(lane->bindingIds.begin(), lane->bindingIds.end(), bindingId), lane->bindingIds.end());
@@ -2880,11 +2882,11 @@ bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackI
     if(lane->drumFilterBindingId == bindingId) lane->drumFilterBindingId.clear();
     if(lane->drumStutterBindingId == bindingId) lane->drumStutterBindingId.clear();
     const bool removed = lane->bindingIds.size() != oldSize;
-    const auto* clip = getClip(trackId, clipId);
+    const auto* clip = getClip(sequence, trackId, clipId);
     if(removed && clip != nullptr && clip->isStateCapture) {
         const std::string key = trackId + "\x1f" + bindingId;
-        if(stateCaptureManualOverrideKeys.erase(key) > 0) {
-            if(auto* binding = getBinding(trackId, bindingId)) {
+        if(isMainSequence(sequence) && stateCaptureManualOverrideKeys.erase(key) > 0) {
+            if(auto* binding = getBinding(sequence, trackId, bindingId)) {
                 binding->hasLiveOverride = false;
                 binding->liveOverrideValue.clear();
             }
@@ -2894,26 +2896,26 @@ bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackI
     return removed;
 }
 
-ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(const std::string& trackId, const std::string& clipId,
+ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                              const std::string& laneId) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return nullptr;
     auto it = std::find_if(clip->lanes.begin(), clip->lanes.end(), [&](auto& lane) { return lane.id == laneId; });
     return it == clip->lanes.end() ? nullptr : &*it;
 }
 
-const ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(const std::string& trackId, const std::string& clipId,
+const ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                                     const std::string& laneId) const {
-    const auto* clip = getClip(trackId, clipId);
+    const auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return nullptr;
     auto it = std::find_if(clip->lanes.begin(), clip->lanes.end(), [&](const auto& lane) { return lane.id == laneId; });
     return it == clip->lanes.end() ? nullptr : &*it;
 }
 
-bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setClipLaneType(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                  const std::string& laneId, ofxOceanodeTimelineLaneType type) {
-    auto* lane = getLane(trackId, clipId, laneId);
-    auto* clip = getClip(trackId, clipId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(lane == nullptr) return false;
     // Wave is a track type, not a lane type -- createLane refuses it and
     // loading folds the old Wave-lane format onto the clip, so nothing may
@@ -2924,8 +2926,8 @@ bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, con
        previousType == ofxOceanodeTimelineLaneType::Curve && type != previousType) {
         for(const auto& bindingId : lane->bindingIds) {
             const std::string key = trackId + "\x1f" + bindingId;
-            if(stateCaptureManualOverrideKeys.erase(key) == 0) continue;
-            if(auto* binding = getBinding(trackId, bindingId)) {
+            if(!isMainSequence(sequence) || stateCaptureManualOverrideKeys.erase(key) == 0) continue;
+            if(auto* binding = getBinding(sequence, trackId, bindingId)) {
                 binding->hasLiveOverride = false;
                 binding->liveOverrideValue.clear();
             }
@@ -2948,7 +2950,7 @@ bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, con
     if(type == ofxOceanodeTimelineLaneType::Dropdown) {
         for(auto& point : lane->curvePoints) point.value = std::max(0.0f, std::round(point.value));
     }
-    if(previousType == ofxOceanodeTimelineLaneType::Wave && type != ofxOceanodeTimelineLaneType::Wave)
+    if(isMainSequence(sequence) && previousType == ofxOceanodeTimelineLaneType::Wave && type != ofxOceanodeTimelineLaneType::Wave)
         releaseWaveClipIfNeeded(trackId, clipId);
     if(type == ofxOceanodeTimelineLaneType::PianoRoll) {
         lane->valueMin = 0.0f;
@@ -2979,7 +2981,7 @@ bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, con
         if(lane->drumRows.empty()) {
             int voices = 0;
             std::vector<std::string> names;
-            const auto* track = getTrack(trackId);
+            const auto* track = getTrack(sequence, trackId);
             if(track == nullptr || !drumGridInstrument(*track, *lane, voices, names)) voices = 4;
             lane->drumRows = ofxOceanodeTimelineDrumGrid::defaultRows(std::max(1, voices), names,
                 std::min(16.0, clip == nullptr ? 4.0 : clip->contentDurationBeats));
@@ -2992,15 +2994,15 @@ bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, con
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setClipTiming(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setClipTiming(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                double startBeat, double durationBeats) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
     const double previousStart = clip->startBeat, previousDuration = clip->durationBeats;
     clip->startBeat = std::max(0.0, startBeat);
     clip->durationBeats = std::max(1.0 / 24.0, durationBeats);
     // Resizing a Wave clip stretches its complete source over the new length.
-    const auto* track = getTrack(trackId);
+    const auto* track = getTrack(sequence, trackId);
     if(track != nullptr && track->isWaveTrack) normalizeWaveClipMapping(*clip);
     // A clip dragged while playing moves notes already queued ahead.
     if(clip->startBeat != previousStart || clip->durationBeats != previousDuration) invalidateSchedule();
@@ -3018,16 +3020,16 @@ bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& 
                                                     [this](const auto& other) { return isTrackSoloed(other); }));
 }
 
-bool ofxOceanodeTimelineManager::setTrackMuted(const std::string& trackId, bool muted) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::setTrackMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, bool muted) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->muted == muted) return false;
     track->muted = muted;
     refreshPlaybackEnablement();
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setTrackLatencyOffset(const std::string& trackId, float milliseconds) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::setTrackLatencyOffset(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, float milliseconds) {
+    auto* track = getTrack(sequence, trackId);
     const float clamped = ofClamp(milliseconds, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
     if(track == nullptr || track->latencyOffsetMs == clamped) return false;
     track->latencyOffsetMs = clamped;
@@ -3036,21 +3038,21 @@ bool ofxOceanodeTimelineManager::setTrackLatencyOffset(const std::string& trackI
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setTrackSolo(const std::string& trackId, bool solo) {
-    auto* track = getTrack(trackId);
+bool ofxOceanodeTimelineManager::setTrackSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, bool solo) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     // Setting it by hand replaces what a Toggle lane drove, until a lane
     // drives it again.
-    const bool wasDriven = playback.drivenSolo.erase(PlayKey{0, trackId}) > 0;
+    const bool wasDriven = isMainSequence(sequence) && playback.drivenSolo.erase(PlayKey{0, trackId}) > 0;
     if(track->solo == solo && !wasDriven) return false;
     track->solo = solo;
     refreshPlaybackEnablement();
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                       const std::string& laneId, bool drives) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->drivesTrackSolo == drives) return false;
     lane->drivesTrackSolo = drives;
     if(drives && container != nullptr) applyLaneTrackSolos(container->getTransportState().beatPosition);
@@ -3058,10 +3060,10 @@ bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(const std::string& track
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setLaneTargetProbability(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setLaneTargetProbability(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                         const std::string& laneId, const std::string& parameterPath,
                                                         float probability) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr) return false;
     probability = ofClamp(probability, 0.0f, 1.0f);
     const auto it = lane->targetProbability.find(parameterPath);
@@ -3099,26 +3101,26 @@ bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
     return changed;
 }
 
-bool ofxOceanodeTimelineManager::setLaneMuted(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setLaneMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                             const std::string& laneId, bool muted) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->muted == muted) return false;
     lane->muted = muted;
     refreshPlaybackEnablement();
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setLaneSolo(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setLaneSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                            const std::string& laneId, bool solo) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->solo == solo) return false;
     lane->solo = solo;
     refreshPlaybackEnablement();
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setClipChance(const std::string& trackId, const std::string& clipId, float chance) {
-    auto* clip = getClip(trackId, clipId);
+bool ofxOceanodeTimelineManager::setClipChance(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, float chance) {
+    auto* clip = getClip(sequence, trackId, clipId);
     chance = ofClamp(chance, 0.0f, 1.0f);
     if(clip == nullptr || clip->chance == chance) return false;
     clip->chance = chance;
@@ -3129,8 +3131,8 @@ bool ofxOceanodeTimelineManager::setClipChance(const std::string& trackId, const
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setClipMuted(const std::string& trackId, const std::string& clipId, bool muted) {
-    auto* clip = getClip(trackId, clipId);
+bool ofxOceanodeTimelineManager::setClipMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, bool muted) {
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr || clip->muted == muted) return false;
     clip->muted = muted;
     refreshPlaybackEnablement();
@@ -3149,37 +3151,37 @@ void ofxOceanodeTimelineManager::refreshPlaybackEnablement() {
     applyAutomation();
 }
 
-bool ofxOceanodeTimelineManager::resizeClipEnd(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                double duration, ofxOceanodeTimelineEndEdit operation) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr || !std::isfinite(duration)) return false;
     const double source = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     const double ratio = ofxOceanodeTimelineClipTime::effectiveStretch(*clip);
     duration = std::max(1.0 / 24.0, duration);
-    setClipTiming(trackId, clipId, clip->startBeat, duration);
-    const auto* track = getTrack(trackId);
+    setClipTiming(sequence, trackId, clipId, clip->startBeat, duration);
+    const auto* track = getTrack(sequence, trackId);
     if(track != nullptr && track->isWaveTrack) {
         // Audio always stretches its full slice, independent of the global tool.
     } else if(operation == ofxOceanodeTimelineEndEdit::Repeat) {
         clip->contentStretch = ratio;
-        setClipContentDuration(trackId, clipId, source, true);
+        setClipContentDuration(sequence, trackId, clipId, source, true);
     } else if(operation == ofxOceanodeTimelineEndEdit::Trim) {
-        setClipContentDuration(trackId, clipId, duration / ratio, false);
+        setClipContentDuration(sequence, trackId, clipId, duration / ratio, false);
     } else {
-        setClipContentDuration(trackId, clipId, source, false);
+        setClipContentDuration(sequence, trackId, clipId, source, false);
     }
     invalidateEvaluationIndexes();
     invalidateSchedule();
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setClipContentDuration(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setClipContentDuration(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                          double contentDurationBeats, bool repeatContent) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
     clip->contentDurationBeats = std::max(1.0 / 24.0, contentDurationBeats);
     clip->repeatContent = repeatContent;
-    const auto* track = getTrack(trackId);
+    const auto* track = getTrack(sequence, trackId);
     if(track != nullptr && track->isWaveTrack) {
         // Never allow a generic repeat/crop edit to turn a Wave slice back
         // into a repeating pattern clip.
@@ -3196,9 +3198,9 @@ bool ofxOceanodeTimelineManager::setClipContentDuration(const std::string& track
     return true;
 }
 
-bool ofxOceanodeTimelineManager::consolidateClipContent(const std::string& trackId,
+bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                         const std::string& clipId) {
-    auto* clip = getClip(trackId, clipId);
+    auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
 
     const double oldSourceDuration = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
@@ -3312,9 +3314,9 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(const std::string& track
     return changed;
 }
 
-bool ofxOceanodeTimelineManager::setClipNumber(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setClipNumber(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                               const std::string& laneId, double beat, float value) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || !ofxOceanodeTimelineIsHeldValueLane(lane->type) ||
        !std::isfinite(beat) || !std::isfinite(value) || beat < 0.0) return false;
     auto it = std::lower_bound(lane->curvePoints.begin(), lane->curvePoints.end(), beat,
@@ -3326,24 +3328,24 @@ bool ofxOceanodeTimelineManager::setClipNumber(const std::string& trackId, const
     return true;
 }
 
-bool ofxOceanodeTimelineManager::setClipStep(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::setClipStep(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                              const std::string& laneId, double startBeat,
                                              const std::string& value, double durationBeats) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->type != ofxOceanodeTimelineLaneType::Step) return false;
     lane->step.setStep(startBeat, value, durationBeats);
     return true;
 }
 
-bool ofxOceanodeTimelineManager::removeClipStep(const std::string& trackId, const std::string& clipId,
+bool ofxOceanodeTimelineManager::removeClipStep(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                 const std::string& laneId, double startBeat) {
-    auto* lane = getLane(trackId, clipId, laneId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->type != ofxOceanodeTimelineLaneType::Step) return false;
     return lane->step.removeStep(startBeat);
 }
 
-ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) {
-    auto* track = getTrack(trackId);
+ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId) {
+    auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return nullptr;
     if(evaluationIndexesValid) {
         const auto trackIndex = trackEvaluationIndexes.find(track);
@@ -3364,8 +3366,8 @@ ofxOceanodeNodeModel* ofxOceanodeTimelineManager::pianoPitchNode(const std::stri
     return parameter == nullptr ? nullptr : parameter->getNodeModel();
 }
 
-const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) const {
-    const auto* track = getTrack(trackId);
+const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId) const {
+    const auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return nullptr;
     if(evaluationIndexesValid) {
         const auto trackIndex = trackEvaluationIndexes.find(track);
@@ -4169,4 +4171,301 @@ void ofxOceanodeTimelineManager::setTimeSignature(int numerator, int denominator
        std::abs(loopEndBeat - previousBeatsPerBar) <= kEpsilon) {
         loopEndBeat = getBeatsPerBar();
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// The same editing operations on the main timeline
+// ---------------------------------------------------------------------------
+
+std::string ofxOceanodeTimelineManager::createTrack(const std::string& requestedName) {
+    return createTrack(mainSequence, requestedName);
+}
+
+std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index) {
+    return insertTrackCopy(mainSequence, copy, name, index);
+}
+
+std::string ofxOceanodeTimelineManager::duplicateTrack(const std::string& trackId) {
+    return duplicateTrack(mainSequence, trackId);
+}
+
+std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::breakClipLanesIntoTracks(const std::string& trackId, const std::string& clipId) {
+    return breakClipLanesIntoTracks(mainSequence, trackId, clipId);
+}
+
+std::string ofxOceanodeTimelineManager::createWaveTrack(const std::string& requestedName) {
+    return createWaveTrack(mainSequence, requestedName);
+}
+
+std::string ofxOceanodeTimelineManager::createWaveVolumeLane(const std::string& trackId, const std::string& clipId) {
+    return createWaveVolumeLane(mainSequence, trackId, clipId);
+}
+
+std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(const std::string& trackId) {
+    return getWaveTrackVolumePoints(mainSequence, trackId);
+}
+
+const std::vector<ofxOceanodeTimelineCurvePoint>& ofxOceanodeTimelineManager::getWaveTrackVolumePoints(const std::string& trackId) const {
+    return getWaveTrackVolumePoints(mainSequence, trackId);
+}
+
+bool ofxOceanodeTimelineManager::addWaveTrackVolumePoint(const std::string& trackId, double beat, float value) {
+    return addWaveTrackVolumePoint(mainSequence, trackId, beat, value);
+}
+
+bool ofxOceanodeTimelineManager::removeWaveTrackVolumePoint(const std::string& trackId, double beat, double epsilon) {
+    return removeWaveTrackVolumePoint(mainSequence, trackId, beat, epsilon);
+}
+
+bool ofxOceanodeTimelineManager::renameTrack(const std::string& trackId, const std::string& requestedName) {
+    return renameTrack(mainSequence, trackId, requestedName);
+}
+
+bool ofxOceanodeTimelineManager::removeTrack(const std::string& trackId) {
+    return removeTrack(mainSequence, trackId);
+}
+
+ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string& trackId) {
+    return getTrack(mainSequence, trackId);
+}
+
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::getTrack(const std::string& trackId) const {
+    return getTrack(mainSequence, trackId);
+}
+
+std::string ofxOceanodeTimelineManager::addBinding(const std::string& trackId, ofxOceanodeAbstractParameter& parameter, ofxOceanodeTimelineAutomationMode mode) {
+    return addBinding(mainSequence, trackId, parameter, mode);
+}
+
+bool ofxOceanodeTimelineManager::bindClipTarget(const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::string& path, ofxOceanodeTimelineTargetRole role) {
+    return bindClipTarget(mainSequence, trackId, clipId, laneId, path, role);
+}
+
+bool ofxOceanodeTimelineManager::moveBinding(const std::string& trackId, const std::string& bindingId, int newIndex) {
+    return moveBinding(mainSequence, trackId, bindingId, newIndex);
+}
+
+bool ofxOceanodeTimelineManager::setBindingOrder(const std::string& trackId, const std::vector<std::string>& orderedBindingIds) {
+    return setBindingOrder(mainSequence, trackId, orderedBindingIds);
+}
+
+ofxOceanodeTimelineNoteGroup* ofxOceanodeTimelineManager::getNoteGroup(const std::string& trackId, const std::string& groupId) {
+    return getNoteGroup(mainSequence, trackId, groupId);
+}
+
+std::string ofxOceanodeTimelineManager::createNoteGroup(const std::string& trackId, const std::string& name, const std::string& pitchBindingId, const std::string& gateBindingId, const std::string& velocityBindingId) {
+    return createNoteGroup(mainSequence, trackId, name, pitchBindingId, gateBindingId, velocityBindingId);
+}
+
+bool ofxOceanodeTimelineManager::setNoteGroupRoles(const std::string& trackId, const std::string& groupId, const std::string& pitchBindingId, const std::string& gateBindingId, const std::string& velocityBindingId) {
+    return setNoteGroupRoles(mainSequence, trackId, groupId, pitchBindingId, gateBindingId, velocityBindingId);
+}
+
+bool ofxOceanodeTimelineManager::setNoteGroupKitRole(const std::string& trackId, const std::string& groupId, const std::string& bindingId, int which) {
+    return setNoteGroupKitRole(mainSequence, trackId, groupId, bindingId, which);
+}
+
+bool ofxOceanodeTimelineManager::removeNoteGroup(const std::string& trackId, const std::string& groupId, bool removeBindings) {
+    return removeNoteGroup(mainSequence, trackId, groupId, removeBindings);
+}
+
+std::string ofxOceanodeTimelineManager::createNoteGroupClip(const std::string& trackId, const std::string& groupId, const std::string& requestedName, double startBeat, double durationBeats, std::string* laneIdOut, ofxOceanodeTimelineLaneType laneType) {
+    return createNoteGroupClip(mainSequence, trackId, groupId, requestedName, startBeat, durationBeats, laneIdOut, laneType);
+}
+
+int ofxOceanodeTimelineManager::retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) {
+    return retargetParameterPaths(mainSequence, oldToNew);
+}
+
+bool ofxOceanodeTimelineManager::removeBinding(const std::string& trackId, const std::string& bindingId) {
+    return removeBinding(mainSequence, trackId, bindingId);
+}
+
+bool ofxOceanodeTimelineManager::setBindingMode(const std::string& trackId, const std::string& bindingId, ofxOceanodeTimelineAutomationMode mode) {
+    return setBindingMode(mainSequence, trackId, bindingId, mode);
+}
+
+bool ofxOceanodeTimelineManager::setBindingClamp(const std::string& trackId, const std::string& bindingId, bool clampToParameterRange) {
+    return setBindingClamp(mainSequence, trackId, bindingId, clampToParameterRange);
+}
+
+int ofxOceanodeTimelineManager::captureStateAsCurvePoints(const std::string& trackId, const std::string& bindingId, double timelineBeat) {
+    return captureStateAsCurvePoints(mainSequence, trackId, bindingId, timelineBeat);
+}
+
+std::string ofxOceanodeTimelineManager::createClip(const std::string& trackId, const std::string& requestedName, double startBeat, double durationBeats) {
+    return createClip(mainSequence, trackId, requestedName, startBeat, durationBeats);
+}
+
+std::string ofxOceanodeTimelineManager::createLfoClip(const std::string& trackId, const std::string& outputBindingId, const std::string& requestedName, double startBeat, double durationBeats) {
+    return createLfoClip(mainSequence, trackId, outputBindingId, requestedName, startBeat, durationBeats);
+}
+
+void ofxOceanodeTimelineManager::ensureLfoLanes(const std::string& trackId, const std::string& clipId) {
+    return ensureLfoLanes(mainSequence, trackId, clipId);
+}
+
+std::string ofxOceanodeTimelineManager::splitClip(const std::string& trackId, const std::string& clipId, double timelineBeat) {
+    return splitClip(mainSequence, trackId, clipId, timelineBeat);
+}
+
+std::string ofxOceanodeTimelineManager::duplicateClip(const std::string& srcTrackId, const std::string& clipId, const std::string& dstTrackId, double newStartBeat, const std::string& srcLaneId, const std::string& dstBindingId) {
+    return duplicateClip(mainSequence, srcTrackId, clipId, dstTrackId, newStartBeat, srcLaneId, dstBindingId);
+}
+
+int ofxOceanodeTimelineManager::separateStateCaptureClip(const std::string& trackId, const std::string& clipId) {
+    return separateStateCaptureClip(mainSequence, trackId, clipId);
+}
+
+bool ofxOceanodeTimelineManager::trimClipStart(const std::string& trackId, const std::string& clipId, double newStartBeat) {
+    return trimClipStart(mainSequence, trackId, clipId, newStartBeat);
+}
+
+bool ofxOceanodeTimelineManager::extendClipStart(const std::string& trackId, const std::string& clipId, double newStartBeat) {
+    return extendClipStart(mainSequence, trackId, clipId, newStartBeat);
+}
+
+bool ofxOceanodeTimelineManager::renameClip(const std::string& trackId, const std::string& clipId, const std::string& requestedName) {
+    return renameClip(mainSequence, trackId, clipId, requestedName);
+}
+
+bool ofxOceanodeTimelineManager::removeClip(const std::string& trackId, const std::string& clipId) {
+    return removeClip(mainSequence, trackId, clipId);
+}
+
+void ofxOceanodeTimelineManager::removeClipFromGroups(const std::string& trackId, const std::string& clipId) {
+    return removeClipFromGroups(mainSequence, trackId, clipId);
+}
+
+std::string ofxOceanodeTimelineManager::groupClips(const std::vector<std::pair<std::string, std::string>>& members) {
+    return groupClips(mainSequence, members);
+}
+
+bool ofxOceanodeTimelineManager::ungroupClip(const std::string& trackId, const std::string& clipId) {
+    return ungroupClip(mainSequence, trackId, clipId);
+}
+
+const ofxOceanodeTimelineClipGroup* ofxOceanodeTimelineManager::getGroupForClip(const std::string& trackId, const std::string& clipId) const {
+    return getGroupForClip(mainSequence, trackId, clipId);
+}
+
+ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(const std::string& trackId, const std::string& clipId) {
+    return getClip(mainSequence, trackId, clipId);
+}
+
+const ofxOceanodeTimelineClip* ofxOceanodeTimelineManager::getClip(const std::string& trackId, const std::string& clipId) const {
+    return getClip(mainSequence, trackId, clipId);
+}
+
+std::string ofxOceanodeTimelineManager::createLane(const std::string& trackId, const std::string& clipId, const std::string& requestedName, ofxOceanodeTimelineLaneType type) {
+    return createLane(mainSequence, trackId, clipId, requestedName, type);
+}
+
+std::string ofxOceanodeTimelineManager::duplicateLane(const std::string& trackId, const std::string& clipId, const std::string& laneId) {
+    return duplicateLane(mainSequence, trackId, clipId, laneId);
+}
+
+bool ofxOceanodeTimelineManager::removeLane(const std::string& trackId, const std::string& clipId, const std::string& laneId) {
+    return removeLane(mainSequence, trackId, clipId, laneId);
+}
+
+bool ofxOceanodeTimelineManager::setLaneMultiRowCount(const std::string& trackId, const std::string& clipId, const std::string& laneId, int rowCount) {
+    return setLaneMultiRowCount(mainSequence, trackId, clipId, laneId, rowCount);
+}
+
+bool ofxOceanodeTimelineManager::reloadWaveform(const std::string& trackId, const std::string& clipId) {
+    return reloadWaveform(mainSequence, trackId, clipId);
+}
+
+bool ofxOceanodeTimelineManager::addBindingToLane(const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::string& bindingId) {
+    return addBindingToLane(mainSequence, trackId, clipId, laneId, bindingId);
+}
+
+bool ofxOceanodeTimelineManager::removeBindingFromLane(const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::string& bindingId) {
+    return removeBindingFromLane(mainSequence, trackId, clipId, laneId, bindingId);
+}
+
+ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(const std::string& trackId, const std::string& clipId, const std::string& laneId) {
+    return getLane(mainSequence, trackId, clipId, laneId);
+}
+
+const ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(const std::string& trackId, const std::string& clipId, const std::string& laneId) const {
+    return getLane(mainSequence, trackId, clipId, laneId);
+}
+
+bool ofxOceanodeTimelineManager::setClipLaneType(const std::string& trackId, const std::string& clipId, const std::string& laneId, ofxOceanodeTimelineLaneType type) {
+    return setClipLaneType(mainSequence, trackId, clipId, laneId, type);
+}
+
+bool ofxOceanodeTimelineManager::setClipTiming(const std::string& trackId, const std::string& clipId, double startBeat, double durationBeats) {
+    return setClipTiming(mainSequence, trackId, clipId, startBeat, durationBeats);
+}
+
+bool ofxOceanodeTimelineManager::setTrackMuted(const std::string& trackId, bool muted) {
+    return setTrackMuted(mainSequence, trackId, muted);
+}
+
+bool ofxOceanodeTimelineManager::setTrackLatencyOffset(const std::string& trackId, float milliseconds) {
+    return setTrackLatencyOffset(mainSequence, trackId, milliseconds);
+}
+
+bool ofxOceanodeTimelineManager::setTrackSolo(const std::string& trackId, bool solo) {
+    return setTrackSolo(mainSequence, trackId, solo);
+}
+
+bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool drives) {
+    return setLaneDrivesTrackSolo(mainSequence, trackId, clipId, laneId, drives);
+}
+
+bool ofxOceanodeTimelineManager::setLaneTargetProbability(const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::string& parameterPath, float probability) {
+    return setLaneTargetProbability(mainSequence, trackId, clipId, laneId, parameterPath, probability);
+}
+
+bool ofxOceanodeTimelineManager::setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted) {
+    return setLaneMuted(mainSequence, trackId, clipId, laneId, muted);
+}
+
+bool ofxOceanodeTimelineManager::setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo) {
+    return setLaneSolo(mainSequence, trackId, clipId, laneId, solo);
+}
+
+bool ofxOceanodeTimelineManager::setClipChance(const std::string& trackId, const std::string& clipId, float chance) {
+    return setClipChance(mainSequence, trackId, clipId, chance);
+}
+
+bool ofxOceanodeTimelineManager::setClipMuted(const std::string& trackId, const std::string& clipId, bool muted) {
+    return setClipMuted(mainSequence, trackId, clipId, muted);
+}
+
+bool ofxOceanodeTimelineManager::resizeClipEnd(const std::string& trackId, const std::string& clipId, double duration, ofxOceanodeTimelineEndEdit operation) {
+    return resizeClipEnd(mainSequence, trackId, clipId, duration, operation);
+}
+
+bool ofxOceanodeTimelineManager::setClipContentDuration(const std::string& trackId, const std::string& clipId, double contentDurationBeats, bool repeatContent) {
+    return setClipContentDuration(mainSequence, trackId, clipId, contentDurationBeats, repeatContent);
+}
+
+bool ofxOceanodeTimelineManager::consolidateClipContent(const std::string& trackId, const std::string& clipId) {
+    return consolidateClipContent(mainSequence, trackId, clipId);
+}
+
+bool ofxOceanodeTimelineManager::setClipNumber(const std::string& trackId, const std::string& clipId, const std::string& laneId, double beat, float value) {
+    return setClipNumber(mainSequence, trackId, clipId, laneId, beat, value);
+}
+
+bool ofxOceanodeTimelineManager::setClipStep(const std::string& trackId, const std::string& clipId, const std::string& laneId, double startBeat, const std::string& value, double durationBeats) {
+    return setClipStep(mainSequence, trackId, clipId, laneId, startBeat, value, durationBeats);
+}
+
+bool ofxOceanodeTimelineManager::removeClipStep(const std::string& trackId, const std::string& clipId, const std::string& laneId, double startBeat) {
+    return removeClipStep(mainSequence, trackId, clipId, laneId, startBeat);
+}
+
+ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) {
+    return getBinding(mainSequence, trackId, bindingId);
+}
+
+const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) const {
+    return getBinding(mainSequence, trackId, bindingId);
 }
