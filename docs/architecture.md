@@ -79,6 +79,22 @@ folder as one row with a summary of its contents, hides what is inside a
 folded folder, and applies header drags and the Arrange menu through
 deferred `moveTrack` requests after the track loop.
 
+Macro timelines: every macro can own a sequence
+(`ofxOceanodeTimelineMacroSequences.cpp`). It is created on first use, its
+binding paths are relative to the macro's container, and it is saved as
+`sequence.json` in the macro's own folder (its preset folder, or its library
+definition, through the core's `loadMacroPreset`/`saveMacroPreset` hooks).
+Copies of a library macro share one sequence; entries follow the macro's
+container through a `weak_ptr`, so a deleted macro's sequence goes with it.
+Macro sequences are edited, not played, until macro clips exist.
+
+The controller edits one sequence at a time, its scope: the main timeline, or
+a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
+breadcrumb). Every model call from the controller and lane editors passes the
+scope's sequence (`scope(timeline)`; editors get it in their context). The
+tempo lane, loop, markers, seeking and the playhead belong to the main
+timeline and are hidden in a macro scope; undo steps the scope's own history.
+
 Clips and Targets are session-only projections of the same model, selected by
 `targetsView` in the controller. Clips draws one arrangement rectangle per clip;
 Targets projects clips onto binding rows. Neither projection changes clip

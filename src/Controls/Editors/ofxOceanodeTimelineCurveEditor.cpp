@@ -14,6 +14,7 @@ using namespace ofxOceanodeTimelineClipTime;
 
 void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* lane = &context.lane;
 
@@ -33,7 +34,7 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
         ImGui::SetTooltip("Clamp curve values to the configured Range min..max");
     {
         // Scale: Auto follows the parameter (a gain: dB)
-        const auto* scaleBinding = lane->bindingIds.empty() ? nullptr : timeline.getBinding(track.id, lane->bindingIds.front());
+        const auto* scaleBinding = lane->bindingIds.empty() ? nullptr : timeline.getBinding(sequence, track.id, lane->bindingIds.front());
         const bool autoDb = scaleBinding != nullptr && scaleBinding->valueScale == "dB";
         int scale = lane->curveScale == "Linear" ? 1 : lane->curveScale == "dB" ? 2 : 0;
         const std::string autoLabel = std::string("Auto (") + (autoDb ? "dB" : "linear") + ")";
@@ -79,6 +80,7 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
 void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
     const ofxOceanodeTimelineLaneCanvas& canvas) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;
@@ -100,7 +102,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     const float curveRangeMin = std::min(lane->valueMin, lane->valueMax);
     const float curveRangeMax = std::max(lane->valueMin, lane->valueMax);
     // a gain on a decibel axis: the point values are positions on it
-    const auto* curveBinding = lane->bindingIds.empty() ? nullptr : timeline.getBinding(track.id, lane->bindingIds.front());
+    const auto* curveBinding = lane->bindingIds.empty() ? nullptr : timeline.getBinding(sequence, track.id, lane->bindingIds.front());
     const bool curveDb = ofxOceanodeTimelineScale::isDecibels(*lane, curveBinding);
     const auto curveValueToY = [&](float normalizedValue) {
         if(curveDb) return curveBottom - ofClamp(normalizedValue, 0.0f, 1.0f) * (curveBottom - curveTop);

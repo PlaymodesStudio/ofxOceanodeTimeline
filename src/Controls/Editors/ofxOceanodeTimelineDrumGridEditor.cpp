@@ -242,9 +242,10 @@ void shiftRow(Row& row, double by) {
 void drawRoleCombo(ofxOceanodeTimelineLaneEditorContext& context, const char* label, std::string& roleId,
                    ofxOceanodeTimelineTargetRole role, char* search, size_t searchSize) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto& lane = context.lane;
-    const auto* currentBinding = roleId.empty() ? nullptr : timeline.getBinding(track.id, roleId);
+    const auto* currentBinding = roleId.empty() ? nullptr : timeline.getBinding(sequence, track.id, roleId);
     const std::string preview = currentBinding == nullptr ? "None" : compactParameterName(currentBinding->parameterPath);
     propertyLabel(label);
     if(ImGui::BeginCombo((std::string("##drum") + label).c_str(), preview.c_str())) {
@@ -254,7 +255,7 @@ void drawRoleCombo(ofxOceanodeTimelineLaneEditorContext& context, const char* la
             const bool stillUsed = lane.pianoPitchBindingId == previous || lane.pianoGateBindingId == previous ||
                                    lane.pianoVelocityBindingId == previous || lane.drumDurationBindingId == previous ||
                                    lane.drumFilterBindingId == previous || lane.drumStutterBindingId == previous;
-            if(!previous.empty() && !stillUsed) timeline.removeBindingFromLane(track.id, context.clip.id, lane.id, previous);
+            if(!previous.empty() && !stillUsed) timeline.removeBindingFromLane(sequence, track.id, context.clip.id, lane.id, previous);
         }
         ImGui::InputText("Search parameters", search, searchSize);
         std::vector<std::string> paths = context.targetPaths;
@@ -304,6 +305,7 @@ int ofxOceanodeTimelineDrumGridEditor::focusedRow(const ofxOceanodeTimelineLane&
 
 void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto& lane = context.lane;
     const ofxOceanodeTimelineNoteGroup* group = nullptr;
@@ -312,15 +314,15 @@ void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEdito
     if(group != nullptr) {
         // Grouped lanes follow their instrument's routing.
         if(ImGui::Button(("Routing: " + group->name + "...").c_str())) context.noteGroupToEdit = group->id;
-        const auto* gate = timeline.getBinding(track.id, group->gateBindingId);
-        const auto* pitch = timeline.getBinding(track.id, group->pitchBindingId);
+        const auto* gate = timeline.getBinding(sequence, track.id, group->gateBindingId);
+        const auto* pitch = timeline.getBinding(sequence, track.id, group->pitchBindingId);
         ImGui::TextWrapped("Gate -> %s", gate == nullptr ? "No target" : gate->parameterPath.c_str());
         ImGui::TextWrapped("Pitch -> %s", pitch == nullptr ? "No target" : pitch->parameterPath.c_str());
-        const auto* duration = timeline.getBinding(track.id, group->durationBindingId);
+        const auto* duration = timeline.getBinding(sequence, track.id, group->durationBindingId);
         ImGui::TextWrapped("Duration -> %s", duration == nullptr ? "No target" : duration->parameterPath.c_str());
-        const auto* filter = timeline.getBinding(track.id, group->filterBindingId);
+        const auto* filter = timeline.getBinding(sequence, track.id, group->filterBindingId);
         ImGui::TextWrapped("Filter -> %s", filter == nullptr ? "No target" : filter->parameterPath.c_str());
-        const auto* stutter = timeline.getBinding(track.id, group->stutterBindingId);
+        const auto* stutter = timeline.getBinding(sequence, track.id, group->stutterBindingId);
         ImGui::TextWrapped("Stutter -> %s", stutter == nullptr ? "No target" : stutter->parameterPath.c_str());
         ImGui::TextDisabled("Row n plays component (slot) n");
     } else {
@@ -340,6 +342,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEdito
 
 void ofxOceanodeTimelineDrumGridEditor::drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     auto& lane = context.lane;
     // The grid: where new hits snap and which columns are drawn. Hits already
     // placed keep their positions whatever it becomes.

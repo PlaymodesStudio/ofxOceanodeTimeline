@@ -10,7 +10,7 @@ class ofxOceanodeTimelineLfoEditor {
 public:
     void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const;
     // Returns a rename request for the shell to service.
-    bool draw(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
+    bool draw(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
               const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
               const ofxOceanodeTimelineEditorView& view,
               ofxOceanodeTimelineClipEditorState& editorState,

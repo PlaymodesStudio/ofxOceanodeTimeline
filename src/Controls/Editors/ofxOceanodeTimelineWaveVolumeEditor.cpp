@@ -9,7 +9,7 @@
 using namespace ofxOceanodeTimelineEditorUi;
 
 void ofxOceanodeTimelineWaveVolumeEditor::draw(
-    ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineTrack& track,
+    ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack& track,
     const ofxOceanodeTimelineEditorView& view, float width, float height,
     double beatPosition, float timelineOriginX) {
     const double endBeat = view.endBeat;
@@ -36,7 +36,7 @@ void ofxOceanodeTimelineWaveVolumeEditor::draw(
     }
     // Through the manager's accessor rather than the member, so every path
     // that touches these points goes through one door.
-    auto& points = timeline.getWaveTrackVolumePoints(track.id);
+    auto& points = timeline.getWaveTrackVolumePoints(sequence, track.id);
     if(points.empty()) {
         const double automationEnd = std::max(1.0, endBeat);
         points = {{0.0, track.waveVolume}, {automationEnd, track.waveVolume}};
@@ -120,7 +120,7 @@ void ofxOceanodeTimelineWaveVolumeEditor::draw(
             const double beat = view.snapBeat(ofClamp(beatForX(mouse.x), 0.0, endBeat));
             const float value = ofClamp(4.0f * (graphMax.y - 5.0f - mouse.y) /
                                         std::max(1.0f, graphMax.y - graphMin.y - 10.0f), 0.0f, 4.0f);
-            timeline.addWaveTrackVolumePoint(track.id, beat, value);
+            timeline.addWaveTrackVolumePoint(sequence, track.id, beat, value);
         } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right) && nearest >= 0) {
             // Right-click: set an exact value or delete (was: delete immediately).
             waveVolumeValuePointIndex = nearest;
@@ -158,7 +158,7 @@ void ofxOceanodeTimelineWaveVolumeEditor::draw(
             const bool deleteDisabled = points.size() <= 2;
             if(deleteDisabled) ImGui::BeginDisabled();
             if(ImGui::MenuItem("Delete point")) {
-                timeline.removeWaveTrackVolumePoint(track.id, points[waveVolumeValuePointIndex].beat);
+                timeline.removeWaveTrackVolumePoint(sequence, track.id, points[waveVolumeValuePointIndex].beat);
                 waveVolumeValuePointIndex = -1;
             }
             if(deleteDisabled) ImGui::EndDisabled();

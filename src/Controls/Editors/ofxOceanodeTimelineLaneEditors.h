@@ -14,7 +14,9 @@ class ofxOceanodeTimelineLaneEditors {
 public:
     ofxOceanodeTimelineLaneEditor& forType(ofxOceanodeTimelineLaneType type);
     bool hasNoteSelection(const std::string& laneId) const { return pianoRoll.hasNoteSelection(laneId); }
-    void updateMonitoring(ofxOceanodeTimelineManager& timeline, const std::string& laneId) { pianoRoll.updateMonitoring(timeline, laneId); }
+    void updateMonitoring(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, const std::string& laneId) {
+        pianoRoll.updateMonitoring(timeline, sequence, laneId);
+    }
     void clearSelection() { pianoRoll.clearSelection(); drumGrid.clearSelection(); }
     void forgetTrack(const std::string& trackId) { pianoRoll.forgetTrack(trackId); }
     static float keyboardReserve(ofxOceanodeTimelineLaneType type);

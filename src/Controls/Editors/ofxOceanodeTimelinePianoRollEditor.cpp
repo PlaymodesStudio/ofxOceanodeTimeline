@@ -63,12 +63,13 @@ bool mutationGroupChip(int group, bool selected) {
 
 void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;
 
     auto drawPianoRole = [&](const char* label, std::string& roleId) {
-        const auto* currentBinding = roleId.empty() ? nullptr : timeline.getBinding(track.id, roleId);
+        const auto* currentBinding = roleId.empty() ? nullptr : timeline.getBinding(sequence, track.id, roleId);
         const std::string preview = currentBinding == nullptr ? "None" : compactParameterName(currentBinding->parameterPath);
         propertyLabel(label);
         if(ImGui::BeginCombo((std::string("##") + label).c_str(), preview.c_str())) {
@@ -79,7 +80,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEdit
                     lane->pianoGateBindingId == previousRoleId ||
                     lane->pianoVelocityBindingId == previousRoleId;
                 if(!previousRoleId.empty() && !stillUsed)
-                    timeline.removeBindingFromLane(track.id, clip->id, lane->id, previousRoleId);
+                    timeline.removeBindingFromLane(sequence, track.id, clip->id, lane->id, previousRoleId);
             }
             ImGui::InputText("Search parameters", targetSearch, sizeof(targetSearch));
             std::vector<std::string> paths = context.targetPaths;
@@ -108,7 +109,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEdit
             const char* labels[] = {"Pitch", "Gate", "Velocity"};
             const std::string* roles[] = {&laneGroup->pitchBindingId, &laneGroup->gateBindingId, &laneGroup->velocityBindingId};
             for(int role = 0; role < 3; ++role) {
-                const auto* target = timeline.getBinding(track.id, *roles[role]);
+                const auto* target = timeline.getBinding(sequence, track.id, *roles[role]);
                 ImGui::TextWrapped("%s -> %s", labels[role], target == nullptr ? "No target" : target->parameterPath.c_str());
             }
         }
@@ -117,7 +118,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEdit
             const char* roleNames[3] = {"Pitch", "Gate", "Velocity"};
             const std::string* roles[3] = {&laneGroup->pitchBindingId, &laneGroup->gateBindingId, &laneGroup->velocityBindingId};
             for(int role = 0; role < 3; ++role) {
-                const auto* member = roles[role]->empty() ? nullptr : timeline.getBinding(track.id, *roles[role]);
+                const auto* member = roles[role]->empty() ? nullptr : timeline.getBinding(sequence, track.id, *roles[role]);
                 tip += std::string(role > 0 ? "\n" : "") + roleNames[role] + ": " +
                     (member == nullptr ? std::string("none") : member->parameterPath);
             }
@@ -435,13 +436,14 @@ void ofxOceanodeTimelinePianoRollEditor::drawMutation(ofxOceanodeTimelineLaneEdi
 void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
     const ofxOceanodeTimelineLaneCanvas& canvas) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;
     const auto& view = context.view;
     auto& editorLaneId = context.focusedLaneId;
     const bool isFocused = context.focused;
-    updateMonitoring(timeline, context.focusedLaneId);
+    updateMonitoring(timeline, sequence, context.focusedLaneId);
     auto beatOffset = [&](double beat) { return view.beatToPixels(beat); };
     auto beatAtOffset = [&](float pixels) { return view.pixelsToBeat(pixels); };
     const auto& editorMin = canvas.min;
@@ -1240,10 +1242,10 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
 
 }
 
-void ofxOceanodeTimelinePianoRollEditor::updateMonitoring(ofxOceanodeTimelineManager& timeline,
+void ofxOceanodeTimelinePianoRollEditor::updateMonitoring(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence,
                                                          const std::string& activeLaneId) {
     if(!editPreviewActive) return;
-    const auto* lane = timeline.getLane(editPreviewTrackId, editPreviewClipId, editPreviewLaneId);
+    const auto* lane = timeline.getLane(sequence, editPreviewTrackId, editPreviewClipId, editPreviewLaneId);
     if(ImGui::IsMouseDown(ImGuiMouseButton_Left) && lane != nullptr && lane->pianoLiveEditSound &&
        activeLaneId == editPreviewLaneId && pianoDragMode != PianoDragMode::None) return;
     timeline.clearLiveOverride(editPreviewTrackId, editPreviewGateId);

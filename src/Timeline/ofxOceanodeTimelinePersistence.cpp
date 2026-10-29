@@ -1456,3 +1456,21 @@ bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath)
         return false;
     }
 }
+
+ofJson ofxOceanodeTimelineManager::sequenceToJson(const ofxOceanodeTimelineSequence& sequence) const {
+    // The preset codec, on a timeline holding only this sequence, so every
+    // lane type and future field stays in step with timeline.json.
+    ofxOceanodeTimelineManager isolated;
+    isolated.mainSequence.tracks = sequence.tracks;
+    isolated.mainSequence.clipGroups = sequence.clipGroups;
+    const auto full = isolated.toJson();
+    return {{"version", full["version"]}, {"tracks", full["tracks"]}, {"clipGroups", full["clipGroups"]}};
+}
+
+void ofxOceanodeTimelineManager::sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json) const {
+    ofxOceanodeTimelineManager isolated;
+    if(json.is_object()) isolated.fromJson(json);
+    auto* base = sequence.base;
+    sequence = std::move(isolated.mainSequence);
+    sequence.base = base;
+}

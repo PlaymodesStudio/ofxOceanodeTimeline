@@ -19,7 +19,7 @@ public:
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
     void clearSelection();
-    void updateMonitoring(ofxOceanodeTimelineManager& timeline, const std::string& activeLaneId);
+    void updateMonitoring(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, const std::string& activeLaneId);
     bool hasNoteSelection(const std::string& laneId) const {
         return pianoSelectionLaneId == laneId && !pianoSelectedNoteIndices.empty();
     }

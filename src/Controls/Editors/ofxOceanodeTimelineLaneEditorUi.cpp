@@ -45,10 +45,10 @@ bool hoverRect(const ImVec2& min, const ImVec2& max) {
            ImGui::IsMouseHoveringRect(min, max);
 }
 
-std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
+std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
                                              const std::string& trackId, const ofxOceanodeTimelineLane& lane) {
     if(lane.bindingIds.empty()) return {};
-    const auto* binding = timeline.getBinding(trackId, lane.bindingIds.front());
+    const auto* binding = timeline.getBinding(sequence, trackId, lane.bindingIds.front());
     auto* parameter = binding == nullptr ? nullptr : container.findTimelineParameter(binding->parameterPath);
     return parameter == nullptr ? std::vector<std::string>() : ofxOceanodeTimelineDropdownOptions(*parameter);
 }

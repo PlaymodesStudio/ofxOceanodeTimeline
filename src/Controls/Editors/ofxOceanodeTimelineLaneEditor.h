@@ -10,6 +10,7 @@ class ofxOceanodeContainer;
 struct ofxOceanodeTimelineLaneEditorContext {
     ofxOceanodeTimelineManager& timeline;
     ofxOceanodeContainer& container;
+    ofxOceanodeTimelineSequence& sequence; // the one the editor shows (main or a macro's)
     const ofxOceanodeTimelineTrack& track;
     ofxOceanodeTimelineClip& clip;
     ofxOceanodeTimelineLane& lane;
@@ -36,6 +37,7 @@ struct ofxOceanodeTimelineLaneCanvas {
 struct ofxOceanodeTimelineClipPreview {
     ofxOceanodeTimelineManager& timeline;
     ofxOceanodeContainer& container;
+    ofxOceanodeTimelineSequence& sequence;
     const ofxOceanodeTimelineTrack& track;
     const ofxOceanodeTimelineClip& clip;
     const ofxOceanodeTimelineLane* lane;

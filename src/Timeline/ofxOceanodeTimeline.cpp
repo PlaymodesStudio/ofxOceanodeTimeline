@@ -1065,6 +1065,8 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
 }
 
 std::string ofxOceanodeTimelineManager::createWaveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    // Macro timelines hold automation only (audio voices are keyed by track and clip id).
+    if(!isMainSequence(sequence)) return std::string();
     const auto trackId = createTrack(sequence, requestedName);
     if(auto* track = getTrack(sequence, trackId)) {
         track->isWaveTrack = true;

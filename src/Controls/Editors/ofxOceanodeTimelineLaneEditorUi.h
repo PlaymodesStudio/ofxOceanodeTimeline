@@ -44,7 +44,7 @@ int divisionIndexForBeats(double beats);
 std::string compactParameterName(const std::string& path);
 ImU32 mutedTrackColor(const ofColor& color, float brightness, float saturation = 0.34f);
 bool hoverRect(const ImVec2& min, const ImVec2& max);
-std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
+std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
                                              const std::string& trackId, const ofxOceanodeTimelineLane& lane);
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value);
 // Inserts a point in beat order; a segment it cuts keeps its bend in both

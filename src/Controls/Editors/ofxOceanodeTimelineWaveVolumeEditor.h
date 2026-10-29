@@ -3,12 +3,13 @@
 class ofxOceanodeTimelineManager;
 class ofxOceanodeTimelineEditorView;
 struct ofxOceanodeTimelineTrack;
+class ofxOceanodeTimelineSequence;
 
 class ofxOceanodeTimelineWaveVolumeEditor {
 public:
     // Origin of beat zero in the arrangement, including horizontal scroll.
     // The properties panel may have a different width on narrow windows.
-    void draw(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineTrack& track,
+    void draw(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack& track,
               const ofxOceanodeTimelineEditorView& view, float width, float height,
               double beatPosition, float timelineOriginX);
 

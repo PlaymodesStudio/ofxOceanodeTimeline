@@ -9,6 +9,7 @@ from pathlib import Path
 
 native.fixture.CASES = r'''
 #include "ofxOceanodeTimeline.h"
+#include "Nodes/ofxOceanodeNodeMacro.h"
 // Inspect transient shell state only; all drawing and mutations use production code.
 #define private public
 #include "Controls/ofxOceanodeTimelineController.h"
@@ -772,10 +773,85 @@ int main() {
     dragHeader(folder,ImVec2(ui.fileDropBounds.x-150,(folderRow->minY+folderRow->maxY)*0.5f+20.0f));
     assert(model.getTrack(folder)->parentId.empty());
 
+    {
+        // A macro's own timeline: opened from its node menu, edited in its own
+        // scope with its own history, saved with the macro.
+        auto& macroNode=owner->createNode(std::make_unique<ofxOceanodeNodeMacro>(),1);
+        auto inside=static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
+        auto& innerProbe=inside->createNode(std::make_unique<ClarityProbe>(),1);
+        auto& innerCutoff=static_cast<ofxOceanodeAbstractParameter&>(innerProbe.getParameters().get("Cutoff"));
+        auto* pattern=model.getMacroSequence(*inside);
+        assert(pattern && pattern->tracks.empty() && pattern->base==inside.get());
+        const auto mainBefore=model.toJson()["tracks"];
+        const auto pt=model.createTrack(*pattern,"Pattern");
+        const auto pb=model.addBinding(*pattern,pt,innerCutoff);
+        assert(!pb.empty() && pattern->tracks[0].bindings[0].parameterPath=="Synth_1/Cutoff"); // relative to the macro
+        assert(model.addBinding(*pattern,pt,static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get("Cutoff"))).empty());
+        const auto pc=model.createClip(*pattern,pt,"Phrase",0,4);
+        const auto pl=model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
+        model.addBindingToLane(*pattern,pt,pc,pl,pb);
+        assert(model.toJson()["tracks"]==mainBefore); // the main timeline is untouched
+
+        // "Edit Timeline": the editor shows the macro's sequence.
+        for(int i=0;i<25;++i) frame();
+        model.requestMacroScope(*inside);
+        frame(); frame();
+        assert(ui.inMacroScope() && &ui.scope(model)==pattern && ui.scopes.back().label.size());
+        const auto rect=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==pc;});
+        assert(rect!=ui.clipScreenRects.end() && rect->trackId==pt);
+        assert(ui.clipScreenRects.size()==1); // only the macro's clip (its ids may repeat the main timeline's)
+        frame(1250,ImVec2(-100,-100),false,"macro-scope");
+        // A real drag moves the macro's clip; undo puts it back, in this scope only.
+        const ImVec2 from((rect->x1+rect->x2)*0.5f,(rect->y1+rect->y2)*0.5f);
+        const float beatPixels=(rect->x2-rect->x1)/4.0f;
+        frame(1250,from,false); frame(1250,from,true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(from.x+beatPixels*2*i/6.0f,from.y),true);
+        frame(1250,ImVec2(from.x+beatPixels*2,from.y),false); frame();
+        assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-2.0)<1e-6);
+        assert(model.toJson()["tracks"]==mainBefore);
+        assert(ui.inMacroScope());
+        ui.restoreHistory(model,false);
+        assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat)<1e-6);
+        ui.restoreHistory(model,true);
+        assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-2.0)<1e-6);
+        assert(model.toJson()["tracks"]==mainBefore);
+
+        // Saved with the macro, read back from its folder.
+        const auto folder=std::filesystem::temp_directory_path()/"oceanode-macro-sequence";
+        std::filesystem::create_directories(folder);
+        assert(model.saveMacroSequence(*inside,folder.string()));
+        assert(std::filesystem::exists(folder/"sequence.json"));
+        // The core's own save and load of the macro's folder reach it too.
+        std::filesystem::remove(folder/"sequence.json");
+        assert(inside->savePreset(folder.string()) && std::filesystem::exists(folder/"sequence.json"));
+        model.loadMacroSequence(*inside,folder.string());
+        auto* reloaded=model.getMacroSequence(*inside);
+        assert(reloaded && reloaded->tracks.size()==1 && reloaded->tracks[0].clips.size()==1);
+        assert(std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
+        assert(inside->loadPreset(folder.string()));
+        reloaded=model.getMacroSequence(*inside);
+        assert(reloaded && reloaded->tracks.size()==1 && std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
+        frame(); frame(); // the old scope's sequence was replaced: back to the main timeline
+        assert(!ui.inMacroScope());
+        // An emptied timeline leaves no file behind.
+        model.removeTrack(*reloaded,reloaded->tracks[0].id);
+        assert(model.saveMacroSequence(*inside,folder.string()) && !std::filesystem::exists(folder/"sequence.json"));
+        std::filesystem::remove_all(folder);
+
+        // Back to Main from the breadcrumb, and closed when the macro goes away.
+        model.requestMacroScope(*inside); frame(); assert(ui.inMacroScope());
+        ui.leaveScopesTo(0); frame(); assert(!ui.inMacroScope());
+        model.requestMacroScope(*inside); frame(); assert(ui.inMacroScope());
+        inside.reset();
+        macroNode.deleteSelf();
+        frame(); frame();
+        assert(!ui.inMacroScope());
+    }
+
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, macro timeline scope (undo, save, breadcrumb), portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 

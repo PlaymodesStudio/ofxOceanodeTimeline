@@ -37,6 +37,7 @@ void ofxOceanodeTimelineStepEditor::drawProperties(ofxOceanodeTimelineLaneEditor
 void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
     const ofxOceanodeTimelineLaneCanvas& canvas) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;
@@ -153,7 +154,7 @@ void ofxOceanodeTimelineStepEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCont
             const double cellBeat = cellBeatAtMouse();
             auto stepIt = findStep(cellBeat);
             if(stepIt == lane->step.steps.end()) {
-                timeline.setClipStep(editorTrackId, editorClipId, lane->id, cellBeat, "1", beatsPerStep);
+                timeline.setClipStep(sequence, editorTrackId, editorClipId, lane->id, cellBeat, "1", beatsPerStep);
                 stepIt = findStep(cellBeat);
             }
             return stepIt;

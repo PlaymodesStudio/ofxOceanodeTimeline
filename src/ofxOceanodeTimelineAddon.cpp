@@ -1,3 +1,4 @@
+#include "Nodes/ofxOceanodeNodeMacro.h"
 #include "ofxOceanodeTimeline.h"
 #include "ofxOceanode.h"
 #include "ofxOceanodeTimelineController.h"
@@ -34,6 +35,12 @@ public:
     }
     void retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) override {
         manager.retargetParameterPaths(oldToNew);
+    }
+    void loadMacroPreset(ofxOceanodeContainer& macroContainer, const std::string& folder) override {
+        manager.loadMacroSequence(macroContainer, folder);
+    }
+    bool saveMacroPreset(const ofxOceanodeContainer& macroContainer, const std::string& folder) const override {
+        return manager.saveMacroSequence(macroContainer, folder);
     }
     void removeParameterBindings(ofxOceanodeAbstractParameter& parameter) override {
         const auto path = host->getTimelineParameterPath(parameter);
@@ -86,6 +93,33 @@ public:
                 }
                 ImGui::EndMenu();
             }
+            // Inside a macro: its own timeline too (a macro's timeline only
+            // drives what is inside that macro).
+            if(auto* model = absParam.getNodeModel()) {
+                const std::string canvas = model->getParents();
+                auto* inside = canvas.empty() || canvas == "Canvas" || canvas == "0" ? nullptr : host->getContainerForCanvasID(canvas);
+                auto* sequence = inside == nullptr || inside == host ? nullptr : timelineManager.getMacroSequence(*inside);
+                if(sequence != nullptr) {
+                    const std::string label = "Add to " + timelineManager.getMacroSequenceLabel(*inside) + " Timeline Track";
+                    if(ImGui::BeginMenu(label.c_str())) {
+                        auto addTo = [&](const std::string& trackId) {
+                            if(!timelineManager.addBinding(*sequence, trackId, absParam).empty())
+                                timelineManager.requestMacroScope(*inside);
+                        };
+                        if(ImGui::Selectable("New Timeline Track")) {
+                            const auto trackId = timelineManager.createTrack(*sequence, absParam.getName());
+                            addTo(trackId);
+                        }
+                        for(const auto& track : sequence->tracks) {
+                            if(track.isFolder) continue;
+                            if(ImGui::Selectable((track.name + "##macroTrack" + track.id).c_str())) addTo(track.id);
+                        }
+                        ImGui::EndMenu();
+                    }
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("This macro's own timeline: saved with the macro, shared by copies of a library macro.");
+                }
+            }
             {
                 // Pitch, gate and velocity as one piano-roll row; the
                 // timeline shows a dialog to pick the other two (or the
@@ -118,6 +152,16 @@ public:
 
     }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
+                // A macro's own timeline, opened in the timeline editor.
+                if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&model); macro != nullptr && macro->getContainer()){
+                    ImGui::Separator();
+                    if(ImGui::Selectable("Edit Timeline")){
+                        manager.requestMacroScope(*macro->getContainer());
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Open this macro's own timeline in the timeline window.\nIt is saved with the macro (copies of a library macro share it).");
+                }
                 // An instrument (a synth that takes notes): a piano-roll row
                 // playing it, set up in the timeline's dialog.
                 ofxOceanodeTimelineInstrument instrument;

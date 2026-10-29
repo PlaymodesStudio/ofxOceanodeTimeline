@@ -15,6 +15,7 @@ using namespace ofxOceanodeTimelineClipTime;
 void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
     const ofxOceanodeTimelineLaneCanvas& canvas) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     auto* container = &context.container;
     const auto& track = context.track;
     auto* clip = &context.clip;
@@ -33,7 +34,7 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // Number: free values. Dropdown: option indices of the bound
     // parameter, shown by name and picked from its list.
     const bool dropdown = lane->type == ofxOceanodeTimelineLaneType::Dropdown;
-    const auto options = dropdown ? laneDropdownOptions(timeline, *container, track.id, *lane) : std::vector<std::string>();
+    const auto options = dropdown ? laneDropdownOptions(timeline, sequence, *container, track.id, *lane) : std::vector<std::string>();
     const char* valuePopup = dropdown ? "Dropdown option" : "Number value";
     const double content = sourceDuration(*clip);
     const double cycleLength = cycleDuration(*clip);
@@ -83,7 +84,7 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             } else if(hit < 0 && !ImGui::GetIO().KeyShift) {
                 const double beat = std::max(0.0, std::min(content, view.snapBeat(sourceBeat)));
                 const float value = ofxOceanodeTimelineCurve::valueAtBeat(lane->curvePoints, {}, "Step", beat, 0.0f);
-                timeline.setClipNumber(track.id, clip->id, lane->id, beat, value);
+                timeline.setClipNumber(sequence, track.id, clip->id, lane->id, beat, value);
                 for(size_t i = 0; i < lane->curvePoints.size(); ++i)
                     if(std::abs(lane->curvePoints[i].beat - beat) < 1e-6) curveValuePointIndex = static_cast<int>(i);
                 curveNumericValue = value;
@@ -163,6 +164,7 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
 
 void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineClipPreview& preview) const {
     auto& timeline = preview.timeline;
+    auto& sequence = preview.sequence;
     auto* container = &preview.container;
     const auto& track = preview.track;
     const auto& clip = preview.clip;
@@ -175,7 +177,7 @@ void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineCl
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const bool dropdown = lane->type == ofxOceanodeTimelineLaneType::Dropdown;
-    const auto options = dropdown ? laneDropdownOptions(timeline, *container, track.id, *lane) : std::vector<std::string>();
+    const auto options = dropdown ? laneDropdownOptions(timeline, sequence, *container, track.id, *lane) : std::vector<std::string>();
     dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
     const int cycles = clip.repeatContent ? static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip))) : 1;
     for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {

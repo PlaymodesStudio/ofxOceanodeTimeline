@@ -14,6 +14,7 @@ using namespace ofxOceanodeTimelineClipTime;
 
 void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEditorContext& context) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;
@@ -21,7 +22,7 @@ void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEdit
     int rows = std::max(1, lane->multiRowCount);
     propertyLabel("Components");
     if(ImGui::DragInt("##Components", &rows, 0.1f, 1, 16))
-        timeline.setLaneMultiRowCount(track.id, clip->id, lane->id, rows);
+        timeline.setLaneMultiRowCount(sequence, track.id, clip->id, lane->id, rows);
     drawDivision(*lane);
     if(lane->type == ofxOceanodeTimelineLaneType::MultiValue) {
         ImGui::TextDisabled("Dbl-click a block to edit");
@@ -37,6 +38,7 @@ void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEdit
 void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
     const ofxOceanodeTimelineLaneCanvas& canvas) {
     auto& timeline = context.timeline;
+    auto& sequence = context.sequence;
     const auto& track = context.track;
     auto* clip = &context.clip;
     auto* lane = &context.lane;

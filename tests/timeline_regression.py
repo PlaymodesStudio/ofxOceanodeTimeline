@@ -459,7 +459,9 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         command = [os.environ.get("CXX", "clang++"), "-std=c++17", "-O0", "-g", "-w",
                    "-fsanitize=address,undefined", "-fno-sanitize=vptr", "-fno-omit-frame-pointer", "-DOF_NO_FMOD",
                    "-I" + str(folder), *["-I" + str(path) for path in includes], str(cpp),
-                   *[str(path) for path in sorted((ADDON / "src/Timeline").glob("*.cpp"))],
+                   # Macro timelines walk real macro nodes, which this mock container has none of.
+                   *[str(path) for path in sorted((ADDON / "src/Timeline").glob("*.cpp"))
+                     if path.name != "ofxOceanodeTimelineMacroSequences.cpp"],
                    str(ADDON / "src/Controls/Editors/ofxOceanodeTimelineEditorView.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeScheduling.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeTransport.cpp"),

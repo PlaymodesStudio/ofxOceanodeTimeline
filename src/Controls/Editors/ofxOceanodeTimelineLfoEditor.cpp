@@ -13,7 +13,7 @@ using namespace ofxOceanodeTimelineCurve;
 using namespace ofxOceanodeTimelineClipTime;
 
 bool ofxOceanodeTimelineLfoEditor::draw(
-    ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
+    ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
     const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
     const ofxOceanodeTimelineEditorView& view,
     ofxOceanodeTimelineClipEditorState& editorState,
@@ -50,7 +50,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     if(header.close) editorState.clipEditorOpen = false;
     finishAbsoluteLayout(ImVec2(headerMin.x, headerMax.y));
     if(editorFolded) return renameRequested; // folded: only the header row is shown
-    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, track, clip, view, endEdit);
+    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, sequence, track, clip, view, endEdit);
     ImGui::TextWrapped("Control envelopes shape this oscillator. Only the LFO result drives the output target.");
 
     // Every row is a full-width block starting at the same x, so one origin
@@ -92,10 +92,10 @@ bool ofxOceanodeTimelineLfoEditor::draw(
 
     auto drawLanePlayback = [&](ofxOceanodeTimelineLane& lane) {
         if(playbackToggle("laneMute" + lane.id, "M", lane.muted, "Mute lane"))
-            timeline.setLaneMuted(track.id, clip.id, lane.id, !lane.muted);
+            timeline.setLaneMuted(sequence, track.id, clip.id, lane.id, !lane.muted);
         ImGui::SameLine();
         if(playbackToggle("laneSolo" + lane.id, "S", lane.solo, "Solo lane within this clip"))
-            timeline.setLaneSolo(track.id, clip.id, lane.id, !lane.solo);
+            timeline.setLaneSolo(sequence, track.id, clip.id, lane.id, !lane.solo);
         ImGui::SameLine();
     };
 
@@ -110,7 +110,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                              ImVec2(rowMin.x + kLabelWidth, rowMax.y),
                              mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
-        if(auto* lane = timeline.getLane(track.id, clip.id, key)) drawLanePlayback(*lane);
+        if(auto* lane = timeline.getLane(sequence, track.id, clip.id, key)) drawLanePlayback(*lane);
         if(ImGui::SmallButton((">##lfoExpand" + key).c_str())) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
         ImGui::Selectable((label + "##lfoHeaderCollapsed" + key).c_str(), focused,
@@ -200,7 +200,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         beginRowProperties(row, resultKey);
         ImGui::TextUnformatted("LFO result");
         const auto* outputBinding = clip.lfoOutputBindingId.empty()
-            ? nullptr : timeline.getBinding(track.id, clip.lfoOutputBindingId);
+            ? nullptr : timeline.getBinding(sequence, track.id, clip.lfoOutputBindingId);
         const std::string outputPreview = outputBinding == nullptr
             ? "No output target" : compactParameterName(outputBinding->parameterPath);
         propertyLabel("Output");
@@ -565,7 +565,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         if(!lfoDragLaneId.empty()) {
-            if(auto* lane = timeline.getLane(track.id, clip.id, lfoDragLaneId))
+            if(auto* lane = timeline.getLane(sequence, track.id, clip.id, lfoDragLaneId))
                 std::sort(lane->curvePoints.begin(), lane->curvePoints.end(),
                           [](const auto& a, const auto& b) { return a.beat < b.beat; });
         }

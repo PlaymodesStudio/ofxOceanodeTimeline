@@ -1087,6 +1087,33 @@ public:
     const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return mainSequence.tracks; }
     // The main timeline's arrangement, read-only (folder depth, parents...).
     const ofxOceanodeTimelineSequence& getMainSequence() const { return mainSequence; }
+    ofxOceanodeTimelineSequence& getMainSequence() { return mainSequence; }
+
+    // ---- Macro timelines: each macro's own sequence ----
+    // The sequence of the macro owning this container (created empty on first
+    // use, its paths relative to the macro); nullptr when no macro owns it.
+    // Copies of a library macro share one; a local macro owns its own.
+    ofxOceanodeTimelineSequence* getMacroSequence(ofxOceanodeContainer& macroContainer);
+    // How the editor names it: the macro's title, else its canvas id.
+    std::string getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const;
+    // Called with the macro's own preset or library folder (sequence.json).
+    void loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder);
+    bool saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const;
+    // False once the macro it belongs to is gone (an editor scope then closes).
+    bool isLiveSequence(const ofxOceanodeTimelineSequence& sequence) const;
+    // A sequence's own data as JSON ("tracks", "clipGroups"), and back.
+    ofJson sequenceToJson(const ofxOceanodeTimelineSequence& sequence) const;
+    void sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json) const;
+    // Undo per sequence: the main timeline's is the timeline history above,
+    // a macro sequence keeps its own.
+    void beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
+    void endTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
+    bool undoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
+    bool redoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
+    // "Edit timeline" from a macro's node menu, picked up by the editor.
+    void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScope = &macroContainer; }
+    ofxOceanodeContainer* consumeMacroScopeRequest() { auto* requested = pendingMacroScope; pendingMacroScope = nullptr; return requested; }
+
     // Resolves a sequence's binding paths (its base, else this timeline's root).
     ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {
         return {sequence.base != nullptr ? sequence.base : container};
@@ -1646,6 +1673,23 @@ private:
         size_t bytes = 0;
     };
     std::unique_ptr<TimelineEdit> pendingTimelineEdit;
+    // Macro sequences: where each one lives and who shares it.
+    struct MacroSequenceEntry {
+        std::weak_ptr<ofxOceanodeContainer> container; // expires with the macro
+        const ofxOceanodeContainer* address = nullptr;
+        std::shared_ptr<ofxOceanodeTimelineSequence> sequence;
+        std::string libraryFolder; // a library macro's definition: shared by every copy
+    };
+    mutable std::vector<MacroSequenceEntry> macroSequences;
+    // Drops entries of deleted macros and keeps each shared sequence's base
+    // on a live copy's container.
+    void pruneMacroSequences() const;
+    struct SequenceHistory {
+        std::unique_ptr<ofJson> pending;
+        std::deque<std::pair<ofJson, ofJson>> undo, redo; // (before, after)
+    };
+    mutable std::map<const ofxOceanodeTimelineSequence*, SequenceHistory> sequenceHistories;
+    ofxOceanodeContainer* pendingMacroScope = nullptr;
     std::deque<TimelineEdit> timelineUndo, timelineRedo;
     bool replayingTimelineEdit = false;
     ofJson timelineEditData() const;

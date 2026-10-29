@@ -263,6 +263,28 @@ private:
     std::vector<TrackHeaderRow> trackHeaderRows;
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
+    // ---- Editor scope: which sequence the editor shows and edits ----
+    // Empty: the main timeline. Otherwise macro timelines, outermost first
+    // (the breadcrumb). Entering or leaving clears selections and the clip
+    // editor, whose ids belong to a sequence.
+    struct EditorScope {
+        ofxOceanodeTimelineSequence* sequence = nullptr;
+        ofxOceanodeContainer* container = nullptr; // the macro's (pickers resolve inside it)
+        std::string label;
+    };
+    std::vector<EditorScope> scopes;
+    ofxOceanodeTimelineSequence& scope(ofxOceanodeTimelineManager& timeline) {
+        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+    }
+    const ofxOceanodeTimelineSequence& scope(const ofxOceanodeTimelineManager& timeline) const {
+        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+    }
+    bool inMacroScope() const { return !scopes.empty(); }
+    void enterMacroScope(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& macroContainer);
+    // Back to the scope at `depth` (0: the main timeline).
+    void leaveScopesTo(size_t depth);
+    void resetEditorForScope();
+    void drawScopeBreadcrumb(ofxOceanodeTimelineManager& timeline);
     // Two clips of one track to merge (applied after the track iteration).
     std::string mergeTrackId, mergeFirstClipId, mergeSecondClipId;
     bool requestClipDeletion = false;
