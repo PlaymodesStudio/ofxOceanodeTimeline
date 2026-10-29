@@ -4912,13 +4912,17 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                     ImGui::EndCombo();
                 }
                 ImGui::TextDisabled("Track parameters this lane drives");
+                const bool toggleLane = isToggleLane(*lane) && !clip->isLfo;
+                constexpr float kChanceWidth = 64.0f;
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(lane->bindingIds.begin(), lane->bindingIds.end(), candidate.id) != lane->bindingIds.end();
                     bool enabled = assigned;
-                    // One row each: checkbox and name, with Inspect pinned to the right.
+                    // One row each: checkbox and name, then (Toggle) the chance
+                    // and Inspect pinned to the right.
+                    const float chanceReserve = assigned && toggleLane ? kChanceWidth + ImGui::GetStyle().ItemSpacing.x : 0.0f;
                     const float inspectReserve = assigned ? smallButtonReserve("?") : 0.0f;
                     const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() -
-                        ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve;
+                        ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - chanceReserve;
                     const std::string name = fitText(compactParameterName(candidate.parameterPath), nameWidth) +
                         (candidate.missingTarget ? " (!)" : "");
                     if(ImGui::Checkbox((name + "##target" + candidate.id).c_str(), &enabled)) {
@@ -4926,6 +4930,18 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                         else timeline.removeBindingFromLane(track.id, clip->id, lane->id, candidate.id);
                     }
                     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
+                    if(assigned && toggleLane) {
+                        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - chanceReserve + ImGui::GetStyle().ItemSpacing.x);
+                        const auto found = lane->targetProbability.find(candidate.parameterPath);
+                        float chance = (found == lane->targetProbability.end() ? 1.0f : found->second) * 100.0f;
+                        ImGui::SetNextItemWidth(kChanceWidth);
+                        if(ImGui::SliderFloat(("##targetChance" + candidate.id).c_str(), &chance, 0.0f, 100.0f, "%.0f%%"))
+                            timeline.setLaneTargetProbability(track.id, clip->id, lane->id, candidate.parameterPath, std::round(chance) / 100.0f);
+                        if(ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Chance that each toggle block reaches %s.\n"
+                                              "Rolled per block and repeat; a block left out keeps it off.\n"
+                                              "Ctrl/Cmd-click to type a value.", candidate.parameterPath.c_str());
+                    }
                     if(assigned) {
                         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve + ImGui::GetStyle().ItemSpacing.x);
                         if(ImGui::SmallButton(("?##inspect" + candidate.id).c_str())) {
@@ -4935,7 +4951,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Inspect what drives %s", candidate.parameterPath.c_str());
                     }
                 }
-                if(isToggleLane(*lane) && !clip->isLfo) {
+                if(toggleLane) {
                     ImGui::Separator();
                     bool drivesSolo = lane->drivesTrackSolo;
                     if(ImGui::Checkbox("Track solo##laneDrivesTrackSolo", &drivesSolo))

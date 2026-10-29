@@ -1574,7 +1574,8 @@ bool evaluateMultiValueRow(const std::vector<ofxOceanodeTimelineValueRegion>& ro
 }
 
 bool evaluateMultiGateRow(const std::vector<ofxOceanodeTimelineGateRegion>& row, double localBeat,
-                          double retriggerGap = 0.0, double wrapLength = 0.0, float* velocity = nullptr) {
+                          double retriggerGap = 0.0, double wrapLength = 0.0, float* velocity = nullptr,
+                          double* regionStart = nullptr) {
     auto startOf = [](const ofxOceanodeTimelineGateRegion& r) { return r.startBeat; };
     auto endOf = [](const ofxOceanodeTimelineGateRegion& r) { return r.end(); };
     auto same = [](const ofxOceanodeTimelineGateRegion&, const ofxOceanodeTimelineGateRegion&) { return true; };
@@ -1583,9 +1584,30 @@ bool evaluateMultiGateRow(const std::vector<ofxOceanodeTimelineGateRegion>& row,
         if(localBeat < region.startBeat || localBeat >= region.end()) continue;
         if(inRetriggerGap(row, index, localBeat, retriggerGap, startOf, endOf, same, wrapLength)) continue;
         if(velocity) *velocity = ofClamp(region.velocity, 0.0f, 1.0f);
+        if(regionStart) *regionStart = region.startBeat;
         return true;
     }
     return false;
+}
+
+// Whether one toggle block reaches one target (lane.targetProbability): one
+// stable roll per block, row, repeat and clip start (see stepProbabilityPasses).
+bool toggleTargetPasses(const ofxOceanodeTimelineLane& lane, const std::string& path, float probability,
+                        double regionStart, int row, int64_t cycle, uint64_t epoch) {
+    if(probability <= 0.0f) return false;
+    if(probability >= 1.0f) return true;
+    uint64_t hash = 0xcbf29ce484222325ULL; // FNV-1a of the path
+    for(const unsigned char c : path) { hash ^= c; hash *= 0x100000001b3ULL; }
+    hash ^= static_cast<uint64_t>(std::llround(regionStart * 960.0)) * 0x9e3779b97f4a7c15ULL;
+    hash ^= (static_cast<uint64_t>(cycle) << 8 | static_cast<uint64_t>(row & 0xff)) * 0xbf58476d1ce4e5b9ULL;
+    hash ^= static_cast<uint64_t>(static_cast<uint32_t>(lane.probabilitySeed)) * 0xd6e8feb86659fd93ULL;
+    hash ^= epoch * 0x94d049bb133111ebULL;
+    hash ^= hash >> 30;
+    hash *= 0xbf58476d1ce4e5b9ULL;
+    hash ^= hash >> 27;
+    hash *= 0x94d049bb133111ebULL;
+    hash ^= hash >> 31;
+    return static_cast<float>(hash & 0xffffULL) / 65535.0f < probability;
 }
 
 // Source beats per timeline beat of a clip (to express the retrigger gap,
@@ -4910,6 +4932,21 @@ bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(const std::string& track
     return true;
 }
 
+bool ofxOceanodeTimelineManager::setLaneTargetProbability(const std::string& trackId, const std::string& clipId,
+                                                        const std::string& laneId, const std::string& parameterPath,
+                                                        float probability) {
+    auto* lane = getLane(trackId, clipId, laneId);
+    if(lane == nullptr) return false;
+    probability = ofClamp(probability, 0.0f, 1.0f);
+    const auto it = lane->targetProbability.find(parameterPath);
+    const float current = it == lane->targetProbability.end() ? 1.0f : it->second;
+    if(current == probability) return false;
+    if(probability >= 1.0f) lane->targetProbability.erase(it);
+    else lane->targetProbability[parameterPath] = probability;
+    refreshPlaybackEnablement();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
     bool changed = false;
     for(auto& track : tracks) {
@@ -5720,6 +5757,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                     const int rowCount = std::max(1, lane.multiRowCount);
                     std::vector<std::string> components;
                     components.reserve(rowCount);
+                    // Gates: the block each row is in (NaN = none), for the
+                    // per-target rolls below.
+                    std::vector<double> blockStarts;
                     for(int row = 0; row < rowCount; ++row) {
                         if(lane.type == ofxOceanodeTimelineLaneType::MultiValue) {
                             float rowValue = 0.0f;
@@ -5728,19 +5768,35 @@ void ofxOceanodeTimelineManager::collectActiveValues(double beatPosition, bool i
                             components.push_back(active ? automationText::formatFloat(rowValue) : "0");
                         } else {
                             float velocity = 1.0f;
+                            double blockStart = 0.0;
                             const bool active = row < static_cast<int>(lane.multiGateRows.size()) &&
                                 evaluateMultiGateRow(lane.multiGateRows[row], sourceBeat,
                                                      laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
                                                      clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0,
-                                                     &velocity);
+                                                     &velocity, &blockStart);
                             components.push_back(!active ? "0" : velocity >= 1.0f ? "1" : automationText::formatFloat(velocity));
+                            blockStarts.push_back(active ? blockStart : std::numeric_limits<double>::quiet_NaN());
                         }
                     }
                     const std::string value = joinAutomationValues(components);
                     for(const auto& bindingId : lane.bindingIds) {
                         if(const auto* binding = bindingFor(track, bindingId)) {
                             if(binding->bypass) continue;
-                            contribute(binding, value);
+                            const auto chance = lane.type == ofxOceanodeTimelineLaneType::MultiGate
+                                ? lane.targetProbability.find(binding->parameterPath) : lane.targetProbability.end();
+                            if(chance == lane.targetProbability.end() || chance->second >= 1.0f) {
+                                contribute(binding, value);
+                                continue;
+                            }
+                            // Blocks this target's roll leaves out rest at 0.
+                            auto reached = components;
+                            const int64_t cycle = ofxOceanodeTimelineClipTime::cycleIndex(clip, beatPosition);
+                            for(int row = 0; row < rowCount; ++row) {
+                                if(std::isnan(blockStarts[row])) continue;
+                                if(!toggleTargetPasses(lane, binding->parameterPath, chance->second,
+                                                       blockStarts[row], row, cycle, mutationEpoch)) reached[row] = "0";
+                            }
+                            contribute(binding, joinAutomationValues(reached));
                         }
                     }
                 } else if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) {
@@ -6492,6 +6548,7 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     ChangeHash hash;
     hash.add(lane.type);
     hash.add(lane.muted); hash.add(lane.solo); hash.add(lane.drivesTrackSolo);
+    for(const auto& [path, probability] : lane.targetProbability) { hash.add(path); hash.add(probability); }
     hash.add(lane.bindingIds.size());
     for(const auto& id : lane.bindingIds) hash.add(id);
     hash.add(lane.step.steps.size());
@@ -7769,6 +7826,11 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["muted"] = lane.muted;
                 laneJson["solo"] = lane.solo;
                 if(lane.drivesTrackSolo) laneJson["drivesTrackSolo"] = true;
+                if(!lane.targetProbability.empty()) {
+                    laneJson["targetProbability"] = ofJson::object();
+                    for(const auto& [path, probability] : lane.targetProbability)
+                        laneJson["targetProbability"][path] = probability;
+                }
                 laneJson["laneType"] = laneTypeToString(lane.type);
                 laneJson["bindingIds"] = lane.bindingIds;
                 laneJson["stepCount"] = lane.stepCount;
@@ -8139,6 +8201,13 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         lane.muted = laneJson.value("muted", false);
                         lane.solo = laneJson.value("solo", false);
                         lane.drivesTrackSolo = laneJson.value("drivesTrackSolo", false);
+                        if(laneJson.contains("targetProbability") && laneJson["targetProbability"].is_object()) {
+                            for(const auto& [path, probability] : laneJson["targetProbability"].items()) {
+                                if(!probability.is_number()) continue;
+                                const float chance = ofClamp(probability.get<float>(), 0.0f, 1.0f);
+                                if(chance < 1.0f) lane.targetProbability[path] = chance;
+                            }
+                        }
                         lane.type = laneTypeFromString(laneJson.value("laneType", std::string("Step")));
                         lane.stepCount = std::max(1, laneJson.value("stepCount", 16));
                         lane.beatsPerStep = std::max(1.0 / 24.0, laneJson.value("beatsPerStep", 0.25));

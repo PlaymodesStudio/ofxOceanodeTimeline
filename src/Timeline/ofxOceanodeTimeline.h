@@ -423,6 +423,9 @@ struct ofxOceanodeTimelineLane {
     // Toggle lanes: also drive their own track's solo -- on while a block
     // plays, off between blocks; outside the clip the solo holds.
     bool drivesTrackSolo = false;
+    // Toggle lanes: the chance (0..1) that each block reaches a target, by
+    // parameter path, rolled per block and repeat; missing = always.
+    std::map<std::string, float> targetProbability;
     ofxOceanodeTimelineStepLane step;
     int stepCount = 16;
     double beatsPerStep = 0.25;
@@ -1117,6 +1120,8 @@ public:
     bool setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
     bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
     bool setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool drives);
+    bool setLaneTargetProbability(const std::string& trackId, const std::string& clipId, const std::string& laneId,
+                                  const std::string& parameterPath, float probability);
     bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);
     bool setClipChance(const std::string& trackId, const std::string& clipId, float chance);
     // The notes a piano lane plays in one repeat of the current clip start,
