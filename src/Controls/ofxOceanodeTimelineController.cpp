@@ -4888,11 +4888,13 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), isFocused ? "\n(editing)" : "\nClick to edit this lane");
     }
     {
-        const std::string targets = lane->bindingIds.empty() ? std::string("No target")
+        const bool drivesSolo = lane->drivesTrackSolo && isToggleLane(*lane);
+        std::string targets = lane->bindingIds.empty() ? std::string(drivesSolo ? "" : "No target")
             : lane->bindingIds.size() == 1 ? std::string("1 target") : ofToString(lane->bindingIds.size()) + " targets";
+        if(drivesSolo) targets += targets.empty() ? "Track solo" : " + track solo";
         const std::string summary = fitText(std::string(laneDisplayName(*lane)) + "  /  " + targets,
                                             ImGui::GetContentRegionAvail().x);
-        if(lane->bindingIds.empty()) ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.35f, 1.0f), "%s", summary.c_str());
+        if(lane->bindingIds.empty() && !drivesSolo) ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.35f, 1.0f), "%s", summary.c_str());
         else ImGui::TextDisabled("%s", summary.c_str());
     }
     if(ImGui::BeginTabBar("##clipPropertyTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
@@ -4932,6 +4934,15 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                         }
                         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Inspect what drives %s", candidate.parameterPath.c_str());
                     }
+                }
+                if(isToggleLane(*lane) && !clip->isLfo) {
+                    ImGui::Separator();
+                    bool drivesSolo = lane->drivesTrackSolo;
+                    if(ImGui::Checkbox("Track solo##laneDrivesTrackSolo", &drivesSolo))
+                        timeline.setLaneDrivesTrackSolo(track.id, clip->id, lane->id, drivesSolo);
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("This toggle also drives %s's solo: on while a block plays,\n"
+                                          "off between blocks. Outside the clip the solo holds.", track.name.c_str());
                 }
             }
             if(!context.requestedTargetPath.empty())

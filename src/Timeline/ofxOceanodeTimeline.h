@@ -420,6 +420,9 @@ struct ofxOceanodeTimelineLane {
     std::vector<std::string> bindingIds;
     bool muted = false;
     bool solo = false;
+    // Toggle lanes: also drive their own track's solo -- on while a block
+    // plays, off between blocks; outside the clip the solo holds.
+    bool drivesTrackSolo = false;
     ofxOceanodeTimelineStepLane step;
     int stepCount = 16;
     double beatsPerStep = 0.25;
@@ -1113,6 +1116,7 @@ public:
     bool setTrackLatencyOffset(const std::string& trackId, float milliseconds);
     bool setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
     bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
+    bool setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool drives);
     bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);
     bool setClipChance(const std::string& trackId, const std::string& clipId, float chance);
     // The notes a piano lane plays in one repeat of the current clip start,
@@ -1504,6 +1508,9 @@ private:
     // The frame path rolls the current pass; the scheduler rolls the next one
     // while it probes beats past the loop end, then restores the current one.
     void applyClipChanceRolls(uint64_t generation, uint64_t pass) const;
+    // Sets each track's solo from its Toggle lanes bound to it at this beat.
+    // True when some solo changed.
+    bool applyLaneTrackSolos(double beat);
     // Per-session salt so a fresh launch does not replay the same rolls.
     uint64_t clipChanceSalt = 0;
     struct PianoPitchRangeIndex {

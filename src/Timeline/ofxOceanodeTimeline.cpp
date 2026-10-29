@@ -4900,6 +4900,41 @@ bool ofxOceanodeTimelineManager::setTrackSolo(const std::string& trackId, bool s
     return true;
 }
 
+bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId,
+                                                      const std::string& laneId, bool drives) {
+    auto* lane = getLane(trackId, clipId, laneId);
+    if(lane == nullptr || lane->drivesTrackSolo == drives) return false;
+    lane->drivesTrackSolo = drives;
+    if(drives && container != nullptr) applyLaneTrackSolos(container->getTransportState().beatPosition);
+    refreshPlaybackEnablement();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
+    bool changed = false;
+    for(auto& track : tracks) {
+        if(track.isWaveTrack) continue;
+        bool driven = false, on = false;
+        for(const auto& clip : track.clips) {
+            if(clip.isLfo || clip.muted || !clipCoversBeat(clip, beat)) continue;
+            for(const auto& lane : clip.lanes) {
+                if(!lane.drivesTrackSolo || lane.type != ofxOceanodeTimelineLaneType::MultiGate ||
+                   !laneAudible(clip, lane)) continue;
+                driven = true;
+                // A clip its chance roll left out rests: the solo is off.
+                if(clip.chanceSilenced || lane.multiGateRows.empty()) continue;
+                const double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, beat);
+                on = on || evaluateMultiGateRow(lane.multiGateRows.front(), sourceBeat, 0.0,
+                    clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0);
+            }
+        }
+        if(!driven || track.solo == on) continue;
+        track.solo = on;
+        changed = true;
+    }
+    return changed;
+}
+
 bool ofxOceanodeTimelineManager::setLaneMuted(const std::string& trackId, const std::string& clipId,
                                             const std::string& laneId, bool muted) {
     auto* lane = getLane(trackId, clipId, laneId);
@@ -6244,6 +6279,13 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     }
 
     applyClipChanceRolls(transport.generation, transport.loopCount);
+    // Toggle lanes bound to their track's solo decide, before anything reads
+    // which tracks are audible this frame.
+    if(applyLaneTrackSolos(transport.beatPosition)) {
+        invalidateEvaluationIndexes();
+        ensureEvaluationIndexes();
+        invalidateSchedule();
+    }
     // Drifted notes start again from the written ones on the next play.
     if(!transport.isPlaying && !pianoDrift.empty()) {
         pianoDrift.clear();
@@ -6449,7 +6491,7 @@ void ofxOceanodeTimelineManager::invalidateSchedule() {
 uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTimelineLane& lane) {
     ChangeHash hash;
     hash.add(lane.type);
-    hash.add(lane.muted); hash.add(lane.solo);
+    hash.add(lane.muted); hash.add(lane.solo); hash.add(lane.drivesTrackSolo);
     hash.add(lane.bindingIds.size());
     for(const auto& id : lane.bindingIds) hash.add(id);
     hash.add(lane.step.steps.size());
@@ -7726,6 +7768,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
                 laneJson["name"] = lane.name;
                 laneJson["muted"] = lane.muted;
                 laneJson["solo"] = lane.solo;
+                if(lane.drivesTrackSolo) laneJson["drivesTrackSolo"] = true;
                 laneJson["laneType"] = laneTypeToString(lane.type);
                 laneJson["bindingIds"] = lane.bindingIds;
                 laneJson["stepCount"] = lane.stepCount;
@@ -8095,6 +8138,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         lane.name = laneJson.value("name", std::string("Lane"));
                         lane.muted = laneJson.value("muted", false);
                         lane.solo = laneJson.value("solo", false);
+                        lane.drivesTrackSolo = laneJson.value("drivesTrackSolo", false);
                         lane.type = laneTypeFromString(laneJson.value("laneType", std::string("Step")));
                         lane.stepCount = std::max(1, laneJson.value("stepCount", 16));
                         lane.beatsPerStep = std::max(1.0 / 24.0, laneJson.value("beatsPerStep", 0.25));
