@@ -1127,6 +1127,22 @@ public:
     // One pass of a macro timeline: the end of its last clip, at least a bar.
     double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
 
+    // ---- Encapsulation (nodes moved into a new macro) ----
+    // Paths old -> new, absolute: every timeline (main and each macro's)
+    // follows. Returns the bindings changed.
+    int retargetAllParameterPaths(const std::map<std::string, std::string>& oldToNew);
+    // Nodes of `canvas` were encapsulated into macroContainer's macro. Paths
+    // follow; with moveIntoMacro, the tracks of the canvas's timeline that
+    // drive only those nodes move into the macro's own timeline, and a macro
+    // track with one clip plays it in their place. Returns what undo and
+    // redo need (replayParameterMove).
+    ofJson encapsulateParameters(ofxOceanodeContainer& canvas, ofxOceanodeContainer& macroContainer,
+                                 const std::map<std::string, std::string>& oldToNew, bool moveIntoMacro);
+    void replayParameterMove(ofxOceanodeContainer& canvas, ofxOceanodeContainer* macroContainer,
+                             const std::map<std::string, std::string>& oldToNew, const ofJson& record, bool backwards);
+    // Every parameter a timeline (main or a macro's) drives.
+    void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
+
     // ---- Macro timelines: each macro's own sequence ----
     // The sequence of the macro owning this container (created empty on first
     // use, its paths relative to the macro); nullptr when no macro owns it.
@@ -1740,6 +1756,14 @@ private:
         size_t trackIndex = 0;
     };
     std::vector<MacroSource> collectMacroSources() const;
+    // The timeline whose paths are relative to this canvas (main at the root).
+    ofxOceanodeTimelineSequence* sequenceForCanvas(ofxOceanodeContainer& canvas);
+    // Moves source's tracks driving only what is inside the macro at
+    // `relativeCanvas` into target (only `onlyIds` when given) and adds the
+    // macro track playing them (id `macroTrackId` when free). Record for undo.
+    ofJson moveTracksIntoMacro(ofxOceanodeTimelineSequence& source, ofxOceanodeTimelineSequence& target,
+                               ofxOceanodeContainer& macroContainer, const std::string& relativeCanvas,
+                               const std::set<std::string>* onlyIds, const std::string& macroTrackId);
     // A parameter of the macro node owning this container ("Active",
     // "Snapshot"); nullptr when no macro owns it.
     ofxOceanodeAbstractParameter* macroNodeParameter(const ofxOceanodeContainer& macroContainer,

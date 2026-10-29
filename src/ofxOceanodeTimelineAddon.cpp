@@ -29,12 +29,19 @@ public:
         return manager.getParameterTrackColor(p, color);
     }
     void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const override {
-        for(const auto& track : manager.getTracks())
-            for(const auto& binding : track.bindings)
-                if(auto* parameter = host->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
+        manager.collectBoundParameters(result);
     }
     void retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) override {
-        manager.retargetParameterPaths(oldToNew);
+        manager.retargetAllParameterPaths(oldToNew);
+    }
+    ofJson encapsulateParameters(ofxOceanodeContainer& canvas, ofxOceanodeContainer& macroContainer,
+                                 const std::map<std::string, std::string>& oldToNew, bool moveIntoMacro) override {
+        return manager.encapsulateParameters(canvas, macroContainer, oldToNew, moveIntoMacro);
+    }
+    void replayParameterMove(ofxOceanodeContainer& canvas, ofxOceanodeContainer* macroContainer,
+                             const std::map<std::string, std::string>& oldToNew, const ofJson& record,
+                             bool backwards) override {
+        manager.replayParameterMove(canvas, macroContainer, oldToNew, record, backwards);
     }
     void loadMacroPreset(ofxOceanodeContainer& macroContainer, const std::string& folder) override {
         manager.loadMacroSequence(macroContainer, folder);

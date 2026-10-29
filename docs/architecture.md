@@ -119,6 +119,18 @@ once when the clip comes up (within the pre-roll), again each time it
 starts. Both go through the macro node's own parameters
 (`macroNodeParameter`), not the core's internals.
 
+Encapsulation: when the selected nodes are automated, the core's canvas
+asks whether their tracks stay on the timeline or move into the new macro.
+Either way every timeline's paths follow (`retargetAllParameterPaths`,
+relative within macro timelines). Moving (`encapsulateParameters`) takes the
+tracks driving only the encapsulated nodes out of the canvas's timeline
+(main at the root, else that macro's), rewrites their paths relative to the
+new macro, and puts a macro track with one clip in their place. The core
+keeps the extension's record with the canvas undo step;
+`replayParameterMove` brings the tracks back on undo and moves them again on
+redo (skipping tracks a restored macro already has). Extraction is recorded
+the same way, paths only.
+
 The controller edits one sequence at a time, its scope: the main timeline, or
 a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
 breadcrumb). Every model call from the controller and lane editors passes the

@@ -235,3 +235,179 @@ ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter(con
     if(macro == nullptr || !macro->getParameterGroup().contains(name)) return nullptr;
     return dynamic_cast<ofxOceanodeAbstractParameter*>(&macro->getParameterGroup().get(name));
 }
+
+namespace {
+// An absolute path (or canvas id) as seen from inside the canvas `base`:
+// empty when it is not inside it.
+std::string relativeTo(const std::string& base, const std::string& path) {
+    if(isRootCanvas(base)) return path;
+    if(path.rfind(base + "::", 0) == 0) return path.substr(base.size() + 2);
+    if(path.rfind(base + " / ", 0) == 0) return path.substr(base.size() + 3);
+    return std::string();
+}
+} // namespace
+
+int ofxOceanodeTimelineManager::retargetAllParameterPaths(const std::map<std::string, std::string>& oldToNew) {
+    int changed = retargetParameterPaths(mainSequence, oldToNew);
+    pruneMacroSequences();
+    // Macro timelines hold paths relative to their macro.
+    for(const auto& entry : macroSequences) {
+        const std::string base = entry.address->getCanvasID();
+        std::map<std::string, std::string> relative;
+        for(const auto& [from, to] : oldToNew) {
+            const auto relativeFrom = relativeTo(base, from), relativeNew = relativeTo(base, to);
+            if(!relativeFrom.empty() && !relativeNew.empty()) relative[relativeFrom] = relativeNew;
+        }
+        if(!relative.empty()) changed += retargetParameterPaths(*entry.sequence, relative);
+    }
+    return changed;
+}
+
+void ofxOceanodeTimelineManager::collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const {
+    if(container == nullptr) return;
+    for(const auto& track : mainSequence.tracks)
+        for(const auto& binding : track.bindings)
+            if(auto* parameter = container->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences)
+        for(const auto& track : entry.sequence->tracks)
+            for(const auto& binding : track.bindings)
+                if(auto* parameter = entry.address->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
+}
+
+ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::sequenceForCanvas(ofxOceanodeContainer& canvas) {
+    if(&canvas == container || isRootCanvas(canvas.getCanvasID())) return &mainSequence;
+    return getMacroSequence(canvas);
+}
+
+ofJson ofxOceanodeTimelineManager::moveTracksIntoMacro(ofxOceanodeTimelineSequence& source, ofxOceanodeTimelineSequence& target,
+                                                       ofxOceanodeContainer& macroContainer, const std::string& relativeCanvas,
+                                                       const std::set<std::string>* onlyIds, const std::string& macroTrackId) {
+    const std::string& macro = relativeCanvas;
+    auto inside = [&](const std::string& path) {
+        return path.rfind(macro + "::", 0) == 0 || path.rfind(macro + " / ", 0) == 0;
+    };
+    auto strip = [&](const std::string& path) {
+        return path.rfind(macro + "::", 0) == 0 ? path.substr(macro.size() + 2) : path.substr(macro.size() + 3);
+    };
+    // Tracks driving only what is inside the macro (a macro track: a macro inside it).
+    std::vector<size_t> moving;
+    for(size_t i = 0; i < source.tracks.size(); ++i) {
+        const auto& track = source.tracks[i];
+        if(track.isFolder || track.isWaveTrack) continue;
+        if(onlyIds != nullptr && onlyIds->count(track.id) == 0) continue;
+        const bool movable = track.isMacroTrack()
+            ? track.macroCanvas.rfind(macro + " / ", 0) == 0
+            : !track.bindings.empty() && std::all_of(track.bindings.begin(), track.bindings.end(),
+                                                     [&](const auto& binding) { return inside(binding.parameterPath); });
+        if(movable) moving.push_back(i);
+    }
+    ofJson record = {{"macroCanvas", macro}};
+    if(moving.empty()) return record;
+
+    // As they were here, for undo; and where the first one was.
+    ofxOceanodeTimelineSequence moved;
+    double end = 0.0;
+    for(const auto index : moving) {
+        moved.tracks.push_back(source.tracks[index]);
+        for(const auto& clip : source.tracks[index].clips) end = std::max(end, clip.startBeat + clip.durationBeats);
+    }
+    record["tracks"] = sequenceToJson(moved);
+    record["indices"] = moving;
+    const std::string firstParent = source.tracks[moving.front()].parentId;
+    size_t firstIndex = 0;
+    for(size_t i = 0; i < moving.front(); ++i)
+        if(source.tracks[i].parentId == firstParent && std::find(moving.begin(), moving.end(), i) == moving.end()) ++firstIndex;
+
+    // Into the macro's timeline, its paths relative to the macro.
+    for(auto track : moved.tracks) {
+        if(target.findTrack(track.id) != nullptr) continue; // already there (a redo of a restored macro)
+        for(auto& binding : track.bindings) binding.parameterPath = strip(binding.parameterPath);
+        if(track.isMacroTrack()) track.macroCanvas = strip(track.macroCanvas);
+        for(auto& clip : track.clips)
+            for(auto& lane : clip.lanes) {
+                std::decay_t<decltype(lane.targetProbability)> relative;
+                for(const auto& [path, chance] : lane.targetProbability) relative[inside(path) ? strip(path) : path] = chance;
+                lane.targetProbability = std::move(relative);
+            }
+        track.parentId.clear();
+        target.tracks.push_back(std::move(track));
+    }
+    // Out of here, with their clips' group memberships.
+    std::set<std::string> movedIds;
+    for(const auto& track : moved.tracks) movedIds.insert(track.id);
+    for(auto it = moving.rbegin(); it != moving.rend(); ++it) source.tracks.erase(source.tracks.begin() + static_cast<std::ptrdiff_t>(*it));
+    for(auto& group : source.clipGroups)
+        group.members.erase(std::remove_if(group.members.begin(), group.members.end(),
+            [&](const auto& member) { return movedIds.count(member.first) > 0; }), group.members.end());
+    source.clipGroups.erase(std::remove_if(source.clipGroups.begin(), source.clipGroups.end(),
+        [](const auto& group) { return group.members.size() < 2; }), source.clipGroups.end());
+    source.normalizeFolders();
+
+    // A macro track in their place: one clip playing the macro's timeline as they played.
+    auto trackId = createMacroTrack(source, macroContainer);
+    if(auto* track = getTrack(source, trackId); track != nullptr && !macroTrackId.empty() && source.findTrack(macroTrackId) == nullptr) {
+        track->id = macroTrackId;
+        trackId = macroTrackId;
+    }
+    if(!trackId.empty()) {
+        createMacroClip(source, trackId, 0.0, end > 0.0 ? end : getBeatsPerBar());
+        moveTrack(source, trackId, firstParent, firstIndex);
+    }
+    record["macroTrack"] = trackId;
+    // Their history no longer matches either timeline.
+    if(isMainSequence(source)) clearTimelineHistory(); else sequenceHistories.erase(&source);
+    sequenceHistories.erase(&target);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return record;
+}
+
+ofJson ofxOceanodeTimelineManager::encapsulateParameters(ofxOceanodeContainer& canvas, ofxOceanodeContainer& macroContainer,
+                                                         const std::map<std::string, std::string>& oldToNew, bool moveIntoMacro) {
+    retargetAllParameterPaths(oldToNew);
+    if(!moveIntoMacro) return ofJson();
+    auto* source = sequenceForCanvas(canvas);
+    auto* target = getMacroSequence(macroContainer);
+    const auto relative = relativeTo(canvas.getCanvasID(), macroContainer.getCanvasID());
+    if(source == nullptr || target == nullptr || relative.empty()) return ofJson();
+    return moveTracksIntoMacro(*source, *target, macroContainer, relative, nullptr, std::string());
+}
+
+void ofxOceanodeTimelineManager::replayParameterMove(ofxOceanodeContainer& canvas, ofxOceanodeContainer* macroContainer,
+                                                     const std::map<std::string, std::string>& oldToNew,
+                                                     const ofJson& record, bool backwards) {
+    const bool movedTracks = record.is_object() && record.contains("tracks");
+    auto* source = movedTracks ? sequenceForCanvas(canvas) : nullptr;
+    if(!backwards) {
+        retargetAllParameterPaths(oldToNew);
+        if(source == nullptr || macroContainer == nullptr) return;
+        auto* target = getMacroSequence(*macroContainer);
+        if(target == nullptr) return;
+        std::set<std::string> ids;
+        for(const auto& track : record["tracks"].value("tracks", ofJson::array())) ids.insert(track.value("id", std::string()));
+        moveTracksIntoMacro(*source, *target, *macroContainer, record.value("macroCanvas", std::string()), &ids,
+                            record.value("macroTrack", std::string()));
+        return;
+    }
+    if(source != nullptr) {
+        // The macro track goes; the tracks come back where they were.
+        const auto macroTrack = record.value("macroTrack", std::string());
+        if(!macroTrack.empty()) removeTrack(*source, macroTrack);
+        ofxOceanodeTimelineSequence restored;
+        sequenceFromJson(restored, record["tracks"]);
+        const auto indices = record.value("indices", std::vector<size_t>());
+        for(size_t i = 0; i < restored.tracks.size(); ++i) {
+            if(source->findTrack(restored.tracks[i].id) != nullptr) continue;
+            const size_t at = std::min(i < indices.size() ? indices[i] : source->tracks.size(), source->tracks.size());
+            source->tracks.insert(source->tracks.begin() + static_cast<std::ptrdiff_t>(at), std::move(restored.tracks[i]));
+        }
+        source->normalizeFolders();
+        if(isMainSequence(*source)) clearTimelineHistory(); else sequenceHistories.erase(source);
+    }
+    std::map<std::string, std::string> newToOld;
+    for(const auto& [from, to] : oldToNew) newToOld[to] = from;
+    retargetAllParameterPaths(newToOld);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+}
