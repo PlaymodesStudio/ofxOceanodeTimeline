@@ -3077,8 +3077,18 @@ bool ofxOceanodeTimelineManager::setLaneTargetProbability(ofxOceanodeTimelineSeq
 
 bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
     bool changed = false;
+    // Mutes and solos set by hand are the user listening: a lane can't solo
+    // a track they muted, or one their solo of another track leaves out.
+    const bool handSolo = std::any_of(mainSequence.tracks.begin(), mainSequence.tracks.end(),
+                                      [](const auto& track) { return track.solo; });
     for(auto& track : mainSequence.tracks) {
         if(track.isWaveTrack) continue;
+        if(track.muted || (handSolo && !track.solo)) {
+            const bool wasSoloed = isTrackSoloed(track);
+            playback.drivenSolo.erase(PlayKey{0, track.id});
+            if(isTrackSoloed(track) != wasSoloed) changed = true;
+            continue;
+        }
         bool driven = false, on = false;
         for(const auto& clip : track.clips) {
             if(clip.isLfo || clip.muted || !clipCoversBeat(clip, beat)) continue;
@@ -3914,6 +3924,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(!transport.isPlaying && !playback.pianoDrift.empty()) playback.clearRolls();
     collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues);
     updatePianoGateOwnership(transport.isPlaying);
+    releaseSilencedRests(transport);
 
     // Hand the discrete events of the coming window to any backend that can
     // execute them at an exact instant. Everything below still runs exactly

@@ -2007,3 +2007,39 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                [](double a, double b) { return std::abs(a - b) <= kEpsilon; }),
                    outBeats.end());
 }
+
+void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransportState& transport) {
+    std::unordered_map<std::string, std::string> sounding;
+    std::unordered_set<std::string> silenced;
+    if(transport.isPlaying) {
+        for(const auto& track : mainSequence.tracks) {
+            if(track.isWaveTrack) continue;
+            const bool audible = isTrackAudible(track);
+            for(const auto& clip : track.clips) {
+                if(clip.isLfo || !clipCoversBeat(clip, transport.beatPosition)) continue;
+                for(const auto& lane : clip.lanes) {
+                    const bool multiRow = lane.type == ofxOceanodeTimelineLaneType::MultiGate ||
+                                          lane.type == ofxOceanodeTimelineLaneType::MultiValue;
+                    if(!multiRow && lane.type != ofxOceanodeTimelineLaneType::Step) continue;
+                    const bool heard = audible && !clip.muted && laneAudible(clip, lane);
+                    const std::string rest = multiRow
+                        ? joinAutomationValues(std::vector<std::string>(static_cast<size_t>(std::max(1, lane.multiRowCount)), "0"))
+                        : "0";
+                    for(const auto& bindingId : lane.bindingIds) {
+                        const auto* binding = getBinding(track.id, bindingId);
+                        if(binding == nullptr || binding->bypass) continue;
+                        if(heard) sounding[binding->parameterPath] = multiRow ? rest : mapNormalizedLaneValue(lane, *binding, rest);
+                        else silenced.insert(binding->parameterPath);
+                    }
+                }
+            }
+        }
+    }
+    // Heard last frame, silenced now and written by nothing else: rest once.
+    for(const auto& entry : soundingRestPaths) {
+        if(sounding.count(entry.first) > 0 || silenced.count(entry.first) == 0) continue;
+        if(activeAutomationValues.count(entry.first) == 0)
+            activeAutomationValues[entry.first].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, entry.second);
+    }
+    soundingRestPaths = std::move(sounding);
+}

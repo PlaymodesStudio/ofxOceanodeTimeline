@@ -1773,6 +1773,11 @@ private:
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);
     void updatePianoGateOwnership(bool isPlaying);
+    // Toggle, Multi Gate, Multi Value and Step lanes whose clip is under the
+    // playhead but stops being heard (its track muted or left out by a solo,
+    // the clip or lane muted) write their rest once, as a clip its chance
+    // leaves out does; otherwise a gate left at 1 stays at 1.
+    void releaseSilencedRests(const ofxOceanodeTransportState& transport);
     // Gives note groups that never had a Duration / Filter role their
     // instrument's input (see ofxOceanodeTimelineNoteGroup::durationDecided).
     // Not an undoable edit: history snapshots get the same role.
@@ -1785,6 +1790,8 @@ private:
     std::unordered_set<std::string> playingPianoGatePaths;
     // Gates closed by the last updatePianoGateOwnership().
     std::vector<std::string> releasedPianoGatePaths;
+    // Rest values of the gate-type lanes heard last frame, by parameter path.
+    std::unordered_map<std::string, std::string> soundingRestPaths;
     ActiveValueMap activeAutomationValues;
     bool bpmAutomationEnabled = false;
     bool bpmLaneCollapsed = true;
