@@ -32,6 +32,9 @@ public:
             for(const auto& binding : track.bindings)
                 if(auto* parameter = host->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
     }
+    void retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) override {
+        manager.retargetParameterPaths(oldToNew);
+    }
     void removeParameterBindings(ofxOceanodeAbstractParameter& parameter) override {
         const auto path = host->getTimelineParameterPath(parameter);
         std::vector<std::pair<std::string, std::string>> bindings;

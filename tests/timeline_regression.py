@@ -31,6 +31,10 @@ public:
     std::string getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter) const {
         return parameter.getEscapedName();
     }
+    // A flat graph: every parameter is in this one container.
+    std::string getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter, const ofxOceanodeContainer&) const {
+        return parameter.getEscapedName();
+    }
     ofxOceanodeAbstractParameter* findTimelineParameter(const std::string& path) const {
         auto it = targets.find(path);
         return it == targets.end() ? nullptr : it->second;

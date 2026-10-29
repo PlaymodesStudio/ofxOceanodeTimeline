@@ -594,7 +594,7 @@ ofxOceanodeTimelinePlayContext ofxOceanodeTimelineManager::playContextFor(
 std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManager::playedSequences(
         double /*fromBeat*/, double /*toBeat*/) const {
     // The main timeline, through the identity map, as copy 0.
-    return {PlayedSequence{&mainSequence, {}, 0}};
+    return {PlayedSequence{&mainSequence, {}, 0, resolverFor(mainSequence)}};
 }
 
 bool ofxOceanodeTimelineManager::isClipChanceSilenced(const ofxOceanodeTimelineClip& clip) const {

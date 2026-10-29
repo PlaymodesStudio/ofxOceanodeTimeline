@@ -906,6 +906,14 @@ void ofxOceanodeTimelineManager::setContainer(ofxOceanodeContainer* owner) {
     for(const auto& path : parameterPaths) refreshTimelineFlag(path);
 }
 
+ofxOceanodeAbstractParameter* ofxOceanodeTimelineResolver::find(const std::string& path) const {
+    return base == nullptr ? nullptr : base->findTimelineParameter(path);
+}
+
+std::string ofxOceanodeTimelineResolver::pathOf(ofxOceanodeAbstractParameter& parameter) const {
+    return base == nullptr ? std::string() : base->getTimelineParameterPath(parameter, *base);
+}
+
 std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
     ofxOceanodeTimelineTrack track;
     track.id = sequence.makeUniqueTrackId();
@@ -1208,7 +1216,9 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
     auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack || track->isFolder || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
-    const std::string path = container->getTimelineParameterPath(parameter);
+    // Relative to the sequence's container; nothing outside it.
+    const std::string path = resolverFor(sequence).pathOf(parameter);
+    if(path.empty()) return std::string();
     // A parameter may be published to several tracks. Each track owns an
     // independent binding (and blend mode), while duplicate bindings inside
     // one track would only create ambiguous rows and are therefore rejected.

@@ -24,6 +24,7 @@ def production():
     end = source.index('std::string ofxOceanodeContainer::getTimelineParameterPath', start)
     result += source[start:end]
     for signature in ('std::string ofxOceanodeContainer::getTimelineParameterPath(',
+                      'std::string ofxOceanodeContainer::getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter,\n',
                       'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findTimelineParameter(',
                       'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findParameter('):
         result += block(source, signature) + '\n'
@@ -91,6 +92,27 @@ int main(int argc, char** argv) {
     probe.value = 5.f; child.update();
     assert(probe.value.get() == 5.f); // Forwarding never causes a second evaluation.
     root.update(); assert(probe.value.get() == 42.f);
+    {
+        // A sequence based in another container binds relative to it and
+        // only to what is inside it.
+        ofxOceanodeContainer inner(registry, types, transport); inner.setCanvasID("Inner");
+        inner.setTimelineHost(&root);
+        auto& innerNode = inner.createNode(std::make_unique<AutomationProbe>(), 1);
+        auto& innerParameter = static_cast<ofxOceanodeAbstractParameter&>(innerNode.getParameters().get("Value"));
+        assert(root.getTimelineParameterPath(innerParameter) == "Inner::Automation_Probe_1/Value");
+        ofxOceanodeTimelineSequence pattern;
+        pattern.base = &inner;
+        const auto resolver = timeline.resolverFor(pattern);
+        assert(resolver.pathOf(innerParameter) == "Automation_Probe_1/Value");
+        assert(resolver.find("Automation_Probe_1/Value") == &innerParameter);
+        assert(resolver.pathOf(parameter).empty()); // the root's probe is outside Inner
+        const auto patternTrack = timeline.createTrack(pattern, "Pattern");
+        assert(timeline.addBinding(pattern, patternTrack, parameter).empty());
+        assert(!timeline.addBinding(pattern, patternTrack, innerParameter).empty());
+        assert(pattern.tracks.front().bindings.front().parameterPath == "Automation_Probe_1/Value");
+        // The main timeline keeps absolute paths.
+        assert(timeline.resolverFor(timeline.getMainSequence()).pathOf(innerParameter) == "Inner::Automation_Probe_1/Value");
+    }
     std::unordered_set<ofxOceanodeAbstractParameter*> published;
     root.getAutomationExtension()->collectBoundParameters(published);
     assert(published.count(&parameter));

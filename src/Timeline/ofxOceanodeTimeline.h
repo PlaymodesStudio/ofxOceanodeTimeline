@@ -953,6 +953,18 @@ public:
     virtual void releaseWaveClip(const std::string& trackId, const std::string& clipId) = 0;
 };
 
+// Finds parameters by timeline path relative to the container a sequence
+// lives in: the root for the main timeline (absolute paths, as saved in
+// every file), a macro's container for that macro's sequence -- so one
+// shared sequence reaches each copy's own parameters.
+struct ofxOceanodeTimelineResolver {
+    ofxOceanodeContainer* base = nullptr;
+    ofxOceanodeAbstractParameter* find(const std::string& path) const;
+    // Empty when the parameter is not inside base: a sequence only drives
+    // what is inside the container it belongs to.
+    std::string pathOf(ofxOceanodeAbstractParameter& parameter) const;
+};
+
 // The arrangement of one timeline: its tracks (with their bindings, clips and
 // lanes), clip groups and the counters new ids start from. The main timeline
 // is one; a macro will own one. Data and plain lookups only: parameters,
@@ -961,6 +973,9 @@ class ofxOceanodeTimelineSequence {
 public:
     std::vector<ofxOceanodeTimelineTrack> tracks;
     std::vector<ofxOceanodeTimelineClipGroup> clipGroups;
+    // The container its binding paths are relative to (not saved; nullptr:
+    // the timeline's own root, as for the main timeline).
+    ofxOceanodeContainer* base = nullptr;
     // First number tried for each kind of new id.
     uint64_t nextTrackNumber = 1;
     uint64_t nextBindingNumber = 1;
@@ -1068,6 +1083,10 @@ public:
     const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return mainSequence.tracks; }
     // The main timeline's arrangement, read-only (folder depth, parents...).
     const ofxOceanodeTimelineSequence& getMainSequence() const { return mainSequence; }
+    // Resolves a sequence's binding paths (its base, else this timeline's root).
+    ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {
+        return {sequence.base != nullptr ? sequence.base : container};
+    }
 
     std::string addBinding(const std::string& trackId,
                           ofxOceanodeAbstractParameter& parameter,
@@ -1669,6 +1688,7 @@ private:
         const ofxOceanodeTimelineSequence* sequence = nullptr;
         ofxOceanodeTimelineTimeMap map;
         uint64_t instanceKey = 0;
+        ofxOceanodeTimelineResolver resolver; // where its paths point
     };
     // The sequences heard between two main-timeline beats. For now only the
     // main timeline itself; nested macro sequences will be added here.
