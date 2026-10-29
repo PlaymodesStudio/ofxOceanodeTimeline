@@ -623,10 +623,9 @@ struct ofxOceanodeTimelineClip {
     bool repeatContent = true;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
-    // the clip starts: each play/seek and each loop pass.
+    // the clip starts: each play/seek and each loop pass. The result is not
+    // stored here: see ofxOceanodeTimelineClipChanceSilenced().
     float chance = 1.0f;
-    // Runtime result of the current roll; not saved. See applyClipChanceRolls().
-    mutable bool chanceSilenced = false;
     // An LFO clip is a self-contained continuous modulator. Its Curve lanes
     // describe the oscillator controls and this binding receives the final
     // normalized result mapped through lfoOutputMin/lfoOutputMax.
@@ -683,6 +682,29 @@ namespace ofxOceanodeTimelineClipTime {
     int64_t cycleIndex(const ofxOceanodeTimelineClip& clip,
                        double timelineBeat);
 }
+
+// What evaluation rolls for: clip chance, step/note/gate probability,
+// mutation and drift. Playback state, passed to evaluation and never stored
+// on the timeline data, so the scheduler can probe the next loop pass without
+// touching what the current frame plays.
+struct ofxOceanodeTimelinePlayContext {
+    uint64_t generation = 0; // transport generation (play, seek, stop)
+    uint64_t pass = 0;       // loop pass
+    uint64_t salt = 0;       // per session, so a fresh launch rolls anew
+    // The copy of a sequence being evaluated; 0 is the main timeline, whose
+    // rolls it leaves unchanged.
+    uint64_t instanceKey = 0;
+    // The seed step/note probability and mutations roll with.
+    uint64_t epoch() const;
+    ofxOceanodeTimelinePlayContext nextPass() const {
+        auto next = *this;
+        ++next.pass;
+        return next;
+    }
+};
+// Whether a clip's chance leaves it out of this pass of this copy.
+bool ofxOceanodeTimelineClipChanceSilenced(const ofxOceanodeTimelineClip& clip,
+                                           const ofxOceanodeTimelinePlayContext& context);
 
 // Curve lanes in decibels (a gain parameter): shared by the evaluator and the
 // editor so the curve always draws what it applies. Normalized 0 is silence,
@@ -1114,6 +1136,11 @@ public:
     bool setClipTiming(const std::string& trackId, const std::string& clipId,
                        double startBeat, double durationBeats);
     bool isTrackAudible(const ofxOceanodeTimelineTrack& track) const;
+    // The solo playback uses: the one a Toggle lane last drove, else the
+    // track's own (saved) solo.
+    bool isTrackSoloed(const ofxOceanodeTimelineTrack& track) const;
+    // Whether the clip's chance leaves it out of the pass now playing.
+    bool isClipChanceSilenced(const ofxOceanodeTimelineClip& clip) const;
     bool setTrackMuted(const std::string& trackId, bool muted);
     bool setTrackSolo(const std::string& trackId, bool solo);
     bool setTrackLatencyOffset(const std::string& trackId, float milliseconds);
@@ -1382,7 +1409,8 @@ private:
     // it for the current playhead; the scheduler uses it for beats that have
     // not been reached yet, which is what makes lookahead possible without a
     // second implementation of the lane semantics.
-    void collectActiveValues(double beat, bool isPlaying, bool applyPianoRanges,
+    void collectActiveValues(const ofxOceanodeTimelinePlayContext& context,
+                             double beat, bool isPlaying, bool applyPianoRanges,
                              ActiveValueMap& activeValues,
                              ofxOceanodeTimelineTargetInspection* inspection = nullptr,
                              const std::set<std::string>* onlyPaths = nullptr) const;
@@ -1399,8 +1427,13 @@ private:
     void refreshPlaybackEnablement();
     // Beats in (fromBeat, toBeat] at which any discrete lane can change value:
     // clip edges, repeat cycles, step grid cells, step/region/note boundaries.
-    void collectChangeBeats(double fromBeat, double toBeat, bool inclusiveStart,
+    void collectChangeBeats(const ofxOceanodeTimelinePlayContext& context,
+                            double fromBeat, double toBeat, bool inclusiveStart,
                             std::vector<double>& outBeats) const;
+    // The context a transport position plays with; passOffset 1 is the
+    // next loop pass, which the scheduler reaches before the wrap.
+    ofxOceanodeTimelinePlayContext playContextFor(const ofxOceanodeTransportState& transport,
+                                                  uint64_t passOffset = 0) const;
     double beatAfterSeconds(double startBeat, double seconds, float fallbackBpm) const;
     const std::vector<std::string>& orderedAutomationPaths() const;
     uint64_t pianoInputLeadUs(const std::string& path) const;
@@ -1493,28 +1526,44 @@ private:
         ofxOceanodeTimelinePianoVoicing voicing;
     };
     // Cached per lane for a few repeats of the current clip start.
-    const PianoRepeatPlayback& repeatPlayback(const ofxOceanodeTimelineTrack& track,
+    const PianoRepeatPlayback& repeatPlayback(const ofxOceanodeTimelinePlayContext& context,
+                                              const ofxOceanodeTimelineTrack& track,
                                               const ofxOceanodeTimelineClip& clip,
                                               const ofxOceanodeTimelineLane& lane,
                                               const SharedPianoPlayback* shared,
                                               int64_t repeat) const;
-    mutable std::unordered_map<const void*, std::map<std::pair<uint64_t, int64_t>, PianoRepeatPlayback>> repeatVoicingCache;
-    // Which clip start note/step probability and mutations roll for (from the
-    // transport generation and loop pass, set with the clip chance rolls).
-    mutable uint64_t mutationEpoch = 0;
     // The notes a lane plays in one repeat of the current start, mutated
     // (and, with drift, from the repeat played before).
-    std::vector<ofxOceanodeTimelinePianoNote> repeatNotes(const ofxOceanodeTimelineLane& lane, int64_t repeat,
+    std::vector<ofxOceanodeTimelinePianoNote> repeatNotes(const ofxOceanodeTimelinePlayContext& context,
+                                                          const ofxOceanodeTimelineLane& lane, int64_t repeat,
                                                           double sourceLength) const;
     // Drift: per lane, the last few repeats played (epoch, repeat) in order.
     using PianoDriftStep = std::pair<std::pair<uint64_t, int64_t>, std::vector<ofxOceanodeTimelinePianoNote>>;
-    mutable std::unordered_map<const ofxOceanodeTimelineLane*, std::vector<PianoDriftStep>> pianoDrift;
-    // Rolls every clip's chance for one transport generation / loop pass.
-    // The frame path rolls the current pass; the scheduler rolls the next one
-    // while it probes beats past the loop end, then restores the current one.
-    void applyClipChanceRolls(uint64_t generation, uint64_t pass) const;
-    // Sets each track's solo from its Toggle lanes bound to it at this beat.
-    // True when some solo changed.
+    // Where content plays: the copy (PlayContext::instanceKey) and the id of
+    // a track, clip or lane in it. Ids, not pointers, so one shared content
+    // can be followed separately in each copy.
+    using PlayKey = std::pair<uint64_t, std::string>;
+    struct PlayKeyHash {
+        size_t operator()(const PlayKey& key) const {
+            return std::hash<std::string>{}(key.second) ^ (key.first * 0x9e3779b97f4a7c15ULL);
+        }
+    };
+    // Everything playback remembers between evaluations, kept off the data.
+    struct PlaybackState {
+        // A few repeats of each piano lane (or shared piano pool) around the
+        // playhead, by (epoch, repeat).
+        std::unordered_map<PlayKey, std::map<std::pair<uint64_t, int64_t>, PianoRepeatPlayback>, PlayKeyHash> repeatVoicing;
+        std::unordered_map<PlayKey, std::vector<PianoDriftStep>, PlayKeyHash> pianoDrift;
+        // Solo set by a track's Toggle lanes. Never saved; held after the
+        // block until a lane or the user sets it again.
+        std::unordered_map<PlayKey, bool, PlayKeyHash> drivenSolo;
+        void clearRolls() { repeatVoicing.clear(); pianoDrift.clear(); }
+    };
+    mutable PlaybackState playback;
+    // The pass the frame plays (set from the transport each update).
+    ofxOceanodeTimelinePlayContext playContext;
+    // Sets each track's driven solo from its Toggle lanes bound to it at this
+    // beat. True when some track's solo changed.
     bool applyLaneTrackSolos(double beat);
     // Per-session salt so a fresh launch does not replay the same rolls.
     uint64_t clipChanceSalt = 0;

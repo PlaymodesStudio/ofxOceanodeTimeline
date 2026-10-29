@@ -12,6 +12,7 @@ int main() {
     a.bindParameter(av); b.bindParameter(bv);
     for(auto* p : {&a,&b}) owner.targets[p->getEscapedName()]=p;
     ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    auto soloed=[&](const std::string& id){ return model.isTrackSoloed(*model.getTrack(id)); };
     const auto t=model.createTrack("Soloed"), other=model.createTrack("Other");
     const auto ab=model.addBinding(t,a), bb=model.addBinding(other,b);
     const auto ac=model.createClip(t,"A",0,8);
@@ -27,27 +28,36 @@ int main() {
     toggle->multiRowCount=1; toggle->multiGateRows={{{2,2,1}}};
     owner.transport->play();
     owner.transport->seekToBeat(3); model.update();
-    assert(!model.getTrack(t)->solo); // unbound: nothing happens
+    assert(!soloed(t)); // unbound: nothing happens
     assert(model.setLaneDrivesTrackSolo(t,tc,tl,true));
-    assert(model.getTrack(t)->solo);
+    assert(soloed(t));
     model.update(); near(av,0.5);
     bv=0; model.update(); near(bv,0); // the other track is silenced
     owner.transport->seekToBeat(1); model.update();
-    assert(!model.getTrack(t)->solo); near(bv,0.75);
-    owner.transport->seekToBeat(5); model.update(); assert(!model.getTrack(t)->solo);
-    owner.transport->seekToBeat(3); model.update(); assert(model.getTrack(t)->solo);
-    owner.transport->seekToBeat(7); model.update(); assert(model.getTrack(t)->solo); // holds outside the clip
+    assert(!soloed(t)); near(bv,0.75);
+    owner.transport->seekToBeat(5); model.update(); assert(!soloed(t));
+    owner.transport->seekToBeat(3); model.update(); assert(soloed(t));
+    owner.transport->seekToBeat(7); model.update(); assert(soloed(t)); // holds outside the clip
     // A muted lane does not drive it; the manual solo stays as set.
     model.setTrackSolo(t,false); model.setLaneMuted(t,tc,tl,true);
-    owner.transport->seekToBeat(3); model.update(); assert(!model.getTrack(t)->solo);
-    model.setLaneMuted(t,tc,tl,false); model.update(); assert(model.getTrack(t)->solo);
+    owner.transport->seekToBeat(3); model.update(); assert(!soloed(t));
+    model.setLaneMuted(t,tc,tl,false); model.update(); assert(soloed(t));
+    // Driven solo is playback state: the track's own solo stays as set by
+    // hand, and saving stores only that.
+    assert(soloed(t) && !model.getTrack(t)->solo);
+    assert(!model.toJson()["tracks"][0]["solo"].get<bool>());
+    // Setting it by hand replaces the driven one until a lane drives it again.
+    assert(model.setTrackSolo(t,false)); assert(!soloed(t));
+    owner.transport->seekToBeat(7); model.update(); assert(!soloed(t));
+    owner.transport->seekToBeat(3); model.update(); assert(soloed(t));
     // Persisted; absent in older files.
     const auto saved=model.toJson(); model.fromJson(saved);
+    assert(!model.getTrack(t)->solo);
     assert(model.getLane(t,tc,tl)->drivesTrackSolo);
     auto legacy=saved;
     for(auto& track:legacy["tracks"]) for(auto& clip:track["clips"]) for(auto& l:clip["lanes"]) l.erase("drivesTrackSolo");
     model.fromJson(legacy); assert(!model.getLane(t,tc,tl)->drivesTrackSolo);
-    std::cout << "Track solo toggle passed: playback drives solo, holds outside the clip, lane mute, persistence.\n";
+    std::cout << "Track solo toggle passed: playback drives solo, holds outside the clip, lane mute, never saved, persistence.\n";
 }
 '''
 if __name__ == '__main__':

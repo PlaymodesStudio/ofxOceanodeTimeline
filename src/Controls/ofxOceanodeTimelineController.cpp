@@ -1934,8 +1934,10 @@ void ofxOceanodeTimelineController::draw() {
         if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
             timeline.setTrackMuted(track.id, !track.muted);
         ImGui::SameLine();
-        if(playbackToggle("trackSolo" + track.id, "S", track.solo, "Solo track (multiple solos allowed)"))
-            timeline.setTrackSolo(track.id, !track.solo);
+        // Shows the solo playback uses, which a Toggle lane may be driving.
+        const bool soloed = timeline.isTrackSoloed(track);
+        if(playbackToggle("trackSolo" + track.id, "S", soloed, "Solo track (multiple solos allowed)"))
+            timeline.setTrackSolo(track.id, !soloed);
         if(track.latencyOffsetMs != 0.0f) {
             // The track's latency correction, set from its right-click menu.
             const std::string latencyLabel = ofToString(track.latencyOffsetMs, 1) + " ms";
@@ -2152,7 +2154,7 @@ void ofxOceanodeTimelineController::draw() {
                 const bool clipSelected = selectedClips.count({track.id, clip.id}) > 0;
                 auto lift = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * (clipSelected ? 0.45f : 0.0f)); };
                 // A clip its chance roll left out of this pass reads as half muted.
-                const bool rolledOut = transportPlaying && clip.chanceSilenced;
+                const bool rolledOut = transportPlaying && timeline.isClipChanceSilenced(clip);
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
                                             clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
