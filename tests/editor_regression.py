@@ -57,6 +57,13 @@ int main() {
                     std::abort();
                 }
         }
+        // A gate block drawn over others joins them; blocks that only touch stay apart.
+        std::vector<ofxOceanodeTimelineGateRegion> gates{{4, 2, 0.5f}, {0, 1, 1.0f}, {1, 1, 0.8f}, {5, 2, 0.3f}, {5.5, 0.5, 1.0f}};
+        ofxOceanodeTimelineMergeOverlappingGates(gates);
+        assert(gates.size() == 3);
+        assert(gates[0].startBeat == 0 && gates[0].durationBeats == 1);
+        assert(gates[1].startBeat == 1 && gates[1].durationBeats == 1); // back to back: retriggers
+        assert(gates[2].startBeat == 4 && gates[2].durationBeats == 3 && gates[2].velocity == 0.5f);
         // Linear stays linear; a point after the last one adds a neutral segment.
         ofxOceanodeTimelineLane line;
         line.curveInterpolation = "Linear";

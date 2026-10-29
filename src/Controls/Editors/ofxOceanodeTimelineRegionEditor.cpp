@@ -273,6 +273,11 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
             if(inVelocity) ImGui::SetTooltip("Gate velocity. Right-click: 100%%");
         }
         if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            // A block drawn or moved over others joins them: one block, not
+            // stacked copies (which also drew brighter where they overlap).
+            if(regionDragMode != RegionDragMode::None && !isValueRow &&
+               regionDragRow >= 0 && regionDragRow < static_cast<int>(lane->multiGateRows.size()))
+                ofxOceanodeTimelineMergeOverlappingGates(lane->multiGateRows[regionDragRow]);
             velocityDrag = false;
             regionDragMode = RegionDragMode::None;
             regionDragRow = -1;

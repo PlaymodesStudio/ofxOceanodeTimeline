@@ -278,6 +278,10 @@ struct ofxOceanodeTimelineGateRegion {
     float velocity = 1.0f; // level while on (0..1)
     double end() const { return startBeat + durationBeats; }
 };
+// Joins blocks of one row that overlap (blocks that only touch stay apart:
+// back to back they retrigger). A joined block keeps the earliest block's
+// velocity. The row comes back sorted by start.
+void ofxOceanodeTimelineMergeOverlappingGates(std::vector<ofxOceanodeTimelineGateRegion>& row);
 
 // Drum Grid: one hit placed in a kit piece's row. It has a position in time,
 // not a grid index: the editing grid only decides where new hits snap, so a

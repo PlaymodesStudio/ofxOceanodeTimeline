@@ -505,6 +505,17 @@ bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
     return true;
 }
 } // namespace
+void ofxOceanodeTimelineMergeOverlappingGates(std::vector<ofxOceanodeTimelineGateRegion>& row) {
+    std::stable_sort(row.begin(), row.end(), [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+    std::vector<ofxOceanodeTimelineGateRegion> merged;
+    for(const auto& region : row) {
+        if(!merged.empty() && region.startBeat < merged.back().end() - kEpsilon)
+            merged.back().durationBeats = std::max(merged.back().end(), region.end()) - merged.back().startBeat;
+        else merged.push_back(region);
+    }
+    row = std::move(merged);
+}
+
 namespace ofxOceanodeTimelineClipTime {
 
 
