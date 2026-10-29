@@ -2135,7 +2135,7 @@ void ofxOceanodeTimelineController::draw() {
         // ofxOceanodeTimelineTrack::isWaveTrack) -- it always renders as the
         // same single always-visible clip row a collapsed track would use,
         // regardless of its own collapsed flag.
-        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack;
+        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isMacroTrack();
         const float trackHeaderHeight = track.isWaveTrack
             ? ofClamp(track.waveTrackHeight, kWaveTrackMinHeight, kWaveTrackMaxHeight)
             : (singleRowTrack ? (!targetsView ? 80.0f : kCollapsedHeight) : kHeaderHeight);
@@ -2284,7 +2284,11 @@ void ofxOceanodeTimelineController::draw() {
 
             contextMenuSection("Create");
             if(ImGui::MenuItem(track.isWaveTrack ? "Add new wave clip" : "New clip")) {
-                if(track.isWaveTrack) {
+                if(track.isMacroTrack()) {
+                    // A macro clip: one pass of the macro's timeline.
+                    const auto clipId = timeline.createMacroClip(scope(timeline), track.id, snapBeat(std::max(0.0, pendingWaveClipBeat)));
+                    if(!clipId.empty()) { selectedClips.clear(); selectedClips.insert({track.id, clipId}); }
+                } else if(track.isWaveTrack) {
                     // Wave clips need a file before they are useful, so this
                     // asks for one and creates the clip around it.
                     waveFileRequest = WaveFileRequest::NewClip;
@@ -2503,7 +2507,8 @@ void ofxOceanodeTimelineController::draw() {
                 if(labelRight - labelLeft > 39) {
                     std::string label = clip.name + (clip.muted ? " [Muted]" : "");
                     if(clip.chance < 1.0f) label += " " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%";
-                    label += " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
+                    label += track.isMacroTrack() ? std::string(" [macro timeline]")
+                                                  : " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
                     dl->PushClipRect(ImVec2(left + 4.0f, min.y + 3.0f), ImVec2(labelRight, max.y - 3.0f), true);
                     dl->AddText(ImVec2(labelLeft, min.y + 6), IM_COL32(245, 250, 255, 255), label.c_str());
                     dl->PopClipRect();
@@ -2520,6 +2525,44 @@ void ofxOceanodeTimelineController::draw() {
                 const double visibleTo = beatAtOffset(right - min.x) - clip.startBeat;
                 firstVisibleCycle = std::max(0, static_cast<int>(std::floor(visibleFrom / cycleLength)));
                 lastVisibleCycle = static_cast<int>(std::min(1e9, std::ceil(visibleTo / cycleLength)));
+            }
+            if(track.isMacroTrack()) {
+                // What the macro's timeline holds, one thin row per track, as
+                // this clip places it (repeats, tempo ratio, offset).
+                auto* macroContainer = timeline.findMacroContainer(scope(timeline), track);
+                const auto* inner = macroContainer == nullptr ? nullptr : timeline.getMacroSequence(*macroContainer);
+                if(inner == nullptr) {
+                    dl->AddText(ImVec2(left + 6.0f, max.y - 18.0f), IM_COL32(255, 165, 60, 255), "[macro missing]");
+                    return;
+                }
+                std::vector<const ofxOceanodeTimelineTrack*> rows;
+                for(const auto& innerTrack : inner->tracks) if(!innerTrack.isFolder) rows.push_back(&innerTrack);
+                dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
+                const float top = min.y + 20.0f, height = std::max(4.0f, max.y - 5.0f - top);
+                const float rowHeight = rows.empty() ? 0.0f : std::max(1.0f, height / rows.size());
+                const int cycles = clip.repeatContent
+                    ? static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycleDuration(clip)))) : 1;
+                const double content = sourceDuration(clip);
+                for(size_t r = 0; r < rows.size(); ++r) {
+                    const float y1 = top + r * rowHeight, y2 = y1 + std::max(1.0f, rowHeight - 1.0f);
+                    for(const auto& innerClip : rows[r]->clips) {
+                        const double from = innerClip.startBeat, to = std::min(content, innerClip.startBeat + innerClip.durationBeats);
+                        if(from >= content) continue;
+                        for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
+                            const float a = min.x + beatOffset(sourceToTimelineBeat(clip, from, cycle));
+                            const float b = min.x + beatOffset(sourceToTimelineBeat(clip, to, cycle));
+                            const ImU32 color = IM_COL32(rows[r]->color.r, rows[r]->color.g, rows[r]->color.b, 210);
+                            if(b >= a) dl->AddRectFilled(ImVec2(a, y1), ImVec2(std::max(a + 1.0f, b), y2), color);
+                            else { // crosses the content offset's wrap
+                                const float cycleStart = min.x + beatOffset(clip.startBeat + cycle * cycleDuration(clip));
+                                dl->AddRectFilled(ImVec2(a, y1), ImVec2(cycleStart + beatOffset(clip.startBeat + cycleDuration(clip)) - beatOffset(clip.startBeat), y2), color);
+                                dl->AddRectFilled(ImVec2(cycleStart, y1), ImVec2(b, y2), color);
+                            }
+                        }
+                    }
+                }
+                dl->PopClipRect();
+                return;
             }
             if(track.isWaveTrack) {
                 dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
@@ -2690,7 +2733,11 @@ void ofxOceanodeTimelineController::draw() {
                 const double clickedBeat = beatAtOffset(mouse.x - min.x);
                 const bool editorShowingThisClip = editorState.clipEditorOpen && editorState.editorTrackId == track.id &&
                     editorState.editorClipId == clip.id && editorState.foldedClipEditors.count(clip.id) == 0;
-                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && editorShowingThisClip) {
+                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
+                    // Into the macro's own timeline (next frame: never mid-iteration).
+                    if(auto* macroContainer = timeline.findMacroContainer(scope(timeline), track))
+                        timeline.requestMacroScope(*macroContainer);
+                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && editorShowingThisClip) {
                     // Double-clicking the clip whose editor is open closes it again.
                     editorState.clipEditorOpen = false;
                 } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -2794,6 +2841,19 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::TextUnformatted(clip.name.c_str());
             drawSynthNavigation(timeline, track, &clip);
             contextMenuSection("Clip");
+            if(track.isMacroTrack()) {
+                if(ImGui::MenuItem("Open macro timeline")) {
+                    if(auto* macroContainer = timeline.findMacroContainer(scope(timeline), track))
+                        timeline.requestMacroScope(*macroContainer);
+                }
+                if(ImGui::MenuItem("Clip properties...")) {
+                    editorState.editorTrackId = track.id;
+                    editorState.editorClipId = clip.id;
+                    editorState.editorLaneId.clear();
+                    editorState.clipEditorOpen = true;
+                    editorState.foldedClipEditors.erase(clip.id);
+                }
+            }
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(scope(timeline), track.id, clip.id, !clip.muted);
             if(ImGui::MenuItem("Rename clip")) {

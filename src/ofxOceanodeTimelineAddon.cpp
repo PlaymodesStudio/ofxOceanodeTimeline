@@ -161,6 +161,14 @@ public:
                     }
                     if(ImGui::IsItemHovered())
                         ImGui::SetTooltip("Open this macro's own timeline in the timeline window.\nIt is saved with the macro (copies of a library macro share it).");
+                    if(ImGui::Selectable("Add to Timeline as Macro Track")){
+                        // A track whose clips play this macro's timeline, with a first clip at the start.
+                        const auto trackId = manager.createMacroTrack(*macro->getContainer());
+                        if(!trackId.empty()) manager.createMacroClip(trackId, 0.0);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A main-timeline track whose clips play this macro's timeline:\nplace, repeat, stretch (tempo ratio) and offset them like any clip.");
                 }
                 // An instrument (a synth that takes notes): a piano-roll row
                 // playing it, set up in the timeline's dialog.

@@ -321,6 +321,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
         if(track.isFolder) trackJson["isFolder"] = true;
         if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
+        if(track.isMacroTrack()) trackJson["macroCanvas"] = track.macroCanvas;
         trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
         trackJson["waveVolumePoints"] = ofJson::array();
         for(const auto& point : track.waveVolumePoints)
@@ -377,6 +378,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             clipJson["contentStretch"] = clip.contentStretch;
             clipJson["repeatContent"] = clip.repeatContent;
             if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
+            if(clip.macroSnapshot >= 0) clipJson["macroSnapshot"] = clip.macroSnapshot;
             clipJson["muted"] = clip.muted;
             clipJson["chance"] = clip.chance;
             clipJson["isLfo"] = clip.isLfo;
@@ -677,6 +679,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         // Older files have no folders: every track at the top level.
         track.isFolder = trackJson.value("isFolder", false);
         track.parentId = trackJson.value("parentId", std::string());
+        track.macroCanvas = trackJson.value("macroCanvas", std::string());
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));
         if(trackJson.contains("waveVolumePoints") && trackJson["waveVolumePoints"].is_array()) {
             for(const auto& pointJson : trackJson["waveVolumePoints"]) {
@@ -758,6 +761,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 // Older files have no offset: their content starts at its start.
                 clip.contentOffsetBeats = clip.isLfo || track.isWaveTrack ? 0.0 : clipJson.value("contentOffsetBeats", 0.0);
                 clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
+                clip.macroSnapshot = clipJson.value("macroSnapshot", -1);
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.lfoOutputBindingId = mapBinding(clipJson.value("lfoOutputBindingId", std::string()));
                 if(std::none_of(track.bindings.begin(), track.bindings.end(),

@@ -841,6 +841,29 @@ int main() {
         // Back to Main from the breadcrumb, and closed when the macro goes away.
         model.requestMacroScope(*inside); frame(); assert(ui.inMacroScope());
         ui.leaveScopesTo(0); frame(); assert(!ui.inMacroScope());
+        {
+            // A macro track on the main timeline: its clips play the macro's timeline.
+            const auto mt=model.createMacroTrack(*inside);
+            assert(!mt.empty() && model.getTrack(mt)->macroCanvas==inside->getCanvasID());
+            const auto mc=model.createMacroClip(mt,0.0);
+            assert(!mc.empty() && model.getClip(mt,mc)->contentDurationBeats>=model.getBeatsPerBar());
+            assert(model.createLane(mt,mc,"x",ofxOceanodeTimelineLaneType::Curve).empty()); // no lanes in a macro clip
+            for(int i=0;i<25;++i) frame();
+            const auto mrect=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==mc && r.trackId==mt;});
+            assert(mrect!=ui.clipScreenRects.end());
+            const ImVec2 at((mrect->x1+mrect->x2)*0.5f,(mrect->y1+mrect->y2)*0.5f);
+            frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(1250,at,true); frame(1250,at,false);
+            frame(); frame();
+            assert(ui.inMacroScope() && &ui.scope(model)==model.getMacroSequence(*inside)); // double-click opens it
+            ui.leaveScopesTo(0); frame();
+            // Saved and read back; a renumbered macro carries its tracks along.
+            const auto saved=model.toJson();
+            model.fromJson(saved);
+            assert(model.getTrack(mt)->macroCanvas==inside->getCanvasID() && model.getClip(mt,mc));
+            model.retargetParameterPaths({{inside->getCanvasID()+"::Synth_1/Cutoff","Macro 9::Synth_1/Cutoff"}});
+            assert(model.getTrack(mt)->macroCanvas=="Macro 9");
+            model.removeTrack(mt);
+        }
         model.requestMacroScope(*inside); frame(); assert(ui.inMacroScope());
         inside.reset();
         macroNode.deleteSelf();
@@ -851,7 +874,7 @@ int main() {
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, macro timeline scope (undo, save, breadcrumb), portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 

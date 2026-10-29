@@ -123,3 +123,80 @@ bool ofxOceanodeTimelineManager::isLiveSequence(const ofxOceanodeTimelineSequenc
     return std::any_of(macroSequences.begin(), macroSequences.end(),
         [&](const auto& entry) { return entry.sequence.get() == &sequence; });
 }
+
+namespace {
+// The macro container with this canvas id, searched from `from` down.
+ofxOceanodeContainer* containerWithCanvas(ofxOceanodeContainer& from, const std::string& canvasID) {
+    for(auto* node : from.getAllModules()) {
+        auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
+        if(macro == nullptr || !macro->getContainer()) continue;
+        auto& inner = *macro->getContainer();
+        if(inner.getCanvasID() == canvasID) return &inner;
+        if(canvasID.rfind(inner.getCanvasID() + " / ", 0) == 0)
+            if(auto* found = containerWithCanvas(inner, canvasID)) return found;
+    }
+    return nullptr;
+}
+
+bool isRootCanvas(const std::string& canvasID) { return canvasID.empty() || canvasID == "Canvas" || canvasID == "0"; }
+} // namespace
+
+std::string ofxOceanodeTimelineManager::createMacroTrack(ofxOceanodeTimelineSequence& sequence,
+                                                         ofxOceanodeContainer& macroContainer) {
+    // The macro's canvas id relative to the sequence's container; only a
+    // macro inside it (a sequence never reaches outside its own macro).
+    const auto* base = resolverFor(sequence).base;
+    const std::string canvas = macroContainer.getCanvasID();
+    std::string relative = canvas;
+    if(base != nullptr && !isRootCanvas(base->getCanvasID())) {
+        const std::string prefix = base->getCanvasID() + " / ";
+        if(canvas.rfind(prefix, 0) != 0) return std::string();
+        relative = canvas.substr(prefix.size());
+    }
+    if(isRootCanvas(relative) || getMacroSequence(macroContainer) == nullptr) return std::string();
+    const auto id = createTrack(sequence, getMacroSequenceLabel(macroContainer));
+    getTrack(sequence, id)->macroCanvas = relative;
+    invalidateEvaluationIndexes();
+    return id;
+}
+
+ofxOceanodeContainer* ofxOceanodeTimelineManager::findMacroContainer(const ofxOceanodeTimelineSequence& sequence,
+                                                                     const ofxOceanodeTimelineTrack& track) const {
+    if(container == nullptr || !track.isMacroTrack()) return nullptr;
+    const auto* base = sequence.base != nullptr ? sequence.base : container;
+    const std::string canvas = isRootCanvas(base->getCanvasID()) ? track.macroCanvas
+                                                                 : base->getCanvasID() + " / " + track.macroCanvas;
+    return containerWithCanvas(*container, canvas);
+}
+
+double ofxOceanodeTimelineManager::macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const {
+    double end = 0.0;
+    for(const auto& track : macroSequence.tracks)
+        for(const auto& clip : track.clips) end = std::max(end, clip.startBeat + clip.durationBeats);
+    return std::max(getBeatsPerBar(), end);
+}
+
+std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                        double startBeat, double durationBeats) {
+    const auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || !track->isMacroTrack()) return std::string();
+    auto* macroContainer = findMacroContainer(sequence, *track);
+    auto* macroSequence = macroContainer == nullptr ? nullptr : getMacroSequence(*macroContainer);
+    const double length = macroSequence == nullptr ? getBeatsPerBar() : macroTimelineLength(*macroSequence);
+    const auto id = createClip(sequence, trackId, track->name, startBeat, durationBeats > 0.0 ? durationBeats : length);
+    if(auto* clip = getClip(sequence, trackId, id)) {
+        clip->contentDurationBeats = length;
+        clip->contentStretch = 1.0;
+        clip->repeatContent = true;
+    }
+    invalidateEvaluationIndexes();
+    return id;
+}
+
+std::string ofxOceanodeTimelineManager::createMacroTrack(ofxOceanodeContainer& macroContainer) {
+    return createMacroTrack(mainSequence, macroContainer);
+}
+
+std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& trackId, double startBeat, double durationBeats) {
+    return createMacroClip(mainSequence, trackId, startBeat, durationBeats);
+}

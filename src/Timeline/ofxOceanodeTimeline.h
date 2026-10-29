@@ -638,6 +638,11 @@ struct ofxOceanodeTimelineClip {
     // there to its end and on from its start. Automation clips only; Wave
     // clips keep their file position in waveSourceStartBeat, LFOs their phase.
     double contentOffsetBeats = 0.0;
+    // A macro clip (on a macro track) plays its macro's timeline through its
+    // own timing: content length = one pass of that timeline, stretch = its
+    // tempo ratio, offset = which section plays. The macro snapshot recalled
+    // when it starts (-1: none).
+    int macroSnapshot = -1;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -891,6 +896,12 @@ struct ofxOceanodeTimelineTrack {
     // followed by its contents (see ofxOceanodeTimelineSequence::normalizeFolders).
     bool isFolder = false;
     std::string parentId; // empty: at the top level
+    // Macro track: its clips play the timeline of this macro (the canvas id
+    // of the macro's container, relative to the sequence's own container:
+    // absolute on the main timeline). Empty: an ordinary track. A macro
+    // track has no bindings, and its clips no lanes.
+    std::string macroCanvas;
+    bool isMacroTrack() const { return !macroCanvas.empty(); }
 };
 constexpr float kMaxTrackLatencyOffsetMs = 250.0f;
 
@@ -1088,6 +1099,20 @@ public:
     // The main timeline's arrangement, read-only (folder depth, parents...).
     const ofxOceanodeTimelineSequence& getMainSequence() const { return mainSequence; }
     ofxOceanodeTimelineSequence& getMainSequence() { return mainSequence; }
+
+    // ---- Macro tracks: clips that play a macro's own timeline ----
+    std::string createMacroTrack(ofxOceanodeContainer& macroContainer);
+    std::string createMacroTrack(ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& macroContainer);
+    // A clip on a macro track. A content length of 0 uses the macro
+    // timeline's length (the end of its last clip, at least one bar).
+    std::string createMacroClip(const std::string& trackId, double startBeat, double durationBeats = 0.0);
+    std::string createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                double startBeat, double durationBeats = 0.0);
+    // The live container of the macro a macro track plays (nullptr: gone).
+    ofxOceanodeContainer* findMacroContainer(const ofxOceanodeTimelineSequence& sequence,
+                                             const ofxOceanodeTimelineTrack& track) const;
+    // One pass of a macro timeline: the end of its last clip, at least a bar.
+    double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
 
     // ---- Macro timelines: each macro's own sequence ----
     // The sequence of the macro owning this container (created empty on first

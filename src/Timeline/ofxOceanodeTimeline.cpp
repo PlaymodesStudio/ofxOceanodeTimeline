@@ -1227,7 +1227,8 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
                                                    ofxOceanodeAbstractParameter& parameter,
                                                    ofxOceanodeTimelineAutomationMode mode) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || track->isFolder || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isFolder || track->isMacroTrack() || container == nullptr ||
+       !isStepLaneCompatible(parameter)) return std::string();
 
     // Relative to the sequence's container; nothing outside it.
     const std::string path = resolverFor(sequence).pathOf(parameter);
@@ -1760,6 +1761,26 @@ int ofxOceanodeTimelineManager::retargetParameterPaths(ofxOceanodeTimelineSequen
             binding.parameterPath = it->second;
             binding.missingTarget = false;
             changed++;
+        }
+    }
+    // Macro tracks follow a moved macro: its canvas id changed as its
+    // parameters' paths did (same node and parameter after "::").
+    std::map<std::string, std::string> canvases;
+    for(const auto& entry : oldToNew) {
+        const auto oldCut = entry.first.find("::"), newCut = entry.second.find("::");
+        if(oldCut == std::string::npos || newCut == std::string::npos) continue;
+        if(entry.first.substr(oldCut) != entry.second.substr(newCut)) continue;
+        canvases.emplace(entry.first.substr(0, oldCut), entry.second.substr(0, newCut));
+    }
+    for(auto& track : sequence.tracks) {
+        if(!track.isMacroTrack()) continue;
+        for(const auto& canvas : canvases) {
+            if(track.macroCanvas == canvas.first) track.macroCanvas = canvas.second;
+            else if(track.macroCanvas.rfind(canvas.first + " / ", 0) == 0)
+                track.macroCanvas = canvas.second + track.macroCanvas.substr(canvas.first.size());
+            else continue;
+            ++changed;
+            break;
         }
     }
     if(changed > 0) {
@@ -2407,7 +2428,7 @@ void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip
 std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    const std::string& firstClipId, const std::string& secondClipId) {
     const auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || firstClipId == secondClipId) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || firstClipId == secondClipId) return std::string();
     const auto* first = getClip(sequence, trackId, firstClipId);
     const auto* second = getClip(sequence, trackId, secondClipId);
     if(first == nullptr || second == nullptr) return std::string();
@@ -3058,6 +3079,7 @@ std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& 
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return std::string();
     if(type == ofxOceanodeTimelineLaneType::Wave) return std::string();
+    if(const auto* owner = getTrack(sequence, trackId); owner != nullptr && owner->isMacroTrack()) return std::string();
     ofxOceanodeTimelineLane lane;
     lane.id = sequence.makeUniqueLaneId();
     lane.name = requestedName.empty() ? "Lane" : requestedName;
