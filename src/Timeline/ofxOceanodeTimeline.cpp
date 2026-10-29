@@ -1230,6 +1230,8 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
     if(track == nullptr || track->isWaveTrack || track->isFolder || track->isMacroTrack() || container == nullptr ||
        !isStepLaneCompatible(parameter)) return std::string();
 
+    // A gated macro's Active belongs to its macro track.
+    if(isGatedMacroActive(parameter)) return std::string();
     // Relative to the sequence's container; nothing outside it.
     const std::string path = resolverFor(sequence).pathOf(parameter);
     if(path.empty()) return std::string();
@@ -4422,6 +4424,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues);
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);
+    updateMacroGating(transport);
 
     // Hand the discrete events of the coming window to any backend that can
     // execute them at an exact instant. Everything below still runs exactly

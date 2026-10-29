@@ -457,7 +457,9 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         (folder / "macro_stub.cpp").write_text(
             '#include "Timeline/ofxOceanodeTimeline.h"\n'
             'std::vector<ofxOceanodeTimelineManager::MacroSource> '
-            'ofxOceanodeTimelineManager::collectMacroSources() const { return {}; }\n')
+            'ofxOceanodeTimelineManager::collectMacroSources() const { return {}; }\n'
+            'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
+            'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"

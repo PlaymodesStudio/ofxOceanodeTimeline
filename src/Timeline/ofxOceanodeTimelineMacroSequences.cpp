@@ -227,3 +227,11 @@ std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager:
     }
     return sources;
 }
+
+ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter(const ofxOceanodeContainer& macroContainer,
+                                                                           const std::string& name) const {
+    if(container == nullptr) return nullptr;
+    auto* macro = owningMacro(*container, macroContainer);
+    if(macro == nullptr || !macro->getParameterGroup().contains(name)) return nullptr;
+    return dynamic_cast<ofxOceanodeAbstractParameter*>(&macro->getParameterGroup().get(name));
+}

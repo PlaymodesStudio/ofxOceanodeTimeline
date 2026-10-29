@@ -902,7 +902,16 @@ struct ofxOceanodeTimelineTrack {
     // track has no bindings, and its clips no lanes.
     std::string macroCanvas;
     bool isMacroTrack() const { return !macroCanvas.empty(); }
+    // Gating: the macro is switched on (its Active) only around this track's
+    // clips: preRollMs before one starts (at least the macro's earliest
+    // negative latency) until tailMs after it ends, so its nodes start up
+    // before the first events and its gates and releases finish after the
+    // rest values went out.
+    bool macroGate = false;
+    float macroPreRollMs = 100.0f;
+    float macroTailMs = 500.0f;
 };
+constexpr float kMaxMacroGateMs = 5000.0f;
 constexpr float kMaxTrackLatencyOffsetMs = 250.0f;
 
 // A lightweight cross-track grouping: it holds no automation data of its
@@ -1731,6 +1740,22 @@ private:
         size_t trackIndex = 0;
     };
     std::vector<MacroSource> collectMacroSources() const;
+    // A parameter of the macro node owning this container ("Active",
+    // "Snapshot"); nullptr when no macro owns it.
+    ofxOceanodeAbstractParameter* macroNodeParameter(const ofxOceanodeContainer& macroContainer,
+                                                     const std::string& name) const;
+    // Whether this is the Active of a macro a macro track gates.
+    bool isGatedMacroActive(const ofxOceanodeAbstractParameter& parameter);
+    // Gated macros' Active and each macro clip's snapshot, once per frame.
+    void updateMacroGating(const ofxOceanodeTransportState& transport);
+    // Macros gating switched off (switched back on when no longer gated).
+    std::set<const ofxOceanodeContainer*> gatedOffMacros;
+    // The clip whose snapshot each macro last recalled (track/clip ids).
+    std::map<const ofxOceanodeContainer*, std::string> recalledMacroClip;
+    // Inside played macro timelines: what each gate, toggle and step binding
+    // writes when no clip plays it (its rest), so a macro clip's end, a muted
+    // macro track or a skipped clip leave nothing open.
+    std::unordered_map<const ofxOceanodeTimelineParameterBinding*, std::string> restWhenInactiveCache;
     void rebuildPlayedMacros();
     const PlayedMacro* playedMacroAt(const std::string& canvas) const;
     // The played copies, then the main timeline: what evaluation walks.
@@ -1811,6 +1836,9 @@ private:
         double windowTo = std::numeric_limits<double>::infinity();
         // Mixed into the pass: each macro clip repeat rolls anew (0: main).
         uint64_t passMix = 0;
+        // The macro track and clip that placed it (nullptr: the main timeline).
+        const ofxOceanodeTimelineTrack* placedBy = nullptr;
+        const ofxOceanodeTimelineClip* placedClip = nullptr;
         // The context its lanes roll with.
         ofxOceanodeTimelinePlayContext contextFrom(const ofxOceanodeTimelinePlayContext& context) const {
             auto copy = context;

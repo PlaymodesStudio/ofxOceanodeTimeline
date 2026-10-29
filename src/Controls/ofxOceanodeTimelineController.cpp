@@ -2285,6 +2285,27 @@ void ofxOceanodeTimelineController::draw() {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
             }
 
+            if(track.isMacroTrack()) {
+                contextMenuSection("Gating");
+                if(ImGui::MenuItem("Gate macro (on only around clips)", nullptr, track.macroGate))
+                    if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroGate = !track.macroGate;
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Switch the macro's Active on only around this track's clips:\n"
+                                      "on a pre-roll before a clip starts, off a tail after it ends.\n"
+                                      "Gates inside the macro rest at each clip's end.");
+                if(track.macroGate) {
+                    float preRoll = track.macroPreRollMs, tail = track.macroTailMs;
+                    ImGui::SetNextItemWidth(120.0f);
+                    const bool preChanged = ImGui::DragFloat("Pre-roll ms", &preRoll, 1.0f, 0.0f, kMaxMacroGateMs, "%.0f");
+                    ImGui::SetNextItemWidth(120.0f);
+                    const bool tailChanged = ImGui::DragFloat("Tail ms", &tail, 5.0f, 0.0f, kMaxMacroGateMs, "%.0f");
+                    if(preChanged || tailChanged)
+                        if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) {
+                            editTrack->macroPreRollMs = ofClamp(preRoll, 0.0f, kMaxMacroGateMs);
+                            editTrack->macroTailMs = ofClamp(tail, 0.0f, kMaxMacroGateMs);
+                        }
+                }
+            }
             contextMenuSection("Create");
             if(ImGui::MenuItem(track.isWaveTrack ? "Add new wave clip" : "New clip")) {
                 if(track.isMacroTrack()) {
@@ -2856,6 +2877,14 @@ void ofxOceanodeTimelineController::draw() {
                     editorState.clipEditorOpen = true;
                     editorState.foldedClipEditors.erase(clip.id);
                 }
+                // The macro snapshot this clip recalls when it starts (-1: none).
+                int snapshot = clip.macroSnapshot;
+                ImGui::SetNextItemWidth(120.0f);
+                if(ImGui::InputInt("Snapshot at start", &snapshot))
+                    if(auto* editClip = timeline.getClip(scope(timeline), track.id, clip.id))
+                        editClip->macroSnapshot = std::max(-1, std::min(snapshot, 64));
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Which of the macro's snapshots this clip recalls when it starts\n(-1: none). Each clip can start a different scene.");
             }
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(scope(timeline), track.id, clip.id, !clip.muted);

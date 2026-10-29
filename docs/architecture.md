@@ -105,6 +105,20 @@ macro tracks' latencies add up around a copy, and a copy's offset wins on a
 path the main timeline also drives. Wave tracks play on the main timeline
 only.
 
+Inside played macro timelines, gate, toggle and step bindings write their
+rest value wherever no clip of theirs plays (`restWhenInactiveCache`, part
+of the value at every beat, so the scheduler sends it too): a macro clip's
+end, a muted macro track or a skipped clip leave nothing open. Once per
+frame `updateMacroGating` switches each gated macro track's macro
+(`macroGate`) through the macro node's Active: on from `macroPreRollMs`
+(at least the macro's earliest negative latency) before a clip until
+`macroTailMs` after it, with the window wrapped at the loop so a loop start
+inside a clip keeps it on. Gating owns Active (a binding to it is refused).
+The same pass sets the macro node's Snapshot to a clip's `macroSnapshot`
+once when the clip comes up (within the pre-roll), again each time it
+starts. Both go through the macro node's own parameters
+(`macroNodeParameter`), not the core's internals.
+
 The controller edits one sequence at a time, its scope: the main timeline, or
 a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
 breadcrumb). Every model call from the controller and lane editors passes the

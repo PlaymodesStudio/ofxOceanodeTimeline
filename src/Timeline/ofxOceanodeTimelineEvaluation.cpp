@@ -655,6 +655,8 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
                         placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
                         placement.resolver = resolverFor(*placement.sequence);
+                        placement.placedBy = &track;
+                        placement.placedClip = &clip;
                         // Its own rolls per copy (macro track and clip), new
                         // ones each repeat, as each loop pass rolls anew.
                         uint64_t key = outer.instanceKey * 0x9e3779b97f4a7c15ULL;
@@ -670,6 +672,111 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
         }
     }
     return result;
+}
+
+bool ofxOceanodeTimelineManager::isGatedMacroActive(const ofxOceanodeAbstractParameter& parameter) {
+    if(parameter.getName() != "Active") return false;
+    ensureEvaluationIndexes();
+    for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
+        if(!track.isMacroTrack() || !track.macroGate) continue;
+        if(const auto* played = playedMacroAt(track.macroCanvas))
+            if(macroNodeParameter(*played->macroContainer, "Active") == &parameter) return true;
+    }
+    return false;
+}
+
+void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportState& transport) {
+    // What each macro should be: on (gated around a clip), and the clip
+    // whose snapshot comes up next.
+    std::map<const ofxOceanodeContainer*, bool> gatedOn;
+    struct Upcoming { std::string key; int snapshot = -1; double order = 0.0; };
+    std::map<const ofxOceanodeContainer*, Upcoming> upcoming;
+    const double beat = transport.beatPosition;
+    const double beatsPerMs = std::max(1.0f, transport.bpm) / 60000.0;
+    const bool looping = loopEnabled && loopEndBeat > loopStartBeat + kEpsilon &&
+                         beat >= loopStartBeat - kEpsilon && beat < loopEndBeat;
+    // Main-timeline beat ranges, wrapped at the loop: what plays within
+    // `before` of the playhead and `after` past it.
+    // (from, to, loop passes ahead: +1 past the wrap, -1 before it)
+    struct Range { double from, to; int pass; };
+    auto ranges = [&](double before, double after) {
+        std::vector<Range> out;
+        double from = beat - before, to = beat + after;
+        if(looping) {
+            if(to > loopEndBeat) out.push_back({loopStartBeat, std::min(loopEndBeat, loopStartBeat + (to - loopEndBeat)), 1});
+            if(from < loopStartBeat) out.push_back({std::max(loopStartBeat, loopEndBeat - (loopStartBeat - from)), loopEndBeat, -1});
+            from = std::max(from, loopStartBeat);
+            to = std::min(to, loopEndBeat);
+        }
+        out.push_back({from, to, 0});
+        return out;
+    };
+    auto touches = [](const PlayedSequence& placement, const Range& range) {
+        return placement.windowTo > range.from + kEpsilon && placement.windowFrom <= range.to + kEpsilon;
+    };
+    for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
+        if(!track.isMacroTrack()) continue;
+        const auto* played = playedMacroAt(track.macroCanvas);
+        if(played == nullptr) continue;
+        // Pre-roll covers the earliest negative latency inside the macro.
+        float earliestMs = 0.0f;
+        for(const auto& inner : played->sequence->tracks)
+            earliestMs = std::min(earliestMs, ofClamp(trackLatencyWithFolders(inner) + played->outerLatencyMs,
+                                                      -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs));
+        const double preRoll = std::max<double>(ofClamp(track.macroPreRollMs, 0.0f, kMaxMacroGateMs), -earliestMs) * beatsPerMs;
+        const double tail = ofClamp(track.macroTailMs, 0.0f, kMaxMacroGateMs) * beatsPerMs;
+        bool* on = track.macroGate ? &gatedOn[played->macroContainer] : nullptr;
+        for(const auto& range : ranges(track.macroGate ? tail : 0.0, preRoll)) {
+            for(const auto& placement : playedSequences(playContext, range.from, range.to)) {
+                if(placement.placedBy != &track || !touches(placement, range)) continue;
+                if(on != nullptr) *on = true;
+                // The latest clip started or starting within the pre-roll
+                // (not one that already ended); a clip running across the
+                // loop start continues through the wrap, any other starts
+                // again each pass.
+                if(range.pass < 0 || (range.pass == 0 && placement.windowTo <= beat + kEpsilon)) continue;
+                const auto* clip = placement.placedClip;
+                const bool acrossWrap = looping && clip->startBeat < loopStartBeat - kEpsilon &&
+                                        clip->startBeat + clip->durationBeats > loopStartBeat + kEpsilon;
+                const std::string key = track.id + "/" + clip->id + "#" +
+                    (acrossWrap ? std::string() : ofToString(static_cast<int64_t>(transport.loopCount) + range.pass));
+                const double order = range.pass * 1e9 + placement.windowFrom;
+                auto& next = upcoming[played->macroContainer];
+                if(next.key.empty() || order > next.order) next = {key, clip->macroSnapshot, order};
+            }
+        }
+    }
+    // Only gated macros are switched; a macro no longer gated is switched back on.
+    for(const auto& [macroContainer, on] : gatedOn) {
+        auto* active = macroNodeParameter(*macroContainer, "Active");
+        if(active == nullptr || active->valueType() != typeid(bool).name()) continue;
+        auto& parameter = active->cast<bool>().getParameter();
+        if(parameter.get() != on) parameter = on;
+        if(on) gatedOffMacros.erase(macroContainer); else gatedOffMacros.insert(macroContainer);
+    }
+    for(auto it = gatedOffMacros.begin(); it != gatedOffMacros.end();) {
+        if(gatedOn.count(*it) > 0) { ++it; continue; }
+        const bool live = std::any_of(playedMacros.begin(), playedMacros.end(),
+                                      [&](const auto& played) { return played.macroContainer == *it; });
+        if(live)
+            if(auto* active = macroNodeParameter(**it, "Active"); active != nullptr && active->valueType() == typeid(bool).name())
+                active->cast<bool>().getParameter() = true;
+        it = gatedOffMacros.erase(it);
+    }
+    // A clip's snapshot is recalled once, when it comes up (within the
+    // pre-roll, so its values are in place when it starts).
+    // Stopped, nothing is recalled: playing starts with the clip at the playhead.
+    if(!transport.isPlaying) { recalledMacroClip.clear(); return; }
+    for(auto it = recalledMacroClip.begin(); it != recalledMacroClip.end();)
+        it = upcoming.count(it->first) > 0 ? std::next(it) : recalledMacroClip.erase(it);
+    for(const auto& [macroContainer, next] : upcoming) {
+        auto& recalled = recalledMacroClip[macroContainer];
+        if(recalled == next.key) continue;
+        recalled = next.key;
+        if(next.snapshot < 0) continue;
+        if(auto* slot = macroNodeParameter(*macroContainer, "Snapshot"); slot != nullptr && slot->valueType() == typeid(int).name())
+            slot->cast<int>().getParameter() = next.snapshot;
+    }
 }
 
 // Copies of the macro timelines the main timeline reaches (collectMacroSources
@@ -760,6 +867,7 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     pianoInputPriorityCache.clear();
     pianoRoleGroupsCache.clear();
     zeroWhenInactiveBindingsCache.clear();
+    restWhenInactiveCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     stateCapturePathsCache.clear();
     playback.clearRolls();
@@ -787,6 +895,21 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
         }
         for(size_t clipIndex = 0; clipIndex < track.clips.size(); ++clipIndex)
             index.clipOrder.emplace(&track.clips[clipIndex], clipIndex);
+    }
+    // Inside played macro timelines, gates, toggles and steps rest (as a
+    // chance-skipped clip's do) wherever no clip of theirs plays.
+    for(const auto& played : playedMacros) for(const auto& track : played.sequence->tracks) {
+        for(const auto& clip : track.clips) for(const auto& lane : clip.lanes) {
+            const bool multiRow = lane.type == ofxOceanodeTimelineLaneType::MultiGate ||
+                                  lane.type == ofxOceanodeTimelineLaneType::MultiValue;
+            if(!multiRow && lane.type != ofxOceanodeTimelineLaneType::Step) continue;
+            const std::string rest = multiRow
+                ? joinAutomationValues(std::vector<std::string>(static_cast<size_t>(std::max(1, lane.multiRowCount)), "0"))
+                : "0";
+            for(const auto& bindingId : lane.bindingIds)
+                if(const auto* binding = bindingInTrack(track, bindingId))
+                    restWhenInactiveCache.emplace(binding, multiRow ? rest : mapNormalizedLaneValue(lane, *binding, rest));
+        }
     }
 
     // These properties depend only on the timeline structure. Cache them once
@@ -1762,6 +1885,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 if(value.empty()) continue;
             }
             else if(isPlaying && zeroWhenInactiveBindingsCache.count(&binding) > 0) value = "0";
+            else if(const auto rest = restWhenInactiveCache.find(&binding); isPlaying && rest != restWhenInactiveCache.end())
+                value = rest->second;
             else continue;
             if(inspectBinding) {
                 inspection->bindings.back().value = value;

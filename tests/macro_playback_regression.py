@@ -15,10 +15,11 @@ native.fixture.CASES = r'''
 class Probe : public ofxOceanodeNodeModel {
 public:
     Probe() : ofxOceanodeNodeModel("Probe") {}
-    ofParameter<float> level, other;
+    ofParameter<float> level, other, gate;
     void setup() override {
         addParameter(level.set("Level", -1, -1, 4));
         addParameter(other.set("Other", -1, -1, 4));
+        addParameter(gate.set("Gate", 0, 0, 1));
     }
 };
 static int failures = 0;
@@ -168,6 +169,63 @@ int main(int, char**) {
     at(11.5);
     check(near(innerProbe.level.get(), -1.0f), "Silent after its clip ends inside the outer repeat");
 
+    // Rest values: a toggle on for the whole macro timeline closes when the
+    // macro clip ends (not held open, as a gate left by a main clip is).
+    const auto gt = model.createTrack(*pattern, "Gate");
+    const auto gb = model.addBinding(*pattern, gt, static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Gate")));
+    const auto gc = model.createClip(*pattern, gt, "Open", 0, 4);
+    const auto gl = model.createLane(*pattern, gt, gc, "Gate", ofxOceanodeTimelineLaneType::MultiGate);
+    model.addBindingToLane(*pattern, gt, gc, gl, gb);
+    model.getLane(*pattern, gt, gc, gl)->multiRowCount = 1;
+    model.getLane(*pattern, gt, gc, gl)->multiGateRows = {{{0.0, 4.0, 1}}};
+    at(9.0);
+    check(near(probe.gate.get(), 1.0f), "Toggle open inside the macro clip");
+    at(16.5);
+    check(near(probe.gate.get(), 0.0f), "...rests when the macro clip ends");
+    at(9.0);
+    model.setTrackMuted(mt, true); at(9.2);
+    check(near(probe.gate.get(), 0.0f), "...and when its macro track is muted");
+    model.setTrackMuted(mt, false);
+
+    // Gating: Active on from the pre-roll (100 ms = 0.2 beats at 120 BPM)
+    // before the clip until the tail (500 ms = 1 beat) after it.
+    auto& active = static_cast<ofxOceanodeAbstractParameter&>(macroNode.getParameters().get("Active")).cast<bool>().getParameter();
+    const float bpm = owner->getTransport()->getState().bpm;
+    check(std::abs(bpm - 120.0f) < 0.01f, "Test assumes 120 BPM");
+    model.getTrack(mt)->macroGate = true;
+    at(2.0);  check(!active.get(), "Gated: off before the clip");
+    at(7.85); check(active.get(), "On within the pre-roll");
+    at(9.0);  check(active.get(), "On in the clip");
+    at(16.8); check(active.get(), "On through the tail");
+    at(17.3); check(!active.get(), "Off after the tail");
+    const auto hand = model.createTrack("Hand");
+    auto& activeParameter = static_cast<ofxOceanodeAbstractParameter&>(macroNode.getParameters().get("Active"));
+    check(model.addBinding(hand, activeParameter).empty(), "A gated macro's Active cannot be bound by hand");
+    model.getTrack(mt)->macroGate = false;
+    check(!model.addBinding(hand, activeParameter).empty(), "...but can when ungated");
+    model.removeTrack(hand);
+    model.getTrack(mt)->macroGate = true;
+    // Loop start inside the clip: on across the wrap.
+    // (clip 8..16, loop 12..20: after the tail it is off, then the
+    // pre-roll before the loop end reaches the clip at the loop start)
+    model.setLoopRange(12.0, 20.0); model.setLoopEnabled(true);
+    at(18.5);  check(!active.get(), "Looping: off after the tail");
+    at(19.9);  check(active.get(), "On again before the wrap, the loop start being inside the clip");
+    model.setLoopEnabled(false);
+    model.getTrack(mt)->macroGate = false;
+    at(2.0);  check(active.get(), "Ungated: switched back on");
+
+    // Snapshot per clip: recalled once when the clip comes up.
+    auto& snapshot = static_cast<ofxOceanodeAbstractParameter&>(macroNode.getParameters().get("Snapshot")).cast<int>().getParameter();
+    model.getClip(mt, mc)->macroSnapshot = 2;
+    snapshot = -1;
+    at(2.0); check(snapshot.get() == -1, "No snapshot outside the clip");
+    at(8.5); check(snapshot.get() == 2, "Clip start recalls its snapshot");
+    snapshot = 5; at(9.0);
+    check(snapshot.get() == 5, "...once (a later change stays)");
+    at(2.0); at(8.5);
+    check(snapshot.get() == 2, "...and again when the clip starts again");
+
     // The macro goes away: its timeline stops playing, nothing dangles.
     owner->getTransport()->stop();
     inside.reset();
@@ -178,7 +236,7 @@ int main(int, char**) {
     model.update(); model.applyAutomation();
     if(failures > 0) return 1;
     std::cout << "Macro playback passed: placement, repeats, tempo, content offset, main layer (Add, Replace), "
-                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, macro removed.\n";
+                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
 }
 '''
 

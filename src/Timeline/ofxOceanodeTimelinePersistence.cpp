@@ -323,7 +323,12 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
         if(track.isFolder) trackJson["isFolder"] = true;
         if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
-        if(track.isMacroTrack()) trackJson["macroCanvas"] = track.macroCanvas;
+        if(track.isMacroTrack()) {
+            trackJson["macroCanvas"] = track.macroCanvas;
+            trackJson["macroGate"] = track.macroGate;
+            trackJson["macroPreRollMs"] = track.macroPreRollMs;
+            trackJson["macroTailMs"] = track.macroTailMs;
+        }
         trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
         trackJson["waveVolumePoints"] = ofJson::array();
         for(const auto& point : track.waveVolumePoints)
@@ -684,6 +689,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.isFolder = trackJson.value("isFolder", false);
         track.parentId = trackJson.value("parentId", std::string());
         track.macroCanvas = trackJson.value("macroCanvas", std::string());
+        track.macroGate = trackJson.value("macroGate", false);
+        track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
+        track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));
         if(trackJson.contains("waveVolumePoints") && trackJson["waveVolumePoints"].is_array()) {
             for(const auto& pointJson : trackJson["waveVolumePoints"]) {
