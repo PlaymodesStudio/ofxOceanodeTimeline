@@ -374,6 +374,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             clipJson["contentDurationBeats"] = clip.contentDurationBeats;
             clipJson["contentStretch"] = clip.contentStretch;
             clipJson["repeatContent"] = clip.repeatContent;
+            if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
             clipJson["muted"] = clip.muted;
             clipJson["chance"] = clip.chance;
             clipJson["isLfo"] = clip.isLfo;
@@ -749,6 +750,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                     clipJson.value("contentStretch", clip.repeatContent
                         ? 1.0 : clip.durationBeats / clip.contentDurationBeats));
                 clip.isLfo = clipJson.value("isLfo", false);
+                // Older files have no offset: their content starts at its start.
+                clip.contentOffsetBeats = clip.isLfo || track.isWaveTrack ? 0.0 : clipJson.value("contentOffsetBeats", 0.0);
+                clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.lfoOutputBindingId = mapBinding(clipJson.value("lfoOutputBindingId", std::string()));
                 if(std::none_of(track.bindings.begin(), track.bindings.end(),

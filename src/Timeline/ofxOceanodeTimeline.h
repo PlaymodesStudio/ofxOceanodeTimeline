@@ -622,6 +622,11 @@ struct ofxOceanodeTimelineClip {
     // when the visible clip edge is later extended to add repetitions.
     double contentStretch = 1.0;
     bool repeatContent = true;
+    // Where in its content the clip starts playing, in source beats
+    // (0 <= offset < contentDurationBeats): the content plays rotated, from
+    // there to its end and on from its start. Automation clips only; Wave
+    // clips keep their file position in waveSourceStartBeat, LFOs their phase.
+    double contentOffsetBeats = 0.0;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -682,6 +687,8 @@ namespace ofxOceanodeTimelineClipTime {
                                 double timelineBeat);
     int64_t cycleIndex(const ofxOceanodeTimelineClip& clip,
                        double timelineBeat);
+    // contentOffsetBeats kept inside [0, source duration).
+    double contentOffset(const ofxOceanodeTimelineClip& clip);
 }
 
 // Where a sequence's beats sit on the main timeline: sequence beat b plays at
@@ -1308,6 +1315,19 @@ public:
     // Does not write parameters, schedule events, or change source content.
     ofxOceanodeTimelineTargetInspection inspectTarget(const std::string& parameterPath,
                                                      double beat, bool isPlaying) const;
+    // A copy of the clip with its content laid out from where it starts
+    // playing (contentOffsetBeats baked into the lanes): it sounds the same,
+    // and previews can draw it without a wrap.
+    ofxOceanodeTimelineClip clipAsPlayed(const ofxOceanodeTimelineClip& clip) const {
+        ofxOceanodeTimelineClip played = clip;
+        bakeContentOffset(played);
+        return played;
+    }
+    // Rotates where the clip's content starts (see contentOffsetBeats);
+    // refused for Wave and LFO clips.
+    bool setClipContentOffset(const std::string& trackId, const std::string& clipId, double offsetBeats);
+    bool setClipContentOffset(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                              const std::string& clipId, double offsetBeats);
     bool setClipContentDuration(const std::string& trackId, const std::string& clipId,
                                  double contentDurationBeats, bool repeatContent);
     bool setClipContentDuration(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
@@ -1791,6 +1811,14 @@ private:
     // The two halves of a clip cut at a timeline beat (see splitClip).
     bool computeClipSplit(const ofxOceanodeTimelineClip& original, double timelineBeat,
                           ofxOceanodeTimelineClip& left, ofxOceanodeTimelineClip& right) const;
+    // The content of both parts of a cut at source beat `cut`: left keeps
+    // [0, cut) (one-shots only), right gets [cut, end) then, when repeating,
+    // [0, cut) -- the content rotated to start at the cut.
+    void cutClipContent(const ofxOceanodeTimelineClip& original, double cut, bool repeating,
+                        ofxOceanodeTimelineClip& left, ofxOceanodeTimelineClip& right) const;
+    // Rewrites the lanes so the content starts where it plays from, and
+    // clears contentOffsetBeats: before edits that cut or re-lay content.
+    void bakeContentOffset(ofxOceanodeTimelineClip& clip) const;
     // Keep the transport-side range in lockstep with edits made by the UI.
     // Waiting for the next automation pass leaves a frame in which the icon
     // says loop is on but the playhead can cross the old end point.

@@ -105,15 +105,45 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline,
     ImGui::EndDisabled();
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Source length (beats): one source cycle. Notes and points stay in source beats. Hidden data is retained.");
+    // Stretch and Tempo are one setting: timeline beats per source beat, or
+    // its inverse read as speed. Either keeps the number of repeats.
+    auto setStretch = [&](double stretch) {
+        stretch = std::max(1.0 / 1024.0, stretch);
+        const bool repeat = clip.repeatContent;
+        const double duration = clip.durationBeats * stretch / ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+        changed = timeline.setClipTiming(track.id, clip.id, clip.startBeat, duration) || changed;
+        clip.contentStretch = stretch;
+        clip.repeatContent = track.isWaveTrack ? false : repeat;
+    };
     field("Stretch (%)", "Stretch");
     double ratio = ofxOceanodeTimelineClipTime::effectiveStretch(clip) * 100.0;
-    if(ImGui::InputDouble("##stretch", &ratio, rows ? 0.0 : 1.0, 10, "%.2f%%") && std::isfinite(ratio)) {
-        ratio = std::max(100.0 / 1024.0, ratio) / 100.0;
-        const bool repeat = clip.repeatContent;
-        const double duration = clip.durationBeats * ratio / ofxOceanodeTimelineClipTime::effectiveStretch(clip);
-        changed = timeline.setClipTiming(track.id, clip.id, clip.startBeat, duration) || changed;
-        clip.contentStretch = ratio;
-        clip.repeatContent = track.isWaveTrack ? false : repeat;
+    if(ImGui::InputDouble("##stretch", &ratio, rows ? 0.0 : 1.0, 10, "%.2f%%") && std::isfinite(ratio))
+        setStretch(std::max(100.0 / 1024.0, ratio) / 100.0);
+    field("Tempo (x global)", "Tempo");
+    {
+        struct TempoRatio { double speed; const char* label; };
+        static const TempoRatio kTempoRatios[] = {
+            {4.0, "x4"}, {3.0, "x3"}, {2.0, "x2"}, {1.5, "3:2"}, {4.0 / 3.0, "4:3"}, {1.0, "x1"},
+            {0.75, "3:4"}, {2.0 / 3.0, "2:3"}, {0.5, "x1/2"}, {1.0 / 3.0, "x1/3"}, {0.25, "x1/4"}};
+        const double speed = 1.0 / ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+        std::string current = "x" + ofToString(speed, 3);
+        for(const auto& tempo : kTempoRatios)
+            if(std::abs(tempo.speed - speed) < 1e-6) current = tempo.label;
+        if(ImGui::BeginCombo("##tempo", current.c_str())) {
+            for(const auto& tempo : kTempoRatios)
+                if(ImGui::Selectable(tempo.label, std::abs(tempo.speed - speed) < 1e-6)) setStretch(1.0 / tempo.speed);
+            ImGui::EndCombo();
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip(track.isWaveTrack
+            ? "Playback speed against the global tempo (the same setting as Stretch). Audio pitch follows."
+            : "Speed against the global tempo (the same setting as Stretch): x2 plays the content twice as fast.");
+    }
+    if(!track.isWaveTrack && !clip.isLfo) {
+        field("Offset (source beats)", "Offset");
+        double offset = clip.contentOffsetBeats;
+        if(ImGui::InputDouble("##offset", &offset, rows ? 0.0 : view.editIncrement(), 1, "%.3f") && std::isfinite(offset))
+            changed = timeline.setClipContentOffset(track.id, clip.id, view.snapBeat(offset)) || changed;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Where the content starts playing: from here to its end, then on from its start.\nThe content itself is not changed.");
     }
     if(table) ImGui::EndTable();
     if(!track.isWaveTrack)

@@ -1792,7 +1792,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
         hash.add(track.clips.data()); hash.add(track.clips.size());
         for(const auto& clip : track.clips) {
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
-            hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent);
+            hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
@@ -1900,123 +1900,142 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                     sourceFrom = std::max(0.0, sourceFrom);
                     sourceTo = std::min(sourceLength, sourceTo);
                     if(sourceTo < sourceFrom) continue;
+                    // Those are play positions in the repeat. With a content offset the
+                    // content plays rotated and wraps at its end: walk it in one range,
+                    // or two either side of the wrap.
+                    const double contentOffset = ofxOceanodeTimelineClipTime::contentOffset(clip);
+                    std::pair<double, double> contentRanges[2] = {{sourceFrom, sourceTo}, {0.0, -1.0}};
+                    if(contentOffset > 0.0) {
+                        double from = sourceFrom + contentOffset, to = sourceTo + contentOffset;
+                        if(from >= sourceLength) { from -= sourceLength; to -= sourceLength; }
+                        contentRanges[0] = {from, std::min(to, sourceLength)};
+                        if(to > sourceLength) contentRanges[1] = {0.0, to - sourceLength};
+                    }
+                    for(const auto& contentRange : contentRanges) {
+                        if(contentRange.second < contentRange.first) continue;
+                        sourceFrom = contentRange.first;
+                        sourceTo = contentRange.second;
 
-                    auto addSourceBeat = [&](double sourceBeat) {
-                        if(sourceBeat < sourceFrom - kEpsilon || sourceBeat > sourceTo + kEpsilon) return;
-                        addSequenceBeat(ofxOceanodeTimelineClipTime::sourceToTimelineBeat(clip, sourceBeat, cycle));
-                    };
-                    // The start of a repetition restarts the pattern (and re-rolls
-                    // per-cycle probabilities), so it is always a candidate.
-                    addSourceBeat(0.0);
+                        auto addSourceBeat = [&](double sourceBeat) {
+                            if(sourceBeat < sourceFrom - kEpsilon || sourceBeat > sourceTo + kEpsilon) return;
+                            addSequenceBeat(ofxOceanodeTimelineClipTime::sourceToTimelineBeat(clip, sourceBeat, cycle));
+                        };
+                        // The start of a repetition restarts the pattern (and re-rolls
+                        // per-cycle probabilities), so it is always a candidate. In a
+                        // rotated clip it is the content at the offset, and content
+                        // beat 0 (the wrap) restarts the pattern too.
+                        addSourceBeat(0.0);
+                        if(contentOffset > 0.0) addSourceBeat(contentOffset);
 
-                    for(const auto& sourceLane : clip.lanes) {
-                        if(!laneAudible(clip, sourceLane)) continue;
-                        const SharedPianoPlayback* shared = nullptr;
-                        if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
-                            const auto it = trackIt->second.sharedPiano.find(&sourceLane);
-                            if(it != trackIt->second.sharedPiano.end()) shared = it->second.get();
-                        }
-                        if(shared != nullptr && shared->first != &sourceLane) continue;
-                        const auto& lane = shared == nullptr ? sourceLane : shared->lane;
-                        if(!laneScheduled(track, lane)) continue;
-                        switch(lane.type) {
-                            case ofxOceanodeTimelineLaneType::Number:
-                            case ofxOceanodeTimelineLaneType::Dropdown:
-                                for(const auto& point : lane.curvePoints) addSourceBeat(point.beat);
-                                break;
-                            case ofxOceanodeTimelineLaneType::Curve:
-                            case ofxOceanodeTimelineLaneType::Wave:
-                                // Continuous, or not automation at all.
-                                break;
-                            case ofxOceanodeTimelineLaneType::Step: {
-                                const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
-                                const double patternLength = std::max(cellLength, lane.stepCount * cellLength);
-                                const int64_t firstPattern = static_cast<int64_t>(std::floor(sourceFrom / patternLength));
-                                const int64_t lastPattern = static_cast<int64_t>(std::floor(sourceTo / patternLength));
-                                if(lastPattern - firstPattern > 64) break;
-                                for(int64_t pattern = firstPattern; pattern <= lastPattern; ++pattern) {
-                                    const double base = static_cast<double>(pattern) * patternLength;
-                                    addSourceBeat(base);
-                                    for(const auto& step : lane.step.steps) {
-                                        const double start = std::max(0.0, step.startBeat);
-                                        const double duration = step.durationBeats > kEpsilon ? step.durationBeats : cellLength;
-                                        addSourceBeat(base + start);
-                                        addSourceBeat(base + start + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
-                                        addSourceBeat(base + start + duration);
+                        for(const auto& sourceLane : clip.lanes) {
+                            if(!laneAudible(clip, sourceLane)) continue;
+                            const SharedPianoPlayback* shared = nullptr;
+                            if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
+                                const auto it = trackIt->second.sharedPiano.find(&sourceLane);
+                                if(it != trackIt->second.sharedPiano.end()) shared = it->second.get();
+                            }
+                            if(shared != nullptr && shared->first != &sourceLane) continue;
+                            const auto& lane = shared == nullptr ? sourceLane : shared->lane;
+                            if(!laneScheduled(track, lane)) continue;
+                            switch(lane.type) {
+                                case ofxOceanodeTimelineLaneType::Number:
+                                case ofxOceanodeTimelineLaneType::Dropdown:
+                                    for(const auto& point : lane.curvePoints) addSourceBeat(point.beat);
+                                    break;
+                                case ofxOceanodeTimelineLaneType::Curve:
+                                case ofxOceanodeTimelineLaneType::Wave:
+                                    // Continuous, or not automation at all.
+                                    break;
+                                case ofxOceanodeTimelineLaneType::Step: {
+                                    const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
+                                    const double patternLength = std::max(cellLength, lane.stepCount * cellLength);
+                                    const int64_t firstPattern = static_cast<int64_t>(std::floor(sourceFrom / patternLength));
+                                    const int64_t lastPattern = static_cast<int64_t>(std::floor(sourceTo / patternLength));
+                                    if(lastPattern - firstPattern > 64) break;
+                                    for(int64_t pattern = firstPattern; pattern <= lastPattern; ++pattern) {
+                                        const double base = static_cast<double>(pattern) * patternLength;
+                                        addSourceBeat(base);
+                                        for(const auto& step : lane.step.steps) {
+                                            const double start = std::max(0.0, step.startBeat);
+                                            const double duration = step.durationBeats > kEpsilon ? step.durationBeats : cellLength;
+                                            addSourceBeat(base + start);
+                                            addSourceBeat(base + start + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                            addSourceBeat(base + start + duration);
+                                        }
                                     }
+                                    break;
                                 }
-                                break;
-                            }
-                            case ofxOceanodeTimelineLaneType::MultiSlider: {
-                                // Dense grid: every cell boundary is a change.
-                                const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
-                                const int64_t firstCell = static_cast<int64_t>(std::floor(sourceFrom / cellLength));
-                                const int64_t lastCell = static_cast<int64_t>(std::floor(sourceTo / cellLength)) + 1;
-                                if(lastCell - firstCell > 512) break;
-                                for(int64_t cell = firstCell; cell <= lastCell; ++cell)
-                                    addSourceBeat(static_cast<double>(cell) * cellLength);
-                                break;
-                            }
-                            case ofxOceanodeTimelineLaneType::MultiValue: {
-                                for(const auto& row : lane.multiValueRows)
-                                    for(const auto& region : row) {
-                                        addSourceBeat(region.startBeat);
-                                        addSourceBeat(region.end());
+                                case ofxOceanodeTimelineLaneType::MultiSlider: {
+                                    // Dense grid: every cell boundary is a change.
+                                    const double cellLength = std::max(1.0 / 24.0, lane.beatsPerStep);
+                                    const int64_t firstCell = static_cast<int64_t>(std::floor(sourceFrom / cellLength));
+                                    const int64_t lastCell = static_cast<int64_t>(std::floor(sourceTo / cellLength)) + 1;
+                                    if(lastCell - firstCell > 512) break;
+                                    for(int64_t cell = firstCell; cell <= lastCell; ++cell)
+                                        addSourceBeat(static_cast<double>(cell) * cellLength);
+                                    break;
+                                }
+                                case ofxOceanodeTimelineLaneType::MultiValue: {
+                                    for(const auto& row : lane.multiValueRows)
+                                        for(const auto& region : row) {
+                                            addSourceBeat(region.startBeat);
+                                            addSourceBeat(region.end());
+                                        }
+                                    break;
+                                }
+                                case ofxOceanodeTimelineLaneType::MultiGate: {
+                                    for(const auto& row : lane.multiGateRows)
+                                        for(const auto& region : row) {
+                                            addSourceBeat(region.startBeat);
+                                            addSourceBeat(region.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                            addSourceBeat(region.end());
+                                        }
+                                    break;
+                                }
+                                case ofxOceanodeTimelineLaneType::DrumGrid: {
+                                    // Every hit: its start (pitch), its gate opening
+                                    // (after the retrigger gap) and its close.
+                                    const double gap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
+                                    std::vector<ofxOceanodeTimelineDrumHit> hits;
+                                    for(const auto& row : lane.drumRows) {
+                                        hits.clear();
+                                        // Hits started before the window may open or close inside it.
+                                        double reach = 0.75 * lane.drumSwingBeats;
+                                        for(const auto& step : row.steps) reach = std::max(reach, step.length + 0.75 * lane.drumSwingBeats);
+                                        ofxOceanodeTimelineDrumGrid::rowHits(lane, row, sourceFrom - reach - 1e-6,
+                                                                             sourceTo, cycle, sourceLength, gap, copyEpoch, hits);
+                                        for(const auto& hit : hits) {
+                                            addSourceBeat(hit.start);
+                                            addSourceBeat(hit.open);
+                                            addSourceBeat(hit.close);
+                                        }
                                     }
-                                break;
-                            }
-                            case ofxOceanodeTimelineLaneType::MultiGate: {
-                                for(const auto& row : lane.multiGateRows)
-                                    for(const auto& region : row) {
-                                        addSourceBeat(region.startBeat);
-                                        addSourceBeat(region.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
-                                        addSourceBeat(region.end());
+                                    break;
+                                }
+                                case ofxOceanodeTimelineLaneType::PianoRoll: {
+                                    // A note stolen by a later one ends early (its voicing end).
+                                    const ofxOceanodeTimelinePianoVoicing* voicing = shared == nullptr ? nullptr : &shared->voicing;
+                                    if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
+                                        const auto it = trackIt->second.pianoVoicing.find(&lane);
+                                        if(it != trackIt->second.pianoVoicing.end() && it->second.end.size() == lane.pianoNotes.size())
+                                            voicing = &it->second;
                                     }
-                                break;
-                            }
-                            case ofxOceanodeTimelineLaneType::DrumGrid: {
-                                // Every hit: its start (pitch), its gate opening
-                                // (after the retrigger gap) and its close.
-                                const double gap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
-                                std::vector<ofxOceanodeTimelineDrumHit> hits;
-                                for(const auto& row : lane.drumRows) {
-                                    hits.clear();
-                                    // Hits started before the window may open or close inside it.
-                                    double reach = 0.75 * lane.drumSwingBeats;
-                                    for(const auto& step : row.steps) reach = std::max(reach, step.length + 0.75 * lane.drumSwingBeats);
-                                    ofxOceanodeTimelineDrumGrid::rowHits(lane, row, sourceFrom - reach - 1e-6,
-                                                                         sourceTo, cycle, sourceLength, gap, copyEpoch, hits);
-                                    for(const auto& hit : hits) {
-                                        addSourceBeat(hit.start);
-                                        addSourceBeat(hit.open);
-                                        addSourceBeat(hit.close);
+                                    // Mutating notes move per repeat: this repeat's.
+                                    const auto* notes = &lane.pianoNotes;
+                                    if(voicing != nullptr && voicing->chance) {
+                                        const auto& played = repeatPlayback(copyContext, track, clip, lane, shared, cycle);
+                                        voicing = &played.voicing;
+                                        if(played.mutated) notes = &played.lane.pianoNotes;
                                     }
+                                    for(size_t n = 0; n < notes->size(); ++n) {
+                                        const auto& note = (*notes)[n];
+                                        addSourceBeat(note.startBeat);
+                                        addSourceBeat(note.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                        addSourceBeat(pianoNoteEnd(note));
+                                        if(voicing != nullptr) addSourceBeat(voicing->end[n]);
+                                    }
+                                    break;
                                 }
-                                break;
-                            }
-                            case ofxOceanodeTimelineLaneType::PianoRoll: {
-                                // A note stolen by a later one ends early (its voicing end).
-                                const ofxOceanodeTimelinePianoVoicing* voicing = shared == nullptr ? nullptr : &shared->voicing;
-                                if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
-                                    const auto it = trackIt->second.pianoVoicing.find(&lane);
-                                    if(it != trackIt->second.pianoVoicing.end() && it->second.end.size() == lane.pianoNotes.size())
-                                        voicing = &it->second;
-                                }
-                                // Mutating notes move per repeat: this repeat's.
-                                const auto* notes = &lane.pianoNotes;
-                                if(voicing != nullptr && voicing->chance) {
-                                    const auto& played = repeatPlayback(copyContext, track, clip, lane, shared, cycle);
-                                    voicing = &played.voicing;
-                                    if(played.mutated) notes = &played.lane.pianoNotes;
-                                }
-                                for(size_t n = 0; n < notes->size(); ++n) {
-                                    const auto& note = (*notes)[n];
-                                    addSourceBeat(note.startBeat);
-                                    addSourceBeat(note.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
-                                    addSourceBeat(pianoNoteEnd(note));
-                                    if(voicing != nullptr) addSourceBeat(voicing->end[n]);
-                                }
-                                break;
                             }
                         }
                     }

@@ -83,6 +83,14 @@ interface lets Piano Roll own its role-specific routing controls separately
 from content settings (Drum Grid uses the same role bindings and draws its own
 Gate/Pitch routing). Generic lane targets remain in the shell.
 
+A clip's `contentOffsetBeats` rotates where its content starts playing; all
+clip-time conversion (`ofxOceanodeTimelineClipTime`) applies it, so editors
+and evaluation see the same rotation. Edits that cut or re-lay content
+(split, trim, grow left, consolidate, a new content length) first bake the
+offset into the lanes (`bakeContentOffset`), and arrangement previews draw
+`clipAsPlayed()`, so nothing draws across the wrap. The Tempo field is the
+same setting as Stretch, shown as a speed ratio.
+
 `resizeClipEnd` is the canonical Repeat / Trim / Stretch operation for numeric
 length edits and edge drags. Drag snapshots restore the original source mapping
 before each application, including group edits, to avoid accumulating rounding

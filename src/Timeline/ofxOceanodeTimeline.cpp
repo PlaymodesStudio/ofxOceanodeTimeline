@@ -477,9 +477,21 @@ double cycleDuration(const ofxOceanodeTimelineClip& clip) {
     return sourceDuration(clip) * stretch(clip);
 }
 
+double contentOffset(const ofxOceanodeTimelineClip& clip) {
+    if(!(clip.contentOffsetBeats > 0.0) || !std::isfinite(clip.contentOffsetBeats)) return 0.0;
+    const double offset = positiveModulo(clip.contentOffsetBeats, sourceDuration(clip));
+    return offset < sourceDuration(clip) - 1e-9 ? offset : 0.0;
+}
+
 double sourceToTimelineBeat(const ofxOceanodeTimelineClip& clip,
                             double sourceBeat, int64_t cycle) {
     const double content = sourceDuration(clip);
+    // Where in the cycle that content beat plays: content before the offset
+    // plays after the content's end.
+    if(const double offset = contentOffset(clip); offset > 0.0) {
+        sourceBeat -= offset;
+        if(sourceBeat < -kEpsilon) sourceBeat += content;
+    }
     if(clip.repeatContent)
         return clip.startBeat + (static_cast<double>(cycle) * content + sourceBeat) * stretch(clip);
     return clip.startBeat + sourceBeat * clip.durationBeats / content;
@@ -488,10 +500,13 @@ double sourceToTimelineBeat(const ofxOceanodeTimelineClip& clip,
 double timelineToSourceBeat(const ofxOceanodeTimelineClip& clip,
                             double timelineBeat) {
     const double localBeat = std::max(0.0, timelineBeat - clip.startBeat);
-    if(clip.repeatContent)
-        return positiveModulo(localBeat, cycleDuration(clip)) / stretch(clip);
-    return localBeat * sourceDuration(clip) /
-        std::max(1.0 / 24.0, clip.durationBeats);
+    const double played = clip.repeatContent
+        ? positiveModulo(localBeat, cycleDuration(clip)) / stretch(clip)
+        : localBeat * sourceDuration(clip) / std::max(1.0 / 24.0, clip.durationBeats);
+    const double offset = contentOffset(clip);
+    if(offset <= 0.0) return played;
+    const double rotated = played + offset;
+    return rotated >= sourceDuration(clip) ? rotated - sourceDuration(clip) : rotated;
 }
 
 int64_t cycleIndex(const ofxOceanodeTimelineClip& clip, double timelineBeat) {
@@ -2155,8 +2170,11 @@ void appendEventWindow(const std::vector<Event>& events, double from, double to,
 }
 } // namespace
 
-bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip& original, double timelineBeat,
+bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip& placed, double timelineBeat,
                                                   ofxOceanodeTimelineClip& left, ofxOceanodeTimelineClip& right) const {
+    // Cut content as it plays: a rotated clip is laid out from its offset first.
+    ofxOceanodeTimelineClip original = placed;
+    bakeContentOffset(original);
     const double minimum = 1.0 / 96.0;
     const double clipEnd = original.startBeat + original.durationBeats;
     if(timelineBeat <= original.startBeat + minimum || timelineBeat >= clipEnd - minimum) return false;
@@ -2177,6 +2195,13 @@ bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip&
         right.contentDurationBeats = std::max(1.0 / 24.0, content - cut);
     }
 
+    cutClipContent(original, cut, repeating, left, right);
+    return true;
+}
+
+void ofxOceanodeTimelineManager::cutClipContent(const ofxOceanodeTimelineClip& original, double cut, bool repeating,
+                                                ofxOceanodeTimelineClip& left, ofxOceanodeTimelineClip& right) const {
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(original);
     for(size_t laneIndex = 0; laneIndex < original.lanes.size(); ++laneIndex) {
         const auto& lane = original.lanes[laneIndex];
         auto& leftLane = left.lanes[laneIndex];
@@ -2270,8 +2295,17 @@ bool ofxOceanodeTimelineManager::computeClipSplit(const ofxOceanodeTimelineClip&
             else for(auto& point : lane.curvePoints) point.value = wrap(point.value);
         }
     }
+}
 
-    return true;
+void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip) const {
+    const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
+    clip.contentOffsetBeats = 0.0;
+    if(offset <= 0.0) return;
+    // The right part of a repeating cut at the offset is the content rotated
+    // to start there.
+    ofxOceanodeTimelineClip left = clip, rotated = clip;
+    cutClipContent(clip, offset, true, left, rotated);
+    clip.lanes = std::move(rotated.lanes);
 }
 
 std::string ofxOceanodeTimelineManager::splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat) {
@@ -2506,6 +2540,7 @@ bool ofxOceanodeTimelineManager::extendClipStart(ofxOceanodeTimelineSequence& se
     if(track == nullptr || clip == nullptr || track->isWaveTrack) return false;
     newStartBeat = std::max(0.0, newStartBeat);
     if(newStartBeat >= clip->startBeat - 1e-9 || clip->isLfo) return trimClipStart(sequence, trackId, clipId, newStartBeat);
+    bakeContentOffset(*clip);
 
     const double stretch = ofxOceanodeTimelineClipTime::stretch(*clip);
     auto isGridLane = [](const ofxOceanodeTimelineLane& lane) {
@@ -3189,6 +3224,8 @@ bool ofxOceanodeTimelineManager::setClipContentDuration(ofxOceanodeTimelineSeque
                                                          double contentDurationBeats, bool repeatContent) {
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
+    // A new content length re-lays the content: start it where it plays from.
+    if(std::abs(std::max(1.0 / 24.0, contentDurationBeats) - clip->contentDurationBeats) > 1e-9) bakeContentOffset(*clip);
     clip->contentDurationBeats = std::max(1.0 / 24.0, contentDurationBeats);
     clip->repeatContent = repeatContent;
     const auto* track = getTrack(sequence, trackId);
@@ -3208,10 +3245,25 @@ bool ofxOceanodeTimelineManager::setClipContentDuration(ofxOceanodeTimelineSeque
     return true;
 }
 
+bool ofxOceanodeTimelineManager::setClipContentOffset(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                      const std::string& clipId, double offsetBeats) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || track->isWaveTrack || clip->isLfo || !std::isfinite(offsetBeats)) return false;
+    double offset = positiveModulo(offsetBeats, ofxOceanodeTimelineClipTime::sourceDuration(*clip));
+    if(offset >= ofxOceanodeTimelineClipTime::sourceDuration(*clip) - 1e-9) offset = 0.0;
+    if(std::abs(offset - clip->contentOffsetBeats) <= 1e-9) return false;
+    clip->contentOffsetBeats = offset;
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                         const std::string& clipId) {
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
+    bakeContentOffset(*clip);
 
     const double oldSourceDuration = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     const bool croppedRepeat = clip->repeatContent &&
@@ -4487,4 +4539,8 @@ ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(cons
 
 const ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(const std::string& trackId, const std::string& bindingId) const {
     return getBinding(mainSequence, trackId, bindingId);
+}
+
+bool ofxOceanodeTimelineManager::setClipContentOffset(const std::string& trackId, const std::string& clipId, double offsetBeats) {
+    return setClipContentOffset(mainSequence, trackId, clipId, offsetBeats);
 }

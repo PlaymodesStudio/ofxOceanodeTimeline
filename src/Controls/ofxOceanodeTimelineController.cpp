@@ -2265,10 +2265,21 @@ void ofxOceanodeTimelineController::draw() {
                 return;
             }
             const auto previewView = editorView(timeline, transportState.bpm, endBeat);
-            const ofxOceanodeTimelineClipPreview preview{timeline, *container, track, clip, lane,
+            // A rotated clip previews its content as it plays, so what spans
+            // the wrap draws in one piece.
+            ofxOceanodeTimelineClip played;
+            const ofxOceanodeTimelineClip* shownClip = &clip;
+            const ofxOceanodeTimelineLane* shownLane = lane;
+            if(ofxOceanodeTimelineClipTime::contentOffset(clip) > 0.0) {
+                played = timeline.clipAsPlayed(clip);
+                shownClip = &played;
+                if(lane != nullptr)
+                    for(const auto& candidate : played.lanes) if(candidate.id == lane->id) shownLane = &candidate;
+            }
+            const ofxOceanodeTimelineClipPreview preview{timeline, *container, track, *shownClip, shownLane,
                 previewView, min, max, left, right, firstVisibleCycle, lastVisibleCycle};
             if(clip.isLfo) lfoEditor.drawPreview(preview);
-            else if(lane != nullptr) laneEditors.forType(lane->type).drawPreview(preview);
+            else if(shownLane != nullptr) laneEditors.forType(shownLane->type).drawPreview(preview);
 
         };
 
