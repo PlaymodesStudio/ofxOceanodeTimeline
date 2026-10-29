@@ -9,7 +9,12 @@ An LFO is a self-contained clip with its own control lanes.
 
 | Component | Owns |
 | --- | --- |
-| `Timeline/ofxOceanodeTimeline.*` | Serializable tracks, clips and lanes; editing operations; evaluation, scheduling and persistence |
+| `Timeline/ofxOceanodeTimeline.*` | Serializable tracks, clips and lanes; editing operations; the per-frame engine (update, apply, overrides), tempo, markers and loop |
+| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls |
+| `Timeline/ofxOceanodeTimelineScheduler.cpp` | Sample-accurate scheduling ahead of the playhead, corrections and latency offsets |
+| `Timeline/ofxOceanodeTimelinePersistence.cpp` | `timeline.json`, clip files and presets |
+| `Timeline/ofxOceanodeTimelineHistory.cpp` | Undo history of timeline edits |
+| `Timeline/ofxOceanodeTimelineInternal.h` | Helpers shared by those files (`ofxOceanodeTimelineDetail`); not part of the API |
 | `Controls/ofxOceanodeTimelineController.*` | Window layout, arrangement gestures, clip editor shell, dialogs and deferred structural edits |
 | `Editors/ofxOceanodeTimelineClipEditorState.h` | Shell focus, open clip IDs, folding and row layout |
 | `Editors/ofxOceanodeTimelineLaneEditors.*` | Concrete lane editor instances and lane-type dispatch |
@@ -110,8 +115,10 @@ lane type. The editor interface is not a dynamic registration system.
 
 Arrangement gestures and instrument/rename dialogs can be extracted separately.
 The clip editor shell can also become its own component without moving the
-per-type editors again. Persistence and scheduling can be split into model
-services independently of UI changes.
+per-type editors again. Persistence, scheduling, evaluation and history
+already live in their own translation units; they are still members of the
+manager, so they can become separate model services independently of UI
+changes.
 
 ## Verification
 

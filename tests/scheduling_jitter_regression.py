@@ -63,16 +63,20 @@ int main() {
 '''
 
 with tempfile.TemporaryDirectory(prefix='timeline-frame-jitter-') as folder:
-    source = Path(folder) / 'timeline.cpp'
     # Inject only the frame-duration input; execute the complete production
     # model, scheduler, transport and OF parameter implementation.
-    source.write_text('extern float schedulingTestFrameSeconds;\n' +
-        (timeline / 'src/Timeline/ofxOceanodeTimeline.cpp').read_text().replace(
-            'ofGetLastFrameTime()', 'schedulingTestFrameSeconds'))
+    patched = {}
+    for original in sorted((timeline / 'src/Timeline').glob('*.cpp')):
+        text = original.read_text()
+        if 'ofGetLastFrameTime()' not in text: continue
+        source = Path(folder) / original.name
+        source.write_text('extern float schedulingTestFrameSeconds;\n' +
+                          text.replace('ofGetLastFrameTime()', 'schedulingTestFrameSeconds'))
+        patched[str(original)] = str(source)
+    assert patched
     original_run = subprocess.run
     def run(command, **kwargs):
-        command = [str(source) if str(arg) == str(timeline / 'src/Timeline/ofxOceanodeTimeline.cpp')
-                   else arg for arg in command]
+        command = [patched.get(str(arg), arg) for arg in command]
         return original_run(command, **kwargs)
     fixture.subprocess.run = run
     fixture.main(cases=cases)
