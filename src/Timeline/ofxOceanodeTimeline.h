@@ -423,8 +423,9 @@ struct ofxOceanodeTimelineLane {
     // Toggle lanes: also drive their own track's solo -- on while a block
     // plays, off between blocks; outside the clip the solo holds.
     bool drivesTrackSolo = false;
-    // Toggle lanes: the chance (0..1) that each block reaches a target, by
-    // parameter path, rolled per block and repeat; missing = always.
+    // Gate lanes (Toggle, Multi Gate): the chance (0..1) that each block
+    // reaches a target, by parameter path, rolled per block, row and repeat;
+    // missing = always.
     std::map<std::string, float> targetProbability;
     ofxOceanodeTimelineStepLane step;
     int stepCount = 16;

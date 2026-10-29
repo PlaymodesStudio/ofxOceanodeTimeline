@@ -56,7 +56,53 @@ int main() {
     auto legacy=saved;
     for(auto& track:legacy["tracks"]) for(auto& cl:track["clips"]) for(auto& l:cl["lanes"]) l.erase("targetProbability");
     model.fromJson(legacy); assert(model.getLane(t,clip,lane)->targetProbability.empty());
-    std::cout << "Toggle target chance passed: never, sometimes (stable per block), always, persistence.\n";
+    // Multi Gate: each row's blocks roll on their own, per target.
+    {
+        ofxOceanodeContainer host;
+        host.transport->setDriverMode(TransportDriverMode::FrameStep);
+        ofParameter<std::vector<float>> xv("X",{0,0},{0,0},{1,1}), yv("Y",{0,0},{0,0},{1,1});
+        ofxOceanodeParameter<std::vector<float>> x,y;
+        x.bindParameter(xv); y.bindParameter(yv);
+        for(auto* p : {&x,&y}) host.targets[p->getEscapedName()]=p;
+        ofxOceanodeTimelineManager rows(&host); rows.setSchedulingEnabled(false);
+        const auto rt=rows.createTrack("Gates");
+        const auto xb=rows.addBinding(rt,x), yb=rows.addBinding(rt,y);
+        const auto rc=rows.createClip(rt,"Gates",0,32);
+        const auto rl=rows.createLane(rt,rc,"Gates",ofxOceanodeTimelineLaneType::MultiGate);
+        rows.addBindingToLane(rt,rc,rl,xb); rows.addBindingToLane(rt,rc,rl,yb);
+        auto* gates=rows.getLane(rt,rc,rl);
+        gates->multiRowCount=2; gates->multiGateRows.assign(2,{});
+        for(int block=0;block<32;++block)
+            for(auto& row : gates->multiGateRows) row.push_back({static_cast<double>(block),0.5,1});
+        assert(rows.setLaneTargetProbability(rt,rc,rl,y.getEscapedName(),0.5f));
+        host.transport->seekToBeat(0); host.transport->play();
+        std::vector<std::vector<float>> rolledRows(32);
+        for(int frame=0; frame<5000; ++frame) {
+            host.transport->advanceFrameStep(1.0/120.0); rows.update();
+            const double beat=host.getTransportState().beatPosition;
+            if(beat>=31.9) break;
+            const int block=static_cast<int>(beat);
+            const double phase=beat-block;
+            const auto xs=xv.get(), ys=yv.get();
+            assert(xs.size()==2 && ys.size()==2);
+            if(phase>0.05 && phase<0.45) {
+                near(xs[0],1); near(xs[1],1);
+                if(rolledRows[block].empty()) rolledRows[block]=ys;
+                near(ys[0],rolledRows[block][0]); near(ys[1],rolledRows[block][1]);
+            } else if(phase>0.55 && phase<0.95) {
+                near(ys[0],0); near(ys[1],0);
+            }
+        }
+        int reached=0, split=0;
+        for(const auto& value : rolledRows) {
+            assert(value.size()==2);
+            reached+=(value[0]>0.5f)+(value[1]>0.5f);
+            split+=(value[0]>0.5f)!=(value[1]>0.5f);
+        }
+        assert(reached>8 && reached<56);
+        assert(split>0); // rows roll independently
+    }
+    std::cout << "Toggle target chance passed: never, sometimes (stable per block), always, persistence, Multi Gate rows.\n";
 }
 '''
 if __name__ == '__main__':

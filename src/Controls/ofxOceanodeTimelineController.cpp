@@ -774,6 +774,8 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
     rightClip->contentDurationBeats = sourceLength - sourceSplit;
     rightClip->contentStretch = original.contentStretch;
     rightClip->repeatContent = false;
+    // The slice starts with the original's chance and then rolls on its own.
+    rightClip->chance = original.chance;
 
     std::vector<ofxOceanodeTimelineLane> leftLanes;
     leftLanes.reserve(original.lanes.size());
@@ -2140,6 +2142,19 @@ void ofxOceanodeTimelineController::draw() {
             return radius >= 4.0f && right - left >= radius * 2.0f + kEdgePixels + 24.0f;
         };
         const bool transportPlaying = container->getTransportState().isPlaying;
+        auto drawChanceKnob = [&](const ofxOceanodeTimelineClip& clip, const ImVec2& center, float radius) {
+            // Ring = 100%; the filled arc shows how likely the clip is to play.
+            const float chance = ofClamp(clip.chance, 0.0f, 1.0f);
+            const bool active = chanceDragClipId == clip.id && chanceDragTrackId == track.id;
+            dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
+            if(chance > 0.0f) {
+                const float a0 = -IM_PI * 0.5f;
+                dl->PathLineTo(center);
+                dl->PathArcTo(center, radius - 1.0f, a0, a0 + IM_PI * 2.0f * chance, 24);
+                dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
+            }
+            dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
+        };
 
         auto drawClip = [&](const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane* lane,
                             const ImVec2& min, const ImVec2& max, bool drawChrome = true,
@@ -2178,19 +2193,8 @@ void ofxOceanodeTimelineController::draw() {
                     dl->AddRect(ImVec2(left - 1, min.y + 1), ImVec2(right + 1, max.y - 1), groupColor, 0.0f, 0, 2.5f);
                     dl->AddText(ImVec2(chromeLeft - 10.0f, min.y + 3), groupColor, "G");
                 }
-                if(knob) {
-                    // Ring = 100%; the filled arc shows how likely the clip is to play.
-                    const float chance = ofClamp(clip.chance, 0.0f, 1.0f);
-                    const bool active = chanceDragClipId == clip.id && chanceDragTrackId == track.id;
-                    dl->AddCircleFilled(knobCenter, knobRadius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
-                    if(chance > 0.0f) {
-                        const float a0 = -IM_PI * 0.5f;
-                        dl->PathLineTo(knobCenter);
-                        dl->PathArcTo(knobCenter, knobRadius - 1.0f, a0, a0 + IM_PI * 2.0f * chance, 24);
-                        dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
-                    }
-                    dl->AddCircle(knobCenter, knobRadius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
-                }
+                // A wave clip's knob goes on top of its waveform, drawn with the content.
+                if(knob && !track.isWaveTrack) drawChanceKnob(clip, knobCenter, knobRadius);
                 const float labelLeft = left + 6.0f;
                 const float labelRight = chromeLeft - (timeline.getGroupForClip(track.id, clip.id) ? 14.0f : 0.0f);
                 if(labelRight - labelLeft > 39) {
@@ -2255,6 +2259,9 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 }
                 dl->PopClipRect();
+                ImVec2 knobCenter;
+                float knobRadius = 0.0f;
+                if(chanceKnob(left, right, min, max, knobCenter, knobRadius)) drawChanceKnob(clip, knobCenter, knobRadius);
                 return;
             }
             const auto previewView = editorView(timeline, transportState.bpm, endBeat);
@@ -4915,13 +4922,14 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                 }
                 ImGui::TextDisabled("Track parameters this lane drives");
                 const bool toggleLane = isToggleLane(*lane) && !clip->isLfo;
+                const bool gateLane = lane->type == ofxOceanodeTimelineLaneType::MultiGate && !clip->isLfo;
                 constexpr float kChanceWidth = 64.0f;
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(lane->bindingIds.begin(), lane->bindingIds.end(), candidate.id) != lane->bindingIds.end();
                     bool enabled = assigned;
-                    // One row each: checkbox and name, then (Toggle) the chance
+                    // One row each: checkbox and name, then (gates) the chance
                     // and Inspect pinned to the right.
-                    const float chanceReserve = assigned && toggleLane ? kChanceWidth + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+                    const float chanceReserve = assigned && gateLane ? kChanceWidth + ImGui::GetStyle().ItemSpacing.x : 0.0f;
                     const float inspectReserve = assigned ? smallButtonReserve("?") : 0.0f;
                     const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() -
                         ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - chanceReserve;
@@ -4932,7 +4940,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                         else timeline.removeBindingFromLane(track.id, clip->id, lane->id, candidate.id);
                     }
                     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
-                    if(assigned && toggleLane) {
+                    if(assigned && gateLane) {
                         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - chanceReserve + ImGui::GetStyle().ItemSpacing.x);
                         const auto found = lane->targetProbability.find(candidate.parameterPath);
                         float chance = (found == lane->targetProbability.end() ? 1.0f : found->second) * 100.0f;
@@ -4940,8 +4948,9 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                         if(ImGui::SliderFloat(("##targetChance" + candidate.id).c_str(), &chance, 0.0f, 100.0f, "%.0f%%"))
                             timeline.setLaneTargetProbability(track.id, clip->id, lane->id, candidate.parameterPath, std::round(chance) / 100.0f);
                         if(ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Chance that each toggle block reaches %s.\n"
-                                              "Rolled per block and repeat; a block left out keeps it off.\n"
+                            ImGui::SetTooltip("Chance that each block reaches %s.\n"
+                                              "Rolled per block and repeat (each row on its own);\n"
+                                              "a block left out keeps it off.\n"
                                               "Ctrl/Cmd-click to type a value.", candidate.parameterPath.c_str());
                     }
                     if(assigned) {

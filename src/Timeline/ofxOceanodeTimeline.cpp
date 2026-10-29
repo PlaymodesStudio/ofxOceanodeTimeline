@@ -1591,7 +1591,7 @@ bool evaluateMultiGateRow(const std::vector<ofxOceanodeTimelineGateRegion>& row,
     return false;
 }
 
-// Whether one toggle block reaches one target (lane.targetProbability): one
+// Whether one gate block reaches one target (lane.targetProbability): one
 // stable roll per block, row, repeat and clip start (see stepProbabilityPasses).
 bool toggleTargetPasses(const ofxOceanodeTimelineLane& lane, const std::string& path, float probability,
                         double regionStart, int row, int64_t cycle, uint64_t epoch) {
