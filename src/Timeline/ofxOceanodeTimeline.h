@@ -818,7 +818,12 @@ struct ofxOceanodeTimelineTrack {
     std::string waveVolumeInterpolation = "Linear";
     std::vector<ofxOceanodeTimelineCurvePoint> waveVolumePoints;
     std::vector<ofxOceanodeTimelineCurveTension> waveVolumeTensions;
+    // Latency correction, milliseconds: shifts when this track's scheduled
+    // events reach their backend (positive later, negative earlier). Only
+    // sample-accurate targets move; frame-rate parameters cannot be shifted.
+    float latencyOffsetMs = 0.0f;
 };
+constexpr float kMaxTrackLatencyOffsetMs = 250.0f;
 
 // A lightweight cross-track grouping: it holds no automation data of its
 // own, just references to existing clips by (trackId, clipId). Each member
@@ -1105,6 +1110,7 @@ public:
     bool isTrackAudible(const ofxOceanodeTimelineTrack& track) const;
     bool setTrackMuted(const std::string& trackId, bool muted);
     bool setTrackSolo(const std::string& trackId, bool solo);
+    bool setTrackLatencyOffset(const std::string& trackId, float milliseconds);
     bool setLaneMuted(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
     bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
     bool setClipMuted(const std::string& trackId, const std::string& clipId, bool muted);

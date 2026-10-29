@@ -1936,6 +1936,16 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SameLine();
         if(playbackToggle("trackSolo" + track.id, "S", track.solo, "Solo track (multiple solos allowed)"))
             timeline.setTrackSolo(track.id, !track.solo);
+        if(track.latencyOffsetMs != 0.0f) {
+            // The track's latency correction, set from its right-click menu.
+            const std::string latencyLabel = ofToString(track.latencyOffsetMs, 1) + " ms";
+            const std::string shown = (track.latencyOffsetMs > 0.0f ? "+" : "") + latencyLabel;
+            const ImVec2 size = ImGui::CalcTextSize(shown.c_str());
+            const ImVec2 at(headerMin.x + kLabelWidth - 88 - size.x, headerMin.y + (trackHeaderHeight - size.y) * 0.5f);
+            ImGui::GetWindowDrawList()->AddText(at, IM_COL32(230, 190, 90, 220), shown.c_str());
+            if(ImGui::IsMouseHoveringRect(at, ImVec2(at.x + size.x, at.y + size.y)))
+                ImGui::SetTooltip("Latency correction (track right-click menu)");
+        }
 
         // Use a ColorButton + explicit picker popup. ColorEdit4 with a local
         // temporary swatch was easy to click past and appeared non-persistent.
@@ -2062,6 +2072,19 @@ void ofxOceanodeTimelineController::draw() {
             }
 
             contextMenuSection("Track");
+            {
+                float latencyMs = track.latencyOffsetMs;
+                ImGui::SetNextItemWidth(150.0f);
+                if(ImGui::DragFloat("Latency (ms)##trackLatency", &latencyMs, 0.25f,
+                                    -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs, "%+.1f ms"))
+                    timeline.setTrackLatencyOffset(track.id, latencyMs);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Moves when this track's notes and events reach their\n"
+                                      "instruments: positive later, negative earlier.\n"
+                                      "Double-click to type a value. Sample-accurate targets only.");
+                if(track.latencyOffsetMs != 0.0f && ImGui::MenuItem("Reset latency"))
+                    timeline.setTrackLatencyOffset(track.id, 0.0f);
+            }
             if(ImGui::MenuItem("Rename track")) {
                 pendingTrackId = track.id;
                 pendingNewTrackDialog = false;

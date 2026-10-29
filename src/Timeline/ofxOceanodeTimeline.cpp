@@ -4882,6 +4882,16 @@ bool ofxOceanodeTimelineManager::setTrackMuted(const std::string& trackId, bool 
     return true;
 }
 
+bool ofxOceanodeTimelineManager::setTrackLatencyOffset(const std::string& trackId, float milliseconds) {
+    auto* track = getTrack(trackId);
+    const float clamped = ofClamp(milliseconds, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
+    if(track == nullptr || track->latencyOffsetMs == clamped) return false;
+    track->latencyOffsetMs = clamped;
+    // Events already handed over carry the old offset: schedule them again.
+    invalidateSchedule();
+    return true;
+}
+
 bool ofxOceanodeTimelineManager::setTrackSolo(const std::string& trackId, bool solo) {
     auto* track = getTrack(trackId);
     if(track == nullptr || track->solo == solo) return false;
@@ -7066,11 +7076,29 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     scheduledBackendPaths = suppressedPaths;
     if(activePaths.empty()) return;
 
+    // ---- track latency correction ----------------------------------------
+    // Each track's offset moves when its events reach the backend, nothing
+    // else: the playhead, the values in effect and the repair checks stay on
+    // musical time. An early track needs its events that much sooner, so the
+    // window reaches further ahead by the earliest offset.
+    std::unordered_map<std::string, int64_t> latencyOffsetUs;
+    int64_t earliestOffsetUs = 0;
+    for(const auto& track : tracks) {
+        if(track.latencyOffsetMs == 0.0f) continue;
+        const int64_t offsetUs = static_cast<int64_t>(std::llround(
+            ofClamp(track.latencyOffsetMs, -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs) * 1000.0));
+        for(const auto& binding : track.bindings) {
+            if(activePaths.count(binding.parameterPath) == 0) continue;
+            latencyOffsetUs.emplace(binding.parameterPath, offsetUs);
+            earliestOffsetUs = std::min(earliestOffsetUs, offsetUs);
+        }
+    }
+
     // ---- walk the window -------------------------------------------------
     // The window can run past the loop end: events of the next pass are
     // scheduled at the exact instant the transport will wrap, so the loop's
     // first beat is on time too.
-    const double lookaheadSeconds = effectiveSchedulingLookaheadMs() / 1000.0;
+    const double lookaheadSeconds = effectiveSchedulingLookaheadMs() / 1000.0 - earliestOffsetUs / 1000000.0;
     const bool loopActive = transport.loopActive() &&
         transport.beatPosition < transport.loopEndBeat - kEpsilon;
     const uint64_t pass = transport.loopCount;
@@ -7155,7 +7183,10 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             // Never let one path's events swap order, whatever the rounding of
             // the tempo integral did.
             const uint64_t leadUs = pianoInputLeadUs(path);
-            const uint64_t preparedDueUs = dueUs > leadUs ? dueUs - leadUs : 0;
+            const auto offsetIt = latencyOffsetUs.find(path);
+            const int64_t offsetUs = offsetIt == latencyOffsetUs.end() ? 0 : offsetIt->second;
+            const int64_t shiftedDueUs = static_cast<int64_t>(dueUs) - static_cast<int64_t>(leadUs) + offsetUs;
+            const uint64_t preparedDueUs = static_cast<uint64_t>(std::max<int64_t>(static_cast<int64_t>(nowUs), shiftedDueUs));
             event.dueSteadyTimeUs = std::max(preparedDueUs, state.lastScheduledDueUs + 1);
             event.generation = transport.generation;
             if(!ofxOceanodeScheduling::dispatch(target.parameter, event)) {
@@ -7171,7 +7202,8 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             // Promotion/correction compares against the GUI playhead. Pitch
             // is already prepared in the backend during the lead interval,
             // but remains logically unchanged until its musical boundary.
-            state.pending.emplace_back(std::max(dueUs, event.dueSteadyTimeUs), value);
+            const int64_t musicalDueUs = static_cast<int64_t>(event.dueSteadyTimeUs) - offsetUs;
+            state.pending.emplace_back(std::max<int64_t>(static_cast<int64_t>(dueUs), musicalDueUs), value);
         }
     }
     if(firstNextPassChange < changes.size()) applyClipChanceRolls(transport.generation, pass);
@@ -7618,6 +7650,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         trackJson["isWaveTrack"] = track.isWaveTrack;
         trackJson["waveVolume"] = track.waveVolume;
         trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
+        if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
         trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
         trackJson["waveVolumePoints"] = ofJson::array();
         for(const auto& point : track.waveVolumePoints)
@@ -7961,6 +7994,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         // lose the default automation lane.
         track.waveVolumeAutomationEnabled = track.isWaveTrack ||
             trackJson.value("waveVolumeAutomationEnabled", false);
+        track.latencyOffsetMs = ofClamp(trackJson.value("latencyOffsetMs", 0.0f), -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));
         if(trackJson.contains("waveVolumePoints") && trackJson["waveVolumePoints"].is_array()) {
             for(const auto& pointJson : trackJson["waveVolumePoints"]) {
