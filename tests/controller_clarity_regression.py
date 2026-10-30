@@ -812,8 +812,11 @@ int main() {
         frame(1250,edge,false); frame(1250,edge,true);
         for(int i=1;i<=6;++i) frame(1250,ImVec2(edge.x+i*10.0f,edge.y+40.0f*i/6.0f),true);
         frame(1250,ImVec2(edge.x+60.0f,edge.y+40.0f),false); frame(); frame();
-        assert(std::abs(model.getViewState().trackHeight-120.0f)<1.0f);
-        assert(std::abs(height(t)-120.0f)<1.0f && std::abs(height(dt)-120.0f)<1.0f); // all at once
+        // The tracks above grow too, so the height changes by less than the
+        // drag and the grabbed edge stays under the mouse.
+        assert(std::abs(headerRow(t)->maxY-2.0f-(edge.y+40.0f))<1.0f);
+        assert(model.getViewState().trackHeight>80.5f && model.getViewState().trackHeight<119.0f);
+        assert(std::abs(height(t)-model.getViewState().trackHeight)<1.0f && std::abs(height(dt)-height(t))<0.5f); // all at once
         assert(std::abs(height(wt)-waveBefore)<0.5f);                               // the Wave track keeps its own
         assert(model.getClip(t,c)->startBeat==startBefore);                          // the clip stayed put
         frame(1250,ImVec2(-100,-100),false,"track-height");

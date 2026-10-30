@@ -157,6 +157,7 @@ private:
     std::string trackResizeId;
     float trackResizeStartMouseY = 0.0f;
     float trackResizeStartHeight = 0.0f;
+    int trackResizeTracksMoved = 1; // tracks whose growth moves the grabbed edge
     char pendingTrackName[128] = {};
     char pendingClipName[128] = {};
     char pendingClipRenameName[128] = {};

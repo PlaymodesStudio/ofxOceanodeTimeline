@@ -1992,6 +1992,9 @@ void ofxOceanodeTimelineController::draw() {
         trackHeaderDragStart = ImGui::GetIO().MousePos;
         trackHeaderDragging = false;
     };
+    // Shared-height tracks drawn so far: resizing all of them from one edge
+    // moves that edge by this many times the height change.
+    int sharedHeightTracks = 0;
     for(const auto& track : scope(timeline).tracks) {
         // Whatever is inside a collapsed folder is not drawn.
         bool insideCollapsed = false;
@@ -2147,6 +2150,7 @@ void ofxOceanodeTimelineController::draw() {
                                               : kCollapsedHeight) : kHeaderHeight);
         // Wave tracks resize alone; the other tracks' rows (Clips view) all at once.
         const bool resizableTrack = track.isWaveTrack || (singleRowTrack && !targetsView);
+        if(resizableTrack && !track.isWaveTrack) ++sharedHeightTracks;
         bool expandTrackForEditor = false;
         ImGui::SetCursorPos(ImVec2(0, headerY));
         // Keep the header as a visual/layout item only. A full-width
@@ -3162,6 +3166,7 @@ void ofxOceanodeTimelineController::draw() {
                 trackResizeId = track.id;
                 trackResizeStartMouseY = ImGui::GetIO().MousePos.y;
                 trackResizeStartHeight = trackHeaderHeight;
+                trackResizeTracksMoved = track.isWaveTrack ? 1 : sharedHeightTracks;
             }
             // Later clips are drawn on top, so hit-test in reverse order and
             // let the visually topmost overlapping clip own the gesture.
@@ -3195,7 +3200,10 @@ void ofxOceanodeTimelineController::draw() {
             for(const auto& clip : track.clips) drawClipMenu(clip);
             if(trackResizeId == track.id) {
                 if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    const float height = trackResizeStartHeight + (ImGui::GetIO().MousePos.y - trackResizeStartMouseY);
+                    // Every shared-height track above grows too, so divide
+                    // the drag between them to keep this edge under the mouse.
+                    const float height = trackResizeStartHeight +
+                        (ImGui::GetIO().MousePos.y - trackResizeStartMouseY) / std::max(1, trackResizeTracksMoved);
                     if(!track.isWaveTrack)
                         timeline.getViewState().trackHeight = ofClamp(height, kMinTrackHeight, kMaxTrackHeight);
                     else if(auto* editTrack = timeline.getTrack(scope(timeline), track.id))
