@@ -203,6 +203,8 @@ constexpr float kRowHeight = 28.0f;
 constexpr float kCollapsedHeight = 38.0f;
 // Horizontal step per folder level in the track pads.
 constexpr float kFolderIndent = 12.0f;
+// Each level of an unfolded macro track's rows is tabbed in by this much.
+constexpr float kUnfoldedIndent = 22.0f;
 constexpr float kWaveTrackMinHeight = 48.0f;
 constexpr float kWaveTrackMaxHeight = 360.0f;
 constexpr float kTrackResizeHandleHeight = 6.0f;
@@ -2165,7 +2167,8 @@ void ofxOceanodeTimelineController::draw() {
     // reverse), and edits them there: the macro's timeline is shared, so an
     // edit shows in every placement. outer: the placements of the sequence
     // the macro track is in (one, the identity, for the timeline shown);
-    // group: the macro track ids from the outermost, naming the rows.
+    // level: how many unfolded macro tracks it is inside; tab: where its
+    // rows' pads start; group: the macro track ids from the outermost.
     struct RowPlacement {
         RowScope at;
         double from = 0.0, to = 0.0;      // beats of the timeline shown
@@ -2178,12 +2181,12 @@ void ofxOceanodeTimelineController::draw() {
     unfoldedSequencesDrawn.clear();
     bool innerEditorDocked = false;
     std::function<void(const ofxOceanodeTimelineTrack&, ofxOceanodeTimelineSequence&, const std::vector<RowPlacement>&,
-                       int, const std::string&)> drawUnfoldedRows;
+                       int, float, const std::string&)> drawUnfoldedRows;
     drawUnfoldedRows = [&](const ofxOceanodeTimelineTrack& macroTrack, ofxOceanodeTimelineSequence& outer,
-                           const std::vector<RowPlacement>& outerPlacements, int depth, const std::string& group) {
+                           const std::vector<RowPlacement>& outerPlacements, int level, float tab, const std::string& group) {
         auto* macroContainer = timeline.findMacroContainer(outer, macroTrack);
         auto* inner = macroContainer == nullptr ? nullptr : timeline.getMacroSequence(*macroContainer);
-        if(inner == nullptr || depth > 16) return;
+        if(inner == nullptr || level > 16) return;
         unfoldedSequencesDrawn.push_back(inner);
         const std::string macroLabel = timeline.getMacroSequenceLabel(*macroContainer);
         const double visibleFrom = beatAtOffset(zoneLeft - unfoldedOriginX);
@@ -2228,16 +2231,21 @@ void ofxOceanodeTimelineController::draw() {
                 insideCollapsed = parent->collapsed;
             if(insideCollapsed) continue;
             const std::string rowId = group + "/" + innerTrack.id;
-            const float indent = (depth + 1 + inner->depthOf(innerTrack)) * kFolderIndent;
+            // Tabbed in under the macro track (and within the macro's own folders).
+            const float indent = std::min(kLabelWidth - 140.0f, tab + inner->depthOf(innerTrack) * kFolderIndent);
             ImGui::SetCursorPos(ImVec2(0, ImGui::GetCursorPosY()));
             ImGui::Dummy(ImVec2(contentWidth, rowHeight));
             const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
             const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
             dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(innerTrack.color, 0.09f));
-            dl->AddRectFilled(rowMin, padMax, mutedTrackColor(innerTrack.color, 0.22f, 0.36f));
-            // The macro track's color down the side: these rows are its timeline.
-            dl->AddRectFilled(ImVec2(rowMin.x + indent - kFolderIndent, rowMin.y),
-                              ImVec2(rowMin.x + indent - kFolderIndent + 3.0f, rowMax.y), macroColor);
+            dl->AddRectFilled(rowMin, ImVec2(rowMin.x + indent, rowMax.y), IM_COL32(17, 17, 20, 255));
+            dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), padMax, mutedTrackColor(innerTrack.color, 0.22f, 0.36f));
+            // A tree line from the macro track, in its color: these rows are its timeline.
+            const float guideX = rowMin.x + tab - kUnfoldedIndent * 0.5f;
+            const float midY = (rowMin.y + rowMax.y) * 0.5f;
+            dl->AddLine(ImVec2(guideX, rowMin.y), ImVec2(guideX, rowMax.y), macroColor, 2.0f);
+            dl->AddLine(ImVec2(guideX, midY), ImVec2(rowMin.x + indent, midY), macroColor, 2.0f);
+            dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), ImVec2(rowMin.x + indent + 3.0f, rowMax.y), macroColor);
             const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
             if(innerTrack.isMacroTrack())
                 dl->AddText(ImVec2(rowMin.x + indent + 7, textY), IM_COL32(235, 235, 235, 255), innerTrack.macroUnfolded ? "v" : ">");
@@ -2395,7 +2403,7 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::MenuItem("Duplicate after")) innerMenuRequest = InnerMenuRequest::Duplicate;
                     if(ImGui::MenuItem("Delete clip")) innerMenuRequest = InnerMenuRequest::Delete;
                     contextMenuSection("Macro");
-                    if(ImGui::MenuItem(("Open " + macroLabel + "'s timeline").c_str())) timeline.requestMacroScope(*macroContainer);
+                    if(ImGui::MenuItem(("Edit " + macroLabel + "'s timeline").c_str())) timeline.requestMacroScope(*macroContainer);
                 }
                 ImGui::EndPopup();
             }
@@ -2419,7 +2427,7 @@ void ofxOceanodeTimelineController::draw() {
                 innerEditorDocked = true;
             }
             if(innerTrack.isMacroTrack() && innerTrack.macroUnfolded)
-                drawUnfoldedRows(innerTrack, *inner, placements, depth + 1 + inner->depthOf(innerTrack), rowId);
+                drawUnfoldedRows(innerTrack, *inner, placements, level + 1, indent + kUnfoldedIndent, rowId);
         }
     };
 
@@ -2732,6 +2740,13 @@ void ofxOceanodeTimelineController::draw() {
 
             if(track.isMacroTrack()) {
                 contextMenuSection("Macro timeline");
+                if(ImGui::MenuItem("Edit macro timeline")) {
+                    // Its own view (with a breadcrumb back), next frame: never mid-iteration.
+                    if(auto* macroContainer = timeline.findMacroContainer(scope(timeline), track))
+                        timeline.requestMacroScope(*macroContainer);
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Open the macro's timeline on its own, as its node's Edit Timeline does.");
                 if(ImGui::MenuItem("Unfold its tracks here", nullptr, track.macroUnfolded))
                     if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
                 if(ImGui::IsItemHovered())
@@ -3322,7 +3337,7 @@ void ofxOceanodeTimelineController::draw() {
             drawSynthNavigation(timeline, track, &clip);
             contextMenuSection("Clip");
             if(track.isMacroTrack()) {
-                if(ImGui::MenuItem("Open macro timeline")) {
+                if(ImGui::MenuItem("Edit macro timeline")) {
                     if(auto* macroContainer = timeline.findMacroContainer(scope(timeline), track))
                         timeline.requestMacroScope(*macroContainer);
                 }
@@ -4346,7 +4361,7 @@ void ofxOceanodeTimelineController::draw() {
             shownTimeline.from = -std::numeric_limits<double>::infinity();
             shownTimeline.to = std::numeric_limits<double>::infinity();
             shownTimeline.shown = &scope(timeline);
-            drawUnfoldedRows(track, scope(timeline), {shownTimeline}, folderDepth, track.id);
+            drawUnfoldedRows(track, scope(timeline), {shownTimeline}, 0, folderIndent + kUnfoldedIndent, track.id);
             // Dropping a dragged header on its rows drops it on the macro track.
             for(auto& row : trackHeaderRows)
                 if(row.trackId == track.id) row.maxY = ImGui::GetCursorScreenPos().y;

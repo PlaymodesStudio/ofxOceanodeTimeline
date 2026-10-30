@@ -327,9 +327,13 @@ from the main timeline as well.
 
 ## Unfolding a macro track
 
-A macro track's clips play its macro's own timeline. Click the arrow on the
-macro track's header (or use **Unfold its tracks here** in its menu) to show
-that timeline's tracks as rows under it. Each row shows its clips where the
+A macro track's clips play its macro's own timeline. **Edit macro timeline**
+in the macro track's or a macro clip's right-click menu opens that timeline on
+its own (as the macro node's **Edit Timeline** does), with a breadcrumb back.
+To see it in place instead, click the arrow on the macro track's header (or
+use **Unfold its tracks here** in its menu): that timeline's tracks show as
+rows under it, tabbed in with a line in the macro track's color (one more step
+for each macro inside a macro). Each row shows its clips where the
 macro clips play them, through their repeats, tempo, content offset and
 reverse, so you can see the macro's contents against the rest of the
 arrangement.
@@ -345,9 +349,8 @@ Where a reversed macro clip plays the timeline mirrored, its clips are shown
 but not edited. A macro track inside the macro unfolds the same way.
 
 The unfolded state is saved with the track. Structural work (new tracks,
-targets, note groups) still happens in the macro's timeline itself, which the
-clip menu's **Open ... timeline** item (or a double-click on the macro clip)
-opens.
+targets, note groups) still happens in the macro's timeline itself, opened by
+**Edit macro timeline** (or a double-click on the macro clip).
 
 ## Duplicating lanes
 
