@@ -297,7 +297,25 @@ private:
     // Back to the scope at `depth` (0: the main timeline).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
+    // Inside a macro: Main > its macros > it, the last level the picker.
     void drawScopeBreadcrumb(ofxOceanodeTimelineManager& timeline);
+    // The timeline picker: Main and every macro's timeline, nested as the
+    // macros are. It leads the toolbar on the main timeline. True when it
+    // changed (or asked for) another timeline.
+    bool drawTimelinePicker(ofxOceanodeTimelineManager& timeline);
+    // A macro track playing macroContainer's timeline, added to the timeline
+    // of the macro it is in (parent; nullptr: the main timeline), shown after.
+    void playMacroTimelineFrom(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& macroContainer,
+                               ofxOceanodeContainer* parent);
+    // Whether parent's timeline (nullptr: the main one) has a macro track for it.
+    bool placedIn(ofxOceanodeTimelineManager& timeline, const ofxOceanodeContainer& macroContainer,
+                  ofxOceanodeContainer* parent);
+    // Where the picker and its rows were drawn (row container nullptr: Main).
+    struct PickerRect { ImVec2 min, max; };
+    struct PickerRow { ofxOceanodeContainer* container = nullptr; ImVec2 min, max; };
+    PickerRect timelinePickerRect;
+    PickerRect timelinePlayRect; // "Play it from ...": empty when not shown
+    std::vector<PickerRow> timelinePickerRows;
     // ---- Unfolded macro tracks: a macro's timeline edited in place ----
     // A macro track's timeline placed on the timeline shown: its sequence,
     // where its beats sit there (one repeat of one macro clip) and which

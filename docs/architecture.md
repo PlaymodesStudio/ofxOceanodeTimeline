@@ -132,8 +132,17 @@ redo (skipping tracks a restored macro already has). Extraction is recorded
 the same way, paths only.
 
 The controller edits one sequence at a time, its scope: the main timeline, or
-a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
-breadcrumb). Every model call from the controller and lane editors passes the
+a macro's (opened with "Edit Timeline" in the macro node menu, or from the
+timeline picker). In a macro scope the breadcrumb shows the macro's whole
+nesting (`enterMacroScope` stacks the macros around it). The picker
+(`drawTimelinePicker`) leads the toolbar on the main timeline and ends the
+breadcrumb in a macro scope; it changes scope from the next frame (through
+`requestMacroScope` / `requestMainScope`). It lists a tree from `listMacroTimelines` (every macro, depth
+first, each level by name, with its track count, whether `collectMacroSources`
+reaches it, and whether its sequence is shared). A macro timeline with tracks
+that nothing reaches offers `playMacroTimelineFrom`: a macro track with one
+clip in the timeline of the macro it is in, recorded in that timeline's
+history. Every model call from the controller and lane editors passes the
 scope's sequence (`scope(timeline)`; editors get it in their context). The
 tempo lane, loop, markers, seeking and the playhead belong to the main
 timeline and are hidden in a macro scope; undo steps the scope's own history.

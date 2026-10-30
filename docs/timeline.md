@@ -325,6 +325,26 @@ A macro's timeline keeps its own history. Undo steps whichever timeline was
 edited last, so an edit made in an unfolded macro track (see below) is undone
 from the main timeline as well.
 
+## Switching timelines
+
+Every macro can have its own timeline, played only by macro clips: a macro
+track on the main timeline (or in the timeline of the macro it is in) plays
+it. The toolbar starts with the timeline shown, **Main**. Inside a macro a
+breadcrumb above the toolbar shows `Main > Macro 1 > Macro 2`, following how
+the macros are nested whichever way the timeline was opened; click a level
+to go back to it. The timeline shown (on the toolbar, or the breadcrumb's
+last level) opens a list of every timeline: Main and each macro's, tabbed
+in under the macro it is in, with its number of tracks, **not played** when
+no macro track reaches it from Main, and **shared** for a library macro whose
+copies share it. Pick one to open it. Right-click a macro there and choose
+**Play it from ...** to add a macro track with one clip for it to the
+timeline of the macro it is in (Main for a macro on the main canvas).
+
+Inside a macro timeline that has tracks but that nothing plays, the
+breadcrumb says so, with a **Play it from ...** button that does the same.
+When the macro is already placed but the macro around it is not played, it
+says that instead.
+
 ## Unfolding a macro track
 
 A macro track's clips play its macro's own timeline. **Edit macro timeline**

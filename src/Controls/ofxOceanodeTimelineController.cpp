@@ -1117,17 +1117,51 @@ void ofxOceanodeTimelineController::openInnerClipEditor(const RowScope& at, cons
 
 void ofxOceanodeTimelineController::enterMacroScope(ofxOceanodeTimelineManager& timeline,
                                                     ofxOceanodeContainer& macroContainer) {
-    auto* sequence = timeline.getMacroSequence(macroContainer);
-    if(sequence == nullptr) return;
-    // Already open: go back to it rather than stacking it again.
-    for(size_t depth = 0; depth < scopes.size(); ++depth)
-        if(scopes[depth].sequence == sequence) { leaveScopesTo(depth + 1); return; }
-    // The breadcrumb follows the macro nesting: a macro inside the open one
-    // stacks on it; any other replaces the stack.
-    const std::string canvas = macroContainer.getCanvasID();
-    while(!scopes.empty() && canvas.rfind(scopes.back().container->getCanvasID() + " / ", 0) != 0) scopes.pop_back();
-    scopes.push_back({sequence, &macroContainer, timeline.getMacroSequenceLabel(macroContainer)});
+    // The breadcrumb follows the macro nesting: Main > the macros this one is
+    // in > this one, whichever way it was opened.
+    const auto macros = timeline.listMacroTimelines();
+    std::vector<ofxOceanodeContainer*> chain;
+    for(auto* at = &macroContainer; at != nullptr && chain.size() <= macros.size();) {
+        chain.insert(chain.begin(), at);
+        const auto found = std::find_if(macros.begin(), macros.end(), [&](const auto& entry) { return entry.container == at; });
+        at = found == macros.end() ? nullptr : found->parent;
+    }
+    std::vector<EditorScope> opened;
+    for(auto* macro : chain) {
+        auto* sequence = timeline.getMacroSequence(*macro);
+        if(sequence == nullptr) return;
+        opened.push_back({sequence, macro, timeline.getMacroSequenceLabel(*macro)});
+    }
+    // Already open: nothing the editor holds needs to go.
+    const bool same = opened.size() == scopes.size() &&
+        std::equal(opened.begin(), opened.end(), scopes.begin(), [](const auto& a, const auto& b) { return a.sequence == b.sequence; });
+    if(same) return;
+    scopes = std::move(opened);
     resetEditorForScope();
+}
+
+void ofxOceanodeTimelineController::playMacroTimelineFrom(ofxOceanodeTimelineManager& timeline,
+                                                          ofxOceanodeContainer& macroContainer,
+                                                          ofxOceanodeContainer* parent) {
+    // A macro track with one clip in the timeline of the macro it is in (the
+    // main timeline on the main canvas), which then opens to show it.
+    auto* sequence = parent == nullptr ? &timeline.getMainSequence() : timeline.getMacroSequence(*parent);
+    if(sequence == nullptr) return;
+    timeline.beginTimelineEdit(*sequence);
+    const auto trackId = timeline.createMacroTrack(*sequence, macroContainer);
+    if(!trackId.empty()) timeline.createMacroClip(*sequence, trackId, 0.0);
+    // Shown from the next frame (this one may be drawing another timeline).
+    if(parent == nullptr) timeline.requestMainScope();
+    else timeline.requestMacroScope(*parent);
+}
+
+bool ofxOceanodeTimelineController::placedIn(ofxOceanodeTimelineManager& timeline, const ofxOceanodeContainer& macroContainer,
+                                             ofxOceanodeContainer* parent) {
+    auto* sequence = parent == nullptr ? &timeline.getMainSequence() : timeline.getMacroSequence(*parent);
+    if(sequence == nullptr) return false;
+    return std::any_of(sequence->tracks.begin(), sequence->tracks.end(), [&](const auto& track) {
+        return track.isMacroTrack() && timeline.findMacroContainer(*sequence, track) == &macroContainer;
+    });
 }
 
 void ofxOceanodeTimelineController::leaveScopesTo(size_t depth) {
@@ -1137,23 +1171,117 @@ void ofxOceanodeTimelineController::leaveScopesTo(size_t depth) {
 }
 
 void ofxOceanodeTimelineController::drawScopeBreadcrumb(ofxOceanodeTimelineManager& timeline) {
+    timelinePickerRows.clear();
+    timelinePlayRect = {};
+    // On the main timeline the picker leads the toolbar instead.
     if(!inMacroScope()) return;
-    // Main > Macro 1 > Macro 2: click a level to go back to it.
-    if(ImGui::SmallButton("Main##scopeMain")) { leaveScopesTo(0); return; }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the main timeline.");
+    // Main > Macro 1 > Macro 2: click a level to go back to it. The last one
+    // is the picker.
     for(size_t depth = 0; depth < scopes.size(); ++depth) {
+        if(depth == 0) {
+            if(ImGui::SmallButton("Main##scopeMain")) { leaveScopesTo(0); return; }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the main timeline.");
+        }
         ImGui::SameLine(); ImGui::TextDisabled(">"); ImGui::SameLine();
-        const bool current = depth + 1 == scopes.size();
-        if(current) {
-            ImGui::TextUnformatted(scopes[depth].label.c_str());
-        } else if(ImGui::SmallButton((scopes[depth].label + "##scope" + ofToString(depth)).c_str())) {
+        if(depth + 1 == scopes.size()) break;
+        if(ImGui::SmallButton((scopes[depth].label + "##scope" + ofToString(depth)).c_str())) {
             leaveScopesTo(depth + 1);
             return;
         }
     }
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.0f));
+    const bool picked = drawTimelinePicker(timeline);
+    ImGui::PopStyleVar();
+    if(picked) return;
+    // Nothing plays a macro timeline unless a macro track reaches it from Main.
+    const auto macros = timeline.listMacroTimelines();
+    auto entryOf = [&](const ofxOceanodeContainer* macro) {
+        return std::find_if(macros.begin(), macros.end(), [&](const auto& entry) { return entry.container == macro; });
+    };
+    const auto self = entryOf(scopes.back().container);
+    if(self == macros.end()) return;
     ImGui::SameLine();
-    ImGui::TextDisabled("  macro timeline: saved with the macro, played by its macro clips");
-    (void)timeline;
+    if(self->played || self->trackCount == 0) {
+        ImGui::TextDisabled("  macro timeline: saved with the macro, played by its macro clips");
+        return;
+    }
+    const std::string parentLabel = self->parent == nullptr ? std::string("Main") : entryOf(self->parent)->label;
+    if(placedIn(timeline, *self->container, self->parent)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "  not played: %s itself is not played", parentLabel.c_str());
+        return;
+    }
+    ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "  not played: no macro track in %s plays it", parentLabel.c_str());
+    ImGui::SameLine();
+    const bool play = ImGui::SmallButton(("Play it from " + parentLabel + "##playMacroTimeline").c_str());
+    timelinePlayRect = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Adds a macro track with one clip to %s's timeline, and opens it.", parentLabel.c_str());
+    if(play) playMacroTimelineFrom(timeline, *self->container, self->parent);
+}
+
+bool ofxOceanodeTimelineController::drawTimelinePicker(ofxOceanodeTimelineManager& timeline) {
+    // The timeline shown, opening a list of every timeline: Main and each
+    // macro's, tabbed in under the macro it is in.
+    const std::string current = scopes.empty() ? std::string("Main") : scopes.back().label;
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize(current.c_str()).x + ImGui::GetFrameHeight() + 2.0f * ImGui::GetStyle().FramePadding.x);
+    const bool picking = ImGui::BeginCombo("##timelinePicker", current.c_str(), ImGuiComboFlags_HeightLargest);
+    timelinePickerRect = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+    if(!picking) {
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open another timeline: the main one, or a macro's own.");
+        return false;
+    }
+    const auto macros = timeline.listMacroTimelines();
+    auto labelOf = [&](const ofxOceanodeContainer* macro) {
+        if(macro == nullptr) return std::string("Main");
+        const auto found = std::find_if(macros.begin(), macros.end(), [&](const auto& entry) { return entry.container == macro; });
+        return found == macros.end() ? std::string() : found->label;
+    };
+    ofxOceanodeContainer* open = scopes.empty() ? nullptr : scopes.back().container;
+    ofxOceanodeContainer* chosen = nullptr;
+    bool chooseMain = false;
+    const ofxOceanodeTimelineManager::MacroTimelineEntry* toPlay = nullptr;
+    if(ImGui::Selectable("Main##pickMain", open == nullptr)) chooseMain = true;
+    timelinePickerRows.push_back({nullptr, ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
+    if(macros.empty()) ImGui::TextDisabled("  No macros in this patch.");
+    const float step = ImGui::GetStyle().IndentSpacing;
+    for(const auto& entry : macros) {
+        ImGui::PushID(entry.container);
+        const float indent = step * static_cast<float>(entry.depth + 1);
+        ImGui::Indent(indent);
+        if(ImGui::Selectable(entry.label.c_str(), open == entry.container)) chosen = entry.container;
+        timelinePickerRows.push_back({entry.container, ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
+        const bool hovered = ImGui::IsItemHovered();
+        const std::string parentLabel = labelOf(entry.parent);
+        if(ImGui::BeginPopupContextItem("##pickerRow")) {
+            if(ImGui::MenuItem(("Play it from " + parentLabel).c_str(), nullptr, false,
+                               !placedIn(timeline, *entry.container, entry.parent))) toPlay = &entry;
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        if(entry.trackCount == 0) ImGui::TextDisabled("empty");
+        else ImGui::TextDisabled("%d track%s", static_cast<int>(entry.trackCount), entry.trackCount == 1 ? "" : "s");
+        if(entry.trackCount > 0 && !entry.played) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.3f, 1.0f), "not played");
+        }
+        if(entry.shared) { ImGui::SameLine(); ImGui::TextDisabled("shared"); }
+        if(hovered) {
+            std::string tip = entry.played ? "Played: a macro track reaches it from Main."
+                                           : "Not played: no macro track reaches it from Main.\nRight-click: play it from " + parentLabel + ".";
+            if(entry.shared) tip += "\nShared by the copies of this library macro.";
+            ImGui::SetTooltip("%s", tip.c_str());
+        }
+        ImGui::Unindent(indent);
+        ImGui::PopID();
+    }
+    if(toPlay != nullptr) ImGui::CloseCurrentPopup();
+    ImGui::EndCombo();
+    // Scopes change from the next frame (the rest of this one is drawn for
+    // the timeline shown).
+    if(toPlay != nullptr) { playMacroTimelineFrom(timeline, *toPlay->container, toPlay->parent); return true; }
+    if(chooseMain && open != nullptr) { leaveScopesTo(0); return true; }
+    if(chosen != nullptr && chosen != open) { timeline.requestMacroScope(*chosen); return true; }
+    return false;
 }
 
 void ofxOceanodeTimelineController::drawTrackArrangeMenu(ofxOceanodeTimelineManager& timeline,
@@ -1276,6 +1404,7 @@ void ofxOceanodeTimelineController::draw() {
         restoreHistory(timeline, historyIO.KeyShift);
     // "Edit Timeline" from a macro's node menu; scopes of deleted macros close.
     if(auto* requested = timeline.consumeMacroScopeRequest()) enterMacroScope(timeline, *requested);
+    if(timeline.consumeMainScopeRequest()) leaveScopesTo(0);
     for(size_t depth = 0; depth < scopes.size(); ++depth)
         if(!timeline.isLiveSequence(*scopes[depth].sequence)) { leaveScopesTo(depth); break; }
     importDroppedAudio(timeline);
@@ -1466,7 +1595,12 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::TextDisabled("%s", text);
         ImGui::SameLine(0.0f, 5.0f);
     };
-    // ---- Row 1: transport | position | tempo | meter | sync | timebase ----
+    // ---- Row 1: timeline | transport | position | tempo | meter | sync | timebase ----
+    // Inside a macro the picker ends the breadcrumb above instead.
+    if(!inMacroScope()) {
+        drawTimelinePicker(timeline);
+        groupSeparator();
+    }
     if(transport != nullptr) {
         // Following an external clock: position, play state and tempo come from it.
         const char* lockedTip = "Following an external clock";

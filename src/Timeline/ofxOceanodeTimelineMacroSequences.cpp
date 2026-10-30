@@ -7,6 +7,7 @@
 #include "Nodes/ofxOceanodeNodeMacro.h"
 
 #include <filesystem>
+#include <functional>
 
 namespace {
 constexpr const char* kSequenceFile = "sequence.json";
@@ -20,6 +21,15 @@ ofxOceanodeNodeMacro* owningMacro(ofxOceanodeContainer& from, const ofxOceanodeC
         if(auto* inner = owningMacro(*macro->getContainer(), target)) return inner;
     }
     return nullptr;
+}
+
+// How the editor names a macro's timeline: the macro's title, else its canvas id.
+std::string macroLabel(ofxOceanodeNodeMacro& macro, const ofxOceanodeContainer& inner) {
+    const auto title = macro.getNodeTitleSuffix();
+    if(!title.empty()) return title;
+    const auto canvas = inner.getCanvasID();
+    const auto last = canvas.rfind(" / ");
+    return last == std::string::npos ? canvas : canvas.substr(last + 3);
 }
 
 // One spelling per library folder, however the core wrote the path.
@@ -68,11 +78,8 @@ ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::getMacroSequence(ofxOce
 }
 
 std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const {
-    if(container != nullptr)
-        if(auto* macro = owningMacro(*container, macroContainer)) {
-            const auto title = macro->getNodeTitleSuffix();
-            if(!title.empty()) return title;
-        }
+    auto* macro = container == nullptr ? nullptr : owningMacro(*container, macroContainer);
+    if(macro != nullptr) return macroLabel(*macro, macroContainer);
     const auto canvas = macroContainer.getCanvasID();
     const auto last = canvas.rfind(" / ");
     return last == std::string::npos ? canvas : canvas.substr(last + 3);
@@ -219,6 +226,51 @@ std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager:
         }
     }
     return sources;
+}
+
+std::vector<ofxOceanodeTimelineManager::MacroTimelineEntry> ofxOceanodeTimelineManager::listMacroTimelines() const {
+    std::vector<MacroTimelineEntry> entries;
+    if(container == nullptr) return entries;
+    const auto sources = collectMacroSources(); // prunes the gone ones too
+    std::function<void(ofxOceanodeContainer&, ofxOceanodeContainer*, int)> walk =
+        [&](ofxOceanodeContainer& from, ofxOceanodeContainer* parent, int depth) {
+        // Each level by name (the core keeps its nodes in no particular order).
+        std::vector<std::pair<std::string, ofxOceanodeContainer*>> level;
+        for(auto* node : from.getAllModules()) {
+            auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
+            if(macro == nullptr || !macro->getContainer()) continue;
+            level.emplace_back(macroLabel(*macro, *macro->getContainer()) + '\n' + macro->getContainer()->getCanvasID(),
+                               macro->getContainer().get());
+        }
+        std::sort(level.begin(), level.end());
+        for(const auto& [key, at] : level) {
+            auto& inner = *at;
+            MacroTimelineEntry entry;
+            entry.container = &inner;
+            entry.parent = parent;
+            entry.depth = depth;
+            entry.label = key.substr(0, key.find('\n'));
+            const auto found = std::find_if(macroSequences.begin(), macroSequences.end(),
+                [&](const auto& candidate) { return candidate.address == &inner; });
+            if(found != macroSequences.end()) {
+                entry.trackCount = found->sequence->tracks.size();
+                entry.shared = std::count_if(macroSequences.begin(), macroSequences.end(),
+                    [&](const auto& other) { return other.sequence == found->sequence; }) > 1;
+            }
+            entry.played = std::any_of(sources.begin(), sources.end(),
+                [&](const auto& source) { return source.macroContainer == &inner; });
+            entries.push_back(entry);
+            walk(inner, &inner, depth + 1);
+        }
+    };
+    walk(*container, nullptr, 0);
+    return entries;
+}
+
+bool ofxOceanodeTimelineManager::isMacroTimelinePlayed(const ofxOceanodeContainer& macroContainer) const {
+    const auto sources = collectMacroSources();
+    return std::any_of(sources.begin(), sources.end(),
+        [&](const auto& source) { return source.macroContainer == &macroContainer; });
 }
 
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter(const ofxOceanodeContainer& macroContainer,
