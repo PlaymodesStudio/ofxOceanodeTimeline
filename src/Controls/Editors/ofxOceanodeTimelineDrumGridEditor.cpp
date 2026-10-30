@@ -2,6 +2,7 @@
 #include "ofxOceanodeTimelineLaneEditorUi.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeParameter.h"
+#include "ofxOceanodeNodeModel.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -236,6 +237,47 @@ void shiftRow(Row& row, double by) {
         step.beat = beat;
     }
     DrumGrid::normalizeRow(row);
+}
+
+// ---- waveform rows ----------------------------------------------------------
+using RowSound = ofxOceanodeTimelineDrumGridEditor::RowSound;
+// One pass of a hit's sound, seconds: duration is varispeed, and pitch also
+// changes the speed when the instrument resamples.
+double passSeconds(const RowSound& sound, const Step& step) {
+    const double ratio = sound.pitchChangesLength ? std::pow(2.0, step.pitch / 12.0) : 1.0;
+    return sound.seconds * ofClamp(step.duration, 0.1f, kDurationMax) / ratio;
+}
+// The pitch change a stretch causes (x2 = an octave down).
+float stretchSemitones(float duration) { return -12.0f * std::log2(std::max(0.01f, duration)); }
+std::string stretchText(float duration) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "x%.2f  %+.1f st", duration, stretchSemitones(duration));
+    return text;
+}
+// A sound's peaks from x0 (where it starts), one pass every passPixels (tiled
+// when it loops), drawn over [from, to) mirrored around cy: one line per
+// pixel column. Returns the lines drawn.
+int drawPeaks(ImDrawList* dl, const std::vector<float>& peaks, float x0, float passPixels, bool loops,
+              float from, float to, float cy, float half, ImU32 color) {
+    if(passPixels <= 0.0f || to <= from || peaks.empty()) return 0;
+    const int count = static_cast<int>(peaks.size());
+    int lines = 0;
+    for(float x = std::floor(from); x < to; x += 1.0f) {
+        double t0 = std::max(0.0, static_cast<double>(x - x0) / passPixels);
+        double t1 = static_cast<double>(x + 1.0f - x0) / passPixels;
+        if(t1 <= 0.0) continue;
+        if(loops) { const double pass = std::floor(t0); t0 -= pass; t1 -= pass; }
+        else if(t0 >= 1.0) break;
+        const int i0 = std::max(0, std::min(count - 1, static_cast<int>(t0 * count)));
+        const int i1 = std::max(i0 + 1, std::min(count, static_cast<int>(std::ceil(t1 * count))));
+        const int stride = std::max(1, (i1 - i0) / 32);
+        float peak = 0.0f;
+        for(int i = i0; i < i1; i += stride) peak = std::max(peak, peaks[static_cast<size_t>(i)]);
+        const float h = std::max(0.5f, ofClamp(peak, 0.0f, 1.0f) * half);
+        dl->AddLine(ImVec2(x + 0.5f, cy - h), ImVec2(x + 0.5f, cy + h), color);
+        ++lines;
+    }
+    return lines;
 }
 
 // Drum Grid and Piano Roll lanes route through the same role bindings.
@@ -491,6 +533,41 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
     const int focused = focusedRow(lane);
     StripMode mode = stripModes.count(lane.id) ? stripModes[lane.id] : StripMode::Velocity;
     const double grid = context.timeline.drumStepBeats(lane);
+    // Each row in its pad's colour (the instrument's rowColors), else the track's.
+    std::vector<ofColor> instrumentColors;
+    ofxOceanodeTimelineInstrument instrument;
+    {
+        int voices = 0;
+        std::vector<std::string> names;
+        context.timeline.drumGridInstrument(track, lane, voices, names, nullptr, &instrumentColors, &instrument);
+    }
+    std::vector<ofColor> rowColors;
+    for(const auto& row : lane.drumRows) rowColors.push_back(DrumGrid::rowColor(instrumentColors, row, track.color));
+    // Each row's sound, when the instrument reports one (else hits draw as blocks).
+    std::vector<RowSound> rowSounds(lane.drumRows.size());
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_WAVEFORMS
+    for(size_t r = 0; r < lane.drumRows.size(); ++r) {
+        const int slot = lane.drumRows[r].slot;
+        if(slot < 0 || slot >= static_cast<int>(instrument.rowWaveforms.size())) continue;
+        const auto& wave = instrument.rowWaveforms[static_cast<size_t>(slot)];
+        auto& sound = rowSounds[r];
+        sound.peaks = wave.peaks;
+        sound.seconds = wave.seconds;
+        sound.loops = wave.loops;
+        sound.gated = wave.gated;
+        sound.mono = wave.mono;
+        sound.pitchChangesLength = wave.pitchChangesLength;
+    }
+#endif
+    auto hasSound = [&](int r) { return r >= 0 && r < static_cast<int>(rowSounds.size()) && rowSounds[static_cast<size_t>(r)].valid(); };
+    // With a sound, the focused row's Duration is a stretch (varispeed).
+    const char* stripNames[kModes];
+    const char* stripLabels[kModes];
+    for(int t = 0; t < kModes; ++t) { stripNames[t] = kStripNames[t]; stripLabels[t] = kStripLabels[t]; }
+    if(hasSound(focused)) {
+        stripNames[static_cast<int>(StripMode::Duration)] = "Stretch";
+        stripLabels[static_cast<int>(StripMode::Duration)] = "Strch";
+    }
 
     // ---- geometry ---------------------------------------------------------
     const float zoneLeft = canvas.zoneLeft;
@@ -522,7 +599,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             }
             return x;
         };
-        if(layout(kStripNames) > canvas.max.x - 4.0f) { shortTabs = true; layout(kStripLabels); }
+        if(layout(stripNames) > canvas.max.x - 4.0f) { shortTabs = true; layout(stripLabels); }
     }
     // The grid chip after the tabs: the lane's grid, click to change it.
     const std::string gridText = gridLabel(lane, context.timeline.getMasterGridBeats());
@@ -562,15 +639,36 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
     // ---- drawing ------------------------------------------------------------
     dl->PushClipRect(ImVec2(headerLeft, canvas.min.y), ImVec2(canvas.max.x, canvas.max.y), true);
     auto trackAlpha = [&](int alpha) { return IM_COL32(track.color.r, track.color.g, track.color.b, alpha); };
-    // Each row in its pad's colour (the instrument's rowColors), else the track's.
-    std::vector<ofColor> instrumentColors;
-    {
-        int voices = 0;
-        std::vector<std::string> names;
-        context.timeline.drumGridInstrument(track, lane, voices, names, nullptr, &instrumentColors);
-    }
-    std::vector<ofColor> rowColors;
-    for(const auto& row : lane.drumRows) rowColors.push_back(DrumGrid::rowColor(instrumentColors, row, track.color));
+    // Seconds on screen: the view maps seconds linearly (through the tempo map).
+    const float pixelsPerSecond = context.timeline.getViewState().pixelsPerSecond;
+    // Where a waveform (sub-)hit sounds, in pixels: its start, one pass's width,
+    // and its end (one pass, or to its gate when it loops; cut by its gate
+    // when gated, by the next hit when mono, by the content's end).
+    struct SoundSpan { float xs, xe, pass; double subStart; };
+    auto soundSpan = [&](const Row& row, const RowSound& sound, size_t index, int64_t p, int cycle, int k) {
+        const auto& step = row.steps[index];
+        const double s1 = hitStartBeat(row, step, p);
+        const int ratchet = std::max(1, step.ratchet);
+        const double sub = step.length / ratchet;
+        SoundSpan span;
+        span.subStart = s1 + k * sub;
+        span.xs = xOf(span.subStart, cycle);
+        span.pass = static_cast<float>(passSeconds(sound, step) * pixelsPerSecond);
+        double cut = content;
+        if(sound.gated || sound.loops) cut = std::min(cut, span.subStart + sub * ofClamp(step.gate, 0.05f, 1.0f));
+        if(sound.mono) {
+            if(k + 1 < ratchet) cut = std::min(cut, span.subStart + sub);
+            else if(index + 1 < row.steps.size() && !DrumGrid::stepHidden(row, row.steps[index + 1]))
+                cut = std::min(cut, hitStartBeat(row, row.steps[index + 1], p));
+            else cut = std::min(cut, hitStartBeat(row, row.steps.front(), p + 1));
+        }
+        const float xCut = xOf(std::max(span.subStart, cut), cycle);
+        span.xe = sound.loops ? xCut : std::min(xCut, span.xs + span.pass);
+        return span;
+    };
+    // Waveform hit ends drawn this frame (Cmd/Ctrl-drag one to stretch it).
+    struct SoundEdge { int row; int step; int cycle; float xs, xe; double subStart, patternStart; };
+    std::vector<SoundEdge> soundEdges;
     auto rowAlpha = [&](int r, int alpha) {
         const auto& c = rowColors[static_cast<size_t>(r)];
         return IM_COL32(c.r, c.g, c.b, alpha);
@@ -664,6 +762,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
     // at the row's length (drag it) and fainter lines at further repeats.
     constexpr int kMaxCellsDrawn = 20000;
     int cellsDrawn = 0;
+    constexpr int kMaxWaveLinesDrawn = 40000;
+    int waveLinesDrawn = 0;
     // The grid and its hits stay inside the grid area: a hit that starts
     // left of the view (scrolled, or the clip starts earlier) must not spill
     // over the row headers.
@@ -676,12 +776,20 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         const bool audible = DrumGrid::rowAudible(lane, row);
         const int64_t patterns = std::max<int64_t>(1, static_cast<int64_t>(std::ceil(content / row.length - 1e-9)));
         const int cellsPerPattern = std::max(1, static_cast<int>(std::ceil(row.length / grid - 1e-9)));
+        const bool waveRow = hasSound(r);
+        const RowSound& sound = rowSounds[static_cast<size_t>(r)];
+        // How far past its pattern a sound can ring, at most (pixels).
+        float spill = 0.0f;
+        if(waveRow)
+            for(const auto& step : row.steps)
+                spill = std::max({spill, static_cast<float>(passSeconds(sound, step) * pixelsPerSecond),
+                                  std::abs(xOf(step.length, 0) - xOf(0.0, 0))});
         for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             for(int64_t p = 0; p < patterns; ++p) {
                 const double patternStart = p * row.length;
                 if(patternStart >= content) break;
                 const float px1 = xOf(patternStart, cycle), px2 = xOf(std::min(content, patternStart + row.length), cycle);
-                if(px2 < left || px1 > right) continue;
+                if(px2 + spill < left || px1 > right) continue;
                 const bool firstPass = p == 0;
                 for(int k = 0; k < cellsPerPattern && cellsDrawn < kMaxCellsDrawn; ++k) {
                     const double s1 = patternStart + k * grid;
@@ -702,20 +810,48 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                         dl->AddRectFilled(ImVec2(cx1, y1), ImVec2(cx2, y2), IM_COL32(255, 255, 255, 26));
                 }
                 // Hits at their true positions; off the current grid: outlined.
-                for(const auto& step : row.steps) {
+                for(size_t i = 0; i < row.steps.size(); ++i) {
+                    const auto& step = row.steps[i];
                     if(DrumGrid::stepHidden(row, step)) continue;
                     const double s1 = hitStartBeat(row, step, p);
                     if(s1 >= content || s1 + step.length <= 0.0) continue;
                     const double s2 = std::min(content, s1 + step.length);
                     float x1 = xOf(std::max(0.0, s1), cycle), x2 = xOf(s2, cycle);
-                    if(x2 < left || x1 > right) continue;
+                    // Waveform rows: each (sub-)hit's sound, as long as it sounds.
+                    SoundSpan spans[DrumGrid::kMaxRatchet];
+                    int spanCount = 0;
+                    float soundEnd = x2;
+                    if(waveRow) {
+                        spanCount = std::max(1, std::min(DrumGrid::kMaxRatchet, step.ratchet));
+                        for(int k = 0; k < spanCount; ++k) {
+                            spans[k] = soundSpan(row, sound, i, p, cycle, k);
+                            soundEnd = std::max(soundEnd, spans[k].xe);
+                        }
+                    }
+                    if(soundEnd < left || x1 > right) continue;
                     x2 = std::max(x2 - 1.0f, x1 + 3.0f);
                     const float probability = ofClamp(step.probability, 0.0f, 1.0f);
                     int alpha = firstPass ? 240 : 85;
                     if(!audible) alpha /= 3;
                     alpha = static_cast<int>(alpha * (0.35f + 0.65f * probability));
                     const float fillTop = y2 - std::max(0.2f, step.velocity) * (y2 - y1);
-                    dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), rowAlpha(r, alpha), 1.5f);
+                    if(waveRow) {
+                        // The hit's span stays as a faint block; its sound is drawn over it,
+                        // mirrored around the row's centre, as tall as its velocity.
+                        dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), rowAlpha(r, alpha / 3), 1.5f);
+                        const ofColor& c = rowColors[static_cast<size_t>(r)];
+                        const ImU32 waveColor = IM_COL32((2 * c.r + 255) / 3, (2 * c.g + 255) / 3, (2 * c.b + 255) / 3, alpha);
+                        const float cy = (y1 + y2) * 0.5f;
+                        const float half = std::max(1.0f, (y2 - y1) * 0.5f - 1.0f) * std::max(0.2f, step.velocity);
+                        for(int k = 0; k < spanCount; ++k) {
+                            const auto& span = spans[k];
+                            if(span.xe < left || span.xs > right) continue;
+                            soundEdges.push_back({r, static_cast<int>(i), cycle, span.xs, span.xe, span.subStart, p * row.length});
+                            if(waveLinesDrawn >= kMaxWaveLinesDrawn) continue;
+                            waveLinesDrawn += drawPeaks(dl, *sound.peaks, span.xs, span.pass, sound.loops,
+                                                        std::max(span.xs, gridClipLeft), std::min(span.xe, right), cy, half, waveColor);
+                        }
+                    } else dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), rowAlpha(r, alpha), 1.5f);
                     const bool sounding = cycle == playCycle && playBeat >= s1 && playBeat < s2;
                     if(sounding && audible) dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2, y2), IM_COL32(255, 255, 255, 200), 1.5f, 0, 1.5f);
                     if(!onGrid(step.beat, grid))
@@ -773,7 +909,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             const float width = headerRight - headerLeft - 8.0f;
             bool first = true;
             for(const std::string& line : {fitText(row.name.empty() ? "Row " + ofToString(focused + 1) : row.name, width),
-                                           fitText(kStripNames[static_cast<int>(mode)], width),
+                                           fitText(stripNames[static_cast<int>(mode)], width),
                                            fitText(altFreePaint(mode) ? "Alt: free" : "Alt: fine", width)}) {
                 if(y + textHeight > stripBottom) break;
                 dl->AddText(ImVec2(headerLeft + 4.0f, y), first ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 170, 255), line.c_str());
@@ -787,7 +923,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             const bool hovered = hoverRect(ImVec2(rect.x1, stripTop), ImVec2(rect.x2, stripTop + tabHeight));
             dl->AddRectFilled(ImVec2(rect.x1, stripTop), ImVec2(rect.x2, stripTop + tabHeight),
                               on ? rowAlpha(focused, 230) : hovered ? IM_COL32(88, 88, 96, 255) : IM_COL32(58, 58, 64, 255), 3.0f);
-            const char* label = shortTabs ? kStripLabels[t] : kStripNames[t];
+            const char* label = shortTabs ? stripLabels[t] : stripNames[t];
             const float w = ImGui::CalcTextSize(label).x;
             dl->AddText(ImVec2((rect.x1 + rect.x2 - w) * 0.5f, stripTop + 3.0f),
                         on ? IM_COL32(20, 20, 20, 255) : IM_COL32(225, 225, 225, 255), label);
@@ -908,13 +1044,30 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         return DrumGrid::stepInRange(row, cell, cell + grid, pos);
     };
     auto focusLane = [&]() { context.focusedLaneId = lane.id; };
+    // Source beat under an x along one clip repeat (not wrapped: past its end it
+    // keeps counting), for a stretch's end.
+    auto sourceInCycle = [&](float x, int cycle) {
+        const double timelineBeat = view.pixelsToBeat(x - canvas.timelineOrigin.x);
+        const double local = clip.repeatContent
+            ? (timelineBeat - clip.startBeat) / stretch(clip) - cycle * content
+            : (timelineBeat - clip.startBeat) * content / std::max(1.0 / 24.0, clip.durationBeats);
+        return local + contentOffset(clip);
+    };
 
     if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if(drag == Drag::Pending && dragLaneId == lane.id && dragRow >= 0 && dragRow < rowCount) {
             // A click: remove the grabbed hit, or add one on the pressed cell.
             auto& row = lane.drumRows[static_cast<size_t>(dragRow)];
-            if(dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) row.steps.erase(row.steps.begin() + dragStep);
-            else if(dragStep < 0 && dragCellBeat < row.length - 1e-9) DrumGrid::addStep(row, newStep(row, dragCellBeat, grid));
+            if(dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
+                // Kept so a double-click can bring it back (and open the hit editor).
+                removedLaneId = lane.id;
+                removedRow = dragRow;
+                removedStep = row.steps[static_cast<size_t>(dragStep)];
+                row.steps.erase(row.steps.begin() + dragStep);
+            } else {
+                if(dragStep < 0 && dragCellBeat < row.length - 1e-9) DrumGrid::addStep(row, newStep(row, dragCellBeat, grid));
+                if(removedLaneId == lane.id) removedLaneId.clear();
+            }
         }
         if(dragLaneId == lane.id) drag = Drag::None;
     }
@@ -963,7 +1116,10 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         }
         if(tabUnderMouse >= 0) {
             ImGui::SetTooltip("%s: %s\nDrag across the hits to paint. %s Right-click a bar: default.",
-                              kStripNames[tabUnderMouse], kStripHints[tabUnderMouse],
+                              stripNames[tabUnderMouse],
+                              tabUnderMouse == static_cast<int>(StripMode::Duration) && hasSound(focused)
+                                  ? "Tape varispeed of the hit's sound: x2 plays it twice as long, an octave lower."
+                                  : kStripHints[tabUnderMouse],
                               tabUnderMouse == static_cast<int>(StripMode::Duration) ? "Snaps to x0.125 .. x24; Alt: free."
                               : tabUnderMouse == static_cast<int>(StripMode::Filter) ? "Snaps to open near the centre; Alt: free. Double-click a bar: open."
                               : tabUnderMouse == static_cast<int>(StripMode::Stutter) ? "Snaps to semitones; Alt: free. Bottom or double-click a bar: off."
@@ -1024,10 +1180,64 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     ImGui::SetTooltip("%s", text);
                 }
             }
+            // A waveform hit's end under the pointer while Cmd/Ctrl is held: drag
+            // it to stretch the hit (varispeed: longer = slower and lower).
+            const bool command = io.KeyCtrl || io.KeySuper;
+            const SoundEdge* edge = nullptr;
+            if(command && overGrid && !overHandle && drag == Drag::None) {
+                const int r = rowAtY(mouse.y);
+                float best = 4.0f * scale;
+                for(const auto& candidate : soundEdges) {
+                    if(candidate.row != r || candidate.xe - candidate.xs < 3.0f || candidate.xe < gridClipLeft) continue;
+                    const float distance = std::abs(mouse.x - candidate.xe);
+                    if(distance <= best) { best = distance; edge = &candidate; }
+                }
+            }
+            if(edge != nullptr) {
+                const auto& step = lane.drumRows[static_cast<size_t>(edge->row)].steps[static_cast<size_t>(edge->step)];
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                dl->AddLine(ImVec2(edge->xe, top + edge->row * rowHeight + 1.0f), ImVec2(edge->xe, top + (edge->row + 1) * rowHeight - 1.0f),
+                            IM_COL32(255, 255, 255, 230), 2.0f);
+                if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    focusedRows[lane.id] = edge->row;
+                    drag = Drag::Stretch;
+                    dragLaneId = lane.id;
+                    dragRow = edge->row;
+                    dragStep = edge->step;
+                    dragLengthCycle = edge->cycle;
+                    dragSubStart = edge->subStart;
+                    dragPatternStart = edge->patternStart;
+                } else ImGui::SetTooltip("%s\nCmd-drag the end: stretch (longer = slower and lower; the end snaps to the grid, Alt: free)",
+                                         stretchText(step.duration).c_str());
+            }
+            if(drag == Drag::Stretch && dragLaneId == lane.id && dragRow >= 0 && dragRow < rowCount && hasSound(dragRow)) {
+                auto& row = lane.drumRows[static_cast<size_t>(dragRow)];
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if(ImGui::IsMouseDown(ImGuiMouseButton_Left) && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
+                    auto& step = row.steps[static_cast<size_t>(dragStep)];
+                    const auto& sound = rowSounds[static_cast<size_t>(dragRow)];
+                    const float xs = xOf(dragSubStart, dragLengthCycle);
+                    float xEnd = mouse.x;
+                    if(!io.KeyAlt) {
+                        // The sounding end on the lane's grid (counted from its pattern's start).
+                        const double beat = sourceInCycle(mouse.x, dragLengthCycle);
+                        double end = dragPatternStart + std::round((beat - dragPatternStart) / grid) * grid;
+                        if(end <= dragSubStart + 1e-9)
+                            end = dragPatternStart + (std::floor((dragSubStart - dragPatternStart) / grid + 1e-9) + 1.0) * grid;
+                        xEnd = xOf(end, dragLengthCycle);
+                    }
+                    const double seconds = std::max(0.0f, xEnd - xs) / std::max(1e-3f, pixelsPerSecond);
+                    const double ratio = sound.pitchChangesLength ? std::pow(2.0, step.pitch / 12.0) : 1.0;
+                    step.duration = ofClamp(static_cast<float>(seconds * ratio / sound.seconds), 0.1f, kDurationMax);
+                    ImGui::SetTooltip("%s", stretchText(step.duration).c_str());
+                }
+            }
             // Grid: click toggles; drag from an empty cell paints hits, from a
             // hit moves it (horizontally, by grid steps; Alt: freely) or sets its
-            // velocity (vertically, or Shift); Cmd/Ctrl-drag erases.
-            if(overGrid && !overHandle && drag != Drag::Length && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            // velocity (vertically, or Shift); Cmd/Ctrl-drag erases. Double-click
+            // a waveform hit: the hit editor.
+            if(overGrid && !overHandle && edge == nullptr && drag != Drag::Length && drag != Drag::Stretch &&
+               ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 const int r = rowAtY(mouse.y);
                 double sourceBeat = 0.0;
                 if(r >= 0 && sourceAtX(mouse.x, sourceBeat)) {
@@ -1041,7 +1251,19 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     dragStartY = mouse.y;
                     previousMouseX = mouse.x;
                     previousMouseY = mouse.y;
-                    if(io.KeyCtrl || io.KeySuper) {
+                    // The first click of a double-click removed the hit: bring it back.
+                    const bool restore = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !command && hasSound(r) &&
+                        dragStep < 0 && removedLaneId == lane.id && removedRow == r &&
+                        ((dragStartPos >= removedStep.beat - 1e-9 && dragStartPos < removedStep.beat + std::max(removedStep.length, minSpan)) ||
+                         std::abs(std::floor(removedStep.beat / grid) * grid - dragCellBeat) < 1e-9);
+                    if(restore) {
+                        drag = Drag::None;
+                        popupLaneId = lane.id;
+                        popupRow = r;
+                        popupStep = DrumGrid::addStep(row, removedStep);
+                        removedLaneId.clear();
+                        ImGui::OpenPopup(("##drumHitEditor" + lane.id).c_str());
+                    } else if(command) {
                         drag = Drag::Erase;
                         if(dragStep >= 0) row.steps.erase(row.steps.begin() + dragStep);
                         dragStep = -1;
@@ -1126,14 +1348,15 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 if(r >= 0 && sourceAtX(mouse.x, sourceBeat)) {
                     const auto& row = lane.drumRows[static_cast<size_t>(r)];
                     const int index = grabAt(row, sourceBeat);
-                    if(index >= 0) {
+                    if(index >= 0 && edge == nullptr) {
                         const auto& step = row.steps[static_cast<size_t>(index)];
                         ImGui::SetTooltip("%s at beat %.4g%s\nvel %.0f  pitch %+d  prob %.0f%%  ratchet x%d  gate %.0f%%  duration x%.2f  filter %s  stutter %s\n"
-                                          "Click: remove. Drag: move / velocity. Right-click: edit",
+                                          "Click: remove. Drag: move / velocity. Right-click: edit%s",
                                           row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)",
                                           step.velocity * 100.0f, step.pitch, step.probability * 100.0f, step.ratchet,
                                           step.gate * 100.0f, step.duration, filterText(step.filter).c_str(),
-                                          stutterText(step.stutter).c_str());
+                                          stutterText(step.stutter).c_str(),
+                                          hasSound(r) ? "\nDouble-click: hit editor. Cmd-drag its end: stretch" : "");
                     }
                 }
             }
@@ -1171,7 +1394,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     if(drag == Drag::StripFine && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
                         auto& step = row.steps[static_cast<size_t>(dragStep)];
                         setStripValue(step, mode, dragStartValue + (dragStartY - mouse.y) * stripFineRate(mode));
-                        ImGui::SetTooltip("%s %s", kStripNames[static_cast<int>(mode)], stripText(step, mode).c_str());
+                        ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)], stripText(step, mode).c_str());
                     } else if(drag == Drag::Strip) {
                         // Every bar between the last mouse position and this one.
                         const float distance = std::abs(mouse.x - previousMouseX);
@@ -1183,7 +1406,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                                                          valueAtY(previousMouseY + (mouse.y - previousMouseY) * t));
                         }
                         const int index = barAt(mouse.x);
-                        if(index >= 0) ImGui::SetTooltip("%s %s", kStripNames[static_cast<int>(mode)],
+                        if(index >= 0) ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)],
                                                          stripText(row.steps[static_cast<size_t>(index)], mode).c_str());
                     }
                     previousMouseX = mouse.x;
@@ -1201,7 +1424,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 }
                 if(overStrip && drag == Drag::None) {
                     const int index = barAt(mouse.x);
-                    if(index >= 0) ImGui::SetTooltip("%s %s", kStripNames[static_cast<int>(mode)],
+                    if(index >= 0) ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)],
                                                      stripText(row.steps[static_cast<size_t>(index)], mode).c_str());
                 }
             }
@@ -1214,7 +1437,18 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             ImGui::EndPopup();
         }
         drawRowMenu(lane, grid);
-        drawStepMenu(lane, grid);
+        // The edited hit's sound, and seconds per beat around it.
+        const RowSound none;
+        const bool popupValid = popupRow >= 0 && popupRow < rowCount && popupStep >= 0 &&
+                                popupStep < static_cast<int>(lane.drumRows[static_cast<size_t>(popupRow)].steps.size());
+        const RowSound& popupSound = popupValid ? rowSounds[static_cast<size_t>(popupRow)] : none;
+        double secondsPerBeat = 0.5;
+        if(popupValid) {
+            const double beat = lane.drumRows[static_cast<size_t>(popupRow)].steps[static_cast<size_t>(popupStep)].beat;
+            secondsPerBeat = std::max(1e-4, static_cast<double>(xOf(beat + 1.0, 0) - xOf(beat, 0)) / std::max(1e-3f, pixelsPerSecond));
+        }
+        drawStepMenu(lane, grid, popupSound);
+        drawHitEditor(lane, grid, popupSound, secondsPerBeat, instrument.filter != nullptr, instrument.stutter != nullptr);
     }
 }
 
@@ -1306,7 +1540,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawRowMenu(ofxOceanodeTimelineLane& lan
     ImGui::EndPopup();
 }
 
-void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& lane, double grid) {
+void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& lane, double grid, const RowSound& sound) {
     if(!ImGui::BeginPopup(("##drumStepMenu" + lane.id).c_str())) return;
     if(popupRow < 0 || popupRow >= static_cast<int>(lane.drumRows.size()) || popupStep < 0 ||
        popupStep >= static_cast<int>(lane.drumRows[static_cast<size_t>(popupRow)].steps.size())) {
@@ -1315,8 +1549,74 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
         return;
     }
     auto& row = lane.drumRows[static_cast<size_t>(popupRow)];
-    auto& step = row.steps[static_cast<size_t>(popupStep)];
+    const auto& step = row.steps[static_cast<size_t>(popupStep)];
     ImGui::Text("%s, hit at beat %.4g%s", row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)");
+    drawStepFields(row, grid, sound, true, true);
+    ImGui::EndPopup();
+}
+
+void ofxOceanodeTimelineDrumGridEditor::drawHitEditor(ofxOceanodeTimelineLane& lane, double grid, const RowSound& sound,
+                                                      double secondsPerBeat, bool hasFilter, bool hasStutter) {
+    if(!ImGui::BeginPopup(("##drumHitEditor" + lane.id).c_str())) return;
+    if(popupRow < 0 || popupRow >= static_cast<int>(lane.drumRows.size()) || popupStep < 0 ||
+       popupStep >= static_cast<int>(lane.drumRows[static_cast<size_t>(popupRow)].steps.size()) || !sound.valid()) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    auto& row = lane.drumRows[static_cast<size_t>(popupRow)];
+    {
+        const auto& step = row.steps[static_cast<size_t>(popupStep)];
+        ImGui::Text("%s, hit at beat %.4g%s", row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)");
+        // The sound as this hit plays it, in seconds: each ratchet sub-hit from
+        // its start, to its gate when it loops or is gated, to the next sub-hit
+        // when mono. The hit's own span is the lighter band.
+        const int ratchet = std::max(1, step.ratchet);
+        const double sub = step.length * secondsPerBeat / ratchet;
+        const double pass = passSeconds(sound, step);
+        const double open = sub * ofClamp(step.gate, 0.05f, 1.0f);
+        std::vector<double> ends;
+        double span = step.length * secondsPerBeat;
+        for(int k = 0; k < ratchet; ++k) {
+            double end = sound.loops ? open : pass;
+            if(sound.gated) end = std::min(end, open);
+            if(sound.mono && k + 1 < ratchet) end = std::min(end, sub);
+            ends.push_back(k * sub + end);
+            span = std::max(span, k * sub + end);
+        }
+        const float scale = uiScale();
+        const float width = std::round(420.0f * scale), height = std::round(110.0f * scale);
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const ImVec2 p1(p0.x + width, p0.y + height);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float pixels = width / static_cast<float>(std::max(1e-4, span));
+        const float hitRight = p0.x + static_cast<float>(step.length * secondsPerBeat) * pixels;
+        dl->AddRectFilled(p0, p1, IM_COL32(20, 20, 23, 255), 3.0f);
+        dl->AddRectFilled(p0, ImVec2(hitRight, p1.y), IM_COL32(44, 44, 50, 255), 3.0f);
+        const float cy = (p0.y + p1.y) * 0.5f;
+        dl->AddLine(ImVec2(p0.x, cy), ImVec2(p1.x, cy), IM_COL32(70, 70, 78, 200));
+        const float half = (height * 0.5f - 3.0f) * std::max(0.2f, step.velocity);
+        for(int k = 0; k < ratchet; ++k) {
+            const float xs = p0.x + static_cast<float>(k * sub) * pixels;
+            const float xe = p0.x + static_cast<float>(ends[static_cast<size_t>(k)]) * pixels;
+            drawPeaks(dl, *sound.peaks, xs, static_cast<float>(pass) * pixels, sound.loops, xs, std::min(xe, p1.x), cy, half,
+                      IM_COL32(230, 230, 235, 235));
+            // Where its gate closes.
+            const float gx = xs + static_cast<float>(open) * pixels;
+            if(gx <= p1.x) dl->AddLine(ImVec2(gx, p0.y), ImVec2(gx, p1.y), IM_COL32(255, 200, 90, 160));
+        }
+        dl->AddRect(p0, p1, IM_COL32(90, 90, 100, 255), 3.0f);
+        ImGui::Dummy(ImVec2(width, height));
+        ImGui::TextDisabled("One pass %.3g s at %s%s%s%s", pass, stretchText(step.duration).c_str(),
+                            sound.loops ? "  loops" : "", sound.gated ? "  gated" : "", sound.mono ? "  mono" : "");
+    }
+    drawStepFields(row, grid, sound, hasFilter, hasStutter);
+    ImGui::EndPopup();
+}
+
+bool ofxOceanodeTimelineDrumGridEditor::drawStepFields(ofxOceanodeTimelineDrumRow& row, double grid, const RowSound& sound,
+                                                       bool hasFilter, bool hasStutter) {
+    auto& step = row.steps[static_cast<size_t>(popupStep)];
     // Drag to change; double-click (or Ctrl+click) to type a value.
     float beat = static_cast<float>(step.beat);
     ImGui::SetNextItemWidth(140.0f);
@@ -1325,8 +1625,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
         moved.beat = ofClamp(static_cast<double>(beat), 0.0, row.length - 1e-6);
         row.steps.erase(row.steps.begin() + popupStep);
         popupStep = DrumGrid::addStep(row, moved);
-        ImGui::EndPopup();
-        return;
+        return false;
     }
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Position from the start of the row's pattern, in beats");
     float length = static_cast<float>(step.length);
@@ -1348,10 +1647,19 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
     if(ImGui::DragInt("Ratchet##drumStep", &step.ratchet, 0.05f, 1, DrumGrid::kMaxRatchet, "x%d"))
         step.ratchet = std::max(1, std::min(DrumGrid::kMaxRatchet, step.ratchet));
     ImGui::SetNextItemWidth(140.0f);
-    if(ImGui::DragFloat("Duration##drumStep", &step.duration, 0.01f, 0.1f, kDurationMax, "x%.2f", ImGuiSliderFlags_Logarithmic))
-        step.duration = ofClamp(step.duration, 0.1f, kDurationMax);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Multiplies the hit's decays (x1 = as set)");
-    {
+    if(sound.valid()) {
+        // With a sound, duration is varispeed: the stretch and the pitch it causes.
+        if(ImGui::DragFloat("Speed / Length##drumStep", &step.duration, 0.01f, 0.1f, kDurationMax, "x%.2f", ImGuiSliderFlags_Logarithmic))
+            step.duration = ofClamp(step.duration, 0.1f, kDurationMax);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tape varispeed: x2 plays the sound twice as long, an octave lower");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%+.1f st", stretchSemitones(step.duration));
+    } else {
+        if(ImGui::DragFloat("Duration##drumStep", &step.duration, 0.01f, 0.1f, kDurationMax, "x%.2f", ImGuiSliderFlags_Logarithmic))
+            step.duration = ofClamp(step.duration, 0.1f, kDurationMax);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Multiplies the hit's decays (x1 = as set)");
+    }
+    if(hasFilter) {
         float filter = step.filter * 100.0f;
         ImGui::SetNextItemWidth(140.0f);
         if(ImGui::DragFloat("Filter##drumStep", &filter, 0.5f, -100.0f, 100.0f, "%+.0f"))
@@ -1359,7 +1667,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n-100 low-pass fully closed .. 0 open .. +100 high-pass fully closed",
                                                      filterText(step.filter).c_str());
     }
-    {
+    if(hasStutter) {
         ImGui::SetNextItemWidth(140.0f);
         if(ImGui::DragFloat("Stutter (note)##drumStep", &step.stutter, 0.1f, 0.0f, 127.0f, step.stutter < 0.5f ? "off" : "%.1f"))
             step.stutter = ofClamp(step.stutter, 0.0f, 127.0f);
@@ -1372,16 +1680,16 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
         moved.beat = std::fmod(std::round(step.beat / grid) * grid, row.length);
         row.steps.erase(row.steps.begin() + popupStep);
         popupStep = DrumGrid::addStep(row, moved);
-        ImGui::EndPopup();
-        return;
+        return false;
     }
     ImGui::SameLine();
     if(ImGui::Button("Delete##drumStep")) {
         row.steps.erase(row.steps.begin() + popupStep);
         popupStep = -1;
         ImGui::CloseCurrentPopup();
+        return false;
     }
-    ImGui::EndPopup();
+    return true;
 }
 
 void ofxOceanodeTimelineDrumGridEditor::drawPreview(const ofxOceanodeTimelineClipPreview& preview) const {

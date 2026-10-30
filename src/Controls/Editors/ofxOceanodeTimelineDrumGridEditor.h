@@ -2,6 +2,7 @@
 #include "ofxOceanodeTimelineLaneEditor.h"
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,10 +32,26 @@ public:
     enum class StripMode { Velocity, Pitch, Probability, Ratchet, Gate, Duration, Filter, Stutter };
     static constexpr int kStripModeCount = 8;
 
+    // A kit slot's sound as the instrument reports it (its RowWaveform). With
+    // one, the row's hits are drawn as waveforms and Duration is varispeed.
+    struct RowSound {
+        std::shared_ptr<const std::vector<float>> peaks;
+        double seconds = 0.0;   // one pass at pitch 0, duration x1
+        bool loops = false, gated = false, mono = false, pitchChangesLength = true;
+        bool valid() const { return peaks && !peaks->empty() && seconds > 0.0; }
+    };
+
 private:
     int focusedRow(const ofxOceanodeTimelineLane& lane) const;
     void drawRowMenu(ofxOceanodeTimelineLane& lane, double grid);
-    void drawStepMenu(ofxOceanodeTimelineLane& lane, double grid);
+    void drawStepMenu(ofxOceanodeTimelineLane& lane, double grid, const RowSound& sound);
+    // Double-click on a waveform hit: its sound drawn large, and its fields.
+    void drawHitEditor(ofxOceanodeTimelineLane& lane, double grid, const RowSound& sound,
+                       double secondsPerBeat, bool hasFilter, bool hasStutter);
+    // The hit's fields (shared by both popups); false once the hit moved
+    // (the popup ends this frame).
+    bool drawStepFields(ofxOceanodeTimelineDrumRow& row, double grid, const RowSound& sound,
+                        bool hasFilter, bool hasStutter);
     void drawRowSettings(ofxOceanodeTimelineLane& lane, int rowIndex, double grid);
 
     char targetSearch[128] = {};
@@ -45,8 +62,9 @@ private:
     // Pending: pressed, not moved yet (release toggles). Paint / Erase: add
     // hits to empty cells / remove hits along the stroke. Velocity / Move:
     // dragging the grabbed hit. Strip / StripFine: painting bars.
-    // Length: dragging a row's end-of-cycle handle.
-    enum class Drag { None, Pending, Paint, Erase, Velocity, Move, Strip, StripFine, Length };
+    // Length: dragging a row's end-of-cycle handle. Stretch: Cmd/Ctrl-dragging
+    // a waveform hit's end (its duration, as varispeed).
+    enum class Drag { None, Pending, Paint, Erase, Velocity, Move, Strip, StripFine, Length, Stretch };
     Drag drag = Drag::None;
     std::string dragLaneId;
     int dragRow = -1;
@@ -58,6 +76,14 @@ private:
     float dragStartValue = 0.0f;
     float previousMouseX = 0.0f, previousMouseY = 0.0f;
     int dragLengthCycle = 0;      // the clip repeat whose end line was grabbed
+    double dragSubStart = 0.0;    // Stretch: source beat where the grabbed (sub-)hit starts
+    double dragPatternStart = 0.0;// Stretch: source beat where its pattern starts
+
+    // The hit a click just removed: a double-click there restores it and
+    // opens the hit editor (waveform rows only).
+    std::string removedLaneId;
+    int removedRow = -1;
+    ofxOceanodeTimelineDrumStep removedStep;
 
     // Context menus: which row / hit they edit.
     std::string popupLaneId;

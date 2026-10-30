@@ -1294,11 +1294,13 @@ std::vector<ofxOceanodeTimelinePianoNote> ofxOceanodeTimelineManager::repeatNote
 bool ofxOceanodeTimelineManager::drumGridInstrument(const ofxOceanodeTimelineTrack& track,
                                                     const ofxOceanodeTimelineLane& lane,
                                                     int& voices, std::vector<std::string>& names, bool* kit,
-                                                    std::vector<ofColor>* colors) const {
+                                                    std::vector<ofColor>* colors,
+                                                    ofxOceanodeTimelineInstrument* instrumentOut) const {
     voices = 0;
     names.clear();
     if(kit != nullptr) *kit = false;
     if(colors != nullptr) colors->clear();
+    if(instrumentOut != nullptr) *instrumentOut = ofxOceanodeTimelineInstrument();
     for(const auto* id : {&lane.pianoGateBindingId, &lane.pianoPitchBindingId}) {
         if(id->empty()) continue;
         const auto* binding = bindingInTrack(track, *id);
@@ -1311,6 +1313,7 @@ bool ofxOceanodeTimelineManager::drumGridInstrument(const ofxOceanodeTimelineTra
         names = instrument.rowNames;
         if(kit != nullptr) *kit = instrument.kit;
         if(colors != nullptr) *colors = instrument.rowColors;
+        if(instrumentOut != nullptr) *instrumentOut = instrument;
         return true;
     }
     return false;

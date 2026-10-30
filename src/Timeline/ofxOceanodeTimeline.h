@@ -24,6 +24,7 @@
 class ofxOceanodeAbstractParameter;
 class ofxOceanodeContainer;
 class ofxOceanodeNodeModel;
+struct ofxOceanodeTimelineInstrument;
 
 // How a binding's per-frame value should combine with whatever other
 // bindings already write to the same parameter. Replace is the classic
@@ -1303,9 +1304,11 @@ public:
     // its voice count and kit slot names. False when it plays no instrument.
     // colors (optional): its kit slot colours (rowColors), see
     // ofxOceanodeTimelineDrumGrid::rowColor.
+    // instrument (optional): all it reports (row waveforms, Filter / Stutter inputs).
     bool drumGridInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
                             int& voices, std::vector<std::string>& names, bool* kit = nullptr,
-                            std::vector<ofColor>* colors = nullptr) const;
+                            std::vector<ofColor>* colors = nullptr,
+                            ofxOceanodeTimelineInstrument* instrument = nullptr) const;
     // The same for a note group's roles.
     bool noteGroupInstrument(const std::string& trackId, const std::string& groupId,
                              int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
