@@ -239,6 +239,7 @@ private:
     struct GroupDragSnapshotEntry {
         std::string trackId, clipId;
         double startBeat, durationBeats, contentDurationBeats, contentStretch;
+        bool repeatContent;
     };
     std::vector<GroupDragSnapshotEntry> groupDragSnapshot;
     double groupDragAnchorBeat = 0.0;

@@ -408,7 +408,9 @@ int main() {
         assert(clip->durationBeats>4.5);
         if(tool==0) { assert(clip->repeatContent); assert(clip->contentDurationBeats==4); }
         if(tool==1) { assert(!clip->repeatContent); assert(clip->contentDurationBeats>4.5); }
-        if(tool==2) { assert(!clip->repeatContent); assert(clip->contentDurationBeats==4); assert(clip->contentStretch>1); }
+        // Stretch scales the clip as it plays (its repeat setting kept): one cycle, slower.
+        if(tool==2) { assert(clip->repeatContent); assert(clip->contentDurationBeats==4); assert(clip->contentStretch>1);
+                      assert(std::abs(clip->contentStretch*4-clip->durationBeats)<1e-6); }
     }
     // Cmd+drag (stretch) of the right edge back past the start: the clip
     // flips to the left of its start and plays backwards, stretched there.
@@ -913,6 +915,31 @@ int main() {
             const auto mc=model.createMacroClip(mt,0.0);
             assert(!mc.empty() && model.getClip(mt,mc)->contentDurationBeats>=model.getBeatsPerBar());
             assert(model.createLane(mt,mc,"x",ofxOceanodeTimelineLaneType::Curve).empty()); // no lanes in a macro clip
+            {
+                // Content in the macro's timeline, previewed inside the macro clip.
+                auto* pattern=model.getMacroSequence(*inside);
+                const auto ct=model.createTrack(*pattern,"Sweep");
+                const auto cb=model.addBinding(*pattern,ct,innerCutoff);
+                const auto cc=model.createClip(*pattern,ct,"Sweep",0,4);
+                const auto cl=model.createLane(*pattern,ct,cc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
+                model.addBindingToLane(*pattern,ct,cc,cl,cb);
+                model.getLane(*pattern,ct,cc,cl)->curvePoints={{0,0.1f},{2,0.9f},{4,0.2f}};
+                model.getLane(*pattern,ct,cc,cl)->curveTensions={{},{}};
+                const auto gt2=model.createTrack(*pattern,"Gates");
+                const auto gb2=model.addBinding(*pattern,gt2,static_cast<ofxOceanodeAbstractParameter&>(innerProbe.getParameters().get("Gate")));
+                const auto gc2=model.createClip(*pattern,gt2,"Gates",0,4);
+                const auto gl2=model.createLane(*pattern,gt2,gc2,"Gate",ofxOceanodeTimelineLaneType::MultiGate);
+                model.addBindingToLane(*pattern,gt2,gc2,gl2,gb2);
+                model.getLane(*pattern,gt2,gc2,gl2)->multiRowCount=1;
+                model.getLane(*pattern,gt2,gc2,gl2)->multiGateRows={{{0.0,0.5,1},{1.0,0.5,1},{2.5,1.0,1}}};
+                model.setClipTiming(mt,mc,0,8); // two passes
+                model.getViewState().trackHeight=120.0f;
+                for(int i=0;i<25;++i) frame();
+                frame(1250,ImVec2(-100,-100),false,"macro-clip-preview");
+                model.reverseClip(mt,mc); frame(); frame(1250,ImVec2(-100,-100),false,"macro-clip-preview-reversed");
+                model.reverseClip(mt,mc);
+                model.getViewState().trackHeight=80.0f;
+            }
             for(int i=0;i<25;++i) frame();
             const auto mrect=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==mc && r.trackId==mt;});
             assert(mrect!=ui.clipScreenRects.end());

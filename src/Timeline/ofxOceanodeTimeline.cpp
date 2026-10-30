@@ -3864,6 +3864,7 @@ bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequ
     if(clip == nullptr || !std::isfinite(duration)) return false;
     const double source = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     const double ratio = ofxOceanodeTimelineClipTime::effectiveStretch(*clip);
+    const double previousDuration = std::max(1.0 / 24.0, clip->durationBeats);
     duration = std::max(1.0 / 24.0, duration);
     setClipTiming(sequence, trackId, clipId, clip->startBeat, duration);
     const auto* track = getTrack(sequence, trackId);
@@ -3875,7 +3876,12 @@ bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequ
     } else if(operation == ofxOceanodeTimelineEndEdit::Trim) {
         setClipContentDuration(sequence, trackId, clipId, duration / ratio, false);
     } else {
-        setClipContentDuration(sequence, trackId, clipId, source, false);
+        // Stretch scales the clip as it plays now (longer = slower), keeping
+        // what it shows and its repeats; it never refits the whole source,
+        // which sped up a clip showing less than its content (a macro clip
+        // over part of its macro's timeline).
+        clip->contentStretch = std::max(1.0 / 1024.0, ratio * duration / previousDuration);
+        setClipContentDuration(sequence, trackId, clipId, source, clip->repeatContent);
     }
     invalidateEvaluationIndexes();
     invalidateSchedule();

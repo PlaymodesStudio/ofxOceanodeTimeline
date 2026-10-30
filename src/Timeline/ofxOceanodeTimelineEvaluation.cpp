@@ -852,6 +852,13 @@ double ofxOceanodeTimelineManager::macroTimelineLength(const ofxOceanodeTimeline
     return std::max(getBeatsPerBar(), end);
 }
 
+ofxOceanodeTimelineSequence ofxOceanodeTimelineManager::reversedMacroTimeline(
+        const ofxOceanodeTimelineSequence& macroSequence) const {
+    auto mirrored = macroSequence;
+    mirrorSequence(mirrored, macroTimelineLength(macroSequence));
+    return mirrored;
+}
+
 void ofxOceanodeTimelineManager::mirrorSequence(ofxOceanodeTimelineSequence& sequence, double length) const {
     for(auto& track : sequence.tracks)
         for(auto& clip : track.clips) {

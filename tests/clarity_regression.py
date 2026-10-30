@@ -143,6 +143,15 @@ int main() {
     near(clip->contentDurationBeats, 3); near(clip->contentStretch, 4); assert(!clip->repeatContent);
     assert(model.getLane(t, c, l1)->curvePoints.size() == source.size());
     assert(model.getLane(t, c, l1)->curvePoints.front().value == source.front().value);
+    // A clip showing part of its content (a macro clip over half its macro's
+    // timeline) stretched longer plays slower, still showing that part.
+    clip->durationBeats = 4; clip->contentDurationBeats = 8; clip->contentStretch = 1; clip->repeatContent = true;
+    assert(model.resizeClipEnd(t, c, 6, ofxOceanodeTimelineEndEdit::Stretch));
+    near(clip->contentDurationBeats, 8); near(clip->contentStretch, 1.5); assert(clip->repeatContent);
+    // Repeats scale with it.
+    clip->durationBeats = 8; clip->contentDurationBeats = 4; clip->contentStretch = 1;
+    assert(model.resizeClipEnd(t, c, 16, ofxOceanodeTimelineEndEdit::Stretch));
+    near(clip->contentStretch, 2); near(ofxOceanodeTimelineClipTime::cycleDuration(*clip), 8);
     clip->durationBeats = 0.125; clip->contentDurationBeats = 1024;
     clip->repeatContent = false; clip->contentStretch = 1;
     near(ofxOceanodeTimelineClipTime::effectiveStretch(*clip),

@@ -2560,46 +2560,107 @@ void ofxOceanodeTimelineController::draw() {
                 lastVisibleCycle = static_cast<int>(std::min(1e9, std::ceil(visibleTo / cycleLength)));
             }
             if(track.isMacroTrack()) {
-                // What the macro's timeline holds, one thin row per track, as
-                // this clip places it (repeats, tempo ratio, offset).
+                // What the macro's timeline holds, one row per track, drawn
+                // as this clip plays it (repeats, tempo ratio, offset,
+                // reversed): each of its clips placed in main-timeline beats
+                // and previewed like any clip.
                 auto* macroContainer = timeline.findMacroContainer(scope(timeline), track);
-                const auto* inner = macroContainer == nullptr ? nullptr : timeline.getMacroSequence(*macroContainer);
+                auto* inner = macroContainer == nullptr ? nullptr : timeline.getMacroSequence(*macroContainer);
                 if(inner == nullptr) {
                     dl->AddText(ImVec2(left + 6.0f, max.y - 18.0f), IM_COL32(255, 165, 60, 255), "[macro missing]");
                     return;
                 }
+                // A reversed clip plays the mirrored timeline, read from the
+                // end of this clip's content.
+                ofxOceanodeTimelineSequence mirrored;
+                ofxOceanodeTimelineSequence* shown = inner;
+                const double content = sourceDuration(clip);
+                double mirrorShift = 0.0;
+                if(clip.reversed) {
+                    mirrored = timeline.reversedMacroTimeline(*inner);
+                    shown = &mirrored;
+                    mirrorShift = timeline.macroTimelineLength(*inner) - content;
+                }
                 std::vector<const ofxOceanodeTimelineTrack*> rows;
-                for(const auto& innerTrack : inner->tracks) if(!innerTrack.isFolder) rows.push_back(&innerTrack);
-                dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
+                for(const auto& innerTrack : shown->tracks) if(!innerTrack.isFolder) rows.push_back(&innerTrack);
                 const float top = min.y + 20.0f, height = std::max(4.0f, max.y - 5.0f - top);
                 const float rowHeight = rows.empty() ? 0.0f : std::max(1.0f, height / rows.size());
+                const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+                const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
+                const double clipEnd = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
+                const double cycle = clip.repeatContent ? cycleDuration(clip) : clipEnd - clip.startBeat;
                 const int cycles = clip.repeatContent
-                    ? static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycleDuration(clip)))) : 1;
-                const double content = sourceDuration(clip);
-                for(size_t r = 0; r < rows.size(); ++r) {
-                    const float y1 = top + r * rowHeight, y2 = y1 + std::max(1.0f, rowHeight - 1.0f);
-                    for(const auto& innerClip : rows[r]->clips) {
-                        double from = innerClip.startBeat, to = std::min(content, innerClip.startBeat + innerClip.durationBeats);
-                        if(from >= content) continue;
-                        if(clip.reversed) { // played backwards: mirrored in the content
-                            const double mirroredFrom = std::max(0.0, content - to);
-                            to = content - from;
-                            from = mirroredFrom;
-                        }
-                        for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
-                            const float a = min.x + beatOffset(sourceToTimelineBeat(clip, from, cycle));
-                            const float b = min.x + beatOffset(sourceToTimelineBeat(clip, to, cycle));
-                            const ImU32 color = IM_COL32(rows[r]->color.r, rows[r]->color.g, rows[r]->color.b, 210);
-                            if(b >= a) dl->AddRectFilled(ImVec2(a, y1), ImVec2(std::max(a + 1.0f, b), y2), color);
-                            else { // crosses the content offset's wrap
-                                const float cycleStart = min.x + beatOffset(clip.startBeat + cycle * cycleDuration(clip));
-                                dl->AddRectFilled(ImVec2(a, y1), ImVec2(cycleStart + beatOffset(clip.startBeat + cycleDuration(clip)) - beatOffset(clip.startBeat), y2), color);
-                                dl->AddRectFilled(ImVec2(cycleStart, y1), ImVec2(b, y2), color);
+                    ? static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycle))) : 1;
+                const auto previewView = editorView(timeline, transportState.bpm, endBeat);
+                for(int repeat = std::max(0, firstVisibleCycle); repeat < cycles && repeat <= lastVisibleCycle; ++repeat) {
+                    const double cycleStart = clip.startBeat + repeat * cycle;
+                    const double wrap = cycleStart + (content - offset) * stretch;
+                    // (main beat of sequence beat 0, segment start, segment end): the
+                    // content from the offset, then from 0 up to the offset.
+                    const double segments[2][3] = {
+                        {cycleStart - offset * stretch, cycleStart, offset > 0.0 ? wrap : cycleStart + cycle},
+                        {wrap, wrap, cycleStart + cycle}};
+                    for(int s = 0; s < (offset > 0.0 ? 2 : 1); ++s) {
+                        const double zero = segments[s][0] - mirrorShift * stretch;
+                        const double segmentFrom = std::max(segments[s][1], clip.startBeat);
+                        const double segmentTo = std::min(segments[s][2], clipEnd);
+                        if(segmentTo <= segmentFrom + 1e-9) continue;
+                        const float segmentLeft = std::max(left + 1.0f, min.x + beatOffset(segmentFrom));
+                        const float segmentRight = std::min(right - 1.0f, min.x + beatOffset(segmentTo));
+                        if(segmentRight <= segmentLeft) continue;
+                        for(size_t r = 0; r < rows.size(); ++r) {
+                            const float y1 = top + r * rowHeight, y2 = y1 + std::max(1.0f, rowHeight - 1.0f);
+                            const auto& innerTrack = *rows[r];
+                            const ImU32 rowColor = IM_COL32(innerTrack.color.r, innerTrack.color.g, innerTrack.color.b, 70);
+                            for(const auto& innerClip : innerTrack.clips) {
+                                // The inner clip as this segment plays it, in main-timeline beats.
+                                ofxOceanodeTimelineClip placed = ofxOceanodeTimelineClipTime::contentOffset(innerClip) > 0.0 ? timeline.clipAsPlayed(innerClip) : innerClip;
+                                placed.startBeat = zero + innerClip.startBeat * stretch;
+                                placed.durationBeats = innerClip.durationBeats * stretch;
+                                if(placed.repeatContent) placed.contentStretch = ofxOceanodeTimelineClipTime::stretch(innerClip) * stretch;
+                                const double placedEnd = placed.startBeat + placed.durationBeats;
+                                if(placedEnd <= segmentFrom || placed.startBeat >= segmentTo) continue;
+                                const float x1 = std::max(segmentLeft, min.x + beatOffset(placed.startBeat));
+                                const float x2 = std::min(segmentRight, min.x + beatOffset(placedEnd));
+                                if(x2 <= x1) continue;
+                                // Only the repeats on screen (as for any clip).
+                                int innerFirst = 0, innerLast = 0;
+                                if(placed.repeatContent) {
+                                    const double innerCycle = std::max(1e-6, cycleDuration(placed));
+                                    innerFirst = std::max(0, static_cast<int>(std::floor((beatAtOffset(x1 - min.x) - placed.startBeat) / innerCycle)));
+                                    innerLast = static_cast<int>(std::min(1e9, std::ceil((beatAtOffset(x2 - min.x) - placed.startBeat) / innerCycle)));
+                                }
+                                dl->PushClipRect(ImVec2(x1, y1), ImVec2(x2, y2), true);
+                                dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2), rowColor);
+                                if(innerTrack.isMacroTrack() || innerClip.muted) {
+                                    // A macro inside: a bar (its own content is a click away).
+                                    dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2),
+                                        IM_COL32(innerTrack.color.r, innerTrack.color.g, innerTrack.color.b, innerClip.muted ? 50 : 160));
+                                } else if(placed.isLfo) {
+                                    const ofxOceanodeTimelineClipPreview preview{timeline, *container, *shown, innerTrack, placed,
+                                        placed.lanes.empty() ? nullptr : &placed.lanes.front(), previewView,
+                                        ImVec2(min.x, y1), ImVec2(max.x, y2), x1, x2, innerFirst, innerLast};
+                                    lfoEditor.drawPreview(preview);
+                                } else {
+                                    // Its lanes in bands, as many as fit (at least the first).
+                                    std::vector<const ofxOceanodeTimelineLane*> shownLanes;
+                                    for(const auto& lane : placed.lanes)
+                                        if(!lane.muted && lane.type != ofxOceanodeTimelineLaneType::Wave) shownLanes.push_back(&lane);
+                                    const size_t bands = std::min(shownLanes.size(),
+                                        static_cast<size_t>(std::max(1.0f, std::floor((y2 - y1) / 10.0f))));
+                                    for(size_t b = 0; b < bands; ++b) {
+                                        const float bandHeight = (y2 - y1) / bands;
+                                        const ofxOceanodeTimelineClipPreview preview{timeline, *container, *shown, innerTrack, placed,
+                                            shownLanes[b], previewView, ImVec2(min.x, y1 + b * bandHeight),
+                                            ImVec2(max.x, y1 + (b + 1) * bandHeight), x1, x2, innerFirst, innerLast};
+                                        laneEditors.forType(shownLanes[b]->type).drawPreview(preview);
+                                    }
+                                }
+                                dl->PopClipRect();
                             }
                         }
                     }
                 }
-                dl->PopClipRect();
                 return;
             }
             if(track.isWaveTrack) {
@@ -2862,7 +2923,8 @@ void ofxOceanodeTimelineController::draw() {
                         for(const auto& member : dragMembers) {
                             if(const auto* memberClip = timeline.getClip(scope(timeline), member.first, member.second)) {
                                 groupDragSnapshot.push_back({member.first, member.second, memberClip->startBeat,
-                                    memberClip->durationBeats, memberClip->contentDurationBeats, ofxOceanodeTimelineClipTime::effectiveStretch(*memberClip)});
+                                    memberClip->durationBeats, memberClip->contentDurationBeats, ofxOceanodeTimelineClipTime::effectiveStretch(*memberClip),
+                                    memberClip->repeatContent});
                                 anchorBeat = std::min(anchorBeat, memberClip->startBeat);
                             }
                         }
@@ -4474,13 +4536,14 @@ void ofxOceanodeTimelineController::draw() {
                         for(const auto& entry : groupDragSnapshot) {
                             const double newMemberStart = groupDragAnchorBeat + (entry.startBeat - groupDragAnchorBeat) * scale;
                             const double newMemberDuration = std::max(1.0 / kPPQ, entry.durationBeats * scale);
-                            timeline.setClipTiming(scope(timeline), entry.trackId, entry.clipId, std::max(0.0, newMemberStart), newMemberDuration);
+                            // At its original length: the edit below scales from there.
+                            timeline.setClipTiming(scope(timeline), entry.trackId, entry.clipId, std::max(0.0, newMemberStart), entry.durationBeats);
                             if(auto* member = timeline.getClip(scope(timeline), entry.trackId, entry.clipId)) {
                                 member->contentDurationBeats = entry.contentDurationBeats;
                                 member->contentStretch = std::max(1.0 / 1024.0, entry.contentStretch);
                                 // Restore the source mapping before applying a fresh
                                 // delta; never accumulate edits over previous frames.
-                                member->repeatContent = true;
+                                member->repeatContent = clipDragMode == ClipDragMode::Stretch ? entry.repeatContent : true;
                                 const auto operation = clipDragMode == ClipDragMode::Repeat ? ofxOceanodeTimelineEndEdit::Repeat
                                     : clipDragMode == ClipDragMode::Stretch ? ofxOceanodeTimelineEndEdit::Stretch : ofxOceanodeTimelineEndEdit::Trim;
                                 timeline.resizeClipEnd(scope(timeline), entry.trackId, entry.clipId, newMemberDuration, operation);
@@ -4494,7 +4557,7 @@ void ofxOceanodeTimelineController::draw() {
                         *clip = dragInitialClip;
                         timeline.reverseClip(scope(timeline), draggingTrackId, draggingClipId);
                         timeline.setClipTiming(scope(timeline), draggingTrackId, draggingClipId, newStart, clip->durationBeats);
-                        clip->repeatContent = true;
+                        clip->repeatContent = dragInitialClip.repeatContent;
                         clip->contentStretch = std::max(1.0 / 1024.0, dragInitialContentStretch);
                         timeline.resizeClipEnd(scope(timeline), draggingTrackId, draggingClipId,
                                                std::max(1.0 / kPPQ, dragInitialClip.startBeat - newStart),
@@ -4504,7 +4567,7 @@ void ofxOceanodeTimelineController::draw() {
                         if(clipDragMode == ClipDragMode::Stretch) *clip = dragInitialClip;
                         clip->contentDurationBeats = dragInitialContentDuration;
                         clip->contentStretch = std::max(1.0 / 1024.0, dragInitialContentStretch);
-                        clip->repeatContent = true;
+                        clip->repeatContent = clipDragMode == ClipDragMode::Stretch ? dragInitialClip.repeatContent : true;
                         const auto operation = clipDragMode == ClipDragMode::Repeat ? ofxOceanodeTimelineEndEdit::Repeat
                             : clipDragMode == ClipDragMode::Stretch ? ofxOceanodeTimelineEndEdit::Stretch : ofxOceanodeTimelineEndEdit::Trim;
                         timeline.resizeClipEnd(scope(timeline), draggingTrackId, draggingClipId, duration, operation);
