@@ -1514,6 +1514,13 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
         const double beat = placement.map.toSequence(beatPosition);
         const auto copyContext = placement.contextFrom(context);
         const uint64_t copyEpoch = copyContext.epoch();
+        // A lane's retrigger gap is in main-timeline beats; in this
+        // sequence's beats it is that over the map's ratio (a macro clip at
+        // double tempo keeps the same gap in time), then in its clip's source.
+        auto retriggerGap = [&](const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                                const ofxOceanodeTimelineClip& clip) {
+            return laneRetriggerGapBeats(track, lane) / placement.map.ratio * sourcePerTimelineBeat(clip);
+        };
         for(const auto& track : placement.sequence->tracks) {
             if(!isTrackAudible(track)) continue;
             contributionTrack = &track;
@@ -1598,7 +1605,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                               lane.type == ofxOceanodeTimelineLaneType::MultiSlider) {
                         std::string value;
                         const bool hasValue = lane.type == ofxOceanodeTimelineLaneType::Step
-                            ? evaluateStepSequencer(lane, sourceBeat, value, laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
+                            ? evaluateStepSequencer(lane, sourceBeat, value, retriggerGap(track, lane, clip),
                                                     ofxOceanodeTimelineClipTime::cycleIndex(clip, beat),
                                                     ofxOceanodeTimelineClipTime::sourceDuration(clip), copyEpoch)
                             : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
@@ -1644,7 +1651,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 double blockStart = 0.0;
                                 const bool active = row < static_cast<int>(lane.multiGateRows.size()) &&
                                     evaluateMultiGateRow(lane.multiGateRows[row], sourceBeat,
-                                                         laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip),
+                                                         retriggerGap(track, lane, clip),
                                                          clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0,
                                                          &velocity, &blockStart);
                                 components.push_back(!active ? "0" : velocity >= 1.0f ? "1" : automationText::formatFloat(velocity));
@@ -1679,7 +1686,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                         // closes so a tail keeps its tuning).
                         const int64_t repeat = ofxOceanodeTimelineClipTime::cycleIndex(clip, beat);
                         const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
-                        const double gap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
+                        const double gap = retriggerGap(track, lane, clip);
                         int instrumentVoices = 0;
                         if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                             const auto it = trackIt->second.drumOutputWidth.find(&lane);
@@ -1792,7 +1799,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                             if(played.mutated) playedNotes = &played.lane.pianoNotes;
                         }
                         const auto& notes = *playedNotes;
-                        const double noteGap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
+                        const double noteGap = retriggerGap(track, lane, clip);
                         // Where a note's gate opens: after the retrigger gap when
                         // its slot was still busy, so the instrument sees an edge.
                         auto openAt = [&](size_t n) {
@@ -2209,6 +2216,13 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
         if(std::isfinite(placement.windowTo)) addTimelineBeat(placement.windowTo);
         const auto copyContext = placement.contextFrom(context);
         const uint64_t copyEpoch = copyContext.epoch();
+        // A lane's retrigger gap is in main-timeline beats; in this
+        // sequence's beats it is that over the map's ratio (a macro clip at
+        // double tempo keeps the same gap in time), then in its clip's source.
+        auto retriggerGap = [&](const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                                const ofxOceanodeTimelineClip& clip) {
+            return laneRetriggerGapBeats(track, lane) / placement.map.ratio * sourcePerTimelineBeat(clip);
+        };
         for(const auto& track : placement.sequence->tracks) {
             if(track.isWaveTrack || !isTrackAudible(track)) continue; // audio, not automation
             for(const auto& clip : track.clips) {
@@ -2312,7 +2326,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                             const double start = std::max(0.0, step.startBeat);
                                             const double duration = step.durationBeats > kEpsilon ? step.durationBeats : cellLength;
                                             addSourceBeat(base + start);
-                                            addSourceBeat(base + start + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                            addSourceBeat(base + start + retriggerGap(track, lane, clip));
                                             addSourceBeat(base + start + duration);
                                         }
                                     }
@@ -2340,7 +2354,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                     for(const auto& row : lane.multiGateRows)
                                         for(const auto& region : row) {
                                             addSourceBeat(region.startBeat);
-                                            addSourceBeat(region.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                            addSourceBeat(region.startBeat + retriggerGap(track, lane, clip));
                                             addSourceBeat(region.end());
                                         }
                                     break;
@@ -2348,7 +2362,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                 case ofxOceanodeTimelineLaneType::DrumGrid: {
                                     // Every hit: its start (pitch), its gate opening
                                     // (after the retrigger gap) and its close.
-                                    const double gap = laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip);
+                                    const double gap = retriggerGap(track, lane, clip);
                                     std::vector<ofxOceanodeTimelineDrumHit> hits;
                                     for(const auto& row : lane.drumRows) {
                                         hits.clear();
@@ -2383,7 +2397,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                     for(size_t n = 0; n < notes->size(); ++n) {
                                         const auto& note = (*notes)[n];
                                         addSourceBeat(note.startBeat);
-                                        addSourceBeat(note.startBeat + laneRetriggerGapBeats(track, lane) * sourcePerTimelineBeat(clip));
+                                        addSourceBeat(note.startBeat + retriggerGap(track, lane, clip));
                                         addSourceBeat(pianoNoteEnd(note));
                                         if(voicing != nullptr) addSourceBeat(voicing->end[n]);
                                     }

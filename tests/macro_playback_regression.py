@@ -15,11 +15,12 @@ native.fixture.CASES = r'''
 class Probe : public ofxOceanodeNodeModel {
 public:
     Probe() : ofxOceanodeNodeModel("Probe") {}
-    ofParameter<float> level, other, gate;
+    ofParameter<float> level, other, gate, trig;
     void setup() override {
         addParameter(level.set("Level", -1, -1, 4));
         addParameter(other.set("Other", -1, -1, 4));
         addParameter(gate.set("Gate", 0, 0, 1));
+        addParameter(trig.set("Trig", 0, 0, 1));
     }
 };
 static int failures = 0;
@@ -251,6 +252,50 @@ int main(int, char**) {
     at(2.0); at(8.5);
     check(snapshot.get() == 2, "...and again when the clip starts again");
 
+    // Retrigger gap at another tempo: two back-to-back gate steps close for
+    // the same time before the second one, whatever tempo the clip plays at.
+    {
+        auto stepPair = [&](ofxOceanodeTimelineSequence& sequence, const std::string& track, const std::string& binding,
+                            double start) {
+            const auto clip = model.createClip(sequence, track, "Pair", start, 4);
+            const auto laneId = model.createLane(sequence, track, clip, "Trig", ofxOceanodeTimelineLaneType::Step);
+            model.addBindingToLane(sequence, track, clip, laneId, binding);
+            auto* lane = model.getLane(sequence, track, clip, laneId);
+            lane->beatsPerStep = 0.5; lane->stepCount = 8;
+            lane->step.steps = {{0.0, 0.0, "1"}, {0.5, 0.0, "1"}};
+            return clip;
+        };
+        // Reference: the same pair on the main timeline, at beat 40.
+        auto& refNode = owner->createNode(std::make_unique<Probe>(), 7);
+        auto& ref = static_cast<Probe&>(refNode.getNodeModel());
+        const auto rt = model.createTrack("Reference");
+        const auto rb = model.addBinding(rt, static_cast<ofxOceanodeAbstractParameter&>(refNode.getParameters().get("Trig")));
+        stepPair(model.getMainSequence(), rt, rb, 40.0);
+        const auto tt = model.createTrack(*pattern, "Trig");
+        const auto tb = model.addBinding(*pattern, tt, static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Trig")));
+        stepPair(*pattern, tt, tb, 0.0);
+        // Closed time (main beats) around a step boundary.
+        auto closed = [&](ofParameter<float>& target, double boundary) {
+            double off = 0.0;
+            constexpr double step = 0.0005;
+            for(double beat = boundary - 0.05; beat < boundary + 0.1; beat += step) {
+                at(beat);
+                if(target.get() < 0.5f) off += step;
+            }
+            return off;
+        };
+        const double reference = closed(ref.trig, 40.5);
+        check(reference > 0.002, "The reference pair retriggers with a gap");
+        for(double tempo : {2.0, 0.5}) {
+            model.getClip(mt, mc)->contentStretch = 1.0 / tempo; // tempo ratio: the macro timeline plays this much faster
+            model.setClipContentOffset(mt, mc, 0.0);
+            const double gap = closed(probe.trig, 8.0 + 0.5 / tempo);
+            check(std::abs(gap - reference) < 0.0015, "Macro clip at tempo x" + ofToString(tempo) + ": gap " + ofToString(gap) +
+                  " beats, as on the main timeline (" + ofToString(reference) + ")");
+        }
+        model.getClip(mt, mc)->contentStretch = 1.0;
+    }
+
     // The macro goes away: its timeline stops playing, nothing dangles.
     owner->getTransport()->stop();
     inside.reset();
@@ -261,7 +306,7 @@ int main(int, char**) {
     model.update(); model.applyAutomation();
     if(failures > 0) return 1;
     std::cout << "Macro playback passed: placement, repeats, tempo, content offset, main layer (Add, Replace), "
-                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, playhead in the macro view, reversed macro clip, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
+                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, playhead in the macro view, reversed macro clip, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, retrigger gap at another tempo, macro removed.\n";
 }
 '''
 
