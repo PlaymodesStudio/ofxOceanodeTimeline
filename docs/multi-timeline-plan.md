@@ -28,6 +28,7 @@ exact as today, and a single timeline at one tempo behaves exactly as now.
 | **Derived transport** | An `ofxOceanodeTransport` that reports a player's beat, BPM, play state and generation instead of owning a clock. Containers inside a free timeline's canvas hand it out from `getTransport()`, so nodes follow their own timeline without changes. |
 | **Timeline clip** | Today's macro clip, generalized: it places any eligible timeline in another, with stretch, offset, repeat and reverse. |
 | **Instance** | One sounding copy of a timeline: a free player, or one repeat of one timeline clip. Instances roll probability and mutation independently (`instanceKey`). |
+| **Time source** | What a transport-synced node follows, chosen in its inspector: Free, Auto (the canvas's default timeline), Clock, or a specific player by name. It replaces the "Sync To Transport" checkbox. |
 
 ## Decisions (defaults; confirm the open ones before phase 3)
 
@@ -58,6 +59,28 @@ Settled in discussion:
   clips is phase 6.
 - **Players belong to the owner instance, not the sequence.** Library-macro
   copies share one sequence and each has its own player.
+- **Transport-synced nodes choose their Time source.** Phasor, Counter, Ramp,
+  `beatTransport`, `lfoTrack` and the SuperCollider boxes get an inspector
+  dropdown in place of "Sync To Transport":
+  - Free (unsynced, as today with sync off);
+  - Auto (the canvas's default timeline);
+  - Clock (always running);
+  - **This canvas:** each of its timelines by name;
+  - **Other canvases:** free players inside macros.
+
+  Only players can be selected. A timeline that only plays as clips is
+  listed greyed out ("only plays as clips"). The choice is saved by id
+  (canvas path plus timeline id), so renames don't break it. A deleted
+  target shows "missing" and the node stays stopped; it never jumps to
+  another timeline. Old patches load sync off as Free and sync on as Auto.
+- **Each canvas has a default timeline,** which Auto follows: the main
+  timeline at the root, the first one in a macro, changeable in the timeline
+  list.
+- **`beatTransport` controls the timeline it follows.** It gains Play, Stop,
+  Seek and Quantize inputs that act on its selected Time source, so a node
+  on one canvas can launch a timeline on another. This settles how a free
+  timeline is controlled from the patch; the transport bar in that
+  timeline's window does the same.
 
 Open (proposed default in brackets):
 
@@ -65,10 +88,18 @@ Open (proposed default in brackets):
    over inner, as now (main over macro copies); then an explicit per-timeline
    priority; then the instance that started later. All three are decidable
    for future instants, which the scheduler needs.]
-2. **How a free timeline is controlled from the patch.** [Both: the transport
-   bar in that timeline's window, and the existing `beatTransport` node
-   extended with Play, Stop, Seek and Quantize inputs, acting on the player of
-   the canvas it sits in.]
+2. **What Auto means inside a placed macro.** A placed macro's canvas can
+   hand out a clip-local transport:
+   - beat = the clip's local beat;
+   - BPM = the parent's BPM ÷ the clip's stretch;
+   - playing while the clip plays;
+   - a new generation at each clip start.
+
+   A phasor inside a fill macro would then restart and stretch with each
+   clip. When clips playing the macro overlap, it falls back to the parent.
+   Today these nodes follow the root transport, so this changes behaviour.
+   [A per-macro setting "nodes follow: parent / clip", defaulting to parent
+   for existing sessions and clip for new macros.]
 3. **Where a macro instance's mode (Placed or Free), tempo and quantize are
    saved.** [In the macro instance's own preset data via the extension hooks,
    not in the shared `sequence.json`.]
@@ -188,7 +219,25 @@ with `docs/architecture.md` updated. Phases 1 and 2 must not change behaviour.
    frame.
 7. **`midiClockNode`** drives the root clock (add `getRootTransport()` or
    similar), never a derived transport.
-8. **Generation per player.** Scheduled events carry the generation of the
+8. **Seconds of play per player.** Counter and Ramp read `.seconds`, not the
+   beat. Each derived transport keeps its own seconds with today's rules: set
+   from the beat on seeks, stops and loop wraps, accumulating real time while
+   that player plays, and continuous through its own tempo changes. The Clock
+   time source exposes raw clock seconds.
+9. **Transport registry and the Time source helper.**
+   - **Registry.** The core keeps a registry of selectable transports:
+     stable id (canvas path plus timeline id), label, canvas group, a
+     "selectable" flag (players only), and a weak pointer. Each entry also
+     carries its time signature and loop range. The core knows nothing about
+     timelines; the timeline addon adds and removes entries.
+   - **Helper.** In `ofxOceanodeNodeModel`: a node enables a "Time source"
+     inspector dropdown with one call. It uses the existing dynamic dropdown
+     support in `ofxOceanodeParameter.h`. `getTransportState()` and
+     `getFrameTransportState()` then resolve to the selected entry, so node
+     code that reads them is unchanged.
+   - **Old patches.** The helper also loads the old "Sync To Transport" bool
+     as Free or Auto.
+10. **Generation per player.** Scheduled events carry the generation of the
    player that produced them. Check how `ofxOceanodeSuperCollider`'s handlers
    use `generation` and make them compare against the right player.
 
@@ -198,6 +247,10 @@ with `docs/architecture.md` updated. Phases 1 and 2 must not change behaviour.
 - two derived players at 120/120 and 120/90 keep exact phase after long runs
   (no drift);
 - stopping one leaves the other's generation untouched;
+- a derived transport's seconds of play follow its own seeks, stops and
+  tempo;
+- the Time source helper resolves Auto, Clock and a named entry, falls back
+  to "missing" when the target goes away, and loads the old bool;
 - frame-step and external modes behave the same.
 
 **Done when:** all existing core and SuperCollider-backed tests pass, and a
@@ -267,8 +320,26 @@ derived transport works standalone.
    - The canvas transport bar (`ofxOceanodeCanvas.cpp:998`) already reads
      `container->getTransport()`, so in a free macro's canvas it shows that
      player for free.
-   - The `beatTransport` node gains its control inputs (open decision 2).
-6. **Wave tracks per player** (3b). Give the audio provider a playhead per
+   - The `beatTransport` node gains Play, Stop, Seek and Quantize inputs
+     acting on its Time source.
+6. **Transport-synced nodes switch to the Time source helper:**
+   - Phasor (`phasor.{h,cpp}`: its sync mode, cycle output and loop-start
+     alignment);
+   - Counter and Ramp (`phasor.h`);
+   - `beatTransport`, which also reads beats-per-bar and loop from the
+     selected entry instead of the main timeline (`beatTransport.cpp:31`
+     uses `extension->getBeatsPerBar()` today);
+   - `lfoTrack`;
+   - the SuperCollider boxes (metro, rhythm, arpeggiator, chord, euclidean,
+     grain).
+
+   Check whether the audio-rate phasor (`basePhasor` in
+   `ofxOceanodeTime`'s audio thread) extrapolates with a BPM between frames.
+   If it does, it must use the selected entry's BPM.
+7. **Clip-local transport for placed macros**, as open decision 2 settles.
+   The timeline addon registers it with the macro's canvas when the macro
+   is in "nodes follow: clip" mode.
+8. **Wave tracks per player** (3b). Give the audio provider a playhead per
    player, or limit Wave tracks to root and placed timelines until then.
 
 **Tests:**
@@ -278,6 +349,11 @@ derived transport works standalone.
 - corrections stay isolated to the player that changed;
 - conflict ordering on a shared path;
 - `lfoTrack` and a phasor inside a free macro follow its player;
+- a phasor on the root canvas set to another timeline follows it, and stops
+  when that timeline stops;
+- `beatTransport` launches a timeline on another canvas;
+- a phasor inside a placed macro in "clip" mode restarts and stretches with
+  each clip;
 - extend `macro_playback_regression.py`, `schedule_correction_regression.py`
   and `scheduling_jitter_regression.py`.
 
@@ -305,6 +381,35 @@ its own tempo, with the root timeline playing or stopped.
    canvas.
 6. **UI.** A timeline list per canvas (new, rename, duplicate, delete, play
    free), and dragging a timeline onto a track to create a clip.
+7. **Choose the timeline first, then the track.** Every "add to timeline"
+   action asks which timeline before it asks which track:
+   - **Parameter menu** (`drawParameterMenu` in
+     `src/ofxOceanodeTimelineAddon.cpp`): "Add to Timeline" opens a list of
+     eligible timelines. These are every timeline owned by the parameter's
+     canvas or any ancestor canvas, from the root down to the innermost
+     canvas, grouped by canvas and labelled with the canvas path. Each one
+     opens its tracks: New Track…, then the existing tracks, skipping
+     folders, Wave tracks and timeline tracks, with already-bound ones
+     marked. Today the menu offers only the main timeline and the immediate
+     enclosing macro's timeline, and misses ancestor macros in between.
+   - **Default:** the timeline of the focused timeline window, if it is
+     eligible, is listed first and highlighted. If only one timeline is
+     eligible, skip the timeline level and keep today's one-click flow.
+   - **The binding path is written relative to the chosen timeline's owner
+     canvas.** After adding, open that timeline in its window (or focus the
+     window already showing it).
+   - **Piano roll and instrument setup:** the dialog
+     (`requestNoteGroupSetup`) starts with a timeline selector, using the
+     same eligibility rule.
+   - **Macro / timeline tracks:** "Add to Timeline as Macro Track" asks
+     which host timeline. Eligible hosts are the timelines of the macro's
+     parent canvas and its ancestors, with the cycle check applied.
+   - **"Remove from Timeline"** searches every eligible timeline, not just
+     the main one, and labels each entry "Timeline ▸ Track".
+8. **Several timelines in the Time source dropdown.** Each canvas marks one
+   timeline as its default, and Auto follows it. Every named timeline on a
+   canvas registers as a Time source entry while it is a player. A timeline
+   that only plays as clips is listed greyed out.
 
 **Tests:**
 - two timelines on one canvas playing independently;
