@@ -586,4 +586,4 @@ if __name__ == "__main__":
                      if path.name != "ofxOceanodeTimelineEditorView.cpp")
     sources += [imgui / name for name in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp")]
     fixture.main(cases=CASES, extra_sources=sources,
-                 extra_includes=[imgui, of_root() / "addons/ofxImGui/src"])
+                 extra_includes=[imgui, of_root() / "addons/ofxImGui/src", of_root() / "addons/ofxOceanode/src/Nodes"])
