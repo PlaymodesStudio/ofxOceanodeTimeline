@@ -2536,7 +2536,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(labelRight - labelLeft > 39) {
                     std::string label = clip.name + (clip.muted ? " [Muted]" : "");
                     if(clip.chance < 1.0f) label += " " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%";
-                    label += track.isMacroTrack() ? std::string(" [macro timeline]")
+                    label += track.isMacroTrack() ? std::string(clip.reversed ? " [macro timeline, reversed]" : " [macro timeline]")
                                                   : " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
                     dl->PushClipRect(ImVec2(left + 4.0f, min.y + 3.0f), ImVec2(labelRight, max.y - 3.0f), true);
                     dl->AddText(ImVec2(labelLeft, min.y + 6), IM_COL32(245, 250, 255, 255), label.c_str());
@@ -2575,8 +2575,13 @@ void ofxOceanodeTimelineController::draw() {
                 for(size_t r = 0; r < rows.size(); ++r) {
                     const float y1 = top + r * rowHeight, y2 = y1 + std::max(1.0f, rowHeight - 1.0f);
                     for(const auto& innerClip : rows[r]->clips) {
-                        const double from = innerClip.startBeat, to = std::min(content, innerClip.startBeat + innerClip.durationBeats);
+                        double from = innerClip.startBeat, to = std::min(content, innerClip.startBeat + innerClip.durationBeats);
                         if(from >= content) continue;
+                        if(clip.reversed) { // played backwards: mirrored in the content
+                            const double mirroredFrom = std::max(0.0, content - to);
+                            to = content - from;
+                            from = mirroredFrom;
+                        }
                         for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
                             const float a = min.x + beatOffset(sourceToTimelineBeat(clip, from, cycle));
                             const float b = min.x + beatOffset(sourceToTimelineBeat(clip, to, cycle));
@@ -2832,6 +2837,7 @@ void ofxOceanodeTimelineController::draw() {
                     dragOffsetBeats = clickedBeat - clip.startBeat;
                     dragInitialContentDuration = clip.contentDurationBeats;
                     dragInitialContentStretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+                    dragInitialClip = clip;
                     dragTimelineOriginX = min.x;
 
                     // A clip that's grouped, or that's part of a multi-
@@ -2893,6 +2899,14 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(scope(timeline), track.id, clip.id, !clip.muted);
+            if(!clip.isLfo && !track.isWaveTrack) { // Wave clips have their own Reverse
+                if(ImGui::MenuItem("Reverse", nullptr, track.isMacroTrack() && clip.reversed))
+                    timeline.reverseClip(scope(timeline), track.id, clip.id);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip(track.isMacroTrack()
+                        ? "Play the macro's timeline backwards in this clip, at the same speed.\nThe macro's timeline itself stays as written."
+                        : "Play this clip backwards at the same speed: its content is mirrored in place.\nCmd+drag the right edge back past the start also reverses it.");
+            }
             if(ImGui::MenuItem("Rename clip")) {
                 requestClipRename(track.id, clip);
                 ImGui::CloseCurrentPopup();
@@ -4464,7 +4478,22 @@ void ofxOceanodeTimelineController::draw() {
                                 timeline.resizeClipEnd(scope(timeline), entry.trackId, entry.clipId, newMemberDuration, operation);
                             }
                         }
+                    } else if(clipDragMode == ClipDragMode::Stretch && !dragInitialClip.isLfo &&
+                              snapBeat(mouseBeat) < dragInitialClip.startBeat - 1.0 / kPPQ) {
+                        // Stretched back past its start: the clip flips and
+                        // plays backwards, stretched over what is left of its start.
+                        const double newStart = std::max(0.0, snapBeat(mouseBeat));
+                        *clip = dragInitialClip;
+                        timeline.reverseClip(scope(timeline), draggingTrackId, draggingClipId);
+                        timeline.setClipTiming(scope(timeline), draggingTrackId, draggingClipId, newStart, clip->durationBeats);
+                        clip->repeatContent = true;
+                        clip->contentStretch = std::max(1.0 / 1024.0, dragInitialContentStretch);
+                        timeline.resizeClipEnd(scope(timeline), draggingTrackId, draggingClipId,
+                                               std::max(1.0 / kPPQ, dragInitialClip.startBeat - newStart),
+                                               ofxOceanodeTimelineEndEdit::Stretch);
                     } else {
+                        // Back from a flip: the clip as it was.
+                        if(clipDragMode == ClipDragMode::Stretch) *clip = dragInitialClip;
                         clip->contentDurationBeats = dragInitialContentDuration;
                         clip->contentStretch = std::max(1.0 / 1024.0, dragInitialContentStretch);
                         clip->repeatContent = true;

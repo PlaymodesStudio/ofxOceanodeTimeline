@@ -410,6 +410,29 @@ int main() {
         if(tool==1) { assert(!clip->repeatContent); assert(clip->contentDurationBeats>4.5); }
         if(tool==2) { assert(!clip->repeatContent); assert(clip->contentDurationBeats==4); assert(clip->contentStretch>1); }
     }
+    // Cmd+drag (stretch) of the right edge back past the start: the clip
+    // flips to the left of its start and plays backwards, stretched there.
+    {
+        // (beats 2-4: clear of the LFO clip on this track, which would take the click)
+        auto* clip=model.getClip(t,c); clip->startBeat=2; clip->durationBeats=2; clip->contentDurationBeats=2;
+        clip->contentStretch=1; clip->repeatContent=true; clip->contentOffsetBeats=0;
+        const auto curveBefore=*model.getLane(t,c,curve);
+        ui.endEditTool=2; ui.snapEnabled=false; // the Stretch tool (Cmd+drag picks it too)
+        for(int settle=0;settle<25;++settle) frame();
+        const auto rect=*std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==c;});
+        const float beatPixels=(rect.x2-rect.x1)/2.0f;
+        const float x=rect.x2-2, y=(rect.y1+rect.y2)*0.5f;
+        frame(1250,ImVec2(x,y),false); frame(1250,ImVec2(x,y),true);
+        for(int i=1;i<=6;++i) frame(1250,ImVec2(x+(rect.x1-beatPixels-x)*i/6.0f,y),true); // to one beat before the start
+        frame(1250,ImVec2(rect.x1-beatPixels,y),false); frame();
+        clip=model.getClip(t,c);
+        assert(std::abs(clip->startBeat-1.0)<0.05 && std::abs(clip->durationBeats-1.0)<0.05); // left of the old start
+        const auto& curveAfter=*model.getLane(t,c,curve);
+        const float endValue=ofxOceanodeTimelineCurve::valueAtBeat(curveBefore.curvePoints,curveBefore.curveTensions,curveBefore.curveInterpolation,2.0,0.0f);
+        assert(std::abs(curveAfter.curvePoints.front().value-endValue)<1e-4f); // starts where it ended: backwards
+        assert(model.reverseClip(t,c)); // and back, for the tests below
+        clip=model.getClip(t,c); clip->startBeat=0; clip->durationBeats=4; clip->contentDurationBeats=4;
+    }
     // A one-shot's effective mapping is derived from its length, even when
     // an external producer left an old stretch field. Drag and numeric edits
     // must both preserve that effective mapping when enabling repeats.
@@ -921,7 +944,7 @@ int main() {
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, track heights (all at once, Wave alone), macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, track heights (all at once, Wave alone), macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, Cmd+drag reverse, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 

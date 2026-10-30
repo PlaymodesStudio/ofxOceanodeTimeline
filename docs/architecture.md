@@ -159,6 +159,19 @@ offset into the lanes (`bakeContentOffset`), and arrangement previews draw
 `clipAsPlayed()`, so nothing draws across the wrap. The Tempo field is the
 same setting as Stretch, shown as a speed ratio.
 
+`reverseClip` plays a clip backwards at the same speed, in place. Automation
+clips get their content rewritten as its time-mirror (`mirrorClipContent`:
+curves with sigmoid bends mirrored exactly and Log / Exp segments laid out
+as fitted pieces, held values shifted to the segment they mirror, events
+and gates mirrored, step, slider and drum patterns mirrored, or first
+unrolled when the content holds a partial pattern) with the content offset
+at which the mirror plays exactly what the clip played
+(`reversedContentOffset`), so playback, scheduling and editors need nothing
+new. A macro clip keeps its macro's shared timeline and sets `reversed`:
+evaluation keeps a mirrored copy of each played macro timeline and the
+placement reads it. Wave clips toggle Reverse. A Stretch drag of the right
+edge back past the start reverses the clip from its drag-start state.
+
 `mergeClips` joins two clips of one track into one plain clip (stretch 1, no
 repeat or offset): each clip's lanes are laid out as they played (repeats
 unrolled, stretch applied, pattern lanes as one pattern over the whole clip),

@@ -169,13 +169,6 @@ ofxOceanodeContainer* ofxOceanodeTimelineManager::findMacroContainer(const ofxOc
     return containerWithCanvas(*container, canvas);
 }
 
-double ofxOceanodeTimelineManager::macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const {
-    double end = 0.0;
-    for(const auto& track : macroSequence.tracks)
-        for(const auto& clip : track.clips) end = std::max(end, clip.startBeat + clip.durationBeats);
-    return std::max(getBeatsPerBar(), end);
-}
-
 std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                         double startBeat, double durationBeats) {
     const auto* track = getTrack(sequence, trackId);

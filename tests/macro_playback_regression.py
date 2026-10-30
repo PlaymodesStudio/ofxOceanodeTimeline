@@ -94,6 +94,16 @@ int main(int, char**) {
     check(playheadIn(13.5, macroBeat) && std::abs(macroBeat - 1.5) < 1e-6, "Macro view: the second repeat starts over");
     check(!playheadIn(16.5, macroBeat), "Macro view: no playhead after the clip");
 
+    // Reversed: the clip plays the macro's timeline backwards at the same
+    // speed (what it played at the mirror beat), the timeline as written.
+    check(model.reverseClip(mt, mc) && model.getClip(mt, mc)->reversed, "Macro clip reversed");
+    check(near(at(9.0), expectedLevel(0.75)), "Reversed: beat 9 plays what beat 15 did");
+    check(near(at(13.5), expectedLevel(0.625)), "...and 13.5 what 10.5 did");
+    check(model.getLane(*pattern, pt, pc, pl)->curvePoints.front().value == 0.0f, "The macro's timeline stays as written");
+    check(playheadIn(9.0, macroBeat) && std::abs(macroBeat - 3.0) < 1e-6, "Macro view: the playhead runs backwards");
+    check(model.reverseClip(mt, mc) && !model.getClip(mt, mc)->reversed, "Reversed twice: forwards");
+    check(near(at(9.0), expectedLevel(0.25)), "...plays as before");
+
     // Tempo: the macro timeline at half speed (stretch 2): one beat in is an eighth.
     auto* clip = model.getClip(mt, mc);
     clip->contentStretch = 2.0;
@@ -251,7 +261,7 @@ int main(int, char**) {
     model.update(); model.applyAutomation();
     if(failures > 0) return 1;
     std::cout << "Macro playback passed: placement, repeats, tempo, content offset, main layer (Add, Replace), "
-                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, playhead in the macro view, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
+                 "mute, solo per sequence, live edits, inspector, a macro inside a macro, playhead in the macro view, reversed macro clip, rest values, gating (pre-roll, tail, loop, no hand binding), snapshot per clip, macro removed.\n";
 }
 '''
 

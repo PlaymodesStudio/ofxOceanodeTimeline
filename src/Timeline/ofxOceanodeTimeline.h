@@ -643,6 +643,10 @@ struct ofxOceanodeTimelineClip {
     // tempo ratio, offset = which section plays. The macro snapshot recalled
     // when it starts (-1: none).
     int macroSnapshot = -1;
+    // A macro clip playing its macro's timeline backwards (the timeline
+    // itself is shared and stays as written). Other clips reverse by
+    // rewriting their content (reverseClip); Wave clips use waveReverse.
+    bool reversed = false;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -1131,6 +1135,12 @@ public:
     // clip playing that macro there (repeat, tempo, offset). False when no
     // clip plays it at the playhead (or its macro track is silent).
     bool macroPlayheadBeat(const ofxOceanodeContainer& macroContainer, double& beat);
+
+    // Plays a clip backwards at the same speed, in place: automation clips
+    // get their content mirrored, macro clips play their macro's timeline
+    // backwards, Wave clips toggle Reverse. LFO clips are refused.
+    bool reverseClip(const std::string& trackId, const std::string& clipId);
+    bool reverseClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
 
     // ---- Encapsulation (nodes moved into a new macro) ----
     // Paths old -> new, absolute: every timeline (main and each macro's)
@@ -1749,6 +1759,10 @@ private:
         std::string canvas; // absolute canvas id
         std::unique_ptr<ofxOceanodeTimelineSequence> sequence;
         float outerLatencyMs = 0.0f; // the macro tracks' around it, added up
+        // The copy reversed macro clips play: the timeline mirrored over
+        // mirrorLength (one pass of it).
+        bool reversed = false;
+        double mirrorLength = 0.0;
     };
     std::vector<PlayedMacro> playedMacros;
     // A macro timeline the main timeline reaches: through the macro track
@@ -1786,7 +1800,10 @@ private:
     // macro track or a skipped clip leave nothing open.
     std::unordered_map<const ofxOceanodeTimelineParameterBinding*, std::string> restWhenInactiveCache;
     void rebuildPlayedMacros();
-    const PlayedMacro* playedMacroAt(const std::string& canvas) const;
+    const PlayedMacro* playedMacroAt(const std::string& canvas, bool reversed = false) const;
+    const PlayedMacro* playedMacroOf(const ofxOceanodeTimelineSequence& sequence) const;
+    // A sequence as reversed macro clips play it: clips mirrored over length.
+    void mirrorSequence(ofxOceanodeTimelineSequence& sequence, double length) const;
     // The played copies, then the main timeline: what evaluation walks.
     std::vector<ofxOceanodeTimelineSequence*> evaluatedSequences() const;
     // The sequence a track belongs to (main, a played copy or a macro's own).
@@ -2077,6 +2094,12 @@ private:
     // Rewrites the lanes so the content starts where it plays from, and
     // clears contentOffsetBeats: before edits that cut or re-lay content.
     void bakeContentOffset(ofxOceanodeTimelineClip& clip) const;
+    // Rewrites a clip's lanes as their time-mirror, so the clip plays what it
+    // played backwards (same start, length, repeat and tempo).
+    void mirrorClipContent(ofxOceanodeTimelineClip& clip) const;
+    // The content offset at which a clip played backwards over mirrored
+    // content plays exactly what it played forwards at `offset`.
+    double reversedContentOffset(const ofxOceanodeTimelineClip& clip, double offset) const;
     // Keep the transport-side range in lockstep with edits made by the UI.
     // Waiting for the next automation pass leaves a frame in which the icon
     // says loop is on but the playhead can cross the old end point.

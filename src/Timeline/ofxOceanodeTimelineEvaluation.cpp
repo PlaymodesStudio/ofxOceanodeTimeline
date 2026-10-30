@@ -608,8 +608,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
         const auto outerContext = outer.contextFrom(context);
         for(const auto& track : outer.sequence->tracks) {
             if(!track.isMacroTrack() || !isTrackAudible(track)) continue;
-            const auto* played = playedMacroAt(track.macroCanvas);
-            if(played == nullptr) continue;
+            if(playedMacroAt(track.macroCanvas) == nullptr) continue;
             const size_t firstOfTrack = result.size();
             double latestStart = -std::numeric_limits<double>::infinity();
             for(const auto& clip : track.clips) {
@@ -631,6 +630,12 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
                 const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 const double cycle = clip.repeatContent ? ofxOceanodeTimelineClipTime::cycleDuration(clip) : end - start;
+                // A reversed clip plays the mirrored copy, its content read
+                // from the end of this clip's content (sequence beat z here is
+                // mirrorLength - content + z there).
+                const auto* played = playedMacroAt(track.macroCanvas, clip.reversed);
+                if(played == nullptr) continue;
+                const double mirrorShift = clip.reversed ? played->mirrorLength - content : 0.0;
                 const double windowStart = std::max(from, start), windowEnd = std::min(to, end);
                 const int64_t firstCycle = clip.repeatContent
                     ? static_cast<int64_t>(std::floor((windowStart - start) / cycle + 1e-9)) : 0;
@@ -651,7 +656,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                                   : (segmentTo < from - kEpsilon || segmentFrom > to + kEpsilon)) continue;
                         PlayedSequence placement;
                         placement.sequence = played->sequence.get();
-                        placement.map = outer.map.then({segments[s][0], stretch});
+                        placement.map = outer.map.then({segments[s][0] - mirrorShift * stretch, stretch});
                         placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
                         placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
                         placement.resolver = resolverFor(*placement.sequence);
@@ -683,6 +688,7 @@ bool ofxOceanodeTimelineManager::macroPlayheadBeat(const ofxOceanodeContainer& m
         for(const auto& played : playedMacros)
             if(played.sequence.get() == placement.sequence && played.macroContainer == &macroContainer) {
                 beat = placement.map.toSequence(playhead);
+                if(played.reversed) beat = played.mirrorLength - beat; // back in the timeline as written
                 return true;
             }
     return false;
@@ -797,6 +803,7 @@ void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportSta
 // finds them through the macro nodes).
 void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
     playedMacros.clear();
+    std::vector<size_t> forwardIndex; // per source, its forward copy
     for(const auto& source : collectMacroSources()) {
         PlayedMacro played;
         played.macroContainer = source.macroContainer;
@@ -819,15 +826,52 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
                     lane.targetProbability = std::move(moved);
                 }
         }
-        const float outer = source.parent < 0 ? 0.0f : playedMacros[static_cast<size_t>(source.parent)].outerLatencyMs;
-        const auto& parent = source.parent < 0 ? mainSequence : *playedMacros[static_cast<size_t>(source.parent)].sequence;
+        const auto* parentCopy = source.parent < 0 ? nullptr : &playedMacros[forwardIndex[static_cast<size_t>(source.parent)]];
+        const float outer = parentCopy == nullptr ? 0.0f : parentCopy->outerLatencyMs;
+        const auto& parent = parentCopy == nullptr ? mainSequence : *parentCopy->sequence;
         played.outerLatencyMs = outer + trackLatencyWithFolders(parent.tracks[source.trackIndex]);
+        // And mirrored, for reversed macro clips.
+        PlayedMacro mirrored;
+        mirrored.macroContainer = played.macroContainer;
+        mirrored.canvas = played.canvas;
+        mirrored.outerLatencyMs = played.outerLatencyMs;
+        mirrored.reversed = true;
+        mirrored.mirrorLength = macroTimelineLength(*source.sequence);
+        mirrored.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*played.sequence);
+        mirrorSequence(*mirrored.sequence, mirrored.mirrorLength);
+        forwardIndex.push_back(playedMacros.size());
         playedMacros.push_back(std::move(played));
+        playedMacros.push_back(std::move(mirrored));
     }
 }
 
-const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(const std::string& canvas) const {
-    for(const auto& played : playedMacros) if(played.canvas == canvas) return &played;
+double ofxOceanodeTimelineManager::macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const {
+    double end = 0.0;
+    for(const auto& track : macroSequence.tracks)
+        for(const auto& clip : track.clips) end = std::max(end, clip.startBeat + clip.durationBeats);
+    return std::max(getBeatsPerBar(), end);
+}
+
+void ofxOceanodeTimelineManager::mirrorSequence(ofxOceanodeTimelineSequence& sequence, double length) const {
+    for(auto& track : sequence.tracks)
+        for(auto& clip : track.clips) {
+            clip.startBeat = length - clip.startBeat - std::max(1.0 / 24.0, clip.durationBeats);
+            if(track.isMacroTrack()) {
+                clip.contentOffsetBeats = reversedContentOffset(clip, ofxOceanodeTimelineClipTime::contentOffset(clip));
+                clip.reversed = !clip.reversed;
+            } else if(!track.isWaveTrack && !clip.isLfo) mirrorClipContent(clip);
+        }
+}
+
+const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroOf(
+        const ofxOceanodeTimelineSequence& sequence) const {
+    for(const auto& played : playedMacros) if(played.sequence.get() == &sequence) return &played;
+    return nullptr;
+}
+
+const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(const std::string& canvas,
+                                                                                         bool reversed) const {
+    for(const auto& played : playedMacros) if(played.canvas == canvas && played.reversed == reversed) return &played;
     return nullptr;
 }
 
@@ -1460,9 +1504,13 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     // of its own copy.
     // A macro timeline plays once per beat: where two macro tracks place it
     // at the same time, the first one found (the outer, upper one) plays.
+    // (Forward and reversed copies of a macro are one macro timeline.)
     std::unordered_set<const ofxOceanodeTimelineSequence*> placed;
+    std::unordered_set<std::string> placedCanvases;
     for(const auto& placement : playedSequences(context, beatPosition, beatPosition)) {
-        if(!placed.insert(placement.sequence).second) continue;
+        if(const auto* played = playedMacroOf(*placement.sequence))
+            if(!placedCanvases.insert(played->canvas).second) continue;
+        placed.insert(placement.sequence);
         const double beat = placement.map.toSequence(beatPosition);
         const auto copyContext = placement.contextFrom(context);
         const uint64_t copyEpoch = copyContext.epoch();
@@ -1863,7 +1911,11 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     // heard. Finally, expose one contribution per binding for
     // cross-track/cross-binding blending: macro timelines first, the main
     // timeline last, so it layers on top of them with its bindings' modes.
-    for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
+    for(const auto* sequence : evaluatedSequences()) {
+    // The other copy of a macro playing now stays out (its rests too).
+    if(const auto* played = playedMacroOf(*sequence); played != nullptr &&
+       placed.count(sequence) == 0 && placedCanvases.count(played->canvas) > 0) continue;
+    for(const auto& track : sequence->tracks) {
         const auto trackIndexIt = trackEvaluationIndexes.find(&track);
         for(const auto& binding : track.bindings) {
             if(!wantsBinding(&binding)) continue;
@@ -1908,6 +1960,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
             }
             activeValues[binding.parameterPath].emplace_back(binding.mode, std::move(value));
         }
+    }
     }
 
 }
@@ -2084,6 +2137,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
             for(const auto& clip : track.clips) {
                 hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
                 hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
+                hash.add(clip.reversed);
                 hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
                 hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
                 for(const auto& lane : clip.lanes) {

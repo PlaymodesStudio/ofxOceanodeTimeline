@@ -2427,6 +2427,221 @@ void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip
     clip.lanes = std::move(rotated.lanes);
 }
 
+namespace {
+// ---- Reversing -------------------------------------------------------------
+// Each lane's content over [0, length) rewritten as its time-mirror: what it
+// played, read backwards. Content past `length` did not play and is dropped.
+
+// The steepness k for which x^k best follows `shape` (0 -> 0, 1 -> 1).
+template<typename Shape>
+float fittedPowerSteepness(Shape&& shape) {
+    float best = 1.0f;
+    double bestError = 1e30;
+    for(int i = 0; i <= 240; ++i) {
+        const float k = 0.1f * std::pow(100.0f, i / 240.0f);
+        double error = 0.0;
+        for(int j = 1; j < 32; ++j) {
+            const double x = j / 32.0;
+            const double d = std::pow(x, static_cast<double>(k)) - shape(x);
+            error += d * d;
+        }
+        if(error < bestError) { bestError = error; best = k; }
+    }
+    return best;
+}
+// The mirror of a Log / Exp segment, 1 - (1 - x)^s, is not a power curve:
+// it is laid out as kPieces segments, each a fitted power curve.
+constexpr int kMirroredPowerPieces = 4;
+
+void mirrorCurve(ofxOceanodeTimelineLane& lane, double length) {
+    if(lane.curvePoints.empty()) return;
+    const bool held = ofxOceanodeTimelineIsHeldValueLane(lane.type);
+    auto windowed = lane;
+    if(held) windowed.curveInterpolation = "Step"; // as held values play
+    std::vector<ofxOceanodeTimelineCurvePoint> points;
+    std::vector<ofxOceanodeTimelineCurveTension> tensions;
+    appendCurveWindow(windowed, 0.0, length, 0.0, points, tensions);
+    const auto mode = curveInterpolationMode(windowed.curveInterpolation);
+    const size_t n = points.size();
+    std::vector<ofxOceanodeTimelineCurvePoint> mirrored(n);
+    for(size_t k = 0; k < n; ++k) mirrored[k] = {length - points[n - 1 - k].beat, points[n - 1 - k].value};
+    if(mode == CurveInterpolationMode::Step && n >= 2) {
+        // A step holds its left point's value: mirrored, each segment takes
+        // the value of the segment it mirrors.
+        for(size_t k = 0; k + 1 < n; ++k) mirrored[k].value = points[n - 2 - k].value;
+        mirrored[n - 1].value = points.front().value;
+    }
+    std::vector<ofxOceanodeTimelineCurveTension> mirroredTensions;
+    std::vector<ofxOceanodeTimelineCurvePoint> laidOut;
+    for(size_t k = 0; k < n; ++k) {
+        laidOut.push_back(mirrored[k]);
+        if(k + 1 == n) break;
+        auto tension = n - 2 - k < tensions.size() ? tensions[n - 2 - k] : ofxOceanodeTimelineCurveTension{};
+        if(mode == CurveInterpolationMode::Sigmoid) tension.inflection = 1.0f - tension.inflection; // exact
+        if(mode != CurveInterpolationMode::LogExp || std::abs(mirrored[k + 1].value - mirrored[k].value) < 1e-6f ||
+           mirrored[k + 1].beat - mirrored[k].beat < 1e-6) {
+            mirroredTensions.push_back(tension);
+            continue;
+        }
+        const double s = ofClamp(tension.steepness, 0.1f, 10.0f);
+        auto mirrorShape = [&](double x) { return 1.0 - std::pow(1.0 - x, s); };
+        for(int piece = 0; piece < kMirroredPowerPieces; ++piece) {
+            const double a = piece / double(kMirroredPowerPieces), b = (piece + 1) / double(kMirroredPowerPieces);
+            const double ha = mirrorShape(a), hb = mirrorShape(b);
+            ofxOceanodeTimelineCurveTension fitted = tension;
+            fitted.steepness = fittedPowerSteepness([&](double w) { return (mirrorShape(a + w * (b - a)) - ha) / std::max(1e-12, hb - ha); });
+            mirroredTensions.push_back(fitted);
+            if(piece + 1 < kMirroredPowerPieces)
+                laidOut.push_back({ofLerp(mirrored[k].beat, mirrored[k + 1].beat, b),
+                                   static_cast<float>(mirrored[k].value + (mirrored[k + 1].value - mirrored[k].value) * hb)});
+        }
+    }
+    lane.curvePoints = std::move(laidOut);
+    lane.curveTensions = std::move(mirroredTensions);
+}
+
+template<typename Event>
+void mirrorEvents(std::vector<Event>& events, double length) {
+    std::vector<Event> mirrored;
+    appendEventWindow(events, 0.0, length, 0.0, mirrored);
+    for(auto& event : mirrored) event.startBeat = length - event.startBeat - event.durationBeats;
+    std::stable_sort(mirrored.begin(), mirrored.end(), [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+    events = std::move(mirrored);
+}
+
+// Whether a pattern `period` long fits a whole number of times in length.
+bool wholePatterns(double length, double period) {
+    const double count = length / std::max(1e-9, period);
+    return count >= 1.0 - 1e-6 && std::abs(count - std::round(count)) < 1e-6;
+}
+
+void mirrorSteps(ofxOceanodeTimelineLane& lane, double length) {
+    const double cell = std::max(1.0 / 24.0, lane.beatsPerStep);
+    const double period = std::max(cell, lane.stepCount * cell);
+    auto durationOf = [&](const ofxOceanodeTimelineStep& step) { return step.durationBeats > kEpsilon ? step.durationBeats : cell; };
+    std::vector<ofxOceanodeTimelineStep> played, hidden;
+    double span = period;
+    if(wholePatterns(length, period)) {
+        // Every repeat of the pattern plays whole: mirror the pattern itself.
+        for(const auto& step : lane.step.steps) (step.startBeat < period - kEpsilon ? played : hidden).push_back(step);
+    } else {
+        // A partial last pattern: one pattern over the whole content.
+        span = length;
+        for(double base = 0.0; base < length - kEpsilon; base += period)
+            for(const auto& step : lane.step.steps) {
+                if(step.startBeat >= period - kEpsilon) continue;
+                const double start = base + std::max(0.0, step.startBeat);
+                if(start >= length - kEpsilon) continue;
+                auto piece = step;
+                piece.startBeat = start;
+                const double duration = std::min(durationOf(step), length - start);
+                piece.durationBeats = std::abs(duration - cell) < 1e-9 && step.durationBeats <= kEpsilon ? 0.0 : duration;
+                played.push_back(piece);
+            }
+        lane.stepCount = std::max(1, static_cast<int>(std::ceil(length / cell - 1e-9)));
+    }
+    for(auto& step : played) step.startBeat = std::max(0.0, span - std::max(0.0, step.startBeat) - durationOf(step));
+    played.insert(played.end(), hidden.begin(), hidden.end());
+    lane.step.steps = std::move(played);
+    lane.step.sortSteps();
+}
+
+void mirrorSlider(ofxOceanodeTimelineLane& lane, double length) {
+    if(lane.multiSliderValues.empty()) return;
+    const double cell = std::max(1.0 / 24.0, lane.beatsPerStep);
+    const int count = std::max(1, lane.stepCount);
+    auto& values = lane.multiSliderValues;
+    if(wholePatterns(length, cell * count)) {
+        if(static_cast<int>(values.size()) < count) values.resize(static_cast<size_t>(count), 0.0f);
+        std::reverse(values.begin(), values.begin() + count);
+        return;
+    }
+    // One pattern over the whole content, cells in reverse order (exact when
+    // the content is a whole number of cells).
+    const int cells = std::max(1, static_cast<int>(std::ceil(length / cell - 1e-9)));
+    std::vector<float> unrolled(static_cast<size_t>(cells));
+    for(int i = 0; i < cells; ++i) {
+        const size_t index = static_cast<size_t>(i % count);
+        unrolled[static_cast<size_t>(i)] = index < values.size() ? values[index] : 0.0f;
+    }
+    std::reverse(unrolled.begin(), unrolled.end());
+    values = std::move(unrolled);
+    lane.stepCount = cells;
+}
+
+void mirrorDrumRows(ofxOceanodeTimelineLane& lane, double length) {
+    for(auto& row : lane.drumRows) {
+        if(!wholePatterns(length, row.length) && length <= ofxOceanodeTimelineDrumGrid::kMaxLength) {
+            // A partial last pattern: the row becomes one pattern over the content.
+            std::vector<ofxOceanodeTimelineDrumStep> unrolled;
+            for(double base = 0.0; base < length - kEpsilon; base += row.length)
+                for(const auto& step : row.steps) {
+                    if(ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) continue;
+                    const double at = base + step.beat;
+                    if(at >= length - kEpsilon) continue;
+                    auto copy = step;
+                    copy.beat = at;
+                    copy.length = std::min(step.length, length - at);
+                    unrolled.push_back(copy);
+                }
+            row.steps = std::move(unrolled);
+            row.length = length;
+        }
+        for(auto& step : row.steps)
+            if(!ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) step.beat = row.length - step.beat - step.length;
+        ofxOceanodeTimelineDrumGrid::normalizeRow(row);
+    }
+}
+} // namespace
+
+void ofxOceanodeTimelineManager::mirrorClipContent(ofxOceanodeTimelineClip& clip) const {
+    // The content is mirrored as written; the offset says where it is read from.
+    const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
+    const double length = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+    for(auto& lane : clip.lanes) {
+        if(!lane.curvePoints.empty() && lane.curveInterpolation != "Value") mirrorCurve(lane, length);
+        mirrorEvents(lane.pianoNotes, length);
+        for(auto& row : lane.multiValueRows) mirrorEvents(row, length);
+        for(auto& row : lane.multiGateRows) mirrorEvents(row, length);
+        if(!lane.step.steps.empty()) mirrorSteps(lane, length);
+        if(lane.type == ofxOceanodeTimelineLaneType::MultiSlider) mirrorSlider(lane, length);
+        if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) mirrorDrumRows(lane, length);
+    }
+    // Played backwards from its end: a repeating clip ending partway through
+    // its content starts there.
+    clip.contentOffsetBeats = reversedContentOffset(clip, offset);
+}
+
+double ofxOceanodeTimelineManager::reversedContentOffset(const ofxOceanodeTimelineClip& clip, double offset) const {
+    // Forward the clip reads (offset + t / stretch) mod content; backwards,
+    // over mirrored content, that is offset' = content - offset - played span.
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+    const double span = clip.repeatContent
+        ? std::max(1.0 / 24.0, clip.durationBeats) / ofxOceanodeTimelineClipTime::stretch(clip) : content;
+    const double reversed = positiveModulo(content - offset - span, content);
+    return reversed < content - 1e-9 && reversed > 1e-9 ? reversed : 0.0;
+}
+
+bool ofxOceanodeTimelineManager::reverseClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                             const std::string& clipId) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || clip->isLfo) return false;
+    if(track->isWaveTrack) clip->waveReverse = !clip->waveReverse;
+    else if(track->isMacroTrack()) {
+        // The macro's timeline is shared: the clip plays it backwards instead.
+        clip->contentOffsetBeats = reversedContentOffset(*clip, ofxOceanodeTimelineClipTime::contentOffset(*clip));
+        clip->reversed = !clip->reversed;
+    } else mirrorClipContent(*clip);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::reverseClip(const std::string& trackId, const std::string& clipId) {
+    return reverseClip(mainSequence, trackId, clipId);
+}
+
 std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    const std::string& firstClipId, const std::string& secondClipId) {
     const auto* track = getTrack(sequence, trackId);

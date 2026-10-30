@@ -187,6 +187,9 @@ private:
     double dragOffsetBeats = 0.0;
     double dragInitialContentDuration = 4.0;
     double dragInitialContentStretch = 1.0;
+    // The clip as it was when an edge drag began: a Stretch drag back past
+    // its start restores it each frame and reverses it from there.
+    ofxOceanodeTimelineClip dragInitialClip;
     float dragTimelineOriginX = 0.0f;
     // A press only becomes a drag once the mouse has moved: a plain click
     // (or the double-click that opens the editor) must not change the clip.
