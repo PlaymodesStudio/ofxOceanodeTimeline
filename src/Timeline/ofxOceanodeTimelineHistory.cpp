@@ -136,8 +136,8 @@ void ofxOceanodeTimelineManager::beginTimelineEdit() {
     }
 }
 
-void ofxOceanodeTimelineManager::endTimelineEdit() {
-    if(!pendingTimelineEdit) return;
+bool ofxOceanodeTimelineManager::endTimelineEdit() {
+    if(!pendingTimelineEdit) return false;
     auto edit = std::move(pendingTimelineEdit);
     edit->after = captureTimelineEdit();
     edit->manualTempo = edit->manualTempo && !bpmAutomationEnabled &&
@@ -146,11 +146,12 @@ void ofxOceanodeTimelineManager::endTimelineEdit() {
         edit->afterBpm = container->getTransportState().bpm;
         edit->manualTempo = std::abs(edit->beforeBpm - edit->afterBpm) > 0.0001f;
     }
-    if(edit->before.data == edit->after.data && !edit->manualTempo) return;
+    if(edit->before.data == edit->after.data && !edit->manualTempo) return false;
     edit->bytes = edit->before.bytes + edit->after.bytes;
     timelineRedo.clear();
     timelineUndo.push_back(std::move(*edit));
     trimTimelineHistory();
+    return true;
 }
 
 void ofxOceanodeTimelineManager::trimTimelineHistory() {
@@ -219,18 +220,19 @@ void ofxOceanodeTimelineManager::beginTimelineEdit(const ofxOceanodeTimelineSequ
     if(!history.pending) history.pending = std::make_unique<ofJson>(sequenceToJson(sequence));
 }
 
-void ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
-    if(isMainSequence(sequence)) { endTimelineEdit(); return; }
+bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
+    if(isMainSequence(sequence)) return endTimelineEdit();
     const auto found = sequenceHistories.find(&sequence);
-    if(found == sequenceHistories.end() || !found->second.pending) return;
+    if(found == sequenceHistories.end() || !found->second.pending) return false;
     auto& history = found->second;
     auto before = std::move(*history.pending);
     history.pending.reset();
     auto after = sequenceToJson(sequence);
-    if(before == after) return;
+    if(before == after) return false;
     history.redo.clear();
     history.undo.emplace_back(std::move(before), std::move(after));
     while(history.undo.size() > 100) history.undo.pop_front();
+    return true;
 }
 
 bool ofxOceanodeTimelineManager::undoTimelineEdit(ofxOceanodeTimelineSequence& sequence) {

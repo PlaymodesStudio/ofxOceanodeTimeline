@@ -913,6 +913,9 @@ struct ofxOceanodeTimelineTrack {
     // before the first events and its gates and releases finish after the
     // rest values went out.
     bool macroGate = false;
+    // Unfolded: the editor shows the macro's tracks as rows under this one,
+    // with its clips where this track's clips play them, editable in place.
+    bool macroUnfolded = false;
     float macroPreRollMs = 100.0f;
     float macroTailMs = 500.0f;
 };
@@ -1180,7 +1183,8 @@ public:
     // Undo per sequence: the main timeline's is the timeline history above,
     // a macro sequence keeps its own.
     void beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
-    void endTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
+    // True when the edit changed something (an undo step was recorded).
+    bool endTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
     bool undoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
     bool redoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
     // "Edit timeline" from a macro's node menu, picked up by the editor.
@@ -1702,7 +1706,7 @@ public:
     // Like canvas history, transactions span a complete user gesture. Runtime
     // automation and view scrolling/zooming are never recorded.
     void beginTimelineEdit();
-    void endTimelineEdit();
+    bool endTimelineEdit();
     bool undoTimelineEdit();
     bool redoTimelineEdit();
     bool canUndoTimelineEdit() const { return !timelineUndo.empty(); }

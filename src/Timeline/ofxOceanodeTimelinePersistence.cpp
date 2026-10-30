@@ -326,6 +326,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         if(track.isMacroTrack()) {
             trackJson["macroCanvas"] = track.macroCanvas;
             trackJson["macroGate"] = track.macroGate;
+            if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
             trackJson["macroPreRollMs"] = track.macroPreRollMs;
             trackJson["macroTailMs"] = track.macroTailMs;
         }
@@ -691,6 +692,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.parentId = trackJson.value("parentId", std::string());
         track.macroCanvas = trackJson.value("macroCanvas", std::string());
         track.macroGate = trackJson.value("macroGate", false);
+        track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
         track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));

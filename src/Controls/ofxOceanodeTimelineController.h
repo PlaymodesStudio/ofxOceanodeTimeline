@@ -7,6 +7,8 @@
 #include "Editors/ofxOceanodeTimelineWaveVolumeEditor.h"
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Editors/ofxOceanodeTimelineLfoEditor.h"
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -87,6 +89,7 @@ private:
     struct TargetAssignment {
         std::string trackId, clipId, laneId, path;
         ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane;
+        ofxOceanodeTimelineSequence* sequence = nullptr; // null: the scope's
     };
     TargetAssignment pendingTargetAssignment;
     char laneTargetSearch[128] = {};
@@ -163,6 +166,7 @@ private:
     char pendingClipRenameName[128] = {};
     std::string clipRenameTrackId;
     std::string clipRenameClipId;
+    ofxOceanodeTimelineSequence* clipRenameSequence = nullptr; // the clip's sequence
     std::string pendingClipBindingId;
     std::string pendingAddLaneTarget;
     int pendingAddLaneChoice = 1;
@@ -281,9 +285,11 @@ private:
     };
     std::vector<EditorScope> scopes;
     ofxOceanodeTimelineSequence& scope(ofxOceanodeTimelineManager& timeline) {
+        if(rowScope != nullptr) return *rowScope->sequence;
         return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
     }
     const ofxOceanodeTimelineSequence& scope(const ofxOceanodeTimelineManager& timeline) const {
+        if(rowScope != nullptr) return *rowScope->sequence;
         return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
     }
     bool inMacroScope() const { return !scopes.empty(); }
@@ -292,6 +298,73 @@ private:
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
     void drawScopeBreadcrumb(ofxOceanodeTimelineManager& timeline);
+    // ---- Unfolded macro tracks: a macro's timeline edited in place ----
+    // A macro track's timeline placed on the timeline shown: its sequence,
+    // where its beats sit there (one repeat of one macro clip) and which
+    // placement that is (macro track, clip, repeat and segment ids, outermost
+    // first). While rowScope is set, scope() and every beat/pixel conversion
+    // (editorView) follow it: the unfolded rows and the clip editor of one of
+    // their clips use the arrangement's and editors' own code.
+    struct RowScope {
+        ofxOceanodeTimelineSequence* sequence = nullptr;
+        ofxOceanodeContainer* container = nullptr; // the macro's
+        ofxOceanodeTimelineTimeMap map;
+        std::string key;
+    };
+    const RowScope* rowScope = nullptr;
+    struct RowScopeGuard {
+        ofxOceanodeTimelineController& controller;
+        const RowScope* previous;
+        RowScopeGuard(ofxOceanodeTimelineController& controller, const RowScope* scope)
+        : controller(controller), previous(controller.rowScope) { controller.rowScope = scope; }
+        ~RowScopeGuard() { controller.rowScope = previous; }
+    };
+    // The clip editor shows a clip of an unfolded macro timeline (sequence
+    // null: a clip of the scope's own). The ids say which clip, since ids
+    // repeat between sequences.
+    RowScope editorRowScope;
+    std::string editorRowTrackId, editorRowClipId;
+    std::string editorRowGroup; // the unfolded rows it docks in (macro track ids)
+    bool innerEditorOpen() const {
+        return editorState.clipEditorOpen && editorRowScope.sequence != nullptr &&
+               editorState.editorTrackId == editorRowTrackId && editorState.editorClipId == editorRowClipId;
+    }
+    // The open clip editor is on this track of the scope's own timeline.
+    bool scopeEditorOnTrack(const std::string& trackId) const {
+        return editorState.clipEditorOpen && !innerEditorOpen() && editorState.editorTrackId == trackId;
+    }
+    // The sequence whose ids editorState holds.
+    ofxOceanodeTimelineSequence& editorSequence(ofxOceanodeTimelineManager& timeline) {
+        if(innerEditorOpen() && timeline.isLiveSequence(*editorRowScope.sequence)) return *editorRowScope.sequence;
+        return scope(timeline);
+    }
+    void openInnerClipEditor(const RowScope& at, const std::string& trackId, const std::string& clipId,
+                             const std::string& laneId);
+    // An arrangement drag of a clip in an unfolded row (applied after the
+    // track iteration, through its placement).
+    struct InnerClipDrag {
+        RowScope at;
+        std::string trackId, clipId;
+        ClipDragMode mode = ClipDragMode::None;
+        ofxOceanodeTimelineClip initial;
+        double grabOffsetBeats = 0.0; // press beat minus the clip start, in its own beats
+        float originX = 0.0f;         // screen x of timeline beat 0
+        float pressX = 0.0f;
+        float rowTop = 0.0f, rowBottom = 0.0f;
+        bool committed = false;
+        bool extend = false;          // Shift on the left edge
+    };
+    InnerClipDrag innerDrag;
+    // Right-clicked clip of an unfolded row (its menu is drawn with the row).
+    RowScope innerMenuAt;
+    std::string innerMenuTrackId, innerMenuClipId, innerMenuGroup;
+    enum class InnerMenuRequest { None, Duplicate, Delete };
+    InnerMenuRequest innerMenuRequest = InnerMenuRequest::None; // applied after the track iteration
+    // Unfolded macro timelines drawn last frame: edits to them are recorded
+    // in their own history, and undo steps whichever was edited last.
+    std::vector<ofxOceanodeTimelineSequence*> unfoldedSequences, unfoldedSequencesDrawn;
+    std::vector<ofxOceanodeTimelineSequence*> historySequences(ofxOceanodeTimelineManager& timeline) const;
+    std::vector<ofxOceanodeTimelineSequence*> undoOrder, redoOrder;
     // Two clips of one track to merge (applied after the track iteration).
     std::string mergeTrackId, mergeFirstClipId, mergeSecondClipId;
     bool requestClipDeletion = false;

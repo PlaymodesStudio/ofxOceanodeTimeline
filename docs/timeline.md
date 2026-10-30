@@ -321,6 +321,34 @@ external edits invalidate older history rather than overwriting newer data.
 For programmatic edits, wrap related mutations in `beginTimelineEdit()` and
 `endTimelineEdit()`, then use `undoTimelineEdit()` / `redoTimelineEdit()`.
 
+A macro's timeline keeps its own history. Undo steps whichever timeline was
+edited last, so an edit made in an unfolded macro track (see below) is undone
+from the main timeline as well.
+
+## Unfolding a macro track
+
+A macro track's clips play its macro's own timeline. Click the arrow on the
+macro track's header (or use **Unfold its tracks here** in its menu) to show
+that timeline's tracks as rows under it. Each row shows its clips where the
+macro clips play them, through their repeats, tempo, content offset and
+reverse, so you can see the macro's contents against the rest of the
+arrangement.
+
+Clips on these rows are edited in place: drag one to move it, drag its right
+edge to repeat, trim or stretch it (the **Right edge** tool and its modifiers
+apply), drag its left edge to trim it, and double-click it to open its content
+editor under its row. The right-click menu also renames, mutes, duplicates and
+deletes it. The rows' **M** and **S** mute and solo within the macro's
+timeline. Edits change the macro's timeline itself, so every macro clip
+playing it follows; moves and snapping are in that timeline's own beats.
+Where a reversed macro clip plays the timeline mirrored, its clips are shown
+but not edited. A macro track inside the macro unfolds the same way.
+
+The unfolded state is saved with the track. Structural work (new tracks,
+targets, note groups) still happens in the macro's timeline itself, which the
+clip menu's **Open ... timeline** item (or a double-click on the macro clip)
+opens.
+
 ## Duplicating lanes
 
 Open a clip editor, right-click a lane's left properties pad and choose

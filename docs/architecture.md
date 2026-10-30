@@ -138,6 +138,19 @@ scope's sequence (`scope(timeline)`; editors get it in their context). The
 tempo lane, loop, markers, seeking and the playhead belong to the main
 timeline and are hidden in a macro scope; undo steps the scope's own history.
 
+An unfolded macro track (`macroUnfolded`, saved with the track) draws its
+macro's tracks as rows under it (`drawUnfoldedRows` in the controller). Each
+macro clip repeat and offset segment is a placement (`macroClipPlacements`,
+shared with the macro clip's own preview): a time map from the macro
+timeline's beats to the beats shown, composed through nested unfolded macro
+tracks. Editing a row's clip, or drawing its clip editor, sets the
+controller's `rowScope` to that placement: `scope()` returns the macro's
+sequence and `editorView()` carries the map (`ofxOceanodeTimelineEditorView`
+draws sequence beat b at `offset + b * ratio`), so the model calls and lane
+editors are the ordinary ones. Requests the clip editor defers (lanes,
+targets, rename) go to the edited clip's sequence. Unfolded sequences are
+recorded in their own history, and undo steps the timeline edited last.
+
 Clips and Targets are session-only projections of the same model, selected by
 `targetsView` in the controller. Clips draws one arrangement rectangle per clip;
 Targets projects clips onto binding rows. Neither projection changes clip

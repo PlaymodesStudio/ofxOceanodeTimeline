@@ -956,10 +956,72 @@ int main() {
                 owner->getTransport()->seekToBeat(0.0);
             }
             ui.leaveScopesTo(0); frame();
+            {
+                // Unfolded: the macro's tracks as rows under the macro track, their
+                // clips where the macro clip plays them (here at half speed), edited there.
+                auto* pattern=model.getMacroSequence(*inside); // read back from the macro's folder above
+                const auto pt=model.createTrack(*pattern,"Phrase");
+                const auto pb=model.addBinding(*pattern,pt,innerCutoff);
+                const auto pc=model.createClip(*pattern,pt,"Phrase",2,4);
+                model.addBindingToLane(*pattern,pt,pc,model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve),pb);
+                const size_t phraseRow=pattern->tracks.size()-1;
+                auto* macroClip=model.getClip(mt,mc);
+                macroClip->startBeat=0; macroClip->contentOffsetBeats=0; macroClip->repeatContent=false;
+                macroClip->contentDurationBeats=8; macroClip->durationBeats=16; macroClip->contentStretch=2;
+                auto* phrase=model.getClip(*pattern,pt,pc);
+                assert(std::abs(phrase->startBeat-2.0)<1e-6 && pattern->tracks[phraseRow].id==pt && phraseRow==2);
+                model.getTrack(mt)->macroUnfolded=true;
+                const auto mainTracks=model.toJson()["tracks"];
+                for(int i=0;i<4;++i) frame();
+                frame(1250,ImVec2(-100,-100),false,"macro-unfolded");
+                assert(std::find(ui.unfoldedSequences.begin(),ui.unfoldedSequences.end(),pattern)!=ui.unfoldedSequences.end());
+                const auto header=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),[&](const auto& r){return r.trackId==mt;});
+                assert(header!=ui.trackHeaderRows.end());
+                const float trackHeight=model.getViewState().trackHeight, innerHeight=std::max(38.0f,trackHeight*0.75f);
+                assert(header->maxY-header->minY>=trackHeight+3*innerHeight-1); // its rows count as the macro track's
+                const float bpm=owner->getTransportState().bpm;
+                auto xAt=[&](double beat){return ui.fileDropOriginX+ui.beatToPixels(model,beat,bpm);};
+                // The phrase (macro beats 2..6) plays at timeline beats 4..12: drag it by
+                // two timeline beats, which is one beat of the macro's timeline.
+                const ImVec2 grab(xAt(7.0),header->minY+trackHeight+innerHeight*(phraseRow+0.5f));
+                frame(1250,grab,false); frame(1250,grab,true);
+                for(int i=1;i<=6;++i) frame(1250,ImVec2(grab.x+(xAt(9.0)-xAt(7.0))*i/6.0f,grab.y),true);
+                frame(1250,ImVec2(xAt(9.0),grab.y),false); frame();
+                assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-3.0)<1e-6);
+                assert(model.toJson()["tracks"]==mainTracks); // only the macro's timeline changed
+                // Undo steps the timeline edited last, from the main timeline.
+                assert(!ui.inMacroScope());
+                ui.restoreHistory(model,false);
+                assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-2.0)<1e-6);
+                ui.restoreHistory(model,true);
+                assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-3.0)<1e-6);
+                // Double-click opens its content editor in place, through the placement.
+                const ImVec2 open(xAt(8.0),grab.y);
+                frame(1250,open,false); frame(1250,open,true); frame(1250,open,false); frame(1250,open,true); frame(1250,open,false);
+                frame(); frame();
+                assert(ui.innerEditorOpen() && &ui.editorSequence(model)==pattern && ui.editorState.editorClipId==pc);
+                assert(!ui.inMacroScope() && ui.editorScreenValid && ui.editorScreenTop>=header->minY+trackHeight+innerHeight*(phraseRow+1)-1);
+                frame(1250,ImVec2(-100,-100),false,"macro-unfolded-editor");
+                {
+                    const auto beat6=xAt(6.0)-ui.fileDropOriginX;
+                    const ofxOceanodeTimelineController::RowScopeGuard placed(ui,&ui.editorRowScope);
+                    assert(std::abs(ui.beatToPixels(model,3.0,bpm)-beat6)<0.5f); // macro beat 3 plays at beat 6
+                    assert(std::abs(ui.pixelsToBeat(model,ui.beatToPixels(model,3.5,bpm),bpm,64)-3.5)<1e-4);
+                }
+                assert(std::abs(ui.beatToPixels(model,6.0,bpm)-(xAt(6.0)-ui.fileDropOriginX))<0.5f); // and back to the main map
+                ui.editorState.clipEditorOpen=false; frame();
+                // Folding hides them again; the state is saved with the track.
+                model.getTrack(mt)->macroUnfolded=false; frame(); frame();
+                assert(ui.unfoldedSequences.empty());
+                model.getTrack(mt)->macroUnfolded=true;
+                macroClip=model.getClip(mt,mc);
+                macroClip->contentStretch=1; macroClip->durationBeats=8;
+            }
             // Saved and read back; a renumbered macro carries its tracks along.
             const auto saved=model.toJson();
             model.fromJson(saved);
             assert(model.getTrack(mt)->macroCanvas==inside->getCanvasID() && model.getClip(mt,mc));
+            assert(model.getTrack(mt)->macroUnfolded);
             model.retargetParameterPaths({{inside->getCanvasID()+"::Synth_1/Cutoff","Macro 9::Synth_1/Cutoff"}});
             assert(model.getTrack(mt)->macroCanvas=="Macro 9");
             model.removeTrack(mt);
@@ -974,7 +1036,7 @@ int main() {
     assert(model.requestParameterLane(t,addedParameter)); model.clear();
     assert(model.consumePendingParameterLanes().empty());
     ImGui::DestroyContext();
-    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, track heights (all at once, Wave alone), macro timeline scope (undo, save, breadcrumb), macro tracks, portable clip import/cancel/undo, mouse timing tools, Cmd+drag reverse, cross-track groups, clip menus and deferred lane routing.\n";
+    std::cout<<"Controller clarity passed: both views, mixed clip, focus, folded track, narrow layout, LFO, audio, read-only inspector, track selection and outlines, track folders and header drag-and-drop, track heights (all at once, Wave alone), macro timeline scope (undo, save, breadcrumb), macro tracks, unfolded macro tracks (in-place drag, undo, editor), portable clip import/cancel/undo, mouse timing tools, Cmd+drag reverse, cross-track groups, clip menus and deferred lane routing.\n";
 }
 '''
 
