@@ -239,10 +239,11 @@ std::vector<MacroPlacement> macroClipPlacements(const ofxOceanodeTimelineClip& c
                                                 double visibleFrom, double visibleTo) {
     std::vector<MacroPlacement> placements;
     const double content = sourceDuration(clip);
-    const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+    // An own-tempo clip lasts as long as its timeline does at that tempo.
+    const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip) * (clip.repeatContent ? clip.ownTempoScale() : 1.0);
     const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
     const double clipEnd = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
-    const double cycle = std::max(1e-6, clip.repeatContent ? cycleDuration(clip) : clipEnd - clip.startBeat);
+    const double cycle = std::max(1e-6, clip.repeatContent ? content * stretch : clipEnd - clip.startBeat);
     const int cycles = clip.repeatContent ? static_cast<int>(std::ceil(clip.durationBeats / cycle)) : 1;
     const int firstRepeat = std::max(0, static_cast<int>(std::floor((visibleFrom - clip.startBeat) / cycle)));
     const int lastRepeat = static_cast<int>(std::min<double>(cycles - 1, std::ceil((visibleTo - clip.startBeat) / cycle)));
@@ -1154,7 +1155,7 @@ void ofxOceanodeTimelineController::drawScopeBreadcrumb(ofxOceanodeTimelineManag
     }
     ImGui::SameLine();
     const auto shown = scopeRef();
-    if(timeline.isFree(shown)) ImGui::TextDisabled("  plays on its own, and wherever clips place it");
+    if(timeline.isFree(shown)) ImGui::TextDisabled("  independent tempo, and played wherever clips place it");
     else if(!shown.timeline.empty()) ImGui::TextDisabled("  a further timeline of this canvas, played by the clips placing it");
     else ImGui::TextDisabled("  macro timeline: saved with the macro, played by its macro clips");
     // Its own transport, tempo, loop and meter when it plays on its own.
@@ -3382,12 +3383,20 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::MenuItem("Edit macro timeline")) {
                     requestPlacedScope(timeline, track);
                 }
+                if(timeline.isClipStretched(clip)) {
+                    if(ImGui::MenuItem("Restore length"))
+                        timeline.restoreClipLength(scope(timeline), track.id, clip.id);
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Undo its stretch: its timeline at its natural speed again\n"
+                                          "(its own tempo when it keeps it), with as many repeats as now.");
+                }
                 if(ImGui::MenuItem("Keep its own tempo", nullptr, clip.ownTempo, !clip.reversed))
-                    if(auto* editClip = timeline.getClip(scope(timeline), track.id, clip.id)) editClip->ownTempo = !clip.ownTempo;
+                    timeline.setClipOwnTempo(scope(timeline), track.id, clip.id, !clip.ownTempo);
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("On: the clip plays its timeline at that timeline's own tempo (its BPM, ratio\n"
                                       "of the clock or tempo lane), not the host's; the clip's stretch still slows it.\n"
-                                      "Its repeats keep the clip's length. Not for a reversed clip.");
+                                      "Its repeats last as long as the timeline does at that tempo (following both tempo maps):\n"
+                                      "4 beats at 180 BPM take 2.667 beats at 120. Not for a reversed clip.");
                 if(ImGui::MenuItem("Clip properties...")) {
                     editorState.editorTrackId = track.id;
                     editorState.editorClipId = clip.id;

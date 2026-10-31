@@ -352,7 +352,7 @@ The unfolded state is saved with the track. Structural work (new tracks,
 targets, note groups) still happens in the macro's timeline itself, opened by
 **Edit macro timeline** (or a double-click on the macro clip).
 
-## Several timelines, playing on their own
+## Several timelines, with independent tempos
 
 Every canvas (the main one and every macro's) can own several timelines: its
 default one (the main timeline, or the macro's own) and any number more. The
@@ -361,7 +361,9 @@ canvas; pick one to show it. Its **...** button makes a **New timeline on this
 canvas**, duplicates, renames or deletes the one shown (a canvas's default
 timeline goes with its canvas), and opens it **in a new window**.
 
-**Placing a timeline as clips.** **Place a timeline here as clips** (in the same
+**Placing a timeline as clips.** A macro node's **Add to Timeline as Macro
+Track** asks which timeline it goes on (the main canvas's, or one of a macro
+around it) when there is more than one. **Place a timeline here as clips** (in the same
 **...** menu) adds a track to the timeline shown whose clips play another
 timeline, exactly like a macro track: move, repeat, stretch, offset and reverse
 the clips. Any timeline of the same canvas, or of a canvas inside it, can be
@@ -369,8 +371,12 @@ placed; one that would end up playing itself (directly or through the
 timelines it places) is not offered. The same timeline can be placed any
 number of times and also play on its own. A clip's **Keep its own tempo**
 (right-click) plays the timeline at its own tempo (its BPM, ratio of the clock
-or tempo lane) instead of the host's; the clip's stretch still slows it, and
-its repeats keep the clip's length. New clips start with it on when the
+or tempo lane) instead of the host's, and lasts as long as the timeline does
+at that tempo, following both tempo maps: a 4-beat timeline at 180 BPM takes
+2.667 beats of a host at 120. Its repeats follow, its stretch still slows it,
+and switching it on or off keeps the number of repeats. A timeline clip whose speed was
+changed (Cmd+drag on its right edge stretches it) offers **Restore length**:
+its timeline at its natural speed again, with as many repeats. New clips start with it on when the
 placed timeline has a tempo of its own (not the default 120 BPM, a ratio of
 the clock, or a tempo lane); off, they follow the host's tempo. Its data is shared, so an edit
 reaches every instance, while each instance has its own playhead and rolls its
@@ -379,12 +385,12 @@ copy. Tracks of a placed timeline drive the same parameters wherever it plays,
 so overlapping instances on one parameter resolve like any two timelines do
 (below).
 
-**Playing on its own.** With a timeline other than the main one shown, tick
-**Plays on its own**. It then gets its own transport on the shared clock:
+**Independent tempo.** With a timeline other than the main one shown, tick
+**Independent tempo**. It then gets its own transport on the shared clock:
 **Play**, **Stop** (back to its start), **|<**, and Space while it is shown,
 play, stop and seek it by itself, while the main timeline plays or is stopped.
-A macro's timeline can also be switched from the macro node's menu (**Play its
-timeline on its own**). Its bar shows:
+A macro's timeline can also be switched from the macro node's menu (**Independent
+tempo for its timeline**). Its bar shows:
 
 - **Quantize**: Play and Stop take effect at once, or on the next beat or bar of
   the main timeline while it plays (else of the clock), so independently

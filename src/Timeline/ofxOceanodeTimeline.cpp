@@ -4508,6 +4508,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Timelines playing on their own first: the main timeline then applies
     // over them on any path both drive.
     if(!isEngine()) {
+        refreshOwnTempoFactors();
         updatePlayers();
         updateTimeSources();
     }

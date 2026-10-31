@@ -654,6 +654,13 @@ struct ofxOceanodeTimelineClip {
     // (fixed, ratio of the clock, or its tempo lane) instead of following the
     // host's; contentStretch still slows it down. Not when reversed.
     bool ownTempo = false;
+    // An own-tempo clip's host beats per beat of its timeline at stretch 1:
+    // the host's tempo over the timeline's (averaged over its content when it
+    // has a tempo lane), so 4 beats at 180 BPM last 2.667 beats at 120. Not
+    // saved: the manager keeps it up to date each frame. Playback, repeats
+    // and previews multiply the stretch by it (ownTempoScale).
+    double ownTempoFactor = 1.0;
+    double ownTempoScale() const { return ownTempo && !reversed ? ownTempoFactor : 1.0; }
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -1190,6 +1197,20 @@ public:
     // same canvas or of a canvas inside it, never one that (through its own
     // timeline tracks) plays host. Its id, empty when refused.
     std::string createTimelineTrack(ofxOceanodeTimelineSequence& host, const TimelineRef& placed);
+    // The tempo factor an own-tempo clip of `host` placing `placed` has now.
+    double ownTempoFactorFor(const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineClip& clip,
+                             const ofxOceanodeTimelineSequence& placed) const;
+    // Refreshes every own-tempo clip's factor (main, further and macro timelines).
+    void refreshOwnTempoFactors();
+    // Turns Keep its own tempo on or off, keeping how many times it repeats
+    // (its length scales with the tempo factor).
+    bool setClipOwnTempo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                         const std::string& clipId, bool ownTempo);
+    // A timeline clip whose speed was changed (a Stretch edit, Cmd+drag on its
+    // right edge): its timeline at its natural speed again, as many repeats
+    // as it had (a one-shot fitted to the clip goes back to its own length).
+    bool isClipStretched(const ofxOceanodeTimelineClip& clip) const;
+    bool restoreClipLength(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     // Whether `from`, through its timeline tracks, plays `target` (or is it).
     bool timelineReaches(const TimelineRef& from, const TimelineRef& target);
     // The live container of the macro a macro track plays (nullptr: gone).
@@ -2041,7 +2062,8 @@ private:
     // A clip keeping its timeline's own tempo: its segment as linear pieces
     // (host from, host to, map offset, map ratio), see the definition.
     void ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play, const ofxOceanodeTimelineTimeMap& outer,
-                        double zero, double stretch, double segmentFrom, double segmentTo, double from, double to,
+                        double zero, double stretch, double userStretch, double segmentFrom, double segmentTo,
+                        double from, double to,
                         bool atBeat, std::vector<std::array<double, 4>>& pieces) const;
     // Scheduling stops here (a timestamped stop); 0: no limit.
     uint64_t scheduleHorizonUs = 0;

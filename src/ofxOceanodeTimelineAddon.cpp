@@ -222,18 +222,51 @@ public:
                     }
                     if(ImGui::IsItemHovered())
                         ImGui::SetTooltip("Open this macro's own timeline in the timeline window.\nIt is saved with the macro (copies of a library macro share it).");
-                    if(ImGui::Selectable("Add to Timeline as Macro Track")){
-                        // A track whose clips play this macro's timeline, with a first clip at the start.
-                        const auto trackId = manager.createMacroTrack(*macro->getContainer());
-                        if(!trackId.empty()) manager.createMacroClip(trackId, 0.0);
-                        ImGui::CloseCurrentPopup();
+                    {
+                        // A track whose clips play this macro's timeline, with a first clip at
+                        // the start, on a timeline of the canvas the macro is in or one around it.
+                        using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
+                        const auto placed = manager.refForCanvas(*macro->getContainer());
+                        std::vector<TimelineRef> hosts;
+                        std::vector<std::string> canvases{std::string()};
+                        const std::string own = model.getParents();
+                        for(size_t at = own.find(" / "); ; at = own.find(" / ", at + 3)) {
+                            const std::string prefix = at == std::string::npos ? own : own.substr(0, at);
+                            if(!prefix.empty() && prefix != "Canvas" && prefix != "0" &&
+                               std::find(canvases.begin(), canvases.end(), prefix) == canvases.end())
+                                canvases.push_back(prefix);
+                            if(at == std::string::npos) break;
+                        }
+                        for(const auto& canvas : canvases)
+                            for(const auto& ref : manager.timelinesOfCanvas(canvas))
+                                if(!manager.timelineReaches(placed, ref)) hosts.push_back(ref);
+                        auto addTo = [&](const TimelineRef& host) {
+                            auto* sequence = manager.timelineFor(host);
+                            if(sequence == nullptr) return;
+                            const auto trackId = manager.createTimelineTrack(*sequence, placed);
+                            if(!trackId.empty()) manager.createMacroClip(*sequence, trackId, 0.0);
+                            if(!(host.canvas.empty() && host.timeline.empty())) manager.requestTimelineScope(host);
+                            ImGui::CloseCurrentPopup();
+                        };
+                        const char* tip = "A track whose clips play this macro's timeline:\n"
+                                          "place, repeat, stretch and offset them like any clip.";
+                        if(hosts.size() <= 1) {
+                            if(ImGui::Selectable("Add to Timeline as Macro Track") && !hosts.empty()) addTo(hosts.front());
+                            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                        } else if(ImGui::BeginMenu("Add to Timeline as Macro Track")) {
+                            for(const auto& host : hosts) {
+                                const bool root = host.canvas.empty() || host.canvas == "Canvas" || host.canvas == "0";
+                                const std::string label = (root ? std::string() : host.canvas + " > ") + manager.timelineName(host) +
+                                                          "##host" + ofxOceanodeTimelineManager::timeSourceId(host);
+                                if(ImGui::MenuItem(label.c_str())) addTo(host);
+                            }
+                            ImGui::EndMenu();
+                        } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
                     }
-                    if(ImGui::IsItemHovered())
-                        ImGui::SetTooltip("A main-timeline track whose clips play this macro's timeline:\nplace, repeat, stretch (tempo ratio) and offset them like any clip.");
                     {
                         const auto ref = manager.refForCanvas(*macro->getContainer());
                         bool free = manager.isFree(ref);
-                        if(ImGui::MenuItem("Play its timeline on its own", nullptr, free)) {
+                        if(ImGui::MenuItem("Independent tempo for its timeline", nullptr, free)) {
                             manager.setFree(ref, !free);
                             ImGui::CloseCurrentPopup();
                         }
@@ -247,7 +280,7 @@ public:
                             ImGui::CloseCurrentPopup();
                         }
                         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip(free ? "Its timeline plays on its own: nodes inside follow that."
+                            ImGui::SetTooltip(free ? "Its timeline has an independent tempo: nodes inside follow it."
                                                    : "Nodes inside set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
                                                      "the macro clip playing it: its beat, restarting with each clip and repeat,\n"
                                                      "at its stretched tempo. Off: they follow the timeline around the macro.");

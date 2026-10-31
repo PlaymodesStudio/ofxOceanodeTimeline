@@ -184,8 +184,13 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
         clip->contentDurationBeats = length;
         clip->contentStretch = 1.0;
         clip->repeatContent = true;
-        // A timeline with a tempo of its own plays at it.
+        // A timeline with a tempo of its own plays at it, so the clip lasts
+        // as long as the timeline does at that tempo.
         clip->ownTempo = macroSequence != nullptr && macroSequence->play.hasOwnTempo();
+        if(clip->ownTempo) {
+            clip->ownTempoFactor = ownTempoFactorFor(sequence, *clip, *macroSequence);
+            if(durationBeats <= 0.0) clip->durationBeats = std::max(1.0 / 24.0, length * clip->ownTempoFactor);
+        }
     }
     invalidateEvaluationIndexes();
     return id;

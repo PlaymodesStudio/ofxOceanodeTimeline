@@ -218,6 +218,35 @@ int main() {
         at(5.5); near(fillValue, 0.3f);  // Fills beat 0.75 (still at 60)
         at(6.5); near(fillValue, 0.7f);  // past beat 1 at main beat 6, then 1 beat per beat: 1.5
         clip->ownTempo = false;
+        fillSettings.bpmAutomationEnabled = false;
+        // A timeline at 180 BPM lasting 4 beats, in the main timeline at 120:
+        // switched to its own tempo, its clip lasts 2.667 beats, and each
+        // repeat with it.
+        fillSettings.bpm = 180.0f;
+        nested.setPlaySettings(fills, fillSettings);
+        clip->contentDurationBeats = 4.0;
+        clip->durationBeats = 4.0;
+        assert(nested.setClipOwnTempo(mainTimeline, placing, placedClip, true));
+        near(clip->durationBeats, 8.0 / 3.0);
+        near(clip->ownTempoFactor, 2.0 / 3.0);
+        // The main tempo changes: the factor follows (the clip's length stays).
+        nest.transport->setBpm(90.0f);
+        nested.update();
+        near(clip->ownTempoFactor, 0.5);
+        nest.transport->setBpm(120.0f);
+        nested.update();
+        // Off again: back to the same number of repeats at the host's tempo.
+        assert(nested.setClipOwnTempo(mainTimeline, placing, placedClip, false));
+        near(clip->durationBeats, 4.0);
+        // Stretched (Cmd+drag on its right edge), then restored: natural
+        // speed, as many repeats.
+        clip->contentStretch = 2.0;
+        clip->durationBeats = 8.0;
+        assert(nested.isClipStretched(*clip));
+        assert(nested.restoreClipLength(mainTimeline, placing, placedClip));
+        near(clip->contentStretch, 1.0);
+        near(clip->durationBeats, 4.0);
+        assert(!nested.isClipStretched(*clip));
         // Saved with which timeline the track plays.
         const auto saved = nested.toJson();
         ofxOceanodeContainer reloadedOwner;

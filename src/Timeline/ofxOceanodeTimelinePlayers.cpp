@@ -663,3 +663,121 @@ void ofxOceanodeTimelineManager::releaseWaveClips(const ofxOceanodeTimelineSeque
                 waveAudioProvider->releaseWaveClip(waveKeyPrefix + track.id, clip.id);
     }
 }
+
+// ---- Own-tempo clips: how long their timeline lasts in host beats ----
+
+namespace {
+// A timeline's tempo at one of its beats, playing on its own tempo.
+double playBpmAt(const ofxOceanodeTimelinePlaySettings& play, double beat, float clockBpm) {
+    if(play.bpmAutomationEnabled && !play.bpmPoints.empty())
+        return ofClamp(ofxOceanodeTimelineCurve::valueAtBeat(play.bpmPoints, play.bpmTensions, play.bpmInterpolation,
+                                                            std::max(0.0, beat), play.bpm),
+                       std::max(1.0f, play.bpmMinimum), std::max(1.0f, play.bpmMaximum));
+    return std::max(1.0f, play.followClockTempo ? clockBpm * play.tempoRatio : play.bpm);
+}
+// Seconds `beats` of it last from its beat `from`, following its tempo lane.
+double playSeconds(const ofxOceanodeTimelinePlaySettings& play, double from, double beats, float clockBpm) {
+    if(!(play.bpmAutomationEnabled && !play.bpmPoints.empty()))
+        return beats * 60.0 / playBpmAt(play, from, clockBpm);
+    const int steps = std::max(1, std::min(4096, static_cast<int>(std::ceil(beats * 32.0))));
+    const double step = beats / steps;
+    double seconds = 0.0;
+    for(int i = 0; i < steps; ++i) seconds += step * 60.0 / playBpmAt(play, from + (i + 0.5) * step, clockBpm);
+    return seconds;
+}
+} // namespace
+
+double ofxOceanodeTimelineManager::ownTempoFactorFor(const ofxOceanodeTimelineSequence& host,
+                                                     const ofxOceanodeTimelineClip& clip,
+                                                     const ofxOceanodeTimelineSequence& placed) const {
+    const auto root = container != nullptr ? container->getRootTransport() : nullptr;
+    const float clockBpm = std::max(1.0f, root != nullptr ? root->getState().bpm : 120.0f);
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+    const double userStretch = ofxOceanodeTimelineClipTime::stretch(clip);
+    // How long one pass of its content lasts at its own tempo (from where
+    // the clip starts it), slowed by the clip's stretch...
+    const double seconds = playSeconds(placed.play, ofxOceanodeTimelineClipTime::contentOffset(clip), content, clockBpm) * userStretch;
+    // ...and how many host beats that is from the clip's start, along the
+    // host's tempo: the main timeline's tempo map, or a timeline's own tempo.
+    double hostBeats = 0.0;
+    if(&host == &mainSequence || !host.play.hasOwnTempo()) {
+        if(bpmAutomationEnabled && !bpmAutomationPoints.empty())
+            hostBeats = secondsToBeat(beatToSeconds(clip.startBeat, clockBpm) + seconds, clockBpm) - clip.startBeat;
+        else hostBeats = seconds * clockBpm / 60.0;
+    } else {
+        // A timeline's own tempo lane: step along it until the time is spent.
+        double beat = clip.startBeat, left = seconds;
+        for(int guard = 0; left > 1e-12 && guard < 100000; ++guard) {
+            const double step = 1.0 / 32.0;
+            const double stepSeconds = step * 60.0 / playBpmAt(host.play, beat + 0.5 * step, clockBpm);
+            if(stepSeconds >= left) { beat += step * left / stepSeconds; left = 0.0; }
+            else { beat += step; left -= stepSeconds; }
+        }
+        hostBeats = beat - clip.startBeat;
+    }
+    return std::max(1e-6, hostBeats / std::max(1e-9, content * userStretch));
+}
+
+void ofxOceanodeTimelineManager::refreshOwnTempoFactors() {
+    auto refresh = [&](ofxOceanodeTimelineSequence& host) {
+        for(auto& track : host.tracks) {
+            if(!track.isMacroTrack()) continue;
+            const ofxOceanodeTimelineSequence* placed = nullptr;
+            for(auto& clip : track.clips) {
+                if(!clip.ownTempo || clip.reversed) continue;
+                if(placed == nullptr) placed = placedTimeline(host, track);
+                if(placed == nullptr) break;
+                const double factor = ownTempoFactorFor(host, clip, *placed);
+                if(std::abs(factor - clip.ownTempoFactor) > 1e-9) clip.ownTempoFactor = factor;
+            }
+        }
+    };
+    refresh(mainSequence);
+    for(auto& timeline : mainSequence.timelines) refresh(*timeline);
+    pruneMacroSequences();
+    for(auto& entry : macroSequences) {
+        refresh(*entry.sequence);
+        for(auto& timeline : entry.sequence->timelines) refresh(*timeline);
+    }
+}
+
+bool ofxOceanodeTimelineManager::setClipOwnTempo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                 const std::string& clipId, bool ownTempo) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || !track->isMacroTrack() || clip->ownTempo == ownTempo) return false;
+    const double before = clip->ownTempoScale();
+    clip->ownTempo = ownTempo;
+    if(ownTempo)
+        if(const auto* placed = placedTimeline(sequence, *track)) clip->ownTempoFactor = ownTempoFactorFor(sequence, *clip, *placed);
+    // As many repeats as before: its length scales with its tempo.
+    if(clip->repeatContent) clip->durationBeats = std::max(1.0 / 24.0, clip->durationBeats * clip->ownTempoScale() / before);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
+}
+
+// ---- Restoring a stretched timeline clip ----
+
+bool ofxOceanodeTimelineManager::isClipStretched(const ofxOceanodeTimelineClip& clip) const {
+    if(clip.repeatContent) return std::abs(clip.contentStretch - 1.0) > 1e-6;
+    const double natural = ofxOceanodeTimelineClipTime::sourceDuration(clip) * clip.ownTempoScale();
+    return std::abs(clip.durationBeats - natural) > 1e-6;
+}
+
+bool ofxOceanodeTimelineManager::restoreClipLength(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                   const std::string& clipId) {
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr || !isClipStretched(*clip)) return false;
+    if(clip->repeatContent) {
+        // As many repeats, each at the timeline's own length.
+        clip->durationBeats = std::max(1.0 / 24.0, clip->durationBeats / std::max(1.0 / 1024.0, clip->contentStretch));
+        clip->contentStretch = 1.0;
+    } else {
+        clip->durationBeats = std::max(1.0 / 24.0, ofxOceanodeTimelineClipTime::sourceDuration(*clip) * clip->ownTempoScale());
+        clip->contentStretch = std::max(1.0 / 1024.0, clip->durationBeats / ofxOceanodeTimelineClipTime::sourceDuration(*clip));
+    }
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
+}

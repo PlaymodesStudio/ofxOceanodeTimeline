@@ -626,10 +626,12 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 // Clip time as ofxOceanodeTimelineClipTime has it: each repeat
                 // (a one-shot is one, stretched to fit) plays the content from
                 // its offset to its end, then from 0 up to the offset.
-                const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+                // A clip keeping its timeline's own tempo scales by its tempo factor.
+                const double userStretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
+                const double stretch = clip.repeatContent ? userStretch * clip.ownTempoScale() : userStretch;
                 const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
                 const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
-                const double cycle = clip.repeatContent ? ofxOceanodeTimelineClipTime::cycleDuration(clip) : end - start;
+                const double cycle = clip.repeatContent ? content * stretch : end - start;
                 // A reversed clip plays the mirrored copy, its content read
                 // from the end of this clip's content (sequence beat z here is
                 // mirrorLength - content + z there).
@@ -662,8 +664,9 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         // Its own tempo: the segment as linear pieces, each at
                         // the ratio of its tempo to the host's there.
                         std::vector<std::array<double, 4>> pieces; // host from, host to, map offset, map ratio
-                        if(clip.ownTempo && !clip.reversed)
-                            ownTempoPieces(played->sequence->play, outer.map, segments[s][0], stretch,
+                        if(clip.ownTempo && !clip.reversed && (bpmAutomationEnabled ||
+                           (played->sequence->play.bpmAutomationEnabled && !played->sequence->play.bpmPoints.empty())))
+                            ownTempoPieces(played->sequence->play, outer.map, segments[s][0], stretch, userStretch,
                                            segmentFrom, segmentTo, from, to, atBeat, pieces);
                         placement.resolver = resolverFor(*placement.sequence);
                         placement.placedBy = &track;
@@ -676,7 +679,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.instanceKey = key == 0 ? 1 : key;
                         placement.passMix = outer.passMix * 0xbf58476d1ce4e5b9ULL ^
                                             (static_cast<uint64_t>(repeat) + 1) * 0xd6e8feb86659fd93ULL;
-                        if(clip.ownTempo && !clip.reversed) {
+                        if(!pieces.empty()) {
                             for(const auto& piece : pieces) {
                                 auto part = placement;
                                 part.map = outer.map.then({piece[2], piece[3]});
@@ -2173,7 +2176,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         for(const auto& clip : track.clips) {
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-            hash.add(clip.reversed); hash.add(clip.ownTempo);
+            hash.add(clip.reversed); hash.add(clip.ownTempo); hash.add(clip.ownTempoFactor);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
@@ -2494,7 +2497,7 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
 // `from` when atBeat) are kept.
 void ofxOceanodeTimelineManager::ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play,
                                                 const ofxOceanodeTimelineTimeMap& outer, double zero, double stretch,
-                                                double segmentFrom, double segmentTo, double from, double to,
+                                                double userStretch, double segmentFrom, double segmentTo, double from, double to,
                                                 bool atBeat, std::vector<std::array<double, 4>>& pieces) const {
     const auto state = playState();
     const float clockBpm = std::max(1.0f, container != nullptr && container->getRootTransport() != nullptr
@@ -2516,16 +2519,20 @@ void ofxOceanodeTimelineManager::ownTempoPieces(const ofxOceanodeTimelinePlaySet
     };
     const bool constant = !(play.bpmAutomationEnabled && !play.bpmPoints.empty()) &&
                           !(bpmAutomationEnabled && !bpmAutomationPoints.empty());
+    // `stretch` places the segment (the clip's stretch times its tempo
+    // factor); the local tempos give the rate within it, at the clip's own
+    // stretch `userStretch`.
+    userStretch = std::max(1e-9, userStretch);
     const double step = constant ? std::numeric_limits<double>::infinity() : 0.25;
     double hostBeat = segmentFrom;
     double childBeat = (segmentFrom - zero) / std::max(1e-9, stretch);
     for(int guard = 0; hostBeat < segmentTo - kEpsilon && guard < 4096; ++guard) {
         const double next = std::min(segmentTo, hostBeat + step);
         // Child beats per host beat, at the piece's start then its midpoint.
-        double rate = childBpm(childBeat) / hostBpm(hostBeat) / std::max(1e-9, stretch);
+        double rate = childBpm(childBeat) / hostBpm(hostBeat) / userStretch;
         if(!constant) {
             const double middle = 0.5 * (hostBeat + next);
-            rate = childBpm(childBeat + rate * (middle - hostBeat)) / hostBpm(middle) / std::max(1e-9, stretch);
+            rate = childBpm(childBeat + rate * (middle - hostBeat)) / hostBpm(middle) / userStretch;
         }
         rate = std::max(1e-6, rate);
         const double ratio = 1.0 / rate;

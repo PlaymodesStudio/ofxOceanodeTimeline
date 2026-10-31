@@ -72,7 +72,7 @@ void ofxOceanodeTimelineController::drawTimelinesBar(ofxOceanodeTimelineManager&
 
 void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager& timeline) {
     const auto shown = scopeRef();
-    const std::string current = timeline.timelineName(shown) + (timeline.isFree(shown) && !isMain(shown) ? "  (plays on its own)" : "");
+    const std::string current = timeline.timelineName(shown) + (timeline.isFree(shown) && !isMain(shown) ? "  (independent tempo)" : "");
     ImGui::SetNextItemWidth(std::min(260.0f, std::max(140.0f, ImGui::CalcTextSize(current.c_str()).x + 30.0f)));
     if(ImGui::BeginCombo("##timelinesMenu", current.c_str(), ImGuiComboFlags_HeightLarge)) {
         // Every timeline, grouped by canvas: pick one to show it here.
@@ -87,7 +87,7 @@ void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager
             std::string label = "  " + timeline.timelineName(ref);
             if(timeline.isFree(ref) && !isMain(ref)) {
                 auto transport = timeline.transportFor(ref);
-                label += transport != nullptr && transport->getState().isPlaying ? "   [playing]" : "   [on its own]";
+                label += transport != nullptr && transport->getState().isPlaying ? "   [playing]" : "   [independent]";
             }
             label += "##" + ofxOceanodeTimelineManager::timeSourceId(ref);
             if(ImGui::Selectable(label.c_str(), sameRef(ref, shown))) enterTimelineScope(timeline, ref);
@@ -96,7 +96,7 @@ void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager
     }
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("The timeline shown here. Every canvas can own several timelines;\n"
-                          "any of them can play on its own or be placed in another as clips.");
+                          "any of them can have an independent tempo or be placed in another as clips.");
     ImGui::SameLine(0.0f, 2.0f);
     if(ImGui::Button("...##timelineActions")) ImGui::OpenPopup("##timelineActionsMenu");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, delete, place, open in a window");
@@ -157,7 +157,7 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
     auto settings = *current;
     bool changed = false;
     bool free = timeline.isFree(ref);
-    if(ImGui::Checkbox("Plays on its own##free", &free)) timeline.setFree(ref, free);
+    if(ImGui::Checkbox("Independent tempo##free", &free)) timeline.setFree(ref, free);
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("On: this timeline has its own transport -- play, stop and seek it by itself,\n"
                           "at its own tempo, alongside the main timeline (nodes can follow it as a Time Source).\n"
@@ -209,7 +209,7 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Placed as clips, it follows the host's tempo (scaled by each clip's stretch).\n"
                               "Its own tempo below is used by clips set to Keep its own tempo,\n"
-                              "and when it plays on its own.");
+                              "and when it has an independent tempo.");
     }
     ImGui::SameLine(0.0f, 8.0f);
     ImGui::AlignTextToFramePadding();
