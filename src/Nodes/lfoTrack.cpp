@@ -8,6 +8,7 @@
 #include "ofxOceanodeContainer.h"
 
 void lfoTrack::setup() {
+    addTimeSourceParameter(); // which timeline's beat it follows (inspector)
     color = ofColor::red;
     description = "Outputs the LFO clips of a timeline track. Value is the LFO as drawn (0..1), "
                   "Phase the raw 0..1 ramp, Cycle the whole cycles since the timeline start "

@@ -4356,10 +4356,6 @@ void ofxOceanodeTimelineManager::setLoopRange(double startBeat, double endBeat) 
 
 void ofxOceanodeTimelineManager::update() {
     beginParameterCache();
-    // Timelines playing on their own first: the main timeline then applies
-    // over them on any path both drive.
-    updatePlayers();
-    updateTimeSources();
     evaluateAutomation();
     applyAutomation();
     endParameterCache();
@@ -4509,6 +4505,12 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
 
 void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(container == nullptr) return;
+    // Timelines playing on their own first: the main timeline then applies
+    // over them on any path both drive.
+    if(!isEngine()) {
+        updatePlayers();
+        updateTimeSources();
+    }
     adoptInstrumentDurations();
     if(metronome) metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
     // Track/binding/clip storage may have changed through the editor since
@@ -4866,6 +4868,7 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.timelines.clear();
     mainSequence.play = {};
     freeTimelines.clear();
+    timelineWindows.clear();
     markers.clear();
     viewState = {};
     playOnPresetLoad = false;

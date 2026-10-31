@@ -141,6 +141,61 @@ int main() {
     assert(model.transportFor(drums) == nullptr);
     for(int i = 0; i < 20; ++i) frame(0.05);
     assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == nullptr);
+    // ---- A timeline placed in another as a clip, stretched ----
+    {
+        ofxOceanodeContainer nest;
+        nest.transport->setDriverMode(TransportDriverMode::FrameStep);
+        ofParameter<float> fillValue("Fill", 0, 0, 1);
+        ofxOceanodeParameter<float> fill; fill.bindParameter(fillValue);
+        nest.targets[fill.getEscapedName()] = &fill;
+        ofxOceanodeTimelineManager nested(&nest);
+        nested.setSchedulingEnabled(false);
+        const auto fillsId = nested.createTimeline("", "Fills");
+        const ofxOceanodeTimelineManager::TimelineRef fills{"", fillsId};
+        auto* fillSequence = nested.timelineFor(fills);
+        const auto ft = nested.createTrack(*fillSequence, "Fill");
+        const auto fb = nested.addBinding(*fillSequence, ft, fill);
+        const auto fa = nested.createClip(*fillSequence, ft, "Low", 0, 1);
+        const auto fal = nested.createLane(*fillSequence, ft, fa, "Fill", ofxOceanodeTimelineLaneType::Number);
+        nested.addBindingToLane(*fillSequence, ft, fa, fal, fb);
+        nested.setClipNumber(*fillSequence, ft, fa, fal, 0, 0.3f);
+        const auto fh = nested.createClip(*fillSequence, ft, "High", 1, 1);
+        const auto fhl = nested.createLane(*fillSequence, ft, fh, "Fill", ofxOceanodeTimelineLaneType::Number);
+        nested.addBindingToLane(*fillSequence, ft, fh, fhl, fb);
+        nested.setClipNumber(*fillSequence, ft, fh, fhl, 0, 0.7f);
+        // On the main timeline at beat 4, at half speed (2 beats per beat of Fills).
+        auto& mainTimeline = nested.getMainSequence();
+        const auto placing = nested.createTimelineTrack(mainTimeline, fills);
+        assert(!placing.empty());
+        assert(nested.getTrack(mainTimeline, placing)->macroCanvas == ".");
+        assert(nested.placedTimeline(mainTimeline, *nested.getTrack(mainTimeline, placing)) == fillSequence);
+        const auto placedClip = nested.createClip(mainTimeline, placing, "Fills", 4, 4);
+        auto* clip = nested.getClip(mainTimeline, placing, placedClip);
+        clip->contentDurationBeats = 2.0;
+        clip->contentStretch = 2.0;
+        clip->repeatContent = true;
+        // Neither may play itself, directly or through the other.
+        assert(nested.createTimelineTrack(*fillSequence, {"", ""}).empty());
+        assert(nested.createTimelineTrack(*fillSequence, fills).empty());
+        assert(nested.timelineReaches({"", ""}, fills));
+        nest.transport->seekToBeat(5.0); // Fills beat 0.5
+        nest.transport->play();
+        nest.transport->latchFrameState();
+        nested.update();
+        near(fillValue, 0.3f);
+        nest.transport->seekToBeat(7.0); // Fills beat 1.5
+        nest.transport->latchFrameState();
+        nested.update();
+        near(fillValue, 0.7f);
+        // Saved with which timeline the track plays.
+        const auto saved = nested.toJson();
+        ofxOceanodeContainer reloadedOwner;
+        ofxOceanodeTimelineManager reloaded(&reloadedOwner);
+        reloaded.fromJson(saved);
+        const auto* reloadedTrack = reloaded.getTrack(reloaded.getMainSequence(), placing);
+        assert(reloadedTrack != nullptr && reloadedTrack->macroCanvas == "." && reloadedTrack->macroTimeline == fillsId);
+    }
+
     // ---- A quantized launch hands its first events over timestamped ----
     {
         ofxOceanodeContainer clocked;
@@ -189,7 +244,7 @@ int main() {
         assert(events.front().value == "1");
         ofxOceanodeScheduling::unregisterOwner(&scheduled);
     }
-    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence.\n";
+    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, nested timelines.\n";
 }
 '''
 

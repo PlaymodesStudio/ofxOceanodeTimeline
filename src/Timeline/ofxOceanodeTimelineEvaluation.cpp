@@ -608,7 +608,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
         const auto outerContext = outer.contextFrom(context);
         for(const auto& track : outer.sequence->tracks) {
             if(!track.isMacroTrack() || !isTrackAudible(track)) continue;
-            if(playedMacroAt(track.macroCanvas) == nullptr) continue;
+            if(playedMacroAt(track) == nullptr) continue;
             const size_t firstOfTrack = result.size();
             double latestStart = -std::numeric_limits<double>::infinity();
             for(const auto& clip : track.clips) {
@@ -633,7 +633,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 // A reversed clip plays the mirrored copy, its content read
                 // from the end of this clip's content (sequence beat z here is
                 // mirrorLength - content + z there).
-                const auto* played = playedMacroAt(track.macroCanvas, clip.reversed);
+                const auto* played = playedMacroAt(track, clip.reversed);
                 if(played == nullptr) continue;
                 const double mirrorShift = clip.reversed ? played->mirrorLength - content : 0.0;
                 const double windowStart = std::max(from, start), windowEnd = std::min(to, end);
@@ -699,7 +699,7 @@ bool ofxOceanodeTimelineManager::isGatedMacroActive(const ofxOceanodeAbstractPar
     ensureEvaluationIndexes();
     for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         if(!track.isMacroTrack() || !track.macroGate) continue;
-        if(const auto* played = playedMacroAt(track.macroCanvas))
+        if(const auto* played = playedMacroAt(track))
             if(macroNodeParameter(*played->macroContainer, "Active") == &parameter) return true;
     }
     return false;
@@ -736,7 +736,7 @@ void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportSta
     };
     for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         if(!track.isMacroTrack()) continue;
-        const auto* played = playedMacroAt(track.macroCanvas);
+        const auto* played = playedMacroAt(track);
         if(played == nullptr) continue;
         // Pre-roll covers the earliest negative latency inside the macro.
         float earliestMs = 0.0f;
@@ -808,6 +808,7 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         PlayedMacro played;
         played.macroContainer = source.macroContainer;
         played.canvas = source.canvas;
+        played.timeline = source.timeline;
         played.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*source.sequence);
         played.sequence->base = nullptr; // its paths are absolute now
         played.sequence->timelines.clear();
@@ -820,6 +821,7 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         PlayedMacro mirrored;
         mirrored.macroContainer = played.macroContainer;
         mirrored.canvas = played.canvas;
+        mirrored.timeline = played.timeline;
         mirrored.outerLatencyMs = played.outerLatencyMs;
         mirrored.reversed = true;
         mirrored.mirrorLength = macroTimelineLength(*source.sequence);
@@ -863,9 +865,18 @@ const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playe
 }
 
 const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(const std::string& canvas,
+                                                                                         const std::string& timeline,
                                                                                          bool reversed) const {
-    for(const auto& played : playedMacros) if(played.canvas == canvas && played.reversed == reversed) return &played;
+    for(const auto& played : playedMacros)
+        if(played.canvas == canvas && played.timeline == timeline && played.reversed == reversed) return &played;
     return nullptr;
+}
+
+// A played track's macroCanvas is absolute ("." the root canvas: copies of
+// the root's timelines keep it relative).
+const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(
+        const ofxOceanodeTimelineTrack& track, bool reversed) const {
+    return playedMacroAt(track.macroCanvas == "." ? std::string() : track.macroCanvas, track.macroTimeline, reversed);
 }
 
 std::vector<ofxOceanodeTimelineSequence*> ofxOceanodeTimelineManager::evaluatedSequences() const {
@@ -2118,7 +2129,7 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
     // rebuild, so edits to them and where they are matter too).
     std::vector<const ofxOceanodeTimelineSequence*> sequences{&mainSequence};
     for(const auto& source : collectMacroSources()) {
-        hash.add(source.macroContainer); hash.add(source.canvas);
+        hash.add(source.macroContainer); hash.add(source.canvas); hash.add(source.timeline);
         sequences.push_back(source.sequence);
     }
     for(const auto* sequence : sequences) hash.word(sequenceSignature(*sequence));
@@ -2130,7 +2141,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
     ChangeHash hash;
     hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
     for(const auto& track : sequence.tracks) {
-        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
+        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
         hash.add(track.isFolder); hash.add(track.parentId);
         hash.add(track.bindings.data()); hash.add(track.bindings.size());
         for(const auto& binding : track.bindings) {

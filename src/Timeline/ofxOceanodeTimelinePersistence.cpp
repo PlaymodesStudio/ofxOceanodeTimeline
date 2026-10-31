@@ -326,6 +326,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         if(track.isMacroTrack()) {
             trackJson["macroCanvas"] = track.macroCanvas;
             trackJson["macroGate"] = track.macroGate;
+            if(!track.macroTimeline.empty()) trackJson["macroTimeline"] = track.macroTimeline;
             if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
             trackJson["macroPreRollMs"] = track.macroPreRollMs;
             trackJson["macroTailMs"] = track.macroTailMs;
@@ -529,6 +530,11 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             json["timelines"].push_back(std::move(timelineJson));
         }
     }
+    if(!timelineWindows.empty()) {
+        json["windows"] = ofJson::array();
+        for(const auto& window : timelineWindows)
+            json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline}});
+    }
     if(!freeTimelines.empty()) {
         json["players"] = ofJson::array();
         for(const auto& ref : freeTimelines)
@@ -709,6 +715,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.parentId = trackJson.value("parentId", std::string());
         track.macroCanvas = trackJson.value("macroCanvas", std::string());
         track.macroGate = trackJson.value("macroGate", false);
+        track.macroTimeline = track.macroCanvas.empty() ? std::string() : trackJson.value("macroTimeline", std::string());
         track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
         track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
@@ -1222,6 +1229,11 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             mainSequence.timelines.push_back(std::move(timeline));
         }
     }
+    if(json.contains("windows") && json["windows"].is_array())
+        for(const auto& window : json["windows"])
+            if(window.is_object())
+                timelineWindows.push_back({window.value("id", static_cast<int>(timelineWindows.size()) + 1),
+                                           {window.value("canvas", std::string()), window.value("timeline", std::string())}});
     if(json.contains("players") && json["players"].is_array())
         for(const auto& player : json["players"])
             if(player.is_object())

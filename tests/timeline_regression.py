@@ -461,8 +461,6 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         # none of: no macro timeline is ever played here.
         (folder / "macro_stub.cpp").write_text(
             '#include "Timeline/ofxOceanodeTimeline.h"\n'
-            'std::vector<ofxOceanodeTimelineManager::MacroSource> '
-            'ofxOceanodeTimelineManager::collectMacroSources() const { return {}; }\n'
             'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
             # Timelines by reference: only the root canvas exists here.

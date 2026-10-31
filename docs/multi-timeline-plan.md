@@ -1,6 +1,9 @@
 # Multi-timeline development plan
 
-Status: plan, not started (written 2026-10-31).
+Status: phases 1 to 5 implemented on the `multi-timeline` branches of
+`ofxOceanode`, `ofxOceanodeTimeline` and `ofxOceanodeSuperCollider`; phase 6 not
+started. Written 2026-10-31. See "Implementation notes" at the end for what was
+built differently from the plan below.
 Touches `ofxOceanode` (core transport) and `ofxOceanodeTimeline`, and is checked
 against `ofxOceanodeSuperCollider` (the timestamping backend and its box synths).
 
@@ -478,3 +481,44 @@ the other), two windows on different players, and focus-routed shortcuts.
 - **Performance.** Evaluation and scheduling scale with the number of playing
   players times placements. Run `perf_benchmark.py` at the end of phases 3
   and 4 with, for example, eight free players.
+
+## Implementation notes
+
+What was built, and where it differs from the plan above.
+
+- **Free players run through engines.** Instead of moving every per-frame cache
+  and the scheduler state into a player object (phase 2), each free timeline
+  is played by an engine: a second `ofxOceanodeTimelineManager` that evaluates,
+  schedules and applies an absolute-path copy of the timeline on the player's
+  transport. The main timeline's code path is unchanged, so phases 2 and 3
+  were behaviour-neutral by construction. Its tempo, loop and meter live in
+  `ofxOceanodeTimelinePlaySettings` on the sequence (the main timeline keeps
+  its own on the manager, as before).
+- **Conflict rule (open decision 1).** Inner canvases' engines run first and
+  the main timeline last, so the outer value lands; a path the main timeline
+  binds is left out of an engine's scheduling. There is no per-timeline
+  priority or "started later" rule yet.
+- **Patch control (decision 2 in the earlier version).** Settled as planned:
+  `beatTransport` has Play/Stop/Seek/Quantize and acts on its Time Source.
+- **Placed macros (open decision 2).** Not built: nodes inside a placed (not
+  free) macro still follow their parent's transport, as before. A clip-local
+  transport would need a driven derived transport in the core.
+- **Where the free state is saved (decision 3).** In the root `timeline.json`
+  (`"players"`: canvas and timeline ids), not in each macro instance's preset.
+- **Global Play (decision 4).** Unchanged: the root timeline's play/stop. The
+  root transport now owns a clock that always runs (internal, frame-step, or
+  while an external clock plays).
+- **Wave tracks (decision 5).** Still main-timeline only.
+- **Immediate root actions.** The root transport's own Play/Stop/Seek stay
+  immediate (as before); only free timelines launch at timestamped instants.
+  A pending start inside the scheduling window is scheduled from its instant,
+  so a free timeline's first events are as exact as the rest.
+- **Placed-and-free on the same paths.** A timeline both placed (as clips) and
+  playing free drives the same parameters twice; the outer one wins where both
+  are active, and rest values of placed macro copies can override the free
+  one's gates between its clips.
+- **Windows (phase 5).** Further windows are editor instances the main Timeline
+  controller hosts (no core change); each swaps in its own view state (zoom,
+  scroll) while it draws. File drops onto a further window are not handled.
+- **Note-group setup** works on the timeline shown in the editor.
+- **Phase 6** (nested clips keeping their own tempo lane) is not started.

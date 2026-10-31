@@ -352,6 +352,78 @@ The unfolded state is saved with the track. Structural work (new tracks,
 targets, note groups) still happens in the macro's timeline itself, opened by
 **Edit macro timeline** (or a double-click on the macro clip).
 
+## Several timelines, playing on their own
+
+Every canvas (the main one and every macro's) can own several timelines: its
+default one (the main timeline, or the macro's own) and any number more. The
+menu at the top left of the Timeline window lists all of them, grouped by
+canvas; pick one to show it. Its **...** button makes a **New timeline on this
+canvas**, duplicates, renames or deletes the one shown (a canvas's default
+timeline goes with its canvas), and opens it **in a new window**.
+
+**Placing a timeline as clips.** **Place a timeline here as clips** (in the same
+**...** menu) adds a track to the timeline shown whose clips play another
+timeline, exactly like a macro track: move, repeat, stretch, offset and reverse
+the clips. Any timeline of the same canvas, or of a canvas inside it, can be
+placed; one that would end up playing itself (directly or through the
+timelines it places) is not offered. The same timeline can be placed any
+number of times and also play on its own: its data is shared, so an edit
+reaches every instance, while each instance has its own playhead and rolls its
+own chance and mutations. **Duplicate this timeline** makes an independent
+copy. Tracks of a placed timeline drive the same parameters wherever it plays,
+so overlapping instances on one parameter resolve like any two timelines do
+(below).
+
+**Playing on its own.** With a timeline other than the main one shown, tick
+**Plays on its own**. It then gets its own transport on the shared clock:
+**Play**, **Stop** (back to its start), **|<**, and Space while it is shown,
+play, stop and seek it by itself, while the main timeline plays or is stopped.
+A macro's timeline can also be switched from the macro node's menu (**Play its
+timeline on its own**). Its bar shows:
+
+- **Quantize**: Play and Stop take effect at once, or on the next beat or bar of
+  the main timeline while it plays (else of the clock), so independently
+  launched timelines start in phase. The start is a timestamped instant: its
+  first events reach a timestamping backend (SuperCollider) as exactly as the
+  rest.
+- **Tempo**: its own fixed **BPM**, the clock's tempo times a ratio (**x Clock**:
+  it follows tempo changes), or its own tempo lane (**Lane**, edited as a list
+  of points with an interpolation).
+- **Loop** and its range, and its time signature.
+
+These settings are saved with the timeline (in the preset, or in the macro's
+`sequence.json`), and which timelines play on their own is saved with the
+preset. A macro's timeline playing on its own is also what the macro's canvas
+plays to: nodes inside it whose Time Source is Auto follow it.
+
+**Who wins on a parameter.** Timelines playing on their own are evaluated
+before the main timeline, inner canvases first, so where two drive the same
+parameter at the same moment the outer one's value lands. A parameter the
+main timeline drives is left to the main timeline's scheduler: a timeline
+playing on its own sends it at frame rate instead.
+
+**Nodes that follow a timeline.** Nodes synced to the transport (Phasor,
+Counter, Ramp, Beat Transport, the SuperCollider boxes) have a **Time Source**
+in the inspector in place of *Sync To Transport*: **Free** (not synced),
+**Auto** (the timeline its canvas plays: the main one, or its macro's when that
+plays on its own), **Clock** (always running at the main tempo), or any
+timeline by name, this canvas's first. A timeline that only plays as clips is
+listed greyed out. The choice is saved by id, so renaming a timeline keeps it;
+a deleted one shows *(missing)* and the node holds stopped. **Beat Transport**
+also plays, stops and seeks the timeline it follows (its **Play**, **Stop** and
+**Seek** inputs), quantized to the next beat or bar, and reads that
+timeline's meter and loop.
+
+**Adding a parameter.** **Add to Timeline** in a parameter's right-click menu
+first asks which timeline (those of the parameter's canvas and of every canvas
+around it), then which track; with only one timeline it goes straight to the
+tracks. **Remove from Timeline** finds the parameter in all of them.
+
+**Windows.** **Open in a new window** (or **Open its timeline in a new window**
+from a macro node) opens another Timeline window, docked with the first one,
+showing that timeline with its own zoom and scroll; it can show any other
+timeline from its own menu. Windows are saved with the preset.
+
 ## Duplicating lanes
 
 Open a clip editor, right-click a lane's left properties pad and choose
