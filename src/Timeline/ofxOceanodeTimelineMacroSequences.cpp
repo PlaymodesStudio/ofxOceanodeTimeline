@@ -184,6 +184,8 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
         clip->contentDurationBeats = length;
         clip->contentStretch = 1.0;
         clip->repeatContent = true;
+        // A timeline with a tempo of its own plays at it.
+        clip->ownTempo = macroSequence != nullptr && macroSequence->play.hasOwnTempo();
     }
     invalidateEvaluationIndexes();
     return id;

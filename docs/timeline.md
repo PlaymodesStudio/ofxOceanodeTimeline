@@ -370,7 +370,9 @@ timelines it places) is not offered. The same timeline can be placed any
 number of times and also play on its own. A clip's **Keep its own tempo**
 (right-click) plays the timeline at its own tempo (its BPM, ratio of the clock
 or tempo lane) instead of the host's; the clip's stretch still slows it, and
-its repeats keep the clip's length. Its data is shared, so an edit
+its repeats keep the clip's length. New clips start with it on when the
+placed timeline has a tempo of its own (not the default 120 BPM, a ratio of
+the clock, or a tempo lane); off, they follow the host's tempo. Its data is shared, so an edit
 reaches every instance, while each instance has its own playhead and rolls its
 own chance and mutations. **Duplicate this timeline** makes an independent
 copy. Tracks of a placed timeline drive the same parameters wherever it plays,

@@ -1030,6 +1030,9 @@ struct ofxOceanodeTimelinePlaySettings {
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     int quantize = 2;                // play/stop on: 0 now, 1 the next beat, 2 the next bar
+    // A tempo of its own (not the default 120 BPM): new clips placing the
+    // timeline then keep it (ofxOceanodeTimelineClip::ownTempo).
+    bool hasOwnTempo() const { return bpmAutomationEnabled || followClockTempo || bpm != 120.0f; }
     bool operator==(const ofxOceanodeTimelinePlaySettings& other) const;
     bool operator!=(const ofxOceanodeTimelinePlaySettings& other) const { return !(*this == other); }
 };

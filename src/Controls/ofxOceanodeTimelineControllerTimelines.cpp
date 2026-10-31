@@ -137,16 +137,7 @@ void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager
                     auto& host = scope(timeline);
                     beginHistoryGesture(timeline);
                     const auto trackId = timeline.createTimelineTrack(host, ref);
-                    if(!trackId.empty()) {
-                        auto* placed = timeline.timelineFor(ref);
-                        const double length = placed == nullptr ? timeline.getBeatsPerBar() : timeline.macroTimelineLength(*placed);
-                        const auto clipId = timeline.createClip(host, trackId, timeline.timelineName(ref), 0.0, length);
-                        if(auto* clip = timeline.getClip(host, trackId, clipId)) {
-                            clip->contentDurationBeats = length;
-                            clip->contentStretch = 1.0;
-                            clip->repeatContent = true;
-                        }
-                    }
+                    if(!trackId.empty()) timeline.createMacroClip(host, trackId, 0.0);
                     finishHistoryGesture(timeline);
                 }
             }
