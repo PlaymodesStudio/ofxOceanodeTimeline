@@ -178,6 +178,8 @@ std::vector<std::string> ofxOceanodeTimelineManager::selectSchedulablePaths() co
     for(const auto& path : orderedAutomationPaths()) {
         // Continuous lanes (curves, LFOs, live overrides) keep the frame path.
         if(continuouslyEvaluatedPathsCache.count(path) > 0) continue;
+        // A path an outer timeline drives is left to its scheduler.
+        if(pathDrivenElsewhere && pathDrivenElsewhere(path)) continue;
         auto* parameter = findParameterCached(path);
         // Only a backend that can execute a value at an instant gets events.
         if(parameter == nullptr || !ofxOceanodeScheduling::hasParameterTarget(parameter)) continue;
@@ -399,7 +401,10 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // The window can run past the loop end: events of the next pass are
     // scheduled at the exact instant the transport will wrap, so the loop's
     // first beat is on time too.
-    const double lookaheadSeconds = effectiveSchedulingLookaheadMs() / 1000.0 - earliestOffsetUs / 1000000.0;
+    double lookaheadSeconds = effectiveSchedulingLookaheadMs() / 1000.0 - earliestOffsetUs / 1000000.0;
+    // Nothing past a timestamped stop.
+    if(scheduleHorizonUs > nowUs)
+        lookaheadSeconds = std::min(lookaheadSeconds, static_cast<double>(scheduleHorizonUs - nowUs) / 1000000.0);
     const bool loopActive = transport.loopActive() &&
         transport.beatPosition < transport.loopEndBeat - kEpsilon;
     const uint64_t pass = transport.loopCount;

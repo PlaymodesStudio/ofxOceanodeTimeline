@@ -810,22 +810,8 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         played.canvas = source.canvas;
         played.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*source.sequence);
         played.sequence->base = nullptr; // its paths are absolute now
-        const std::string& prefix = source.canvas;
-        // "Node/Param" is in the macro itself, "Macro 2::Node/Param" further in.
-        auto absolute = [&](const std::string& path) {
-            return path.find("::") == std::string::npos ? prefix + "::" + path : prefix + " / " + path;
-        };
-        for(auto& track : played.sequence->tracks) {
-            for(auto& binding : track.bindings) binding.parameterPath = absolute(binding.parameterPath);
-            if(track.isMacroTrack()) track.macroCanvas = prefix + " / " + track.macroCanvas;
-            for(auto& clip : track.clips)
-                for(auto& lane : clip.lanes) {
-                    if(lane.targetProbability.empty()) continue;
-                    std::decay_t<decltype(lane.targetProbability)> moved;
-                    for(const auto& [path, chance] : lane.targetProbability) moved[absolute(path)] = chance;
-                    lane.targetProbability = std::move(moved);
-                }
-        }
+        played.sequence->timelines.clear();
+        makeAbsolute(*played.sequence, source.canvas);
         const auto* parentCopy = source.parent < 0 ? nullptr : &playedMacros[forwardIndex[static_cast<size_t>(source.parent)]];
         const float outer = parentCopy == nullptr ? 0.0f : parentCopy->outerLatencyMs;
         const auto& parent = parentCopy == nullptr ? mainSequence : *parentCopy->sequence;
@@ -2135,36 +2121,41 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
         hash.add(source.macroContainer); hash.add(source.canvas);
         sequences.push_back(source.sequence);
     }
-    for(const auto* sequence : sequences) {
-        hash.add(sequence->tracks.data()); hash.add(sequence->tracks.size());
-        for(const auto& track : sequence->tracks) {
-            hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
-            hash.add(track.isFolder); hash.add(track.parentId);
-            hash.add(track.bindings.data()); hash.add(track.bindings.size());
-            for(const auto& binding : track.bindings) {
-                hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
-                hash.add(binding.mode); hash.add(binding.bypass); hash.add(binding.hasLiveOverride);
-            }
-            hash.add(track.noteGroups.size());
-            for(const auto& group : track.noteGroups) {
-                hash.add(group.id); hash.add(group.pitchBindingId); hash.add(group.gateBindingId);
-                hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.stutterBindingId); hash.add(group.voices);
-            }
-            hash.add(track.clips.data()); hash.add(track.clips.size());
-            for(const auto& clip : track.clips) {
-                hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
-                hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-                hash.add(clip.reversed);
-                hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
-                hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
-                for(const auto& lane : clip.lanes) {
-                    hash.word(lanePlaybackSignature(lane));
-                    if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
-                    int voices = 0, instrumentVoices = 0;
-                    bool kit = false;
-                    pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
-                    hash.add(voices); hash.add(kit); hash.add(instrumentVoices);
-                }
+    for(const auto* sequence : sequences) hash.word(sequenceSignature(*sequence));
+    return hash.result();
+}
+
+// One sequence's part of evaluationSignature (an engine follows its source by it).
+uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const {
+    ChangeHash hash;
+    hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
+    for(const auto& track : sequence.tracks) {
+        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
+        hash.add(track.isFolder); hash.add(track.parentId);
+        hash.add(track.bindings.data()); hash.add(track.bindings.size());
+        for(const auto& binding : track.bindings) {
+            hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
+            hash.add(binding.mode); hash.add(binding.bypass); hash.add(binding.hasLiveOverride);
+        }
+        hash.add(track.noteGroups.size());
+        for(const auto& group : track.noteGroups) {
+            hash.add(group.id); hash.add(group.pitchBindingId); hash.add(group.gateBindingId);
+            hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.stutterBindingId); hash.add(group.voices);
+        }
+        hash.add(track.clips.data()); hash.add(track.clips.size());
+        for(const auto& clip : track.clips) {
+            hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
+            hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
+            hash.add(clip.reversed);
+            hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
+            hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
+            for(const auto& lane : clip.lanes) {
+                hash.word(lanePlaybackSignature(lane));
+                if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
+                int voices = 0, instrumentVoices = 0;
+                bool kit = false;
+                pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
+                hash.add(voices); hash.add(kit); hash.add(instrumentVoices);
             }
         }
     }

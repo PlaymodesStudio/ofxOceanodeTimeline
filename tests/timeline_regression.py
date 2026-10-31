@@ -25,7 +25,12 @@ class ofxOceanodeContainer {
 public:
     std::shared_ptr<ofxOceanodeTransport> transport = std::make_shared<ofxOceanodeTransport>();
     std::map<std::string, ofxOceanodeAbstractParameter*> targets;
-    auto getTransport() const { return transport; }
+    std::shared_ptr<ofxOceanodeTransport> transportOverride;
+    auto getTransport() const { return transportOverride != nullptr ? transportOverride : transport; }
+    auto getRootTransport() const { return transport; }
+    auto getTransportOverride() const { return transportOverride; }
+    void setTransportOverride(std::shared_ptr<ofxOceanodeTransport> override) { transportOverride = std::move(override); }
+    std::string getCanvasID() const { return "Canvas"; }
     auto getTransportState() const { return transport->getState(); }
     void setBpm(float bpm, bool = true) { transport->setBpm(bpm); }
     std::string getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter) const {
@@ -459,7 +464,27 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'std::vector<ofxOceanodeTimelineManager::MacroSource> '
             'ofxOceanodeTimelineManager::collectMacroSources() const { return {}; }\n'
             'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
-            'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n')
+            'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
+            # Timelines by reference: only the root canvas exists here.
+            'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
+            'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
+            '{ return canvas.empty() ? container : nullptr; }\n'
+            'ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas('
+            'const ofxOceanodeContainer&, const std::string& timeline) const { return {std::string(), timeline}; }\n'
+            'ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::timelineFor(const TimelineRef& ref) {\n'
+            '    if(!ref.canvas.empty()) return nullptr;\n'
+            '    if(ref.timeline.empty()) return &mainSequence;\n'
+            '    for(auto& timeline : mainSequence.timelines) if(timeline->timelineId == ref.timeline) return timeline.get();\n'
+            '    return nullptr;\n}\n'
+            'bool ofxOceanodeTimelineManager::refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const {\n'
+            '    if(&sequence == &mainSequence) { ref = {}; return true; }\n'
+            '    for(const auto& timeline : mainSequence.timelines)\n'
+            '        if(timeline.get() == &sequence) { ref = {std::string(), timeline->timelineId}; return true; }\n'
+            '    return false;\n}\n'
+            'std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {\n'
+            '    auto* sequence = timelineFor(ref);\n'
+            '    if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;\n'
+            '    return ref.timeline.empty() ? std::string("Main") : ref.timeline;\n}\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"

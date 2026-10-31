@@ -35,8 +35,10 @@ void ofxOceanodeTimelineManager::pruneMacroSequences() const {
     macroSequences.erase(std::remove_if(macroSequences.begin(), macroSequences.end(),
         [](const auto& entry) { return entry.container.expired(); }), macroSequences.end());
     // A shared sequence resolves through a live copy (the first one may be gone).
-    for(auto& entry : macroSequences)
+    for(auto& entry : macroSequences) {
         entry.sequence->base = const_cast<ofxOceanodeContainer*>(entry.address);
+        for(auto& timeline : entry.sequence->timelines) timeline->base = entry.sequence->base;
+    }
     for(auto it = sequenceHistories.begin(); it != sequenceHistories.end();) {
         const bool live = std::any_of(macroSequences.begin(), macroSequences.end(),
             [&](const auto& entry) { return entry.sequence.get() == it->first; });
@@ -197,7 +199,9 @@ std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& track
 std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager::collectMacroSources() const {
     std::vector<MacroSource> sources;
     if(container == nullptr) return sources;
-    pruneMacroSequences();
+    // An engine plays its primary's macro timelines.
+    if(primary != nullptr) primary->pruneMacroSequences(); else pruneMacroSequences();
+    const auto& macroSequences = sequenceEntries();
     constexpr size_t kMaximumSources = 64;
     // Breadth first: the main timeline's macro tracks, then theirs. A macro
     // reached twice is one source (and a sequence never reaches itself).
@@ -403,4 +407,51 @@ void ofxOceanodeTimelineManager::replayParameterMove(ofxOceanodeContainer& canva
     retargetAllParameterPaths(newToOld);
     invalidateEvaluationIndexes();
     invalidateSchedule();
+}
+
+// ---- Timelines by reference ----
+
+ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const {
+    if(container == nullptr) return nullptr;
+    if(isRootCanvas(canvas) || canvas == container->getCanvasID()) return container;
+    return containerWithCanvas(*container, canvas);
+}
+
+ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas(const ofxOceanodeContainer& canvas,
+                                                                                 const std::string& timeline) const {
+    if(&canvas == container || isRootCanvas(canvas.getCanvasID())) return {std::string(), timeline};
+    return {canvas.getCanvasID(), timeline};
+}
+
+ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::timelineFor(const TimelineRef& ref) {
+    ofxOceanodeTimelineSequence* base = nullptr;
+    if(isRootCanvas(ref.canvas)) base = &mainSequence;
+    else if(auto* canvas = canvasContainer(ref.canvas)) base = getMacroSequence(*canvas);
+    if(base == nullptr || ref.timeline.empty()) return base;
+    for(auto& timeline : base->timelines)
+        if(timeline->timelineId == ref.timeline) return timeline.get();
+    return nullptr;
+}
+
+bool ofxOceanodeTimelineManager::refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const {
+    auto within = [&](const ofxOceanodeTimelineSequence& base, const std::string& canvas) {
+        if(&base == &sequence) { ref = {canvas, std::string()}; return true; }
+        for(const auto& timeline : base.timelines)
+            if(timeline.get() == &sequence) { ref = {canvas, timeline->timelineId}; return true; }
+        return false;
+    };
+    if(within(mainSequence, std::string())) return true;
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences)
+        if(within(*entry.sequence, entry.address->getCanvasID())) return true;
+    return false;
+}
+
+std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {
+    auto* sequence = timelineFor(ref);
+    if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;
+    if(!ref.timeline.empty()) return ref.timeline;
+    if(isRootCanvas(ref.canvas)) return "Main";
+    if(auto* canvas = canvasContainer(ref.canvas)) return getMacroSequenceLabel(*canvas);
+    return ref.canvas;
 }
