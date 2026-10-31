@@ -130,6 +130,13 @@ int main() {
     model.sequenceFromJson(copy, model.sequenceToJson(*pattern));
     assert(copy.play == pattern->play);
 
+    // Added from a parameter's menu: on the root canvas, always a further one.
+    const auto pads = model.addTimeline("", "Pads");
+    assert(pads.canvas.empty() && !pads.timeline.empty() && model.timelineExists(pads));
+    assert(model.timelineName(pads) == "Pads" && model.findTimeline(pads) == model.timelineFor(pads));
+    assert(!model.timelineExists({"", "tl_unknown"}) && model.findTimeline({"", "tl_unknown"}) == nullptr);
+    assert(model.timelinesOfCanvas("").size() == 3);
+    assert(model.removeTimeline(pads));
     // Duplicated, renamed and removed.
     const auto twin = model.duplicateTimeline(drums, "Drums 2");
     assert(!twin.empty() && model.timelineFor({"", twin})->tracks.size() == 1);

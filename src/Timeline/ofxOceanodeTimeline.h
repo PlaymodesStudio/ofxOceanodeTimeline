@@ -1267,6 +1267,13 @@ public:
     // The timeline itself (created empty for a canvas's default on first
     // use); nullptr when its canvas or id is unknown.
     ofxOceanodeTimelineSequence* timelineFor(const TimelineRef& ref);
+    // The timeline, without creating a canvas's default one (nullptr when it
+    // has none yet).
+    ofxOceanodeTimelineSequence* findTimeline(const TimelineRef& ref);
+    // Whether a timeline is there to list: the main one always; a further
+    // one while it exists; a macro's own once it has something (tracks,
+    // further timelines, play settings) or plays on its own.
+    bool timelineExists(const TimelineRef& ref);
     // Where a sequence lives (false for a copy or an unknown one).
     bool refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const;
     TimelineRef refForCanvas(const ofxOceanodeContainer& canvas, const std::string& timeline = std::string()) const;
@@ -1281,6 +1288,9 @@ public:
     // A further timeline on a canvas (its id), and its removal (not the default's).
     std::string createTimeline(const std::string& canvas, const std::string& name);
     bool removeTimeline(const TimelineRef& ref);
+    // A new timeline on a canvas: a macro's own one when it has none yet,
+    // else a further one. Its reference (canvas "" when it could not).
+    TimelineRef addTimeline(const std::string& canvas, const std::string& name);
     bool renameTimeline(const TimelineRef& ref, const std::string& name);
     // Copies a timeline as a new one on the same canvas (its id).
     std::string duplicateTimeline(const TimelineRef& ref, const std::string& name = std::string());

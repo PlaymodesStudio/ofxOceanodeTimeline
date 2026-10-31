@@ -12,6 +12,7 @@ public:
     explicit TimelineExtension(ofxOceanodeContainer* owner) : host(owner), manager(owner) {}
     ofxOceanodeContainer* host;
     ofxOceanodeTimelineManager manager;
+    char newTimelineName[64] = "";
     void clear() override { manager.clear(); }
     void beginParameterCache() override { manager.beginParameterCache(); }
     void evaluateAutomation() override { manager.evaluateAutomation(); }
@@ -65,6 +66,7 @@ public:
             // canvas and of every canvas around it, from the root down (a
             // timeline drives what is inside its canvas).
             std::vector<std::pair<TimelineRef, ofxOceanodeContainer*>> eligible;
+            std::vector<std::pair<std::string, ofxOceanodeContainer*>> eligibleCanvases;
             {
                 std::vector<std::string> canvases{std::string()};
                 const std::string own = absParam.getNodeModel() != nullptr ? absParam.getNodeModel()->getParents() : std::string();
@@ -78,6 +80,7 @@ public:
                 for(const auto& canvas : canvases) {
                     auto* canvasContainer = timelineManager.canvasContainer(canvas);
                     if(canvasContainer == nullptr) continue;
+                    eligibleCanvases.push_back({canvas, canvasContainer});
                     for(const auto& ref : timelineManager.timelinesOfCanvas(canvas))
                         eligible.push_back({ref, canvasContainer});
                 }
@@ -122,6 +125,25 @@ public:
                 return (root ? std::string() : ref.canvas + " > ") + timelineManager.timelineName(ref) +
                        "##add" + ofxOceanodeTimelineManager::timeSourceId(ref);
             };
+            // A new timeline (on the parameter's canvas or one around it), with
+            // the parameter on a first track, shown in the editor.
+            auto newTimelineItems = [&]() {
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::InputTextWithHint("##newTimelineName", "Name", newTimelineName, sizeof(newTimelineName));
+                for(const auto& [canvas, canvasContainer] : eligibleCanvases) {
+                    const bool root = canvas.empty();
+                    const std::string where = eligibleCanvases.size() == 1 ? std::string("Create")
+                        : root ? std::string("On the main canvas") : "In " + timelineManager.getMacroSequenceLabel(*canvasContainer);
+                    if(!ImGui::Selectable((where + "##newTimelineOn" + canvas).c_str())) continue;
+                    const auto ref = timelineManager.addTimeline(canvas, newTimelineName);
+                    if(auto* sequence = ref.canvas.empty() && ref.timeline.empty() ? nullptr : timelineManager.timelineFor(ref)) {
+                        const auto track = timelineManager.createTrack(*sequence, absParam.getName());
+                        timelineManager.addBinding(*sequence, track, absParam);
+                        timelineManager.requestTimelineScope(ref);
+                    }
+                    newTimelineName[0] = '\0';
+                }
+            };
             if(ImGui::BeginMenu("Add to Timeline")){
                 if(eligible.size() == 1) {
                     trackItems(eligible.front().first, eligible.front().second); // one timeline: straight to its tracks
@@ -133,6 +155,15 @@ public:
                         }
                     }
                 }
+                ImGui::Separator();
+                if(ImGui::BeginMenu("New Timeline")) {
+                    newTimelineItems();
+                    ImGui::EndMenu();
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A new timeline with this parameter on its first track:\n"
+                                      "on this canvas or one around it (in a macro without a timeline yet,\n"
+                                      "it becomes the macro's own).");
                 ImGui::EndMenu();
             }
             if(ImGui::IsItemHovered())

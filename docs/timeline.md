@@ -428,7 +428,11 @@ timeline's meter and loop.
 **Adding a parameter.** **Add to Timeline** in a parameter's right-click menu
 first asks which timeline (those of the parameter's canvas and of every canvas
 around it), then which track; with only one timeline it goes straight to the
-tracks. **Remove from Timeline** finds the parameter in all of them.
+tracks. Its **New Timeline** submenu takes a name and creates a timeline with
+the parameter on its first track, on the parameter's canvas or one around it,
+and shows it (in a macro that has no timeline yet, it becomes the macro's
+own). **Remove from Timeline** finds the parameter in all of them. A macro's
+own timeline is only listed once it has something in it or plays on its own.
 
 **Windows.** **Open in a new window** (or **Open its timeline in a new window**
 from a macro node) opens another Timeline window, docked with the first one,
