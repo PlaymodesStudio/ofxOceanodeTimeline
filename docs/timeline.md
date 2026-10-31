@@ -392,6 +392,10 @@ timeline on its own**). Its bar shows:
 - **Tempo**: its own fixed **BPM**, the clock's tempo times a ratio (**x Clock**:
   it follows tempo changes), or its own tempo lane (**Lane**, edited as a list
   of points with an interpolation).
+  The toolbar's tempo (labelled **Main** while another timeline is shown)
+  stays the main timeline's. A timeline that does not play on its own still
+  shows its own tempo and meter: clips set to **Keep its own tempo** use them;
+  otherwise, placed as clips, it follows the host's tempo.
 - **Loop** and its range, and its time signature.
 
 These settings are saved with the timeline (in the preset, or in the macro's

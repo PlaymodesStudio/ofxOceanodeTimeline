@@ -171,51 +171,59 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         ImGui::SetTooltip("On: this timeline has its own transport -- play, stop and seek it by itself,\n"
                           "at its own tempo, alongside the main timeline (nodes can follow it as a Time Source).\n"
                           "Off: it plays only where clips of another timeline place it.");
-    if(!free) {
+    auto transport = free ? timeline.transportFor(ref) : nullptr;
+    if(free && transport == nullptr) { ImGui::SameLine(); ImGui::TextDisabled("starting..."); return; }
+    if(transport != nullptr) {
+        const auto state = transport->getState();
+        double pendingClock = 0.0;
+        bool pendingStarts = false;
+        const bool pending = transport->nextPendingAction(pendingClock, pendingStarts);
+        ImGui::SameLine(0.0f, 8.0f);
+        if(ImGui::Button("|<##toStart")) timeline.seekTimeline(ref, 0.0);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to its start");
+        ImGui::SameLine(0.0f, 2.0f);
+        if(ImGui::Button("Stop##stop")) timeline.stopTimeline(ref, true);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Stop and go back to its start (on the quantize below)");
+        ImGui::SameLine(0.0f, 2.0f);
+        const bool playing = state.isPlaying;
+        if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.3f, 1.0f));
+        if(ImGui::Button(playing ? "Pause##play" : (pending && pendingStarts ? "Armed##play" : "Play##play"))) {
+            if(playing) timeline.stopTimeline(ref, false);
+            else if(pending) transport->cancelPendingActions();
+            else timeline.playTimeline(ref);
+        }
+        if(playing) ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip(pending ? "Waiting for its quantized instant (click to cancel)" : "Play or pause it (Space while this timeline is shown)");
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetNextItemWidth(84.0f);
+        if(ImGui::Combo("##quantize", &settings.quantize, kQuantizeLabels, 3)) changed = true;
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
+                              "of the main timeline while it plays (else of the clock), so it starts in phase.");
+        ImGui::SameLine(0.0f, 8.0f);
+        {
+            const double beatsPerBar = std::max(1e-6, settings.timeSignatureNumerator * (4.0 / std::max(1, settings.timeSignatureDenominator)));
+            const double beat = std::max(0.0, state.beatPosition);
+            const int bar = static_cast<int>(std::floor(beat / beatsPerBar)) + 1;
+            const double inBar = beat - (bar - 1) * beatsPerBar;
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(playing ? ImVec4(0.47f, 0.92f, 0.63f, 1.0f) : ImVec4(0.9f, 0.9f, 0.93f, 1.0f),
+                               "%3d. %d   %.1f BPM", bar, static_cast<int>(std::floor(inBar)) + 1, state.bpm);
+        }
+    } else {
         ImGui::SameLine();
-        ImGui::TextDisabled("plays where clips place it");
-        return;
-    }
-    auto transport = timeline.transportFor(ref);
-    if(transport == nullptr) { ImGui::SameLine(); ImGui::TextDisabled("starting..."); return; }
-    const auto state = transport->getState();
-    double pendingClock = 0.0;
-    bool pendingStarts = false;
-    const bool pending = transport->nextPendingAction(pendingClock, pendingStarts);
-    ImGui::SameLine(0.0f, 8.0f);
-    if(ImGui::Button("|<##toStart")) timeline.seekTimeline(ref, 0.0);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to its start");
-    ImGui::SameLine(0.0f, 2.0f);
-    if(ImGui::Button("Stop##stop")) timeline.stopTimeline(ref, true);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Stop and go back to its start (on the quantize below)");
-    ImGui::SameLine(0.0f, 2.0f);
-    const bool playing = state.isPlaying;
-    if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.3f, 1.0f));
-    if(ImGui::Button(playing ? "Pause##play" : (pending && pendingStarts ? "Armed##play" : "Play##play"))) {
-        if(playing) timeline.stopTimeline(ref, false);
-        else if(pending) transport->cancelPendingActions();
-        else timeline.playTimeline(ref);
-    }
-    if(playing) ImGui::PopStyleColor();
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip(pending ? "Waiting for its quantized instant (click to cancel)" : "Play or pause it (Space while this timeline is shown)");
-    ImGui::SameLine(0.0f, 6.0f);
-    ImGui::SetNextItemWidth(84.0f);
-    if(ImGui::Combo("##quantize", &settings.quantize, kQuantizeLabels, 3)) changed = true;
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
-                          "of the main timeline while it plays (else of the clock), so it starts in phase.");
-    ImGui::SameLine(0.0f, 8.0f);
-    {
-        const double beatsPerBar = std::max(1e-6, settings.timeSignatureNumerator * (4.0 / std::max(1, settings.timeSignatureDenominator)));
-        const double beat = std::max(0.0, state.beatPosition);
-        const int bar = static_cast<int>(std::floor(beat / beatsPerBar)) + 1;
-        const double inBar = beat - (bar - 1) * beatsPerBar;
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(playing ? ImVec4(0.47f, 0.92f, 0.63f, 1.0f) : ImVec4(0.9f, 0.9f, 0.93f, 1.0f),
-                           "%3d. %d   %.1f BPM", bar, static_cast<int>(std::floor(inBar)) + 1, state.bpm);
+        ImGui::TextDisabled("follows the clips placing it;");
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Placed as clips, it follows the host's tempo (scaled by each clip's stretch).\n"
+                              "Its own tempo below is used by clips set to Keep its own tempo,\n"
+                              "and when it plays on its own.");
     }
     ImGui::SameLine(0.0f, 8.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("own tempo");
+    ImGui::SameLine(0.0f, 4.0f);
     // Tempo: a fixed BPM, a ratio of the clock's, or its tempo lane.
     const char* tempoModes[] = {"BPM", "x Clock", "Lane"};
     int tempoMode = settings.bpmAutomationEnabled ? 2 : settings.followClockTempo ? 1 : 0;

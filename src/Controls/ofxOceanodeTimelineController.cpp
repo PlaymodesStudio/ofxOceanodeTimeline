@@ -1558,6 +1558,13 @@ void ofxOceanodeTimelineController::draw() {
 
         groupSeparator();
         {
+            // In another timeline, this is still the main timeline's tempo
+            // (that timeline's own is on its breadcrumb row).
+            if(inMacroScope()) {
+                caption("Main");
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The main timeline's tempo. This timeline's own tempo is on the row below.");
+            }
             float bpm = transportState.bpm;
             if(externalClock || timeline.isBpmAutomationEnabled()) {
                 // Read-only: the tempo comes from the clock or the tempo lane.
