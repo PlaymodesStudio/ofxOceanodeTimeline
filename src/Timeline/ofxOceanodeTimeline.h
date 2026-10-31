@@ -1172,21 +1172,6 @@ public:
     ofxOceanodeTimelineSequence* getMacroSequence(ofxOceanodeContainer& macroContainer);
     // How the editor names it: the macro's title, else its canvas id.
     std::string getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const;
-    // Every macro in the patch, as the editor's timeline picker lists it:
-    // depth first, each macro followed by the macros inside it.
-    struct MacroTimelineEntry {
-        ofxOceanodeContainer* container = nullptr;
-        ofxOceanodeContainer* parent = nullptr; // the macro it is in (nullptr: the main canvas)
-        int depth = 0;                          // 0: on the main canvas
-        std::string label;
-        size_t trackCount = 0;                  // 0: no timeline yet, or an empty one
-        bool played = false;                    // a macro track reaches it from the main timeline
-        bool shared = false;                    // a library macro's timeline, shared with its other copies
-    };
-    std::vector<MacroTimelineEntry> listMacroTimelines() const;
-    // Whether a macro track reaches this macro's timeline from the main
-    // timeline (through macros inside macros): otherwise nothing plays it.
-    bool isMacroTimelinePlayed(const ofxOceanodeContainer& macroContainer) const;
     // Called with the macro's own preset or library folder (sequence.json).
     void loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder);
     bool saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const;
@@ -1203,11 +1188,8 @@ public:
     bool undoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
     bool redoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
     // "Edit timeline" from a macro's node menu, picked up by the editor.
-    void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScope = &macroContainer; pendingMainScope = false; }
+    void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScope = &macroContainer; }
     ofxOceanodeContainer* consumeMacroScopeRequest() { auto* requested = pendingMacroScope; pendingMacroScope = nullptr; return requested; }
-    // Back to the main timeline in the editor, picked up the same way.
-    void requestMainScope() { pendingMacroScope = nullptr; pendingMainScope = true; }
-    bool consumeMainScopeRequest() { const bool requested = pendingMainScope; pendingMainScope = false; return requested; }
 
     // Resolves a sequence's binding paths (its base, else this timeline's root).
     ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {
@@ -1845,7 +1827,6 @@ private:
     };
     mutable std::map<const ofxOceanodeTimelineSequence*, SequenceHistory> sequenceHistories;
     ofxOceanodeContainer* pendingMacroScope = nullptr;
-    bool pendingMainScope = false;
     std::deque<TimelineEdit> timelineUndo, timelineRedo;
     bool replayingTimelineEdit = false;
     ofJson timelineEditData() const;
