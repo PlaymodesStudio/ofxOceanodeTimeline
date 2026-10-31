@@ -39,10 +39,18 @@ void ofxOceanodeTimelineManager::pruneMacroSequences() const {
         entry.sequence->base = const_cast<ofxOceanodeContainer*>(entry.address);
         for(auto& timeline : entry.sequence->timelines) timeline->base = entry.sequence->base;
     }
+    // A history belongs to a live macro timeline, or to a further timeline
+    // of the root's or a macro's canvas.
+    auto liveHistory = [&](const ofxOceanodeTimelineSequence* sequence) {
+        for(const auto& timeline : mainSequence.timelines) if(timeline.get() == sequence) return true;
+        for(const auto& entry : macroSequences) {
+            if(entry.sequence.get() == sequence) return true;
+            for(const auto& timeline : entry.sequence->timelines) if(timeline.get() == sequence) return true;
+        }
+        return false;
+    };
     for(auto it = sequenceHistories.begin(); it != sequenceHistories.end();) {
-        const bool live = std::any_of(macroSequences.begin(), macroSequences.end(),
-            [&](const auto& entry) { return entry.sequence.get() == it->first; });
-        if(live) ++it; else it = sequenceHistories.erase(it);
+        if(liveHistory(it->first)) ++it; else it = sequenceHistories.erase(it);
     }
 }
 
@@ -393,6 +401,10 @@ void ofxOceanodeTimelineManager::replayParameterMove(ofxOceanodeContainer& canva
 ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const {
     if(container == nullptr) return nullptr;
     if(isRootCanvas(canvas) || canvas == container->getCanvasID()) return container;
+    // A canvas with a timeline is known already: no walk of the graph.
+    for(const auto& entry : sequenceEntries())
+        if(entry.address != nullptr && !entry.container.expired() && entry.address->getCanvasID() == canvas)
+            return entry.container.lock().get();
     return containerWithCanvas(*container, canvas);
 }
 

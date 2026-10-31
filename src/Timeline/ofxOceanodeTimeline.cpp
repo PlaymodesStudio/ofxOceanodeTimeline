@@ -3610,8 +3610,16 @@ bool ofxOceanodeTimelineManager::isTrackAudible(const ofxOceanodeTimelineTrack& 
     // leaves the main timeline alone, and the other way round).
     // Without any solo (the usual case) skip the walk up each track's folders.
     const auto& sequence = sequenceOf(track);
-    const bool anySolo = std::any_of(sequence.tracks.begin(), sequence.tracks.end(),
-                                     [this](const auto& other) { return isTrackSoloed(other); });
+    auto computeAnySolo = [&]() {
+        return std::any_of(sequence.tracks.begin(), sequence.tracks.end(),
+                           [this](const auto& other) { return isTrackSoloed(other); });
+    };
+    bool anySolo = false;
+    if(anySoloCacheActive) {
+        auto found = anySoloCache.find(&sequence);
+        if(found == anySoloCache.end()) found = anySoloCache.emplace(&sequence, computeAnySolo()).first;
+        anySolo = found->second;
+    } else anySolo = computeAnySolo();
     return !anySolo || isTrackSoloedWithFolders(track);
 }
 
@@ -4364,15 +4372,23 @@ void ofxOceanodeTimelineManager::update() {
 void ofxOceanodeTimelineManager::beginParameterCache() {
     parameterCache.clear();
     parameterCacheActive = true;
+    evaluationHashedThisPass = false;
+    anySoloCache.clear();
+    anySoloCacheActive = true;
 }
 
 void ofxOceanodeTimelineManager::endParameterCache() {
     parameterCacheActive = false;
     parameterCache.clear();
+    evaluationHashedThisPass = false;
+    anySoloCacheActive = false;
+    anySoloCache.clear();
 }
 
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findParameterCached(const std::string& path) const {
     if(container == nullptr) return nullptr;
+    // An engine's paths are absolute, like its primary's: share its cache.
+    if(primary != nullptr && primary->parameterCacheActive) return primary->findParameterCached(path);
     if(!parameterCacheActive) return container->findTimelineParameter(path);
     const auto it = parameterCache.find(path);
     if(it != parameterCache.end()) return it->second;
@@ -4440,6 +4456,13 @@ bool adoptGroupKitRole(ofxOceanodeTimelineTrack& track, const std::string& group
 
 void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
     if(container == nullptr || replayingTimelineEdit) return;
+    // Called after the indexes are current: when the model changed since the
+    // last adoption, else every few frames (an instrument node may appear).
+    const uint64_t frame = ofGetFrameNum();
+    if(adoptedInstrumentsSignature == evaluationIndexesSignature && frame >= adoptedInstrumentsFrame &&
+       frame < adoptedInstrumentsFrame + 15) return;
+    adoptedInstrumentsSignature = evaluationIndexesSignature;
+    adoptedInstrumentsFrame = frame;
     struct Adoption { std::string trackId, groupId; const KitRole* role; ofxOceanodeTimelineParameterBinding binding; };
     std::vector<Adoption> adopted;
     for(size_t trackIndex = 0; trackIndex < mainSequence.tracks.size(); ++trackIndex) {
@@ -4453,7 +4476,7 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
                 ofxOceanodeAbstractParameter* input = nullptr;
                 for(const auto* id : {&group.gateBindingId, &group.pitchBindingId}) {
                     const auto* roleBinding = bindingInTrack(track, *id);
-                    auto* parameter = roleBinding == nullptr ? nullptr : container->findTimelineParameter(roleBinding->parameterPath);
+                    auto* parameter = roleBinding == nullptr ? nullptr : findParameterCached(roleBinding->parameterPath);
                     auto* model = parameter == nullptr ? nullptr : parameter->getNodeModel();
                     ofxOceanodeTimelineInstrument instrument;
                     if(model == nullptr || !model->getTimelineInstrument(instrument)) continue;
@@ -4512,11 +4535,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         updatePlayers();
         updateTimeSources();
     }
-    adoptInstrumentDurations();
     if(metronome) metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
     // Track/binding/clip storage may have changed through the editor since
     // the previous update. Rebuild only then, and share the indexes across the
     // frame evaluation, scheduler probes and both applyAutomation passes.
+    ensureEvaluationIndexes();
+    adoptInstrumentDurations(); // may edit the model: it invalidates the indexes then
     ensureEvaluationIndexes();
     loopWrappedThisFrame = false;
     auto transport = playState();
@@ -4674,6 +4698,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Toggle lanes bound to their track's solo decide, before anything reads
     // which tracks are audible this frame.
     if(applyLaneTrackSolos(transport.beatPosition)) {
+        anySoloCache.clear();
         invalidateEvaluationIndexes();
         ensureEvaluationIndexes();
         invalidateSchedule();
@@ -4868,6 +4893,7 @@ void ofxOceanodeTimelineManager::clear() {
     invalidateEvaluationIndexes();
     mainSequence.clipGroups.clear();
     mainSequence.timelines.clear();
+    mainSequence.nextTimelineNumber = 2;
     mainSequence.play = {};
     freeTimelines.clear();
     timelineWindows.clear();

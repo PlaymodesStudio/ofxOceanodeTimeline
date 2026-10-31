@@ -152,9 +152,11 @@ int main() {
     {
         ofxOceanodeContainer nest;
         nest.transport->setDriverMode(TransportDriverMode::FrameStep);
-        ofParameter<float> fillValue("Fill", 0, 0, 1);
+        ofParameter<float> fillValue("Fill", 0, 0, 1), hitValue("Hit", 0, 0, 1);
         ofxOceanodeParameter<float> fill; fill.bindParameter(fillValue);
+        ofxOceanodeParameter<float> hit; hit.bindParameter(hitValue);
         nest.targets[fill.getEscapedName()] = &fill;
+        nest.targets[hit.getEscapedName()] = &hit;
         ofxOceanodeTimelineManager nested(&nest);
         nested.setSchedulingEnabled(false);
         const auto fillsId = nested.createTimeline("", "Fills");
@@ -247,6 +249,42 @@ int main() {
         near(clip->contentStretch, 1.0);
         near(clip->durationBeats, 4.0);
         assert(!nested.isClipStretched(*clip));
+        // Nested: Fills (following the main tempo again) places Hits, whose
+        // clip keeps Hits' own 240 BPM. Fills plays through a copy, so the
+        // factor the main tempo gives that clip must reach the copy without
+        // a rebuild: at 120 its cycle is 1 Fills beat, at 90 it is 0.75.
+        fillSettings.bpm = 120.0f;
+        nested.setPlaySettings(fills, fillSettings);
+        const auto hitsId = nested.createTimeline("", "Hits");
+        const ofxOceanodeTimelineManager::TimelineRef hits{"", hitsId};
+        auto* hitSequence = nested.timelineFor(hits);
+        const auto ht = nested.createTrack(*hitSequence, "Hit");
+        const auto hb = nested.addBinding(*hitSequence, ht, hit);
+        const auto ha = nested.createClip(*hitSequence, ht, "A", 0, 1);
+        const auto hal = nested.createLane(*hitSequence, ht, ha, "Hit", ofxOceanodeTimelineLaneType::Number);
+        nested.addBindingToLane(*hitSequence, ht, ha, hal, hb);
+        nested.setClipNumber(*hitSequence, ht, ha, hal, 0, 0.2f);
+        const auto hbClip = nested.createClip(*hitSequence, ht, "B", 1, 1);
+        const auto hbl = nested.createLane(*hitSequence, ht, hbClip, "Hit", ofxOceanodeTimelineLaneType::Number);
+        nested.addBindingToLane(*hitSequence, ht, hbClip, hbl, hb);
+        nested.setClipNumber(*hitSequence, ht, hbClip, hbl, 0, 0.8f);
+        auto hitSettings = *nested.playSettings(hits);
+        hitSettings.bpm = 240.0f;
+        nested.setPlaySettings(hits, hitSettings);
+        const auto hitTrack = nested.createTimelineTrack(*fillSequence, hits);
+        assert(!hitTrack.empty());
+        const auto hitClip = nested.createClip(*fillSequence, hitTrack, "Hits", 0, 4);
+        auto* placedHits = nested.getClip(*fillSequence, hitTrack, hitClip);
+        placedHits->contentDurationBeats = 2.0;
+        placedHits->contentStretch = 1.0;
+        placedHits->repeatContent = true;
+        assert(nested.setClipOwnTempo(*fillSequence, hitTrack, hitClip, true));
+        nest.transport->setBpm(120.0f);
+        at(4.45); near(hitValue, 0.2f); // Fills 0.45: Hits beat 0.9
+        nest.transport->setBpm(90.0f);
+        at(4.45); near(hitValue, 0.8f); // Hits beat 1.2
+        nest.transport->setBpm(120.0f);
+        at(4.45); near(hitValue, 0.2f);
         // Saved with which timeline the track plays.
         const auto saved = nested.toJson();
         ofxOceanodeContainer reloadedOwner;

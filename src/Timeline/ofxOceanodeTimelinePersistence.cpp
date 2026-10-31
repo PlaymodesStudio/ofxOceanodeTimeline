@@ -523,6 +523,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     json["play"] = {{"name", play.name}, {"bpm", play.bpm}, {"followClockTempo", play.followClockTempo},
                     {"tempoRatio", play.tempoRatio}, {"quantize", play.quantize}};
     // The canvas's further timelines, and which timelines play on their own.
+    if(mainSequence.nextTimelineNumber > 2) json["nextTimelineNumber"] = mainSequence.nextTimelineNumber;
     if(!mainSequence.timelines.empty()) {
         json["timelines"] = ofJson::array();
         for(const auto& timeline : mainSequence.timelines) {
@@ -1235,6 +1236,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             mainSequence.timelines.push_back(std::move(timeline));
         }
     }
+    mainSequence.nextTimelineNumber = std::max<uint64_t>(json.value("nextTimelineNumber", 2), mainSequence.timelines.size() + 2);
     if(json.contains("clipFollow") && json["clipFollow"].is_array())
         for(const auto& canvas : json["clipFollow"])
             if(canvas.is_string()) clipFollowCanvases.insert(canvas.get<std::string>());
@@ -1242,11 +1244,11 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         for(const auto& window : json["windows"])
             if(window.is_object())
                 timelineWindows.push_back({window.value("id", static_cast<int>(timelineWindows.size()) + 1),
-                                           {window.value("canvas", std::string()), window.value("timeline", std::string())}});
+                                           normalizedRef({window.value("canvas", std::string()), window.value("timeline", std::string())})});
     if(json.contains("players") && json["players"].is_array())
         for(const auto& player : json["players"])
             if(player.is_object())
-                freeTimelines.insert({player.value("canvas", std::string()), player.value("timeline", std::string())});
+                freeTimelines.insert(normalizedRef({player.value("canvas", std::string()), player.value("timeline", std::string())}));
 }
 namespace {
 
@@ -1555,6 +1557,7 @@ ofJson ofxOceanodeTimelineManager::sequenceToJson(const ofxOceanodeTimelineSeque
                    {"tempo", full["tempo"]}, {"loop", full["loop"]}, {"timeSignature", full["timeSignature"]},
                    {"play", full["play"]}};
     if(full.contains("timelines")) json["timelines"] = full["timelines"];
+    if(full.contains("nextTimelineNumber")) json["nextTimelineNumber"] = full["nextTimelineNumber"];
     return json;
 }
 
@@ -1564,11 +1567,15 @@ void ofxOceanodeTimelineManager::sequenceFromJson(ofxOceanodeTimelineSequence& s
     auto* base = sequence.base;
     const auto timelineId = sequence.timelineId;
     auto timelines = std::move(sequence.timelines);
+    const auto nextTimeline = sequence.nextTimelineNumber;
     sequence = std::move(isolated.mainSequence);
     sequence.base = base;
     sequence.timelineId = timelineId;
     // Undo snapshots leave the canvas's further timelines out: keep them.
-    if(!(json.is_object() && json.contains("timelines"))) sequence.timelines = std::move(timelines);
+    if(!(json.is_object() && json.contains("timelines"))) {
+        sequence.timelines = std::move(timelines);
+        sequence.nextTimelineNumber = std::max(nextTimeline, sequence.nextTimelineNumber);
+    }
     for(auto& timeline : sequence.timelines) timeline->base = base;
     auto& play = sequence.play;
     play.bpmAutomationEnabled = isolated.bpmAutomationEnabled;

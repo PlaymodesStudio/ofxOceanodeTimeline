@@ -700,7 +700,9 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
 
 bool ofxOceanodeTimelineManager::macroPlayheadBeat(const ofxOceanodeContainer& macroContainer, double& beat) {
     if(container == nullptr) return false;
-    ensureEvaluationIndexes();
+    // Read from the GUI: the copies of the last update pass (one frame of
+    // staleness only moves a playhead), never a model hash per call.
+    if(!evaluationIndexesValid) rebuildEvaluationIndexes();
     const double playhead = container->getTransportState().beatPosition;
     // As evaluation plays it: the first placement of this macro's copy.
     for(const auto& placement : playedSequences(playContext, playhead, playhead))
@@ -753,6 +755,12 @@ void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportSta
     auto touches = [](const PlayedSequence& placement, const Range& range) {
         return placement.windowTo > range.from + kEpsilon && placement.windowFrom <= range.to + kEpsilon;
     };
+    // Each macro track's windows around the playhead; the placements are
+    // queried once over the widest of them (a placement's window does not
+    // depend on the query, so the wider query holds every narrower one's).
+    struct Gated { const ofxOceanodeTimelineTrack* track; const PlayedMacro* played; double preRoll, tail; };
+    std::vector<Gated> gated;
+    double widestTail = 0.0, widestPreRoll = 0.0;
     for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         if(!track.isMacroTrack()) continue;
         const auto* played = playedMacroAt(track);
@@ -763,10 +771,23 @@ void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportSta
             earliestMs = std::min(earliestMs, ofClamp(trackLatencyWithFolders(inner) + played->outerLatencyMs,
                                                       -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs));
         const double preRoll = std::max<double>(ofClamp(track.macroPreRollMs, 0.0f, kMaxMacroGateMs), -earliestMs) * beatsPerMs;
-        const double tail = ofClamp(track.macroTailMs, 0.0f, kMaxMacroGateMs) * beatsPerMs;
+        const double tail = track.macroGate ? ofClamp(track.macroTailMs, 0.0f, kMaxMacroGateMs) * beatsPerMs : 0.0;
+        gated.push_back({&track, played, preRoll, tail});
+        widestTail = std::max(widestTail, tail);
+        widestPreRoll = std::max(widestPreRoll, preRoll);
+    }
+    std::map<int, std::vector<PlayedSequence>> placementsByPass;
+    if(!gated.empty())
+        for(const auto& range : ranges(widestTail, widestPreRoll))
+            placementsByPass[range.pass] = playedSequences(playContext, range.from, range.to);
+    for(const auto& entry : gated) {
+        const auto& track = *entry.track;
+        const auto* played = entry.played;
         bool* on = track.macroGate ? &gatedOn[played->macroContainer] : nullptr;
-        for(const auto& range : ranges(track.macroGate ? tail : 0.0, preRoll)) {
-            for(const auto& placement : playedSequences(playContext, range.from, range.to)) {
+        for(const auto& range : ranges(entry.tail, entry.preRoll)) {
+            const auto found = placementsByPass.find(range.pass);
+            if(found == placementsByPass.end()) continue;
+            for(const auto& placement : found->second) {
                 if(placement.placedBy != &track || !touches(placement, range)) continue;
                 if(on != nullptr) *on = true;
                 // The latest clip started or starting within the pre-roll
@@ -914,7 +935,11 @@ const ofxOceanodeTimelineSequence& ofxOceanodeTimelineManager::sequenceOf(const 
     };
     if(owns(mainSequence)) return mainSequence;
     for(const auto& played : playedMacros) if(owns(*played.sequence)) return *played.sequence;
-    for(const auto& entry : macroSequences) if(owns(*entry.sequence)) return *entry.sequence;
+    for(const auto& timeline : mainSequence.timelines) if(owns(*timeline)) return *timeline;
+    for(const auto& entry : macroSequences) {
+        if(owns(*entry.sequence)) return *entry.sequence;
+        for(const auto& timeline : entry.sequence->timelines) if(owns(*timeline)) return *timeline;
+    }
     return mainSequence;
 }
 
@@ -1138,7 +1163,8 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
 
 void ofxOceanodeTimelineManager::pianoLaneVoicesAndKit(const ofxOceanodeTimelineTrack& track,
                                                        const ofxOceanodeTimelineLane& lane,
-                                                       int& voices, bool& kit, int* instrumentVoices) const {
+                                                       int& voices, bool& kit, int* instrumentVoices,
+                                                       const std::string& pathsCanvas) const {
     voices = 0;
     kit = false;
     if(instrumentVoices != nullptr) *instrumentVoices = 0;
@@ -1150,7 +1176,8 @@ void ofxOceanodeTimelineManager::pianoLaneVoicesAndKit(const ofxOceanodeTimeline
     for(const auto* id : {&lane.pianoGateBindingId, &lane.pianoPitchBindingId}) {
         if(id->empty()) continue;
         const auto* binding = bindingInTrack(track, *id);
-        auto* parameter = binding == nullptr ? nullptr : findParameterCached(binding->parameterPath);
+        auto* parameter = binding == nullptr ? nullptr
+            : findParameterCached(pathsCanvas.empty() ? binding->parameterPath : absolutePathIn(pathsCanvas, binding->parameterPath));
         auto* model = parameter == nullptr ? nullptr : parameter->getNodeModel();
         ofxOceanodeTimelineInstrument instrument;
         if(model == nullptr || !model->getTimelineInstrument(instrument)) continue;
@@ -1532,10 +1559,10 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     // at the same time, the first one found (the outer, upper one) plays.
     // (Forward and reversed copies of a macro are one macro timeline.)
     std::unordered_set<const ofxOceanodeTimelineSequence*> placed;
-    std::unordered_set<std::string> placedCanvases;
+    std::unordered_set<std::string> placedTimelines; // timeSourceId: a canvas's timelines are each their own
     for(const auto& placement : playedSequences(context, beatPosition, beatPosition)) {
         if(const auto* played = playedMacroOf(*placement.sequence))
-            if(!placedCanvases.insert(played->canvas).second) continue;
+            if(!placedTimelines.insert(timeSourceId({played->canvas, played->timeline})).second) continue;
         placed.insert(placement.sequence);
         const double beat = placement.map.toSequence(beatPosition);
         const auto copyContext = placement.contextFrom(context);
@@ -1947,7 +1974,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     for(const auto* sequence : evaluatedSequences()) {
     // The other copy of a macro playing now stays out (its rests too).
     if(const auto* played = playedMacroOf(*sequence); played != nullptr &&
-       placed.count(sequence) == 0 && placedCanvases.count(played->canvas) > 0) continue;
+       placed.count(sequence) == 0 && placedTimelines.count(timeSourceId({played->canvas, played->timeline})) > 0) continue;
     for(const auto& track : sequence->tracks) {
         const auto trackIndexIt = trackEvaluationIndexes.find(&track);
         for(const auto& binding : track.bindings) {
@@ -2158,6 +2185,19 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
 // One sequence's part of evaluationSignature (an engine follows its source by it).
 uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const {
     ChangeHash hash;
+    // A macro timeline as it is kept holds paths relative to its canvas.
+    const std::string pathsCanvas = sequence.base != nullptr && sequence.base != container ? sequence.base->getCanvasID() : std::string();
+    // Its play settings go into its played copies too (own-tempo clips
+    // follow its tempo there).
+    {
+        const auto& play = sequence.play;
+        hash.add(play.bpm); hash.add(play.followClockTempo); hash.add(play.tempoRatio);
+        hash.add(play.bpmAutomationEnabled); hash.add(play.bpmMinimum); hash.add(play.bpmMaximum);
+        hash.add(play.bpmInterpolation); hash.add(play.bpmPoints.size());
+        for(const auto& point : play.bpmPoints) { hash.add(point.beat); hash.add(point.value); }
+        for(const auto& tension : play.bpmTensions) { hash.add(tension.inflection); hash.add(tension.steepness); }
+        hash.add(play.timeSignatureNumerator); hash.add(play.timeSignatureDenominator);
+    }
     hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
     for(const auto& track : sequence.tracks) {
         hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
@@ -2176,7 +2216,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         for(const auto& clip : track.clips) {
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-            hash.add(clip.reversed); hash.add(clip.ownTempo); hash.add(clip.ownTempoFactor);
+            hash.add(clip.reversed); hash.add(clip.ownTempo); // ownTempoFactor is patched into copies, not hashed
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
@@ -2184,7 +2224,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
                 if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
                 int voices = 0, instrumentVoices = 0;
                 bool kit = false;
-                pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
+                pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices, pathsCanvas);
                 hash.add(voices); hash.add(kit); hash.add(instrumentVoices);
             }
         }
@@ -2193,7 +2233,9 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
 }
 
 void ofxOceanodeTimelineManager::ensureEvaluationIndexes() {
+    if(evaluationIndexesValid && evaluationHashedThisPass) return;
     const uint64_t signature = evaluationSignature();
+    evaluationHashedThisPass = parameterCacheActive;
     if(evaluationIndexesValid && signature == evaluationIndexesSignature) return;
     rebuildEvaluationIndexes();
     evaluationIndexesSignature = signature;

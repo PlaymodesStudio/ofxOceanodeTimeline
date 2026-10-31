@@ -133,8 +133,8 @@ redo (skipping tracks a restored macro already has). Extraction is recorded
 the same way, paths only.
 
 The controller edits one sequence at a time, its scope: the main timeline, or
-a macro's (opened with "Edit Timeline" in the macro node menu, shown as a
-breadcrumb). Every model call from the controller and lane editors passes the
+a macro's (opened with "Edit Timeline" in the macro node menu, shown on the
+scope bar with the path back). Every model call from the controller and lane editors passes the
 scope's sequence (`scope(timeline)`; editors get it in their context). The
 tempo lane, loop, markers, seeking and the playhead belong to the main
 timeline and are hidden in a macro scope; undo steps the scope's own history.
@@ -197,6 +197,18 @@ length edits and edge drags. Drag snapshots restore the original source mapping
 before each application, including group edits, to avoid accumulating rounding
 or stretch changes between frames. Audio always normalizes its full slice.
 
+The evaluation indexes are rebuilt when `evaluationSignature()` changes: a
+hash of every played sequence (tracks, bindings, lanes, play settings), taken
+once per update pass (`evaluationHashedThisPass`, reset by `beginParameterCache`
+and `endParameterCache`); the GUI's playhead lookups read the last pass's
+copies without hashing. An own-tempo clip's factor is not hashed: when the
+clock changes it, `refreshOwnTempoFactors` patches the factor into the played
+copies and engine copies (`patchOwnTempoFactor`). Within a pass, whether a
+sequence has any solo is cached (`anySoloCache`), the engines share the
+primary's parameter cache, instrument roles are adopted only when the model
+changed or every few frames, and macro gating queries the placements once per
+loop range.
+
 `inspectTarget` rebuilds derived evaluation indexes and calls
 `collectActiveValues` with an optional contribution collector. It shares lane
 evaluation, clip arbitration, voice allocation, blending and final clamping
@@ -215,7 +227,15 @@ A default sequence keeps its canvas's further timelines in
 are shared, pruned and saved with it: the root's in `timeline.json`
 (`"timelines"`), a macro's in its `sequence.json`. Undo snapshots of a
 sequence (`sequenceToJson(sequence, false)`) leave them out.
-`timelineFor(ref)`, `refOf(sequence)` and `canvasContainer(canvas)` translate.
+`timelineFor(ref)`, `refOf(sequence)` and `canvasContainer(canvas)` translate
+(`canvasContainer` finds a canvas with a timeline through the macro sequence
+entries before walking the graph). A further timeline's id comes from the
+canvas's saved `nextTimelineNumber`, so a deleted timeline's id is never given
+to a new one: tracks, windows and time sources that still name it stay
+unbound. An undo step of the main timeline leaves the canvas's further
+timelines, the free set, the windows and the clip-following macros as they
+are (`timelineEditData` drops them; `restoreTimelineState` keeps them), and
+each further timeline keeps a history of its own.
 
 Timeline tracks generalize macro tracks: `macroCanvas` is the placed
 timeline's canvas relative to the host's (`"."` for the host's own canvas) and
@@ -273,8 +293,14 @@ source (`timeSourceId(ref)`: `canvas#timeline`, `root#default` for the main
 one): selectable when it has a transport, greyed out otherwise.
 
 The controller shows any timeline (`enterTimelineScope`; `EditorScope::ref`).
-`drawTimelinesBar` draws the timelines menu and, for a timeline other than the
-main one, its player bar. Further windows (`getTimelineWindows`, saved as
+`drawScopeBar` (`ofxOceanodeTimelineControllerTimelines.cpp`) draws the scope
+bar at the top of the window: a badge for the kind of timeline shown (main, a
+macro's own, a further one of a canvas), tinting the bar, the path of scopes
+back to the main timeline, the timelines menu and its actions, and, for a
+timeline other than the main one, its compact player (`drawPlayerBar`:
+independent toggle, transport and quantize while independent, own tempo, loop;
+the loop range and meter in `drawPlayerSettingsPopup`). The toolbar below it
+is the main timeline's and is captioned "Main" in any other scope. Further windows (`getTimelineWindows`, saved as
 `"windows"`) are editors of their own (`windowId` > 0) the main controller
 creates and draws from `drawBeforeWindows`; each swaps in its own
 `ofxOceanodeTimelineViewState` while it draws, so zoom and scroll are per

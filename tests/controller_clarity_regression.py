@@ -108,6 +108,9 @@ int main() {
         if(screenshot) capture(screenshot,atlas,aw,ah);
     };
     frame(); frame();
+    // The scope bar at the top of the window moves everything below it down
+    // (its row, padding and spacing); fixed screen points add this.
+    const float kScopeBar=31.0f;
     assert(!ui.targetsView && ui.clipScreenRects.size()==3);
     frame(1250,ImVec2(-100,-100),false,"clips");
     // Track pads own a separate selection; modifiers toggle tracks without
@@ -189,9 +192,10 @@ int main() {
     assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-rulerTime)<0.0001);
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {
+        // Row 2 of the toolbar sits under the scope bar and row 1: scan the rows.
         const auto id=ImGui::FindWindowByName("Timeline")->GetID(key);
-        for(float x=280;x<650;x+=4) {
-            const ImVec2 point(x,46); frame(1250,point,false);
+        for(float y=40;y<120;y+=6) for(float x=280;x<650;x+=4) {
+            const ImVec2 point(x,y); frame(1250,point,false);
             if(ImGui::GetCurrentContext()->HoveredId==id) return point;
         }
         assert(false && "Toolbar button not found"); return ImVec2();
@@ -267,7 +271,7 @@ int main() {
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
         {
             // Right-clicking Range opens its direction menu, not the lane menu.
-            const ImVec2 range(150,444);
+            const ImVec2 range(150,444+kScopeBar);
             frame(1250,range,false);
             io.AddMouseButtonEvent(1,true); frame(1250,range,false);
             io.AddMouseButtonEvent(1,false); frame(1250,range,false);
@@ -362,11 +366,11 @@ int main() {
             assert(ui.editorState.editorLaneId!=piano);
             auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
             const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
-            click(ImVec2(240,302)); // "+": zoom in
+            click(ImVec2(240,302+kScopeBar)); // "+": zoom in
             auto* lane=model.getLane(t,c,piano);
             assert(lane->pianoHighPitch-lane->pianoLowPitch < high-low);
             const int zoomedLow=lane->pianoLowPitch;
-            click(ImVec2(240,600)); // track near the bottom: jump down
+            click(ImVec2(240,600+kScopeBar)); // track near the bottom: jump down
             lane=model.getLane(t,c,piano);
             assert(lane->pianoLowPitch < zoomedLow);
             assert(ui.editorState.editorLaneId!=piano);

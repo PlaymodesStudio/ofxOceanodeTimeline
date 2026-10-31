@@ -327,9 +327,10 @@ from the main timeline as well.
 
 ## Unfolding a macro track
 
-A macro track's clips play its macro's own timeline. **Edit macro timeline**
+A macro track's clips play its macro's own timeline. **Open its timeline**
 in the macro track's or a macro clip's right-click menu opens that timeline on
-its own (as the macro node's **Edit Timeline** does), with a breadcrumb back.
+its own (as the macro node's **Edit Timeline** does); the scope bar's path
+leads back.
 To see it in place instead, click the arrow on the macro track's header (or
 use **Unfold its tracks here** in its menu): that timeline's tracks show as
 rows under it, tabbed in with a line in the macro track's color (one more step
@@ -356,10 +357,16 @@ targets, note groups) still happens in the macro's timeline itself, opened by
 
 Every canvas (the main one and every macro's) can own several timelines: its
 default one (the main timeline, or the macro's own) and any number more. The
-menu at the top left of the Timeline window lists all of them, grouped by
-canvas; pick one to show it. Its **...** button makes a **New timeline on this
-canvas**, duplicates, renames or deletes the one shown (a canvas's default
-timeline goes with its canvas), and opens it **in a new window**.
+scope bar at the top of the Timeline window says which one is shown: a badge
+with its kind (**MAIN**; **MACRO**, a macro's own timeline; **TIMELINE**, a
+further timeline of a canvas), the path to it (**Main > Macro 1 > ...**, each
+step a way back), and the timelines menu, which lists every timeline grouped
+by canvas; pick one to show it. The bar is tinted by that kind, so a macro
+timeline never looks like the main one. Its **...** button makes a **New
+timeline on this canvas**, duplicates, renames or deletes the one shown (a
+canvas's default timeline goes with its canvas), and opens it **in a new
+window**. A track that places a timeline shows the placed timeline's name
+after its own, in that kind's colour.
 
 **Placing a timeline as clips.** A macro node's **Add to Timeline as Macro
 Track** asks which timeline it goes on (the main canvas's, or one of a macro
@@ -385,26 +392,28 @@ copy. Tracks of a placed timeline drive the same parameters wherever it plays,
 so overlapping instances on one parameter resolve like any two timelines do
 (below).
 
-**Independent tempo.** With a timeline other than the main one shown, tick
-**Independent tempo**. It then gets its own transport on the shared clock:
-**Play**, **Stop** (back to its start), **|<**, and Space while it is shown,
-play, stop and seek it by itself, while the main timeline plays or is stopped.
-A macro's timeline can also be switched from the macro node's menu (**Independent
-tempo for its timeline**). Its bar shows:
+**Independent.** With a timeline other than the main one shown, the scope
+bar also holds its player. Tick **Independent**: it then gets its own
+transport on the shared clock: **Play**, **Stop** (back to its start), **|<**,
+and Space while it is shown, play, stop and seek it by itself, while the main
+timeline plays or is stopped. A macro's timeline can also be switched from the
+macro node's menu (**Independent tempo for its timeline**). The toolbar below
+keeps the main timeline's transport, position and tempo (labelled **Main**
+while another timeline is shown). The player shows:
 
-- **Quantize**: Play and Stop take effect at once, or on the next beat or bar of
-  the main timeline while it plays (else of the clock), so independently
-  launched timelines start in phase. The start is a timestamped instant: its
-  first events reach a timestamping backend (SuperCollider) as exactly as the
-  rest.
+- **Quantize** (next to Play): Play and Stop take effect at once, or on the
+  next beat or bar of the main timeline while it plays (else of the clock), so
+  independently launched timelines start in phase. The start is a timestamped
+  instant: its first events reach a timestamping backend (SuperCollider) as
+  exactly as the rest.
+- Its position (bar . beat) and tempo while it is independent.
 - **Tempo**: its own fixed **BPM**, the clock's tempo times a ratio (**x Clock**:
   it follows tempo changes), or its own tempo lane (**Lane**, edited as a list
-  of points with an interpolation).
-  The toolbar's tempo (labelled **Main** while another timeline is shown)
-  stays the main timeline's. A timeline that does not play on its own still
-  shows its own tempo and meter: clips set to **Keep its own tempo** use them;
+  of points with an interpolation). A timeline that does not play on its own
+  still has its own tempo: clips set to **Keep its own tempo** use it;
   otherwise, placed as clips, it follows the host's tempo.
-- **Loop** and its range, and its time signature.
+- **Loop** (while independent), and in its **...** popup the loop range, its
+  time signature and, while it is not independent, the quantize it will use.
 
 These settings are saved with the timeline (in the preset, or in the macro's
 `sequence.json`), and which timelines play on their own is saved with the

@@ -56,6 +56,10 @@ void ofxOceanodeTimelineManager::refreshTimelineFlag(const std::string& paramete
 ofJson ofxOceanodeTimelineManager::timelineEditData() const {
     auto state = toJson();
     state.erase("view");
+    // Not part of a main-timeline edit: the canvas's further timelines (each
+    // with its own history), which timelines play free, the windows and the
+    // clip-following macros stay as they are across undo.
+    for(const char* key : {"timelines", "nextTimelineNumber", "players", "windows", "clipFollow"}) state.erase(key);
     return state;
 }
 
@@ -90,7 +94,20 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     // and normalizes content and reopens audio files. History must restore exact
     // editor data, including waveform caches for files no longer on disk.
     const auto oldView = viewState;
+    // Kept across the restore (see timelineEditData).
+    const auto keptTimelines = mainSequence.timelines;
+    const auto keptPlay = mainSequence.play;
+    const auto keptNextTimeline = mainSequence.nextTimelineNumber;
+    const auto keptFree = freeTimelines;
+    const auto keptWindows = timelineWindows;
+    const auto keptClipFollow = clipFollowCanvases;
     clear();
+    mainSequence.timelines = keptTimelines;
+    mainSequence.play = keptPlay;
+    mainSequence.nextTimelineNumber = keptNextTimeline;
+    freeTimelines = keptFree;
+    timelineWindows = keptWindows;
+    clipFollowCanvases = keptClipFollow;
     mainSequence.tracks = state.tracks;
     mainSequence.clipGroups = state.groups;
     markers = state.markers;

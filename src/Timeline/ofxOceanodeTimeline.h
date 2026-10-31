@@ -1061,6 +1061,10 @@ public:
     uint64_t nextClipNumber = 1;
     uint64_t nextLaneNumber = 1;
     uint64_t nextGroupNumber = 1;
+    // First number tried for a further timeline's id (saved: a deleted
+    // timeline's id is never given to a new one, so tracks, windows and
+    // time sources that still name it stay unbound).
+    uint64_t nextTimelineNumber = 2;
     // Its tempo, loop and meter when it plays on its own.
     ofxOceanodeTimelinePlaySettings play;
     // A canvas's default timeline keeps the canvas's further timelines here;
@@ -1324,6 +1328,8 @@ public:
     // The root's default timeline is the root transport itself and always
     // plays on its own. A macro's default timeline playing free also becomes
     // what the macro's canvas plays to, so nodes inside it set to Auto follow it.
+    // The same reference however the root canvas was spelled ("" for it).
+    static TimelineRef normalizedRef(TimelineRef ref);
     bool isFree(const TimelineRef& ref) const;
     void setFree(const TimelineRef& ref, bool free);
     // Its transport: the root's for the root default, a free one's own,
@@ -1748,6 +1754,7 @@ public:
     // ofxOceanodeSuperCollider) is responsible for its lifetime and must
     // clear it (pass nullptr) before destroying it.
     void setWaveAudioProvider(ofxOceanodeTimelineWaveAudioProvider* provider) { waveAudioProvider = provider; }
+    ofxOceanodeTimelineWaveAudioProvider* getWaveAudioProvider() const { return waveAudioProvider; }
 
     // Cross-track clip grouping (see ofxOceanodeTimelineClipGroup above).
     // groupClips folds in the membership of any group its arguments
@@ -2039,6 +2046,7 @@ private:
     Player* playerFor(const TimelineRef& ref) const;
     // The engine copy: paths and macro canvases made absolute from canvas.
     static void makeAbsolute(ofxOceanodeTimelineSequence& sequence, const std::string& canvas);
+    static std::string absolutePathIn(const std::string& canvas, const std::string& path);
     // Content signature of one sequence (what a rebuild of its copy follows).
     uint64_t sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const;
     // Engine state: the manager owning its sequences, and its transport.
@@ -2233,8 +2241,11 @@ private:
     // The voice count and kit mode a piano lane plays with: the lane's mono
     // switch, its note group's override, else the instrument it drives.
     // instrumentVoices: the instrument's own count (0: not an instrument).
+    // pathsCanvas: the canvas the track's binding paths are relative to
+    // (a macro timeline as it is kept), "" when they are absolute.
     void pianoLaneVoicesAndKit(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
-                               int& voices, bool& kit, int* instrumentVoices = nullptr) const;
+                               int& voices, bool& kit, int* instrumentVoices = nullptr,
+                               const std::string& pathsCanvas = std::string()) const;
     void computeLaneVoicing(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip,
                             const ofxOceanodeTimelineLane& lane, ofxOceanodeTimelinePianoVoicing& out,
                             const std::vector<uint8_t>* sounding = nullptr) const;
@@ -2311,6 +2322,23 @@ private:
     uint64_t evaluationIndexesSignature = 0;
     std::unordered_set<std::string> stateCaptureManualOverrideKeys;
     bool evaluationIndexesValid = false;
+    // Within one update pass (beginParameterCache to endParameterCache) only
+    // this manager edits its model, and it invalidates the indexes when it
+    // does: the model is hashed once per pass, not once per call.
+    bool evaluationHashedThisPass = false;
+    // Instrument roles are adopted when the model changed, else now and then.
+    uint64_t adoptedInstrumentsSignature = 0;
+    uint64_t adoptedInstrumentsFrame = 0;
+    // Whether any track of a sequence is soloed, cached for the pass (solos
+    // change through the GUI between passes, or through applyLaneTrackSolos,
+    // which clears it).
+    mutable std::unordered_map<const ofxOceanodeTimelineSequence*, bool> anySoloCache;
+    bool anySoloCacheActive = false;
+    // Copies of an own-tempo clip's factor into the played copies of its
+    // timeline (and the engines playing it), so a factor that follows the
+    // clock never forces a rebuild.
+    void patchOwnTempoFactor(const ofxOceanodeTimelineSequence& host, const std::string& trackId,
+                             const std::string& clipId, double factor);
     // The node GUI asks this for every visible parameter. Cache path -> color
     // once per frame instead of scanning every track/binding for every row.
     void rebuildParameterTrackColorCache() const;

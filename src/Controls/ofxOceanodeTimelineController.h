@@ -307,9 +307,14 @@ private:
         return scopes.empty() ? ofxOceanodeTimelineManager::TimelineRef{} : scopes.back().ref;
     }
     // ---- Timelines: the list, the shown one's player, further windows ----
-    void drawTimelinesBar(ofxOceanodeTimelineManager& timeline);
+    // The scope bar at the top of the window: which timeline is shown (a
+    // kind badge, the path to it, the timelines menu) and, for one other
+    // than the main, its player (transport when independent, own tempo).
+    void drawScopeBar(ofxOceanodeTimelineManager& timeline);
     void drawTimelinesMenu(ofxOceanodeTimelineManager& timeline);
+    void drawTimelineRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    void drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     // The main controller draws the further windows (before the core's windows).
     void drawTimelineWindows();
@@ -323,6 +328,10 @@ private:
     int windowId = 0; // 0: the main Timeline window
     bool secondary() const { return windowId != 0; }
     bool windowScopeApplied = false;
+    ofxOceanodeTimelineManager::TimelineRef appliedWindowRef; // the entry as last applied
+    bool windowScopeValid = false; // it could be shown (else its entry is left alone)
+    // Scopes whose timeline is gone close (at the top of each draw).
+    void dropDeadScopes(ofxOceanodeTimelineManager& timeline);
     // A further window's zoom and scroll (the main window's are saved with the timeline).
     ofxOceanodeTimelineViewState ownViewState;
     std::map<int, std::unique_ptr<ofxOceanodeTimelineController>> windowEditors;
@@ -332,7 +341,6 @@ private:
     // Back to the scope at `depth` (0: the main timeline).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
-    void drawScopeBreadcrumb(ofxOceanodeTimelineManager& timeline);
     // ---- Unfolded macro tracks: a macro's timeline edited in place ----
     // A macro track's timeline placed on the timeline shown: its sequence,
     // where its beats sit there (one repeat of one macro clip) and which
