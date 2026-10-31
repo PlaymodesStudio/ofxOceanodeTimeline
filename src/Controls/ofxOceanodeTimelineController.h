@@ -7,6 +7,7 @@
 #include "Editors/ofxOceanodeTimelineWaveVolumeEditor.h"
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Editors/ofxOceanodeTimelineLfoEditor.h"
+#include "Timeline/ofxOceanodeTimeline.h"
 #include <deque>
 #include <functional>
 #include <map>
@@ -27,6 +28,10 @@ struct ofxOceanodeTimelineParameterBinding;
 class ofxOceanodeTimelineController : public ofxOceanodeBaseController {
 public:
     explicit ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> container);
+    // A further Timeline window (windowId > 0): an editor of its own, hosted
+    // and drawn by the main Timeline controller, showing the timeline the
+    // manager's window list gives it.
+    ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> container, int windowId);
 
     void draw() override;
     // Handles a track name/creation request queued by anything outside this
@@ -282,6 +287,7 @@ private:
         ofxOceanodeTimelineSequence* sequence = nullptr;
         ofxOceanodeContainer* container = nullptr; // the macro's (pickers resolve inside it)
         std::string label;
+        ofxOceanodeTimelineManager::TimelineRef ref; // which timeline it is
     };
     std::vector<EditorScope> scopes;
     ofxOceanodeTimelineSequence& scope(ofxOceanodeTimelineManager& timeline) {
@@ -294,6 +300,35 @@ private:
     }
     bool inMacroScope() const { return !scopes.empty(); }
     void enterMacroScope(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& macroContainer);
+    // Any timeline: a macro's (as above) or a canvas's further one.
+    void enterTimelineScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    // The timeline shown (the main one when no scope is open).
+    ofxOceanodeTimelineManager::TimelineRef scopeRef() const {
+        return scopes.empty() ? ofxOceanodeTimelineManager::TimelineRef{} : scopes.back().ref;
+    }
+    // ---- Timelines: the list, the shown one's player, further windows ----
+    void drawTimelinesBar(ofxOceanodeTimelineManager& timeline);
+    void drawTimelinesMenu(ofxOceanodeTimelineManager& timeline);
+    void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    // The main controller draws the further windows (before the core's windows).
+    void drawTimelineWindows();
+    // Seeks the timeline shown: its own transport when it plays on its own,
+    // else the main one.
+    void seekShownTimeline(ofxOceanodeTimelineManager& timeline, double beat);
+    // Shows the timeline a timeline track places, from the next frame.
+    void requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
+    ofxOceanodeTimelineManager::TimelineRef pendingScope;
+    bool pendingScopeRequested = false;
+    int windowId = 0; // 0: the main Timeline window
+    bool secondary() const { return windowId != 0; }
+    bool windowScopeApplied = false;
+    // A further window's zoom and scroll (the main window's are saved with the timeline).
+    ofxOceanodeTimelineViewState ownViewState;
+    std::map<int, std::unique_ptr<ofxOceanodeTimelineController>> windowEditors;
+    char timelineNameBuffer[128] = {};
+    ofxOceanodeTimelineManager::TimelineRef timelineRenameRef;
+    bool requestTimelineRename = false;
     // Back to the scope at `depth` (0: the main timeline).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();

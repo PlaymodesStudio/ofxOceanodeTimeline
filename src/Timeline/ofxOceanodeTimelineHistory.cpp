@@ -217,7 +217,7 @@ bool ofxOceanodeTimelineManager::redoTimelineEdit() { return stepTimelineHistory
 void ofxOceanodeTimelineManager::beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
     if(isMainSequence(sequence)) { beginTimelineEdit(); return; }
     auto& history = sequenceHistories[&sequence];
-    if(!history.pending) history.pending = std::make_unique<ofJson>(sequenceToJson(sequence));
+    if(!history.pending) history.pending = std::make_unique<ofJson>(sequenceToJson(sequence, false));
 }
 
 bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
@@ -227,7 +227,7 @@ bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequen
     auto& history = found->second;
     auto before = std::move(*history.pending);
     history.pending.reset();
-    auto after = sequenceToJson(sequence);
+    auto after = sequenceToJson(sequence, false);
     if(before == after) return false;
     history.redo.clear();
     history.undo.emplace_back(std::move(before), std::move(after));
@@ -241,7 +241,7 @@ bool ofxOceanodeTimelineManager::undoTimelineEdit(ofxOceanodeTimelineSequence& s
     auto& history = sequenceHistories[&sequence];
     if(history.undo.empty()) return false;
     // An unrecorded change since must not be overwritten by an older snapshot.
-    if(sequenceToJson(sequence) != history.undo.back().second) { history.undo.clear(); history.redo.clear(); return false; }
+    if(sequenceToJson(sequence, false) != history.undo.back().second) { history.undo.clear(); history.redo.clear(); return false; }
     sequenceFromJson(sequence, history.undo.back().first);
     history.redo.push_back(std::move(history.undo.back()));
     history.undo.pop_back();
@@ -254,7 +254,7 @@ bool ofxOceanodeTimelineManager::redoTimelineEdit(ofxOceanodeTimelineSequence& s
     endTimelineEdit(sequence);
     auto& history = sequenceHistories[&sequence];
     if(history.redo.empty()) return false;
-    if(sequenceToJson(sequence) != history.redo.back().first) { history.undo.clear(); history.redo.clear(); return false; }
+    if(sequenceToJson(sequence, false) != history.redo.back().first) { history.undo.clear(); history.redo.clear(); return false; }
     sequenceFromJson(sequence, history.redo.back().second);
     history.undo.push_back(std::move(history.redo.back()));
     history.redo.pop_back();

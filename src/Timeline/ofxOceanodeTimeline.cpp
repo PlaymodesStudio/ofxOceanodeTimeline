@@ -4327,7 +4327,7 @@ const ofxOceanodeTimelineMarker* ofxOceanodeTimelineManager::getMarker(const std
 
 void ofxOceanodeTimelineManager::syncLoopToTransport() {
     if(container == nullptr) return;
-    const auto transport = container->getTransport();
+    const auto transport = playTransport();
     if(transport == nullptr) return;
     // An external clock owns position and looping. Preserve the timeline's
     // local setting so it can resume when sync is released, but do not apply
@@ -4505,6 +4505,12 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
 
 void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(container == nullptr) return;
+    // Timelines playing on their own first: the main timeline then applies
+    // over them on any path both drive.
+    if(!isEngine()) {
+        updatePlayers();
+        updateTimeSources();
+    }
     adoptInstrumentDurations();
     if(metronome) metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
     // Track/binding/clip storage may have changed through the editor since
@@ -4512,17 +4518,19 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // frame evaluation, scheduler probes and both applyAutomation passes.
     ensureEvaluationIndexes();
     loopWrappedThisFrame = false;
-    auto transport = container->getTransportState();
-    // Following an external clock (MIDI clock): the master owns position, tempo and looping.
-    const auto ownerTransportPtr = container->getTransport();
-    const bool externalClock = ownerTransportPtr != nullptr && ownerTransportPtr->hasExternalClock();
+    auto transport = playState();
+    // Following an external clock (MIDI clock): the master owns the root's
+    // position, tempo and looping (a timeline playing on its own keeps its own).
+    const auto ownerTransportPtr = playTransport();
+    const bool externalClock = !isEngine() && ownerTransportPtr != nullptr && ownerTransportPtr->hasExternalClock();
 
     // The transport owns the loop (it wraps exactly at the loop end, keeping
     // the overshoot). Hand it the range; an external clock owns looping itself.
-    // There is a single timeline (the root's), so it alone sets the loop.
-    if(auto ownerTransport = container->getTransport()) {
+    // Each timeline sets its own transport's loop and meter.
+    if(auto ownerTransport = playTransport()) {
         ownerTransport->setLoop(!externalClock && loopEnabled, loopStartBeat, loopEndBeat);
-        transport = container->getTransportState();
+        ownerTransport->setBeatsPerBar(getBeatsPerBar());
+        transport = ownerTransport->getState();
     }
 
     // A stopped state-capture curve must still be editable from the node GUI.
@@ -4610,8 +4618,28 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Decide which paths are scheduled before evaluating this frame: their
     // lanes retrigger with the short gap, in the frame value and in the
     // events handed ahead alike.
+    // A timeline about to start at a timestamped instant within the window
+    // is scheduled from that instant, so its first events are exact too;
+    // one about to stop is scheduled no further than its stop.
+    auto schedulingTransport = transport;
+    scheduleHorizonUs = 0;
+    if(isEngine() && transport.driverMode != TransportDriverMode::FrameStep) {
+        double at = 0.0;
+        bool starts = false;
+        if(engineTransport->nextPendingAction(at, starts)) {
+            const uint64_t dueUs = engineTransport->steadyUsAtClock(at);
+            const uint64_t nowUs = ofxOceanodeScheduling::steadyNowUs();
+            const uint64_t windowUs = static_cast<uint64_t>(effectiveSchedulingLookaheadMs() * 1000.0);
+            if(starts && !transport.isPlaying && dueUs > nowUs && dueUs - nowUs <= windowUs) {
+                schedulingTransport.isPlaying = true;
+                schedulingTransport.steadyTimeUs = dueUs;
+            } else if(!starts && transport.isPlaying) {
+                scheduleHorizonUs = dueUs;
+            }
+        }
+    }
     schedulablePathsThisFrame.clear();
-    if(schedulingEnabled && transport.isPlaying && transport.driverMode != TransportDriverMode::FrameStep)
+    if(schedulingEnabled && schedulingTransport.isPlaying && schedulingTransport.driverMode != TransportDriverMode::FrameStep)
         schedulablePathsThisFrame = selectSchedulablePaths();
     {
         std::unordered_set<std::string> fast(schedulablePathsThisFrame.begin(), schedulablePathsThisFrame.end());
@@ -4627,8 +4655,17 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(bpmAutomationEnabled && !externalClock) { // an external clock sets the tempo
         const float automatedBpm = evaluateBpm(transport.beatPosition, transport.bpm);
         if(std::abs(automatedBpm - transport.bpm) > 0.001f) {
-            container->setBpm(automatedBpm);
+            if(isEngine()) engineTransport->setBpm(automatedBpm);
+            else container->setBpm(automatedBpm);
             transport.bpm = automatedBpm;
+        }
+    } else if(isEngine()) {
+        // Its own fixed tempo, or a ratio of the clock's.
+        const float rootBpm = container->getRootTransport() != nullptr ? container->getRootTransport()->getState().bpm : engineBpm;
+        const float wanted = engineFollowsClockTempo ? rootBpm * engineTempoRatio : engineBpm;
+        if(std::abs(wanted - transport.bpm) > 0.0001f) {
+            engineTransport->setBpm(wanted);
+            transport.bpm = wanted;
         }
     }
 
@@ -4646,11 +4683,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);
     updateMacroGating(transport);
+    if(!isEngine()) updateClipTransports(transport);
 
     // Hand the discrete events of the coming window to any backend that can
     // execute them at an exact instant. Everything below still runs exactly
     // as before for this frame's own position.
-    runScheduler(transport, loopWrappedThisFrame);
+    runScheduler(schedulingTransport, loopWrappedThisFrame);
 
     // Wave tracks never touch the automation binding map. They are reported
     // through the optional audio backend as clip sources instead.
@@ -4684,7 +4722,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                     const float clipPlaybackRate = ofClamp(
                         static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
                         0.01f, 16.0f);
-                    waveAudioProvider->updateWaveClip(track.id, clip.id, clip.waveFilePath, clip.waveGain,
+                    waveAudioProvider->updateWaveClip(waveKeyPrefix + track.id, clip.id, clip.waveFilePath, clip.waveGain,
                                                       volume, clip.waveNumChannels, waveSourceBeat,
                                                       clip.contentDurationBeats,
                                                       clip.waveSourceStartBeat,
@@ -4828,6 +4866,11 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.tracks.clear();
     invalidateEvaluationIndexes();
     mainSequence.clipGroups.clear();
+    mainSequence.timelines.clear();
+    mainSequence.play = {};
+    freeTimelines.clear();
+    timelineWindows.clear();
+    clipFollowCanvases.clear();
     markers.clear();
     viewState = {};
     playOnPresetLoad = false;

@@ -35,8 +35,10 @@ void ofxOceanodeTimelineManager::pruneMacroSequences() const {
     macroSequences.erase(std::remove_if(macroSequences.begin(), macroSequences.end(),
         [](const auto& entry) { return entry.container.expired(); }), macroSequences.end());
     // A shared sequence resolves through a live copy (the first one may be gone).
-    for(auto& entry : macroSequences)
+    for(auto& entry : macroSequences) {
         entry.sequence->base = const_cast<ofxOceanodeContainer*>(entry.address);
+        for(auto& timeline : entry.sequence->timelines) timeline->base = entry.sequence->base;
+    }
     for(auto it = sequenceHistories.begin(); it != sequenceHistories.end();) {
         const bool live = std::any_of(macroSequences.begin(), macroSequences.end(),
             [&](const auto& entry) { return entry.sequence.get() == it->first; });
@@ -110,7 +112,9 @@ bool ofxOceanodeTimelineManager::saveMacroSequence(const ofxOceanodeContainer& m
         [&](const auto& entry) { return entry.address == &macroContainer; });
     const std::string file = ofFilePath::join(folder, kSequenceFile);
     // Nothing to keep: no file, so an emptied timeline does not come back.
-    if(found == macroSequences.end() || found->sequence->tracks.empty()) {
+    if(found == macroSequences.end() ||
+       (found->sequence->tracks.empty() && found->sequence->timelines.empty() &&
+        found->sequence->play == ofxOceanodeTimelinePlaySettings())) {
         if(ofFile::doesFileExist(file)) ofFile::removeFile(file);
         return true;
     }
@@ -119,9 +123,8 @@ bool ofxOceanodeTimelineManager::saveMacroSequence(const ofxOceanodeContainer& m
 
 bool ofxOceanodeTimelineManager::isLiveSequence(const ofxOceanodeTimelineSequence& sequence) const {
     if(isMainSequence(sequence)) return true;
-    pruneMacroSequences();
-    return std::any_of(macroSequences.begin(), macroSequences.end(),
-        [&](const auto& entry) { return entry.sequence.get() == &sequence; });
+    TimelineRef ref;
+    return refOf(sequence, ref); // a canvas's default or further timeline
 }
 
 namespace {
@@ -164,6 +167,7 @@ ofxOceanodeContainer* ofxOceanodeTimelineManager::findMacroContainer(const ofxOc
                                                                      const ofxOceanodeTimelineTrack& track) const {
     if(container == nullptr || !track.isMacroTrack()) return nullptr;
     const auto* base = sequence.base != nullptr ? sequence.base : container;
+    if(track.macroCanvas == ".") return const_cast<ofxOceanodeContainer*>(base); // another timeline of its own canvas
     const std::string canvas = isRootCanvas(base->getCanvasID()) ? track.macroCanvas
                                                                  : base->getCanvasID() + " / " + track.macroCanvas;
     return containerWithCanvas(*container, canvas);
@@ -173,8 +177,7 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
                                                         double startBeat, double durationBeats) {
     const auto* track = getTrack(sequence, trackId);
     if(track == nullptr || !track->isMacroTrack()) return std::string();
-    auto* macroContainer = findMacroContainer(sequence, *track);
-    auto* macroSequence = macroContainer == nullptr ? nullptr : getMacroSequence(*macroContainer);
+    auto* macroSequence = placedTimeline(sequence, *track);
     const double length = macroSequence == nullptr ? getBeatsPerBar() : macroTimelineLength(*macroSequence);
     const auto id = createClip(sequence, trackId, track->name, startBeat, durationBeats > 0.0 ? durationBeats : length);
     if(auto* clip = getClip(sequence, trackId, id)) {
@@ -192,33 +195,6 @@ std::string ofxOceanodeTimelineManager::createMacroTrack(ofxOceanodeContainer& m
 
 std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& trackId, double startBeat, double durationBeats) {
     return createMacroClip(mainSequence, trackId, startBeat, durationBeats);
-}
-
-std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager::collectMacroSources() const {
-    std::vector<MacroSource> sources;
-    if(container == nullptr) return sources;
-    pruneMacroSequences();
-    constexpr size_t kMaximumSources = 64;
-    // Breadth first: the main timeline's macro tracks, then theirs. A macro
-    // reached twice is one source (and a sequence never reaches itself).
-    for(int parent = -1; parent < static_cast<int>(sources.size()) && sources.size() < kMaximumSources; ++parent) {
-        const auto& sequence = parent < 0 ? mainSequence : *sources[static_cast<size_t>(parent)].sequence;
-        const std::string baseCanvas = parent < 0 ? std::string() : sources[static_cast<size_t>(parent)].canvas;
-        for(size_t trackIndex = 0; trackIndex < sequence.tracks.size(); ++trackIndex) {
-            const auto& track = sequence.tracks[trackIndex];
-            if(!track.isMacroTrack()) continue;
-            const std::string canvas = baseCanvas.empty() ? track.macroCanvas : baseCanvas + " / " + track.macroCanvas;
-            if(std::any_of(sources.begin(), sources.end(), [&](const auto& source) { return source.canvas == canvas; })) continue;
-            const auto* macroContainer = containerWithCanvas(*container, canvas);
-            if(macroContainer == nullptr) continue;
-            const auto entry = std::find_if(macroSequences.begin(), macroSequences.end(),
-                [&](const auto& candidate) { return candidate.address == macroContainer; });
-            if(entry == macroSequences.end()) continue; // no timeline yet: nothing to play
-            sources.push_back({macroContainer, canvas, entry->sequence.get(), parent, trackIndex});
-            if(sources.size() >= kMaximumSources) break;
-        }
-    }
-    return sources;
 }
 
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter(const ofxOceanodeContainer& macroContainer,
@@ -403,4 +379,65 @@ void ofxOceanodeTimelineManager::replayParameterMove(ofxOceanodeContainer& canva
     retargetAllParameterPaths(newToOld);
     invalidateEvaluationIndexes();
     invalidateSchedule();
+}
+
+// ---- Timelines by reference ----
+
+ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const {
+    if(container == nullptr) return nullptr;
+    if(isRootCanvas(canvas) || canvas == container->getCanvasID()) return container;
+    return containerWithCanvas(*container, canvas);
+}
+
+ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas(const ofxOceanodeContainer& canvas,
+                                                                                 const std::string& timeline) const {
+    if(&canvas == container || isRootCanvas(canvas.getCanvasID())) return {std::string(), timeline};
+    return {canvas.getCanvasID(), timeline};
+}
+
+ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::timelineFor(const TimelineRef& ref) {
+    ofxOceanodeTimelineSequence* base = nullptr;
+    if(isRootCanvas(ref.canvas)) base = &mainSequence;
+    else if(auto* canvas = canvasContainer(ref.canvas)) base = getMacroSequence(*canvas);
+    if(base == nullptr || ref.timeline.empty()) return base;
+    for(auto& timeline : base->timelines)
+        if(timeline->timelineId == ref.timeline) return timeline.get();
+    return nullptr;
+}
+
+bool ofxOceanodeTimelineManager::refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const {
+    auto within = [&](const ofxOceanodeTimelineSequence& base, const std::string& canvas) {
+        if(&base == &sequence) { ref = {canvas, std::string()}; return true; }
+        for(const auto& timeline : base.timelines)
+            if(timeline.get() == &sequence) { ref = {canvas, timeline->timelineId}; return true; }
+        return false;
+    };
+    if(within(mainSequence, std::string())) return true;
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences)
+        if(within(*entry.sequence, entry.address->getCanvasID())) return true;
+    return false;
+}
+
+std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {
+    auto* sequence = timelineFor(ref);
+    if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;
+    if(!ref.timeline.empty()) return ref.timeline;
+    if(isRootCanvas(ref.canvas)) return "Main";
+    if(auto* canvas = canvasContainer(ref.canvas)) return getMacroSequenceLabel(*canvas);
+    return ref.canvas;
+}
+
+std::vector<ofxOceanodeTimelineManager::TimelineRef> ofxOceanodeTimelineManager::allTimelines() {
+    std::vector<TimelineRef> refs{{}};
+    for(const auto& timeline : mainSequence.timelines) refs.push_back({std::string(), timeline->timelineId});
+    pruneMacroSequences();
+    std::vector<std::pair<std::string, const ofxOceanodeTimelineSequence*>> macros;
+    for(const auto& entry : macroSequences) macros.push_back({entry.address->getCanvasID(), entry.sequence.get()});
+    std::sort(macros.begin(), macros.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for(const auto& [canvas, sequence] : macros) {
+        refs.push_back({canvas, std::string()});
+        for(const auto& timeline : sequence->timelines) refs.push_back({canvas, timeline->timelineId});
+    }
+    return refs;
 }

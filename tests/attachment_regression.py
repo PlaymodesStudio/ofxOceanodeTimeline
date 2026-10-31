@@ -35,7 +35,9 @@ def production():
         result += block(source, signature) + '\n'
     model_source = (CORE / 'src/Nodes/ofxOceanodeNodeModel.cpp').read_text()
     for signature in ('string ofxOceanodeNodeModel::getParents()',
-                      'ofxOceanodeTransportState ofxOceanodeNodeModel::getTransportState()'):
+                      'ofxOceanodeTransportState ofxOceanodeNodeModel::getTransportState()',
+                      'std::shared_ptr<ofxOceanodeTransport> ofxOceanodeNodeModel::getTransport()',
+                      'ofxOceanodeTransportState ofxOceanodeNodeModel::missingTimeSourceState('):
         if signature not in result:
             result += block(model_source, signature) + '\n'
     result += 'bool ofxOceanodeContainer::showParameterInCanvas(ofxOceanodeAbstractParameter&) { assert(false); return false; }\n'

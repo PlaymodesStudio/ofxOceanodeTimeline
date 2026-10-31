@@ -608,7 +608,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
         const auto outerContext = outer.contextFrom(context);
         for(const auto& track : outer.sequence->tracks) {
             if(!track.isMacroTrack() || !isTrackAudible(track)) continue;
-            if(playedMacroAt(track.macroCanvas) == nullptr) continue;
+            if(playedMacroAt(track) == nullptr) continue;
             const size_t firstOfTrack = result.size();
             double latestStart = -std::numeric_limits<double>::infinity();
             for(const auto& clip : track.clips) {
@@ -633,7 +633,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 // A reversed clip plays the mirrored copy, its content read
                 // from the end of this clip's content (sequence beat z here is
                 // mirrorLength - content + z there).
-                const auto* played = playedMacroAt(track.macroCanvas, clip.reversed);
+                const auto* played = playedMacroAt(track, clip.reversed);
                 if(played == nullptr) continue;
                 const double mirrorShift = clip.reversed ? played->mirrorLength - content : 0.0;
                 const double windowStart = std::max(from, start), windowEnd = std::min(to, end);
@@ -659,6 +659,12 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.map = outer.map.then({segments[s][0] - mirrorShift * stretch, stretch});
                         placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
                         placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
+                        // Its own tempo: the segment as linear pieces, each at
+                        // the ratio of its tempo to the host's there.
+                        std::vector<std::array<double, 4>> pieces; // host from, host to, map offset, map ratio
+                        if(clip.ownTempo && !clip.reversed)
+                            ownTempoPieces(played->sequence->play, outer.map, segments[s][0], stretch,
+                                           segmentFrom, segmentTo, from, to, atBeat, pieces);
                         placement.resolver = resolverFor(*placement.sequence);
                         placement.placedBy = &track;
                         placement.placedClip = &clip;
@@ -670,6 +676,16 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.instanceKey = key == 0 ? 1 : key;
                         placement.passMix = outer.passMix * 0xbf58476d1ce4e5b9ULL ^
                                             (static_cast<uint64_t>(repeat) + 1) * 0xd6e8feb86659fd93ULL;
+                        if(clip.ownTempo && !clip.reversed) {
+                            for(const auto& piece : pieces) {
+                                auto part = placement;
+                                part.map = outer.map.then({piece[2], piece[3]});
+                                part.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(piece[0]));
+                                part.windowTo = std::min(outer.windowTo, outer.map.toTimeline(piece[1]));
+                                result.push_back(part);
+                            }
+                            continue;
+                        }
                         result.push_back(placement);
                     }
                 }
@@ -699,7 +715,7 @@ bool ofxOceanodeTimelineManager::isGatedMacroActive(const ofxOceanodeAbstractPar
     ensureEvaluationIndexes();
     for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         if(!track.isMacroTrack() || !track.macroGate) continue;
-        if(const auto* played = playedMacroAt(track.macroCanvas))
+        if(const auto* played = playedMacroAt(track))
             if(macroNodeParameter(*played->macroContainer, "Active") == &parameter) return true;
     }
     return false;
@@ -736,7 +752,7 @@ void ofxOceanodeTimelineManager::updateMacroGating(const ofxOceanodeTransportSta
     };
     for(const auto* sequence : evaluatedSequences()) for(const auto& track : sequence->tracks) {
         if(!track.isMacroTrack()) continue;
-        const auto* played = playedMacroAt(track.macroCanvas);
+        const auto* played = playedMacroAt(track);
         if(played == nullptr) continue;
         // Pre-roll covers the earliest negative latency inside the macro.
         float earliestMs = 0.0f;
@@ -808,24 +824,11 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         PlayedMacro played;
         played.macroContainer = source.macroContainer;
         played.canvas = source.canvas;
+        played.timeline = source.timeline;
         played.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*source.sequence);
         played.sequence->base = nullptr; // its paths are absolute now
-        const std::string& prefix = source.canvas;
-        // "Node/Param" is in the macro itself, "Macro 2::Node/Param" further in.
-        auto absolute = [&](const std::string& path) {
-            return path.find("::") == std::string::npos ? prefix + "::" + path : prefix + " / " + path;
-        };
-        for(auto& track : played.sequence->tracks) {
-            for(auto& binding : track.bindings) binding.parameterPath = absolute(binding.parameterPath);
-            if(track.isMacroTrack()) track.macroCanvas = prefix + " / " + track.macroCanvas;
-            for(auto& clip : track.clips)
-                for(auto& lane : clip.lanes) {
-                    if(lane.targetProbability.empty()) continue;
-                    std::decay_t<decltype(lane.targetProbability)> moved;
-                    for(const auto& [path, chance] : lane.targetProbability) moved[absolute(path)] = chance;
-                    lane.targetProbability = std::move(moved);
-                }
-        }
+        played.sequence->timelines.clear();
+        makeAbsolute(*played.sequence, source.canvas);
         const auto* parentCopy = source.parent < 0 ? nullptr : &playedMacros[forwardIndex[static_cast<size_t>(source.parent)]];
         const float outer = parentCopy == nullptr ? 0.0f : parentCopy->outerLatencyMs;
         const auto& parent = parentCopy == nullptr ? mainSequence : *parentCopy->sequence;
@@ -834,6 +837,7 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         PlayedMacro mirrored;
         mirrored.macroContainer = played.macroContainer;
         mirrored.canvas = played.canvas;
+        mirrored.timeline = played.timeline;
         mirrored.outerLatencyMs = played.outerLatencyMs;
         mirrored.reversed = true;
         mirrored.mirrorLength = macroTimelineLength(*source.sequence);
@@ -877,9 +881,18 @@ const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playe
 }
 
 const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(const std::string& canvas,
+                                                                                         const std::string& timeline,
                                                                                          bool reversed) const {
-    for(const auto& played : playedMacros) if(played.canvas == canvas && played.reversed == reversed) return &played;
+    for(const auto& played : playedMacros)
+        if(played.canvas == canvas && played.timeline == timeline && played.reversed == reversed) return &played;
     return nullptr;
+}
+
+// A played track's macroCanvas is absolute ("." the root canvas: copies of
+// the root's timelines keep it relative).
+const ofxOceanodeTimelineManager::PlayedMacro* ofxOceanodeTimelineManager::playedMacroAt(
+        const ofxOceanodeTimelineTrack& track, bool reversed) const {
+    return playedMacroAt(track.macroCanvas == "." ? std::string() : track.macroCanvas, track.macroTimeline, reversed);
 }
 
 std::vector<ofxOceanodeTimelineSequence*> ofxOceanodeTimelineManager::evaluatedSequences() const {
@@ -2132,39 +2145,44 @@ uint64_t ofxOceanodeTimelineManager::evaluationSignature() const {
     // rebuild, so edits to them and where they are matter too).
     std::vector<const ofxOceanodeTimelineSequence*> sequences{&mainSequence};
     for(const auto& source : collectMacroSources()) {
-        hash.add(source.macroContainer); hash.add(source.canvas);
+        hash.add(source.macroContainer); hash.add(source.canvas); hash.add(source.timeline);
         sequences.push_back(source.sequence);
     }
-    for(const auto* sequence : sequences) {
-        hash.add(sequence->tracks.data()); hash.add(sequence->tracks.size());
-        for(const auto& track : sequence->tracks) {
-            hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
-            hash.add(track.isFolder); hash.add(track.parentId);
-            hash.add(track.bindings.data()); hash.add(track.bindings.size());
-            for(const auto& binding : track.bindings) {
-                hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
-                hash.add(binding.mode); hash.add(binding.bypass); hash.add(binding.hasLiveOverride);
-            }
-            hash.add(track.noteGroups.size());
-            for(const auto& group : track.noteGroups) {
-                hash.add(group.id); hash.add(group.pitchBindingId); hash.add(group.gateBindingId);
-                hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.stutterBindingId); hash.add(group.voices);
-            }
-            hash.add(track.clips.data()); hash.add(track.clips.size());
-            for(const auto& clip : track.clips) {
-                hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
-                hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-                hash.add(clip.reversed);
-                hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
-                hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
-                for(const auto& lane : clip.lanes) {
-                    hash.word(lanePlaybackSignature(lane));
-                    if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
-                    int voices = 0, instrumentVoices = 0;
-                    bool kit = false;
-                    pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
-                    hash.add(voices); hash.add(kit); hash.add(instrumentVoices);
-                }
+    for(const auto* sequence : sequences) hash.word(sequenceSignature(*sequence));
+    return hash.result();
+}
+
+// One sequence's part of evaluationSignature (an engine follows its source by it).
+uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const {
+    ChangeHash hash;
+    hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
+    for(const auto& track : sequence.tracks) {
+        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
+        hash.add(track.isFolder); hash.add(track.parentId);
+        hash.add(track.bindings.data()); hash.add(track.bindings.size());
+        for(const auto& binding : track.bindings) {
+            hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
+            hash.add(binding.mode); hash.add(binding.bypass); hash.add(binding.hasLiveOverride);
+        }
+        hash.add(track.noteGroups.size());
+        for(const auto& group : track.noteGroups) {
+            hash.add(group.id); hash.add(group.pitchBindingId); hash.add(group.gateBindingId);
+            hash.add(group.velocityBindingId); hash.add(group.durationBindingId); hash.add(group.filterBindingId); hash.add(group.stutterBindingId); hash.add(group.voices);
+        }
+        hash.add(track.clips.data()); hash.add(track.clips.size());
+        for(const auto& clip : track.clips) {
+            hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
+            hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
+            hash.add(clip.reversed); hash.add(clip.ownTempo);
+            hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
+            hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
+            for(const auto& lane : clip.lanes) {
+                hash.word(lanePlaybackSignature(lane));
+                if(!ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) continue;
+                int voices = 0, instrumentVoices = 0;
+                bool kit = false;
+                pianoLaneVoicesAndKit(track, lane, voices, kit, &instrumentVoices);
+                hash.add(voices); hash.add(kit); hash.add(instrumentVoices);
             }
         }
     }
@@ -2464,4 +2482,59 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
             activeAutomationValues[entry.first].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, entry.second);
     }
     soundingRestPaths = std::move(sounding);
+}
+
+// A clip keeping its timeline's own tempo, between host beats segmentFrom and
+// segmentTo (the timeline's beat 0 sits at host beat `zero` at the start, as
+// a following clip has it): linear pieces, each mapping the timeline's beats at
+// the ratio of its tempo to the host's there (host beats per timeline beat),
+// continuous from piece to piece. A fixed tempo against a fixed host tempo is
+// one exact piece; tempo lanes are followed in pieces of at most a quarter
+// beat, each at its midpoint's ratio. Only the pieces reaching [from, to] (at
+// `from` when atBeat) are kept.
+void ofxOceanodeTimelineManager::ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play,
+                                                const ofxOceanodeTimelineTimeMap& outer, double zero, double stretch,
+                                                double segmentFrom, double segmentTo, double from, double to,
+                                                bool atBeat, std::vector<std::array<double, 4>>& pieces) const {
+    const auto state = playState();
+    const float clockBpm = std::max(1.0f, container != nullptr && container->getRootTransport() != nullptr
+                                              ? container->getRootTransport()->getState().bpm : state.bpm);
+    auto childBpm = [&](double beat) -> double {
+        if(play.bpmAutomationEnabled && !play.bpmPoints.empty())
+            return ofClamp(ofxOceanodeTimelineCurve::valueAtBeat(play.bpmPoints, play.bpmTensions, play.bpmInterpolation,
+                                                                std::max(0.0, beat), play.bpm),
+                           std::max(1.0f, play.bpmMinimum), std::max(1.0f, play.bpmMaximum));
+        return std::max(1.0f, play.followClockTempo ? clockBpm * play.tempoRatio : play.bpm);
+    };
+    // The host's tempo at one of its beats: the main timeline's there, over
+    // the host's own ratio to it.
+    auto hostBpm = [&](double hostBeat) -> double {
+        const double mainBeat = outer.toTimeline(hostBeat);
+        const double main = bpmAutomationEnabled && !bpmAutomationPoints.empty()
+            ? evaluateBpm(mainBeat, state.bpm) : std::max(1.0f, state.bpm);
+        return main / std::max(1e-9, outer.ratio);
+    };
+    const bool constant = !(play.bpmAutomationEnabled && !play.bpmPoints.empty()) &&
+                          !(bpmAutomationEnabled && !bpmAutomationPoints.empty());
+    const double step = constant ? std::numeric_limits<double>::infinity() : 0.25;
+    double hostBeat = segmentFrom;
+    double childBeat = (segmentFrom - zero) / std::max(1e-9, stretch);
+    for(int guard = 0; hostBeat < segmentTo - kEpsilon && guard < 4096; ++guard) {
+        const double next = std::min(segmentTo, hostBeat + step);
+        // Child beats per host beat, at the piece's start then its midpoint.
+        double rate = childBpm(childBeat) / hostBpm(hostBeat) / std::max(1e-9, stretch);
+        if(!constant) {
+            const double middle = 0.5 * (hostBeat + next);
+            rate = childBpm(childBeat + rate * (middle - hostBeat)) / hostBpm(middle) / std::max(1e-9, stretch);
+        }
+        rate = std::max(1e-6, rate);
+        const double ratio = 1.0 / rate;
+        const bool reaches = atBeat ? (from >= hostBeat - kEpsilon && from < next - kEpsilon)
+                                    : !(next < from - kEpsilon || hostBeat > to + kEpsilon);
+        if(reaches) pieces.push_back({hostBeat, next, hostBeat - childBeat * ratio, ratio});
+        if(!atBeat && hostBeat > to + kEpsilon) break;
+        if(atBeat && hostBeat > from + kEpsilon) break;
+        childBeat += rate * (next - hostBeat);
+        hostBeat = next;
+    }
 }
