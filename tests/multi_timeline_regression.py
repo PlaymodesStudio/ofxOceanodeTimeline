@@ -187,6 +187,30 @@ int main() {
         nest.transport->latchFrameState();
         nested.update();
         near(fillValue, 0.7f);
+        // Keeping its own tempo: Fills at 60 BPM inside the main timeline at
+        // 120 advances half a beat per main beat (stretch 1).
+        auto fillSettings = *nested.playSettings(fills);
+        fillSettings.bpm = 60.0f;
+        nested.setPlaySettings(fills, fillSettings);
+        clip->contentStretch = 1.0;
+        clip->contentDurationBeats = 4.0;
+        clip->ownTempo = true;
+        nest.transport->setBpm(120.0f);
+        auto at = [&](double beat) {
+            nest.transport->seekToBeat(beat);
+            nest.transport->latchFrameState();
+            nested.update();
+        };
+        at(5.5); near(fillValue, 0.3f);  // Fills beat 0.75
+        at(6.5); near(fillValue, 0.7f);  // Fills beat 1.25
+        // Its own tempo lane: 60 BPM until its beat 1, then 120 (step).
+        fillSettings.bpmAutomationEnabled = true;
+        fillSettings.bpmInterpolation = "Step";
+        fillSettings.bpmPoints = {{0.0, 60.0f}, {1.0, 120.0f}};
+        nested.setPlaySettings(fills, fillSettings);
+        at(5.5); near(fillValue, 0.3f);  // Fills beat 0.75 (still at 60)
+        at(6.5); near(fillValue, 0.7f);  // past beat 1 at main beat 6, then 1 beat per beat: 1.5
+        clip->ownTempo = false;
         // Saved with which timeline the track plays.
         const auto saved = nested.toJson();
         ofxOceanodeContainer reloadedOwner;
@@ -244,7 +268,7 @@ int main() {
         assert(events.front().value == "1");
         ofxOceanodeScheduling::unregisterOwner(&scheduled);
     }
-    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, nested timelines.\n";
+    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, nested timelines, own-tempo clips.\n";
 }
 '''
 

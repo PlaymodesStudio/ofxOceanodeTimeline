@@ -274,6 +274,7 @@ void ofxOceanodeTimelineManager::destroyPlayer(Player& player) {
         const auto state = player.engine->playState();
         player.engine->sendScheduleCorrections(state, ofxOceanodeScheduling::steadyNowUs());
         player.engine->updatePianoGateOwnership(false);
+        player.engine->releaseWaveClips(player.engine->mainSequence, nullptr);
     }
     if(player.transport != nullptr) {
         player.transport->cancelPendingActions();
@@ -310,6 +311,7 @@ void ofxOceanodeTimelineManager::updatePlayers() {
         player->engine->schedulingEnabled = schedulingEnabled;
         player->engine->schedulingLookaheadMs = schedulingLookaheadMs;
         player->engine->schedulingLookaheadAdaptive = schedulingLookaheadAdaptive;
+        player->engine->waveKeyPrefix = timeSourceId(ref) + "|";
         if(canvas != container) {
             for(const auto& entry : macroSequences)
                 if(entry.address == canvas) player->canvas = entry.container;
@@ -333,7 +335,9 @@ void ofxOceanodeTimelineManager::updatePlayers() {
         auto& engine = *player->engine;
         // The copy follows its source: rebuilt when its content changed.
         const uint64_t signature = sequenceSignature(*sequence);
+        engine.waveAudioProvider = waveAudioProvider; // Wave tracks play on it too, keyed apart
         if(player->source != sequence || player->sourceSignature != signature) {
+            engine.releaseWaveClips(engine.mainSequence, sequence);
             engine.mainSequence = *sequence;
             engine.mainSequence.timelines.clear();
             engine.mainSequence.base = nullptr;
@@ -537,4 +541,92 @@ void ofxOceanodeTimelineManager::closeTimelineWindow(int id) {
 
 void ofxOceanodeTimelineManager::setTimelineWindowRef(int id, const TimelineRef& ref) {
     for(auto& window : timelineWindows) if(window.id == id) window.ref = ref;
+}
+
+// ---- Nodes inside a placed macro following its clips ----
+
+void ofxOceanodeTimelineManager::setNodesFollowClips(const std::string& canvas, bool follow) {
+    if(canvas.empty() || canvas == "Canvas" || canvas == "0") return;
+    if(follow) clipFollowCanvases.insert(canvas);
+    else clipFollowCanvases.erase(canvas);
+}
+
+void ofxOceanodeTimelineManager::releaseClipTransport(ClipTransport& entry) {
+    if(auto canvas = entry.canvas.lock())
+        if(canvas->getTransportOverride() == entry.transport) canvas->setTransportOverride(nullptr);
+}
+
+void ofxOceanodeTimelineManager::updateClipTransports(const ofxOceanodeTransportState& rootState) {
+    for(auto it = clipTransports.begin(); it != clipTransports.end();) {
+        const bool keep = clipFollowCanvases.count(it->first) > 0 && !it->second.canvas.expired() &&
+                          !isFree({it->first, std::string()});
+        if(keep) { ++it; continue; }
+        releaseClipTransport(it->second);
+        it = clipTransports.erase(it);
+    }
+    if(clipFollowCanvases.empty() || container == nullptr) return;
+    auto root = container->getRootTransport();
+    if(root == nullptr) return;
+    std::vector<PlayedSequence> placements;
+    bool placementsCollected = false;
+    for(const auto& canvas : clipFollowCanvases) {
+        if(isFree({canvas, std::string()})) continue; // its own transport wins
+        auto* canvasHost = canvasContainer(canvas);
+        if(canvasHost == nullptr || canvasHost == container) continue;
+        auto& entry = clipTransports[canvas];
+        if(entry.transport == nullptr) {
+            entry.transport = ofxOceanodeTransport::makeDerived(root);
+            entry.address = canvasHost;
+            for(const auto& sequenceEntry : macroSequences)
+                if(sequenceEntry.address == canvasHost) entry.canvas = sequenceEntry.container;
+            entry.transport->setDrivenState(0.0, rootState.bpm, false, true);
+        }
+        if(entry.canvas.expired()) continue;
+        if(canvasHost->getTransportOverride() == nullptr) canvasHost->setTransportOverride(entry.transport);
+        if(const auto* own = timelineFor({canvas, std::string()}))
+            entry.transport->setBeatsPerBar(own->play.timeSignatureNumerator * (4.0 / std::max(1, own->play.timeSignatureDenominator)));
+        if(!placementsCollected) {
+            placements = playedSequences(playContext, rootState.beatPosition, rootState.beatPosition);
+            placementsCollected = true;
+        }
+        const PlayedSequence* found = nullptr;
+        const PlayedMacro* foundCopy = nullptr;
+        for(const auto& placement : placements) {
+            const auto* played = playedMacroOf(*placement.sequence);
+            if(played != nullptr && played->canvas == canvas && played->timeline.empty()) {
+                found = &placement;
+                foundCopy = played;
+                break;
+            }
+        }
+        if(found == nullptr) {
+            // No clip plays it here: it holds where it was, stopped.
+            const auto held = entry.transport->getState();
+            entry.transport->setDrivenState(held.beatPosition, held.bpm, false, false);
+            entry.placement.clear();
+            continue;
+        }
+        double beat = found->map.toSequence(rootState.beatPosition);
+        if(foundCopy->reversed) beat = foundCopy->mirrorLength - beat; // as written
+        const float bpm = static_cast<float>(rootState.bpm / std::max(1e-6, found->map.ratio));
+        const std::string key = ofToString(reinterpret_cast<uintptr_t>(found->placedClip)) + "/" +
+                                ofToString(found->instanceKey) + "/" + ofToString(found->passMix) + "/" +
+                                ofToString(found->windowFrom);
+        const bool restart = key != entry.placement || rootState.generation != entry.rootGeneration;
+        entry.placement = key;
+        entry.rootGeneration = rootState.generation;
+        entry.transport->setDrivenState(beat, bpm, rootState.isPlaying, restart);
+    }
+}
+
+void ofxOceanodeTimelineManager::releaseWaveClips(const ofxOceanodeTimelineSequence& previous,
+                                                  const ofxOceanodeTimelineSequence* next) {
+    if(waveAudioProvider == nullptr) return;
+    for(const auto& track : previous.tracks) {
+        if(!track.isWaveTrack) continue;
+        const auto* kept = next == nullptr ? nullptr : next->findTrack(track.id);
+        for(const auto& clip : track.clips)
+            if(kept == nullptr || !kept->isWaveTrack || next->findClip(track.id, clip.id) == nullptr)
+                waveAudioProvider->releaseWaveClip(waveKeyPrefix + track.id, clip.id);
+    }
 }

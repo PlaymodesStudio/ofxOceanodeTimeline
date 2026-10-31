@@ -210,6 +210,16 @@ public:
                             ImGui::SetTooltip("Its timeline gets its own transport: play, stop and seek it by itself,\n"
                                               "at its own tempo, alongside the main timeline. Nodes inside the macro\n"
                                               "set to Auto follow it. (Its macro clips still play it too.)");
+                        bool followsClips = manager.nodesFollowClips(ref.canvas);
+                        if(ImGui::MenuItem("Nodes inside follow its clips", nullptr, followsClips, !free)) {
+                            manager.setNodesFollowClips(ref.canvas, !followsClips);
+                            ImGui::CloseCurrentPopup();
+                        }
+                        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip(free ? "Its timeline plays on its own: nodes inside follow that."
+                                                   : "Nodes inside set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
+                                                     "the macro clip playing it: its beat, restarting with each clip and repeat,\n"
+                                                     "at its stretched tempo. Off: they follow the timeline around the macro.");
                         if(ImGui::MenuItem("Open its timeline in a new window")) {
                             manager.openTimelineWindow(ref);
                             ImGui::CloseCurrentPopup();

@@ -4683,6 +4683,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);
     updateMacroGating(transport);
+    if(!isEngine()) updateClipTransports(transport);
 
     // Hand the discrete events of the coming window to any backend that can
     // execute them at an exact instant. Everything below still runs exactly
@@ -4721,7 +4722,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                     const float clipPlaybackRate = ofClamp(
                         static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
                         0.01f, 16.0f);
-                    waveAudioProvider->updateWaveClip(track.id, clip.id, clip.waveFilePath, clip.waveGain,
+                    waveAudioProvider->updateWaveClip(waveKeyPrefix + track.id, clip.id, clip.waveFilePath, clip.waveGain,
                                                       volume, clip.waveNumChannels, waveSourceBeat,
                                                       clip.contentDurationBeats,
                                                       clip.waveSourceStartBeat,
@@ -4869,6 +4870,7 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.play = {};
     freeTimelines.clear();
     timelineWindows.clear();
+    clipFollowCanvases.clear();
     markers.clear();
     viewState = {};
     playOnPresetLoad = false;

@@ -251,7 +251,22 @@ quantized to the root's grid while it plays, else the clock's, and at least
 half the lookahead ahead. While a start is pending within the window, the
 engine schedules from that instant (`schedulingTransport` in
 `evaluateAutomation`), so its first events are exact; a pending stop caps the
-window (`scheduleHorizonUs`). Wave tracks play on the main timeline only.
+window (`scheduleHorizonUs`). An engine's Wave voices go to the same audio
+provider, keyed apart by `waveKeyPrefix`; clips its copy loses are released
+(`releaseWaveClips`).
+
+`ownTempo` clips (`ofxOceanodeTimelineClip::ownTempo`) play their timeline at
+its own tempo: `playedSequences` replaces such a segment with linear pieces
+(`ownTempoPieces`), each at the ratio of the placed timeline's tempo to the
+host's there; one exact piece when both tempos are fixed, else pieces of at
+most a quarter beat. Unfolded rows and clip previews still draw them as if
+they followed the host.
+
+Placed macros in `clipFollowCanvases` (saved as `"clipFollow"`) get a driven
+transport (`ofxOceanodeTransport::setDrivenState`) as their canvas override:
+`updateClipTransports`, at the end of the primary's `evaluateAutomation`,
+sets it to the first placement of the macro's copy at the playhead (beat,
+host tempo over the map's ratio, restart when the placement changes).
 
 `updateTimeSources` registers every timeline with the root transport as a time
 source (`timeSourceId(ref)`: `canvas#timeline`, `root#default` for the main

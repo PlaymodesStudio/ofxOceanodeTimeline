@@ -3375,6 +3375,12 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::MenuItem("Edit macro timeline")) {
                     requestPlacedScope(timeline, track);
                 }
+                if(ImGui::MenuItem("Keep its own tempo", nullptr, clip.ownTempo, !clip.reversed))
+                    if(auto* editClip = timeline.getClip(scope(timeline), track.id, clip.id)) editClip->ownTempo = !clip.ownTempo;
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("On: the clip plays its timeline at that timeline's own tempo (its BPM, ratio\n"
+                                      "of the clock or tempo lane), not the host's; the clip's stretch still slows it.\n"
+                                      "Its repeats keep the clip's length. Not for a reversed clip.");
                 if(ImGui::MenuItem("Clip properties...")) {
                     editorState.editorTrackId = track.id;
                     editorState.editorClipId = clip.id;

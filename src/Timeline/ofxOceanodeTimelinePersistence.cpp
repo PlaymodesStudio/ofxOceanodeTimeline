@@ -389,6 +389,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
             if(clip.macroSnapshot >= 0) clipJson["macroSnapshot"] = clip.macroSnapshot;
             if(clip.reversed) clipJson["reversed"] = true;
+            if(clip.ownTempo) clipJson["ownTempo"] = true;
             clipJson["muted"] = clip.muted;
             clipJson["chance"] = clip.chance;
             clipJson["isLfo"] = clip.isLfo;
@@ -529,6 +530,10 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             timelineJson["id"] = timeline->timelineId;
             json["timelines"].push_back(std::move(timelineJson));
         }
+    }
+    if(!clipFollowCanvases.empty()) {
+        json["clipFollow"] = ofJson::array();
+        for(const auto& canvas : clipFollowCanvases) json["clipFollow"].push_back(canvas);
     }
     if(!timelineWindows.empty()) {
         json["windows"] = ofJson::array();
@@ -802,6 +807,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 clip.macroSnapshot = clipJson.value("macroSnapshot", -1);
                 clip.reversed = clipJson.value("reversed", false);
+                clip.ownTempo = clipJson.value("ownTempo", false);
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.lfoOutputBindingId = mapBinding(clipJson.value("lfoOutputBindingId", std::string()));
                 if(std::none_of(track.bindings.begin(), track.bindings.end(),
@@ -1229,6 +1235,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             mainSequence.timelines.push_back(std::move(timeline));
         }
     }
+    if(json.contains("clipFollow") && json["clipFollow"].is_array())
+        for(const auto& canvas : json["clipFollow"])
+            if(canvas.is_string()) clipFollowCanvases.insert(canvas.get<std::string>());
     if(json.contains("windows") && json["windows"].is_array())
         for(const auto& window : json["windows"])
             if(window.is_object())

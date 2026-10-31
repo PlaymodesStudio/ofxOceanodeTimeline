@@ -1,8 +1,7 @@
 # Multi-timeline development plan
 
-Status: phases 1 to 5 implemented on the `multi-timeline` branches of
-`ofxOceanode`, `ofxOceanodeTimeline` and `ofxOceanodeSuperCollider`; phase 6 not
-started. Written 2026-10-31. See "Implementation notes" at the end for what was
+Status: phases 1 to 6 implemented (core and SuperCollider on
+`megabranch26_A`, the timeline addon on `main`). Written 2026-10-31. See "Implementation notes" at the end for what was
 built differently from the plan below.
 Touches `ofxOceanode` (core transport) and `ofxOceanodeTimeline`, and is checked
 against `ofxOceanodeSuperCollider` (the timestamping backend and its box synths).
@@ -500,15 +499,16 @@ What was built, and where it differs from the plan above.
   priority or "started later" rule yet.
 - **Patch control (decision 2 in the earlier version).** Settled as planned:
   `beatTransport` has Play/Stop/Seek/Quantize and acts on its Time Source.
-- **Placed macros (open decision 2).** Not built: nodes inside a placed (not
-  free) macro still follow their parent's transport, as before. A clip-local
-  transport would need a driven derived transport in the core.
+- **Placed macros (open decision 2).** Per macro, off by default for every
+  macro (new ones included): **Nodes inside follow its clips** gives the
+  macro's canvas a driven transport following the clip playing it.
 - **Where the free state is saved (decision 3).** In the root `timeline.json`
   (`"players"`: canvas and timeline ids), not in each macro instance's preset.
 - **Global Play (decision 4).** Unchanged: the root timeline's play/stop. The
   root transport now owns a clock that always runs (internal, frame-step, or
   while an external clock plays).
-- **Wave tracks (decision 5).** Still main-timeline only.
+- **Wave tracks (decision 5).** Free timelines play theirs (engines feed the
+  same provider under their own keys); placed copies still do not.
 - **Immediate root actions.** The root transport's own Play/Stop/Seek stay
   immediate (as before); only free timelines launch at timestamped instants.
   A pending start inside the scheduling window is scheduled from its instant,
@@ -521,4 +521,8 @@ What was built, and where it differs from the plan above.
   controller hosts (no core change); each swaps in its own view state (zoom,
   scroll) while it draws. File drops onto a further window are not handled.
 - **Note-group setup** works on the timeline shown in the editor.
-- **Phase 6** (nested clips keeping their own tempo lane) is not started.
+- **Phase 6.** Per clip (**Keep its own tempo**), not per timeline. Instead of
+  non-linear time maps, an own-tempo segment becomes several linear
+  placements (exact for fixed tempos; quarter-beat pieces along tempo
+  lanes), so the scheduler and evaluation are unchanged. Repeats keep the
+  clip's own cycle length; editor previews draw the clip as host-following.

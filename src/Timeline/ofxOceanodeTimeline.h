@@ -9,6 +9,7 @@
 #include "ofxOceanodeScheduling.h"
 #include "ofxOceanodeTimelineMetronome.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -649,6 +650,10 @@ struct ofxOceanodeTimelineClip {
     // itself is shared and stays as written). Other clips reverse by
     // rewriting their content (reverseClip); Wave clips use waveReverse.
     bool reversed = false;
+    // A timeline clip that plays its timeline at that timeline's own tempo
+    // (fixed, ratio of the clock, or its tempo lane) instead of following the
+    // host's; contentStretch still slows it down. Not when reversed.
+    bool ownTempo = false;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -1296,6 +1301,12 @@ public:
     void playTimeline(const TimelineRef& ref, bool quantized = true);
     void stopTimeline(const TimelineRef& ref, bool rewind = false, bool quantized = true);
     void seekTimeline(const TimelineRef& ref, double beat);
+    // Nodes inside a macro whose timeline does not play on its own follow,
+    // as Auto, the macro clip playing it: its beat (restarting with each
+    // clip and repeat), its stretched tempo, playing while a clip plays it.
+    // Off (the default): they follow the canvas around it.
+    bool nodesFollowClips(const std::string& canvas) const { return clipFollowCanvases.count(canvas) > 0; }
+    void setNodesFollowClips(const std::string& canvas, bool follow);
     // Where its playhead is: its own transport's beat when it plays free,
     // else where the clip playing it now has it (false: none plays it).
     bool timelinePlayheadBeat(const TimelineRef& ref, double& beat);
@@ -1969,6 +1980,18 @@ private:
     };
     std::set<TimelineRef> freeTimelines;   // saved
     std::vector<TimelineWindow> timelineWindows; // saved
+    std::set<std::string> clipFollowCanvases;    // saved
+    struct ClipTransport {
+        std::shared_ptr<ofxOceanodeTransport> transport;
+        std::weak_ptr<ofxOceanodeContainer> canvas;
+        const ofxOceanodeContainer* address = nullptr;
+        std::string placement;  // the placement it follows (track, clip, repeat)
+        uint64_t rootGeneration = 0;
+    };
+    std::map<std::string, ClipTransport> clipTransports;
+    // Moves each macro's clip-following transport to the clip playing it.
+    void updateClipTransports(const ofxOceanodeTransportState& rootState);
+    void releaseClipTransport(ClipTransport& entry);
     TimelineRef pendingTimelineScope;
     bool timelineScopeRequested = false;
     std::vector<std::unique_ptr<Player>> players;
@@ -1996,6 +2019,17 @@ private:
     float engineBpm = 120.0f;
     bool engineFollowsClockTempo = false;
     float engineTempoRatio = 1.0f;
+    // An engine's Wave voices are keyed apart from the main timeline's
+    // (and other engines') by this prefix on the track id.
+    std::string waveKeyPrefix;
+    // Releases the Wave voices of the clips in `previous` that `next` no
+    // longer has (all of them when next is null).
+    void releaseWaveClips(const ofxOceanodeTimelineSequence& previous, const ofxOceanodeTimelineSequence* next);
+    // A clip keeping its timeline's own tempo: its segment as linear pieces
+    // (host from, host to, map offset, map ratio), see the definition.
+    void ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play, const ofxOceanodeTimelineTimeMap& outer,
+                        double zero, double stretch, double segmentFrom, double segmentTo, double from, double to,
+                        bool atBeat, std::vector<std::array<double, 4>>& pieces) const;
     // Scheduling stops here (a timestamped stop); 0: no limit.
     uint64_t scheduleHorizonUs = 0;
     // The transport this manager plays (its engine transport, else the root's).

@@ -659,6 +659,12 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.map = outer.map.then({segments[s][0] - mirrorShift * stretch, stretch});
                         placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
                         placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
+                        // Its own tempo: the segment as linear pieces, each at
+                        // the ratio of its tempo to the host's there.
+                        std::vector<std::array<double, 4>> pieces; // host from, host to, map offset, map ratio
+                        if(clip.ownTempo && !clip.reversed)
+                            ownTempoPieces(played->sequence->play, outer.map, segments[s][0], stretch,
+                                           segmentFrom, segmentTo, from, to, atBeat, pieces);
                         placement.resolver = resolverFor(*placement.sequence);
                         placement.placedBy = &track;
                         placement.placedClip = &clip;
@@ -670,6 +676,16 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         placement.instanceKey = key == 0 ? 1 : key;
                         placement.passMix = outer.passMix * 0xbf58476d1ce4e5b9ULL ^
                                             (static_cast<uint64_t>(repeat) + 1) * 0xd6e8feb86659fd93ULL;
+                        if(clip.ownTempo && !clip.reversed) {
+                            for(const auto& piece : pieces) {
+                                auto part = placement;
+                                part.map = outer.map.then({piece[2], piece[3]});
+                                part.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(piece[0]));
+                                part.windowTo = std::min(outer.windowTo, outer.map.toTimeline(piece[1]));
+                                result.push_back(part);
+                            }
+                            continue;
+                        }
                         result.push_back(placement);
                     }
                 }
@@ -2157,7 +2173,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         for(const auto& clip : track.clips) {
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-            hash.add(clip.reversed);
+            hash.add(clip.reversed); hash.add(clip.ownTempo);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
@@ -2466,4 +2482,59 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
             activeAutomationValues[entry.first].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, entry.second);
     }
     soundingRestPaths = std::move(sounding);
+}
+
+// A clip keeping its timeline's own tempo, between host beats segmentFrom and
+// segmentTo (the timeline's beat 0 sits at host beat `zero` at the start, as
+// a following clip has it): linear pieces, each mapping the timeline's beats at
+// the ratio of its tempo to the host's there (host beats per timeline beat),
+// continuous from piece to piece. A fixed tempo against a fixed host tempo is
+// one exact piece; tempo lanes are followed in pieces of at most a quarter
+// beat, each at its midpoint's ratio. Only the pieces reaching [from, to] (at
+// `from` when atBeat) are kept.
+void ofxOceanodeTimelineManager::ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play,
+                                                const ofxOceanodeTimelineTimeMap& outer, double zero, double stretch,
+                                                double segmentFrom, double segmentTo, double from, double to,
+                                                bool atBeat, std::vector<std::array<double, 4>>& pieces) const {
+    const auto state = playState();
+    const float clockBpm = std::max(1.0f, container != nullptr && container->getRootTransport() != nullptr
+                                              ? container->getRootTransport()->getState().bpm : state.bpm);
+    auto childBpm = [&](double beat) -> double {
+        if(play.bpmAutomationEnabled && !play.bpmPoints.empty())
+            return ofClamp(ofxOceanodeTimelineCurve::valueAtBeat(play.bpmPoints, play.bpmTensions, play.bpmInterpolation,
+                                                                std::max(0.0, beat), play.bpm),
+                           std::max(1.0f, play.bpmMinimum), std::max(1.0f, play.bpmMaximum));
+        return std::max(1.0f, play.followClockTempo ? clockBpm * play.tempoRatio : play.bpm);
+    };
+    // The host's tempo at one of its beats: the main timeline's there, over
+    // the host's own ratio to it.
+    auto hostBpm = [&](double hostBeat) -> double {
+        const double mainBeat = outer.toTimeline(hostBeat);
+        const double main = bpmAutomationEnabled && !bpmAutomationPoints.empty()
+            ? evaluateBpm(mainBeat, state.bpm) : std::max(1.0f, state.bpm);
+        return main / std::max(1e-9, outer.ratio);
+    };
+    const bool constant = !(play.bpmAutomationEnabled && !play.bpmPoints.empty()) &&
+                          !(bpmAutomationEnabled && !bpmAutomationPoints.empty());
+    const double step = constant ? std::numeric_limits<double>::infinity() : 0.25;
+    double hostBeat = segmentFrom;
+    double childBeat = (segmentFrom - zero) / std::max(1e-9, stretch);
+    for(int guard = 0; hostBeat < segmentTo - kEpsilon && guard < 4096; ++guard) {
+        const double next = std::min(segmentTo, hostBeat + step);
+        // Child beats per host beat, at the piece's start then its midpoint.
+        double rate = childBpm(childBeat) / hostBpm(hostBeat) / std::max(1e-9, stretch);
+        if(!constant) {
+            const double middle = 0.5 * (hostBeat + next);
+            rate = childBpm(childBeat + rate * (middle - hostBeat)) / hostBpm(middle) / std::max(1e-9, stretch);
+        }
+        rate = std::max(1e-6, rate);
+        const double ratio = 1.0 / rate;
+        const bool reaches = atBeat ? (from >= hostBeat - kEpsilon && from < next - kEpsilon)
+                                    : !(next < from - kEpsilon || hostBeat > to + kEpsilon);
+        if(reaches) pieces.push_back({hostBeat, next, hostBeat - childBeat * ratio, ratio});
+        if(!atBeat && hostBeat > to + kEpsilon) break;
+        if(atBeat && hostBeat > from + kEpsilon) break;
+        childBeat += rate * (next - hostBeat);
+        hostBeat = next;
+    }
 }
