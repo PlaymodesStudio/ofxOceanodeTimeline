@@ -1042,6 +1042,9 @@ struct ofxOceanodeTimelinePlaySettings {
     // project's or its macro's) loads, and whenever its macro turns active;
     // waits while the macro (or one around it) is inactive, stops when it is.
     bool playOnLoad = false;
+    // Made on purpose (New Timeline): a macro's own timeline is then listed
+    // while still empty.
+    bool created = false;
     // The colour its window's scope bar is tinted with; off: its kind's colour.
     bool customColor = false;
     ofColor color = ofColor(160, 100, 210);

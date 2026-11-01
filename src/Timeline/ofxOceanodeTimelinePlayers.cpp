@@ -39,7 +39,7 @@ bool ofxOceanodeTimelinePlaySettings::operator==(const ofxOceanodeTimelinePlaySe
         loopStartBeat == other.loopStartBeat && loopEndBeat == other.loopEndBeat &&
         timeSignatureNumerator == other.timeSignatureNumerator &&
         timeSignatureDenominator == other.timeSignatureDenominator && quantize == other.quantize &&
-        playOnLoad == other.playOnLoad && customColor == other.customColor &&
+        playOnLoad == other.playOnLoad && created == other.created && customColor == other.customColor &&
         (!customColor || color == other.color);
 }
 
@@ -120,7 +120,8 @@ bool ofxOceanodeTimelineManager::timelineExists(const TimelineRef& ref) {
     const auto* sequence = findTimeline(ref);
     if(sequence == nullptr) return false;
     if(!ref.timeline.empty()) return true;
-    return !sequence->tracks.empty() || !sequence->timelines.empty() || isFree(ref) ||
+    // A macro's own: made on purpose, or in use (older files made it by using it).
+    return sequence->play.created || !sequence->tracks.empty() || !sequence->timelines.empty() || isFree(ref) ||
            sequence->play != ofxOceanodeTimelinePlaySettings();
 }
 
@@ -158,6 +159,7 @@ ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::addTimeline(
     if(!timelineExists({canvas, std::string()})) {
         if(auto* own = timelineFor({canvas, std::string()})) {
             own->play.name = name;
+            own->play.created = true;
             return {canvas, std::string()};
         }
         return {};

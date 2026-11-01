@@ -80,8 +80,8 @@ public:
                     auto* canvasContainer = timelineManager.canvasContainer(canvas);
                     if(canvasContainer == nullptr) continue;
                     eligibleCanvases.push_back({canvas, canvasContainer});
-                    // A macro's own timeline is offered even while it is empty
-                    // (other lists skip it until then): adding to it makes it.
+                    // A macro with no timeline yet is offered too: a New
+                    // Timeline entry that makes its own.
                     auto refs = timelineManager.timelinesOfCanvas(canvas);
                     if(std::none_of(refs.begin(), refs.end(), [](const TimelineRef& ref) { return ref.timeline.empty(); }))
                         refs.insert(refs.begin(), TimelineRef{canvas, std::string()});
@@ -111,7 +111,7 @@ public:
             };
             auto trackItems = [&](const TimelineRef& ref, ofxOceanodeContainer* canvas) {
                 if(ImGui::Selectable(("New Timeline Track##new" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str())) addTo(ref, std::string());
-                auto* sequence = timelineManager.findTimeline(ref); // none yet: a macro's timeline, made by adding to it
+                auto* sequence = timelineManager.findTimeline(ref);
                 if(sequence == nullptr) return;
                 const std::string path = pathFor(canvas);
                 bool first = true;
@@ -132,10 +132,10 @@ public:
             // A new timeline (on the parameter's canvas or one around it), with
             // the parameter on a first track: named, coloured and placed in
             // the New Timeline dialog, then shown in the editor.
-            auto requestNewTimeline = [&]() {
+            auto requestNewTimeline = [&](const std::string& owner) {
                 ofxOceanodeTimelineManager::NewTimelineRequest request;
                 for(const auto& entry : eligibleCanvases) request.canvases.push_back(entry.first);
-                if(!request.canvases.empty()) request.canvas = request.canvases.back(); // its own canvas
+                request.canvas = owner;
                 request.parameter = &absParam;
                 timelineManager.requestNewTimeline(request);
             };
@@ -146,6 +146,15 @@ public:
                     trackItems(eligible.front().first, eligible.front().second);
                 } else {
                     for(const auto& [ref, canvas] : eligible) {
+                        if(!timelineManager.timelineExists(ref)) {
+                            // A macro with no timeline yet: its own is made in the New
+                            // Timeline dialog (name, colour, owner), this parameter on it.
+                            const std::string label = ref.canvas + " > New Timeline...##make" + ofxOceanodeTimelineManager::timeSourceId(ref);
+                            if(ImGui::Selectable(label.c_str())) requestNewTimeline(ref.canvas);
+                            if(ImGui::IsItemHovered())
+                                ImGui::SetTooltip("This macro has no timeline yet: make its own,\nwith this parameter on its first track.");
+                            continue;
+                        }
                         if(ImGui::BeginMenu(timelineLabel(ref).c_str())) {
                             trackItems(ref, canvas);
                             ImGui::EndMenu();
@@ -153,7 +162,7 @@ public:
                     }
                 }
                 ImGui::Separator();
-                if(ImGui::Selectable("New Timeline...")) requestNewTimeline();
+                if(ImGui::Selectable("New Timeline...")) requestNewTimeline(eligibleCanvases.empty() ? std::string() : eligibleCanvases.back().first);
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("A new timeline with this parameter on its first track:\n"
                                       "on this canvas or one around it (in a macro without a timeline yet,\n"
