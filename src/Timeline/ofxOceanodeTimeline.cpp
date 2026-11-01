@@ -897,10 +897,29 @@ void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
     for(const auto& track : mainSequence.tracks) bindingCount += track.bindings.size();
     parameterTrackColorCache.reserve(bindingCount);
     // Preserve the previous first-track-wins behaviour for parameters that
-    // are published to more than one track.
+    // are published to more than one track (the main timeline first).
     for(const auto& track : mainSequence.tracks) {
         for(const auto& binding : track.bindings)
             parameterTrackColorCache.emplace(binding.parameterPath, track.color);
+    }
+    for(const auto& timeline : mainSequence.timelines)
+        for(const auto& track : timeline->tracks)
+            for(const auto& binding : track.bindings)
+                parameterTrackColorCache.emplace(binding.parameterPath, track.color);
+    // Macro timelines (and their canvas's further ones) hold paths relative to
+    // the macro: keyed here by the parameter's path from the root.
+    if(container != nullptr) {
+        pruneMacroSequences();
+        for(const auto& entry : macroSequences) {
+            auto add = [&](const ofxOceanodeTimelineSequence& sequence) {
+                for(const auto& track : sequence.tracks)
+                    for(const auto& binding : track.bindings)
+                        if(auto* parameter = entry.address->findTimelineParameter(binding.parameterPath))
+                            parameterTrackColorCache.emplace(container->getTimelineParameterPath(*parameter), track.color);
+            };
+            add(*entry.sequence);
+            for(const auto& timeline : entry.sequence->timelines) add(*timeline);
+        }
     }
     parameterTrackColorCacheFrame = static_cast<uint64_t>(ofGetFrameNum());
 }
