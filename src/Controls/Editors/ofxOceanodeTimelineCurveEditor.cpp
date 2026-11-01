@@ -180,6 +180,24 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         firstCycle = ofClamp(static_cast<int>(std::floor((visibleFrom - clip->startBeat) / cycleLength)), 0, cycles - 1);
         lastCycle = ofClamp(static_cast<int>(std::floor((visibleTo - clip->startBeat) / cycleLength)), firstCycle, cycles - 1);
     }
+    // The point the mouse is on (within its 8px pick area), or the one being
+    // dragged, is drawn lit and a pixel larger.
+    int litPoint = -1, litCycle = 0;
+    if(isFocused && editorCanvasHovered && !ImGui::IsPopupOpen("Curve point value") && right > left &&
+       hoverRect(ImVec2(left, curveTop), ImVec2(right, curveBottom))) {
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const double mouseBeat = beatAtOffset(mouse.x - timelineMin.x);
+        litCycle = clip->repeatContent
+            ? std::max(0, static_cast<int>(std::floor(std::max(0.0, mouseBeat - clip->startBeat) / repeatCycleDuration))) : 0;
+        if(curveDragPointIndex >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) litPoint = curveDragPointIndex;
+        else for(int i = static_cast<int>(points.size()) - 1; i >= 0; --i) {
+            const float pointX = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, points[i].beat, litCycle));
+            if(std::abs(mouse.x - pointX) <= 8.0f && std::abs(mouse.y - curveValueToY(points[i].value)) <= 8.0f) {
+                litPoint = i;
+                break;
+            }
+        }
+    }
     dl->PushClipRect(ImVec2(left, curveTop), ImVec2(right, curveBottom), true);
     for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         if(cycle > 0) {
@@ -217,9 +235,13 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
                 dl->AddLine(a, b, IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 240 : 130), 2.0f);
             }
         }
-        for(const auto& point : points) {
-            const ImVec2 p(timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, point.beat, cycle)), curveValueToY(point.value));
-            dl->AddCircleFilled(p, cycle == 0 ? 4.0f : 3.0f, IM_COL32(245, 245, 245, cycle == 0 ? 230 : 115));
+        for(size_t i = 0; i < points.size(); ++i) {
+            const ImVec2 p(timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, points[i].beat, cycle)), curveValueToY(points[i].value));
+            const float radius = cycle == 0 ? 4.0f : 3.0f;
+            if(static_cast<int>(i) == litPoint && cycle == litCycle)
+                dl->AddCircleFilled(p, radius + 1.0f, ImGui::GetColorU32(ImGuiCol_HeaderActive));
+            else
+                dl->AddCircleFilled(p, radius, IM_COL32(245, 245, 245, cycle == 0 ? 230 : 115));
         }
     }
     dl->PopClipRect();
