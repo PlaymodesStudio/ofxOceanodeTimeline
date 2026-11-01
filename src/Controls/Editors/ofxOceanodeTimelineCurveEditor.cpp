@@ -181,7 +181,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         lastCycle = ofClamp(static_cast<int>(std::floor((visibleTo - clip->startBeat) / cycleLength)), firstCycle, cycles - 1);
     }
     // The point the mouse is on (within its 8px pick area), or the one being
-    // dragged, is drawn lit and a pixel larger.
+    // dragged, is drawn lit and 8px larger.
     int litPoint = -1, litCycle = 0;
     if(isFocused && editorCanvasHovered && !ImGui::IsPopupOpen("Curve point value") && right > left &&
        hoverRect(ImVec2(left, curveTop), ImVec2(right, curveBottom))) {
@@ -239,7 +239,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             const ImVec2 p(timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, points[i].beat, cycle)), curveValueToY(points[i].value));
             const float radius = cycle == 0 ? 4.0f : 3.0f;
             if(static_cast<int>(i) == litPoint && cycle == litCycle)
-                dl->AddCircleFilled(p, radius + 1.0f, ImGui::GetColorU32(ImGuiCol_HeaderActive));
+                dl->AddCircleFilled(p, radius + 8.0f, ImGui::GetColorU32(ImGuiCol_SliderGrabActive));
             else
                 dl->AddCircleFilled(p, radius, IM_COL32(245, 245, 245, cycle == 0 ? 230 : 115));
         }
