@@ -212,6 +212,21 @@ public:
         }
 
     }
+    // The canvas's right-click menu: a new timeline on that canvas (the
+    // main one, or a macro's at any depth), shown in the Timeline window.
+    void drawCanvasMenu(ofxOceanodeContainer& canvas) override {
+        const bool root = &canvas == host || &canvas == &host->getAutomationHost();
+        const std::string canvasId = root ? std::string() : canvas.getCanvasID();
+        ImGui::Separator();
+        if(ImGui::Selectable("Add new timeline")) {
+            const auto ref = manager.addTimeline(canvasId, std::string());
+            if(!(ref.canvas.empty() && ref.timeline.empty())) manager.requestTimelineScope(ref); // {} : not made
+            ImGui::CloseCurrentPopup();
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", root ? "A new timeline on the main canvas, shown in the Timeline window."
+                                         : "A new timeline on this macro's canvas (its own one when it has none yet),\nshown in the Timeline window.");
+    }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
                 // A macro's own timeline, opened in the timeline editor.
                 if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&model); macro != nullptr && macro->getContainer()){

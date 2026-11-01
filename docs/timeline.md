@@ -368,6 +368,11 @@ canvas's default timeline goes with its canvas), and opens it **in a new
 window**. A track that places a timeline shows the placed timeline's name
 after its own, in that kind's colour.
 
+**Add new timeline** in a canvas's right-click menu makes one on that canvas
+(the main canvas, or a macro's at any depth; a macro without a timeline yet
+gets its own) and shows it. A custom GUI widget's right-click menu offers the
+same **Add to Timeline** items as the parameter in its node.
+
 **Placing a timeline as clips.** A macro node's **Add to Timeline as Macro
 Track** asks which timeline it goes on (the main canvas's, or one of a macro
 around it) when there is more than one. **Place a timeline here as clips** (in the same
