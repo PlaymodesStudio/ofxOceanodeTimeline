@@ -5369,6 +5369,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
     if(requestClipFileErrorPopup) {
         ImGui::OpenPopup("Clip file error"); requestClipFileErrorPopup = false;
     }
+    centerNextModal();
     if(ImGui::BeginPopupModal("Clip file error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.0f);
         ImGui::TextUnformatted(clipFileErrorMessage.c_str());
@@ -5380,6 +5381,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
         ImGui::OpenPopup("Load reusable clip"); requestClipImportPopup = false;
     }
     ImGui::SetNextWindowSize(ImVec2(620, 0), ImGuiCond_Appearing);
+    centerNextModal();
     if(!ImGui::BeginPopupModal("Load reusable clip", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(clipImportDocument.is_null()) { ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return; }
     const auto& track = clipImportDocument["track"];
@@ -5590,6 +5592,7 @@ void ofxOceanodeTimelineController::drawMarkerRenamePopup(ofxOceanodeTimelineMan
         ImGui::OpenPopup("Rename Marker");
         requestMarkerRename = false;
     }
+    centerNextModal();
     if(!ImGui::BeginPopupModal("Rename Marker", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     const bool entered = ImGui::InputText("Name", markerRenameBuffer, sizeof(markerRenameBuffer),
@@ -6582,8 +6585,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
 }
 
 void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineManager& timeline) {
-    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    centerNextModal();
     if(!ImGui::BeginPopupModal("Piano Roll##noteGroupSetup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     const bool editing = !noteSetupEditGroupId.empty();
     ImGui::TextDisabled(editing ? "What this piano roll plays"
@@ -6814,6 +6816,7 @@ void ofxOceanodeTimelineController::requestClipRename(const std::string& trackId
 }
 
 void ofxOceanodeTimelineController::drawClipRenamePopup(ofxOceanodeTimelineManager& timeline) {
+    centerNextModal();
     if(!ImGui::BeginPopupModal("Rename Timeline Clip", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     const bool nameEntered = ImGui::InputText(
@@ -6842,8 +6845,7 @@ void ofxOceanodeTimelineController::drawRenamePopup(ofxOceanodeTimelineManager& 
     // the popup to wherever it happened to be called from, which is exactly
     // the "shows up in the Timeline window instead of on the canvas" bug
     // this fixes. Force it onto the main viewport, centered, every time.
-    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    centerNextModal();
     if(!ImGui::BeginPopupModal(popupTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     const bool entered = ImGui::InputText("Name", pendingTrackName, sizeof(pendingTrackName),
@@ -6862,7 +6864,13 @@ void ofxOceanodeTimelineController::drawRenamePopup(ofxOceanodeTimelineManager& 
     ImGui::EndPopup();
 }
 
+void ofxOceanodeTimelineController::centerNextModal() {
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+}
+
 void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& timeline) {
+    centerNextModal();
     if(!ImGui::BeginPopupModal("New Timeline Clip", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::InputText("Name", pendingClipName, sizeof(pendingClipName));
     // One list, LFO included. This used to be two combos -- an "Automation

@@ -332,6 +332,12 @@ private:
     bool pendingScopeRequested = false;
     int windowId = 0; // 0: the main Timeline window
     bool secondary() const { return windowId != 0; }
+    // Call before every BeginPopupModal: the modal opens on the main OS window,
+    // centred, each time. Left to ImGui it reopens where imgui.ini last had it
+    // (often near the top of the screen), and outside the main window
+    // multi-viewport docking gives it an OS window of its own, where clicks
+    // can land a few pixels off.
+    static void centerNextModal();
     bool windowScopeApplied = false;
     ofxOceanodeTimelineManager::TimelineRef appliedWindowRef; // the entry as last applied
     bool windowScopeValid = false; // it could be shown (else its entry is left alone)
