@@ -3139,6 +3139,9 @@ void ofxOceanodeTimelineController::draw() {
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
                                             clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
+                // The title band reads half as bright as the plotted area below it.
+                const float titleBottom = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
+                dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, titleBottom), IM_COL32(0, 0, 0, 128));
                 // A clip's persistent group and its (separate, ephemeral)
                 // Shift+click selection are drawn as extra outlines on top
                 // of the normal fill/border above, so a grouped clip that's
