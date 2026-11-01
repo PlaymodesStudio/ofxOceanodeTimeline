@@ -1462,6 +1462,9 @@ void ofxOceanodeTimelineController::draw() {
         }
     };
     // Square icon button. `on` tints it with `accent` (toggles, playing).
+    // `swappedButtons` draws the ones left untinted light with a dark icon
+    // (an independent timeline's own transport, told apart from the main one).
+    bool swappedButtons = false;
     auto iconButton = [&](const char* id, ToolIcon icon, const char* tooltip, bool on = false,
                           ImU32 accent = IM_COL32(95, 150, 235, 255), bool enabled = true) {
         const ImVec2 size(toolbarHeight + 2.0f, toolbarHeight);
@@ -1470,10 +1473,13 @@ void ofxOceanodeTimelineController::draw() {
         const bool hovered = ImGui::IsItemHovered() && enabled;
         const bool held = ImGui::IsItemActive() && enabled;
         auto* dl = ImGui::GetWindowDrawList();
-        ImU32 bg = on ? accent : ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+        const bool swapped = swappedButtons && !on;
+        ImU32 bg = on ? accent
+                 : swapped ? (held ? IM_COL32(170, 174, 184, 255) : hovered ? IM_COL32(200, 204, 213, 255) : IM_COL32(225, 228, 235, 255))
+                 : ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
         if(on && hovered) bg = (accent & 0x00FFFFFF) | 0xE6000000;
         dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg, 3.0f);
-        const ImU32 fg = !enabled ? IM_COL32(120, 120, 120, 160) : on ? IM_COL32(15, 18, 24, 255) : IM_COL32(225, 228, 235, 255);
+        const ImU32 fg = !enabled ? IM_COL32(120, 120, 120, 160) : on || swapped ? IM_COL32(15, 18, 24, 255) : IM_COL32(225, 228, 235, 255);
         drawIcon(dl, icon, ImVec2(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f), size.y * 0.52f, fg);
         if(tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
         return pressed;
@@ -1524,6 +1530,7 @@ void ofxOceanodeTimelineController::draw() {
             const bool pending = ownTransport->nextPendingAction(pendingClock, pendingStarts);
             const bool stopping = ownState.isPlaying && pending && !pendingStarts;
             const bool armed = !ownState.isPlaying && pending && pendingStarts;
+            swappedButtons = true;
             if(iconButton("##tbToStart", ToolIcon::ToStart, "Back to its start")) timeline.seekTimeline(shownRef, 0.0);
             ImGui::SameLine(0.0f, 2.0f);
             if(iconButton("##tbStop", ToolIcon::Stop, "Stop (back to its start, quantized)")) timeline.stopTimeline(shownRef, true);
@@ -1538,6 +1545,7 @@ void ofxOceanodeTimelineController::draw() {
                 else if(ownState.isPlaying) timeline.stopTimeline(shownRef, false);
                 else timeline.playTimeline(shownRef);
             }
+            swappedButtons = false;
             ImGui::SameLine(0.0f, 6.0f);
             static const char* quantizeLabels[] = {"Now", "Next beat", "Next bar"};
             int quantize = ownPlay->quantize;
