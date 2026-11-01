@@ -6,12 +6,16 @@
 
 #include "Managers/ofxOceanodeContainer.h"
 #include "ofxOceanodeShared.h"
+#include "ofxOceanodeColors.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
+#include <map>
+#include <set>
 
 using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
 
@@ -48,9 +52,8 @@ void ofxOceanodeTimelineController::enterTimelineScope(ofxOceanodeTimelineManage
 
 // ---- The scope bar: which timeline this window shows ----
 // One row at the top of the window, tinted by the kind of timeline shown:
-// a kind badge, the path to it (Main > Macro 1 > ...), the timelines menu
-// and its actions, then the shown timeline's player when it is not the
-// main one. The main timeline's transport, tempo and loop stay in the
+// its name on a badge that opens the navigator (every timeline as a tree),
+// its actions, then its player when it is not the main one. The main timeline's transport, tempo and loop stay in the
 // toolbar below.
 namespace {
 enum class ScopeKind { Main, Macro, Further };
@@ -65,14 +68,6 @@ ImU32 scopeColor(ScopeKind kind) {
         case ScopeKind::Further: return IM_COL32(50, 165, 150, 255);
     }
     return IM_COL32(120, 120, 120, 255);
-}
-const char* scopeBadge(ScopeKind kind) {
-    switch(kind) {
-        case ScopeKind::Main: return "MAIN";
-        case ScopeKind::Macro: return "MACRO";
-        case ScopeKind::Further: return "TIMELINE";
-    }
-    return "";
 }
 const char* scopeExplanation(ScopeKind kind, bool free) {
     switch(kind) {
@@ -108,52 +103,44 @@ void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& tim
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + pad);
     const float top = ImGui::GetCursorScreenPos().y - pad;
     const float rowHeight = ImGui::GetFrameHeight();
-    // Kind badge.
+    // The badge: the shown timeline's name on its colour. Click: the
+    // navigator, every timeline as a tree, this one marked.
     {
-        const char* badge = scopeBadge(kind);
-        const ImVec2 textSize = ImGui::CalcTextSize(badge);
-        const ImVec2 size(textSize.x + 14.0f, rowHeight);
+        const std::string name = timeline.timelineName(shown);
+        const ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
+        const float arrow = ImGui::GetFontSize() * 0.5f;
+        const ImVec2 size(textSize.x + arrow + 20.0f, rowHeight);
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::Dummy(size);
+        if(ImGui::InvisibleButton("##timelinesNavigatorButton", size)) ImGui::OpenPopup("##timelinesNavigator");
+        const bool hot = ImGui::IsItemHovered() || ImGui::IsPopupOpen("##timelinesNavigator");
         dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), accent, 3.0f);
+        if(hot) dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(255, 255, 255, 30), 3.0f);
         // Dark text, light on a dark colour picked for it.
         const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(accent);
         const bool darkAccent = rgb.x * 0.299f + rgb.y * 0.587f + rgb.z * 0.114f < 0.45f;
-        dl->AddText(ImVec2(pos.x + 7.0f, pos.y + (size.y - textSize.y) * 0.5f),
-                    darkAccent ? IM_COL32(235, 238, 245, 255) : IM_COL32(15, 18, 24, 255), badge);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", scopeExplanation(kind, free));
-    }
-    // The path to it: every timeline it is inside, each a way back (which
-    // ends the row: the scopes just changed).
-    ImGui::SameLine(0.0f, 8.0f);
-    bool left = false;
-    if(!scopes.empty()) {
-        if(ImGui::SmallButton("Main##scopeMain")) { leaveScopesTo(0); left = true; }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the main timeline");
-        for(size_t depth = 0; !left && depth + 1 < scopes.size(); ++depth) {
-            ImGui::SameLine(0.0f, 2.0f); ImGui::TextDisabled(">"); ImGui::SameLine(0.0f, 2.0f);
-            if(ImGui::SmallButton((scopes[depth].label + "##scope" + ofToString(depth)).c_str())) {
-                leaveScopesTo(depth + 1);
-                left = true;
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to this timeline");
+        const ImU32 ink = darkAccent ? IM_COL32(235, 238, 245, 255) : IM_COL32(15, 18, 24, 255);
+        dl->AddText(ImVec2(pos.x + 7.0f, pos.y + (size.y - textSize.y) * 0.5f), ink, name.c_str());
+        ImGui::RenderArrow(dl, ImVec2(pos.x + size.x - arrow - 7.0f, pos.y + (size.y - arrow) * 0.5f), ink, ImGuiDir_Down, 0.5f);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\nClick: every timeline, and where this one is.", scopeExplanation(kind, free));
+        if(ImGui::BeginPopup("##timelinesNavigator")) {
+            drawTimelinesTree(timeline, shown);
+            ImGui::EndPopup();
         }
-        if(!left) { ImGui::SameLine(0.0f, 2.0f); ImGui::TextDisabled(">"); ImGui::SameLine(0.0f, 4.0f); }
     }
-    if(!left) {
-        drawTimelinesMenu(timeline);
-        if(!isMain(shown)) {
-            ImGui::SameLine(0.0f, 10.0f);
-            {
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                dl->AddLine(ImVec2(pos.x, pos.y + 2.0f), ImVec2(pos.x, pos.y + rowHeight - 2.0f), IM_COL32(255, 255, 255, 38), 1.0f);
-                ImGui::Dummy(ImVec2(1.0f, rowHeight));
-            }
-            ImGui::SameLine(0.0f, 10.0f);
-            ImGui::PushID("playerBar");
-            drawPlayerBar(timeline, shown);
-            ImGui::PopID();
+    ImGui::SameLine(0.0f, 4.0f);
+    drawTimelineActions(timeline);
+    if(!isMain(shown)) {
+        ImGui::SameLine(0.0f, 10.0f);
+        {
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            dl->AddLine(ImVec2(pos.x, pos.y + 2.0f), ImVec2(pos.x, pos.y + rowHeight - 2.0f), IM_COL32(255, 255, 255, 38), 1.0f);
+            ImGui::Dummy(ImVec2(1.0f, rowHeight));
         }
+        ImGui::SameLine(0.0f, 10.0f);
+        ImGui::PushID("playerBar");
+        drawPlayerBar(timeline, shown);
+        ImGui::PopID();
     }
     ImGui::PopStyleVar(3);
     ImGui::PopID();
@@ -353,34 +340,198 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
     ImGui::EndPopup();
 }
 
-void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager& timeline) {
-    const auto shown = scopeRef();
-    const std::string current = timeline.timelineName(shown);
-    ImGui::SetNextItemWidth(std::min(260.0f, std::max(120.0f, ImGui::CalcTextSize(current.c_str()).x + 30.0f)));
-    if(ImGui::BeginCombo("##timelinesMenu", current.c_str(), ImGuiComboFlags_HeightLarge)) {
-        // Every timeline, grouped by canvas: pick one to show it here.
-        std::string group = "\x01";
-        for(const auto& ref : timeline.allTimelines()) {
-            const std::string canvas = rootCanvas(ref.canvas) ? std::string("Main canvas") : ref.canvas;
-            if(canvas != group) {
-                group = canvas;
-                ImGui::Separator();
-                ImGui::TextDisabled("%s", group.c_str());
-            }
-            std::string label = "  " + timeline.timelineName(ref);
-            if(timeline.isFree(ref) && !isMain(ref)) {
-                auto transport = timeline.transportFor(ref);
-                label += transport != nullptr && transport->getState().isPlaying ? "   [playing]" : "   [independent]";
-            }
-            label += "##" + ofxOceanodeTimelineManager::timeSourceId(ref);
-            if(ImGui::Selectable(label.c_str(), sameRef(ref, shown))) enterTimelineScope(timeline, ref);
-        }
-        ImGui::EndCombo();
+// ---- The timelines tree: every canvas's timelines, nested as the canvases are ----
+namespace {
+// How a timeline plays: the root transport, its own (independent), where
+// clips of another place it, or not at all.
+enum class PlayMode { Main, Free, Clips, Idle };
+const char* playModeLabel(PlayMode mode) {
+    switch(mode) {
+        case PlayMode::Main: return "Main";
+        case PlayMode::Free: return "Free";
+        case PlayMode::Clips: return "Clips";
+        case PlayMode::Idle: return "Idle";
     }
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("The timeline shown here. Every canvas can own several timelines;\n"
-                          "any of them can play on its own or be placed in another as clips.");
-    ImGui::SameLine(0.0f, 2.0f);
+    return "";
+}
+const char* playModeExplanation(PlayMode mode) {
+    switch(mode) {
+        case PlayMode::Main: return "Main: the root transport, tempo and loop.";
+        case PlayMode::Free: return "Free: independent, on its own transport and tempo.";
+        case PlayMode::Clips: return "Clips: plays where clips of another timeline place it, at that timeline's tempo\n"
+                                     "(its own BPM only for clips set to keep it).";
+        case PlayMode::Idle: return "Idle: not independent and placed nowhere, so it does not play.";
+    }
+    return "";
+}
+std::string parentPath(const std::string& canvas) {
+    const auto at = canvas.rfind(" / ");
+    return at == std::string::npos ? std::string() : canvas.substr(0, at);
+}
+} // namespace
+
+void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager& timeline, const TimelineRef& shown) {
+    // Every timeline under its owner canvas ("" the root), each canvas under
+    // the one around it: the macros between them too, so the nesting is
+    // the canvases' own.
+    const auto refs = timeline.allTimelines();
+    std::map<std::string, std::vector<TimelineRef>> timelinesOf; // in allTimelines' order: the default first
+    std::map<std::string, std::vector<std::string>> childrenOf;
+    std::set<std::string> known{std::string()};
+    for(const auto& ref : refs) {
+        const std::string canvas = rootCanvas(ref.canvas) ? std::string() : ref.canvas;
+        timelinesOf[canvas].push_back({canvas, ref.timeline});
+        for(std::string at = canvas; !at.empty() && known.insert(at).second; at = parentPath(at))
+            childrenOf[parentPath(at)].push_back(at);
+    }
+    for(auto& entry : childrenOf) std::sort(entry.second.begin(), entry.second.end());
+    // The timelines a timeline track of another places as clips.
+    std::set<TimelineRef> placed;
+    for(const auto& ref : refs) {
+        const auto* sequence = timeline.findTimeline(ref);
+        if(sequence == nullptr) continue;
+        const std::string canvas = rootCanvas(ref.canvas) ? std::string() : ref.canvas;
+        for(const auto& track : sequence->tracks) {
+            if(!track.isMacroTrack()) continue;
+            const std::string target = track.macroCanvas == "." ? canvas
+                : canvas.empty() ? track.macroCanvas : canvas + " / " + track.macroCanvas;
+            placed.insert({target, track.macroTimeline});
+        }
+    }
+    const auto rootState = container->getTransportState();
+    auto rootTransport = container->getTransport();
+
+    const ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                       ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
+    // The Nodes list's stripes rather than the theme's table colours.
+    ImGui::PushStyleColor(ImGuiCol_TableRowBg, OceanodeColors::ZebraEven);
+    ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, OceanodeColors::ZebraOdd);
+    // The header row in the windows' title colour.
+    ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, ImGui::GetStyleColorVec4(ImGuiCol_TitleBg));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(8.0f, 3.0f));
+    if(!ImGui::BeginTable("##timelinesTree", 5, tableFlags)) { ImGui::PopStyleVar(); ImGui::PopStyleColor(3); return; }
+    ImGui::TableSetupColumn("Timeline");
+    ImGui::TableSetupColumn("Mode");
+    ImGui::TableSetupColumn("BPM");
+    ImGui::TableSetupColumn("Meter");
+    ImGui::TableSetupColumn("Sync");
+    ImGui::TableHeadersRow();
+
+    const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    const ImVec4 playing(0.47f, 0.92f, 0.63f, 1.0f);
+    bool picked = false;
+    // One timeline's row: a leaf, picked with a click.
+    auto timelineRow = [&](const TimelineRef& ref) {
+        const bool main = isMain(ref);
+        const bool free = !main && timeline.isFree(ref);
+        const auto* play = main ? nullptr : timeline.playSettings(ref);
+        auto transport = timeline.transportFor(ref);
+        const bool isPlaying = transport != nullptr && transport->getState().isPlaying;
+        const PlayMode mode = main ? PlayMode::Main : free ? PlayMode::Free
+            : placed.count(ofxOceanodeTimelineManager::normalizedRef(ref)) > 0 ? PlayMode::Clips : PlayMode::Idle;
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DrawLinesToNodes |
+                                   ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if(sameRef(ref, shown)) flags |= ImGuiTreeNodeFlags_Selected;
+        ImGui::TreeNodeEx(("##" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str(), flags);
+        if(ImGui::IsItemClicked()) {
+            enterTimelineScope(timeline, ref);
+            picked = true;
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("%s%s", playModeExplanation(mode),
+                              free && play != nullptr && play->playOnLoad ? "\nStarts on load, while its macro is active." : "");
+        // Its colour, as its scope bar's, then its name.
+        ImGui::SameLine(0.0f, 0.0f);
+        {
+            const ImU32 accent = play != nullptr && play->customColor
+                ? IM_COL32(play->color.r, play->color.g, play->color.b, 255) : scopeColor(scopeKindOf(ref));
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            const float height = ImGui::GetTextLineHeight();
+            ImGui::Dummy(ImVec2(4.0f, height));
+            ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + 4.0f, pos.y + height), accent);
+        }
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::TextUnformatted(timeline.timelineName(ref).c_str());
+
+        ImGui::TableSetColumnIndex(1);
+        if(isPlaying) ImGui::TextColored(playing, "%s", playModeLabel(mode));
+        else if(mode == PlayMode::Idle) ImGui::TextDisabled("%s", playModeLabel(mode));
+        else ImGui::TextUnformatted(playModeLabel(mode));
+
+        // Tempo: the transport's now when it has one, else its own (only
+        // clips keeping its tempo use it: dimmed).
+        ImGui::TableSetColumnIndex(2);
+        float bpm = rootState.bpm;
+        if(transport != nullptr) bpm = transport->getState().bpm;
+        else if(play != nullptr) {
+            if(play->bpmAutomationEnabled && !play->bpmPoints.empty()) bpm = play->bpmPoints.front().value;
+            else if(play->followClockTempo) bpm = rootState.bpm * play->tempoRatio;
+            else bpm = play->bpm;
+        }
+        ImGui::TextColored(transport != nullptr ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : dim, "%.1f", bpm);
+
+        ImGui::TableSetColumnIndex(3);
+        if(main) ImGui::Text("%d/%d", timeline.getTimeSignatureNumerator(), timeline.getTimeSignatureDenominator());
+        else if(play != nullptr) ImGui::Text("%d/%d", play->timeSignatureNumerator, play->timeSignatureDenominator);
+
+        // Where its tempo comes from.
+        ImGui::TableSetColumnIndex(4);
+        if(main) {
+            const char* sync = "Internal";
+            if(rootTransport != nullptr && rootTransport->hasExternalClock()) {
+                sync = "External";
+#ifdef OFXOCEANODE_USE_MIDI
+                if(container->isMidiClockSyncEnabled()) sync = "MIDI Clock";
+#endif
+            } else if(timeline.isBpmAutomationEnabled()) {
+                sync = "Lane";
+            }
+            ImGui::TextUnformatted(sync);
+        } else if(play != nullptr) {
+            const char* sync = play->bpmAutomationEnabled ? "Lane" : play->followClockTempo ? "x Clock" : "Internal";
+            if(free) ImGui::TextUnformatted(sync);
+            else ImGui::TextDisabled("Host (%s)", sync);
+        }
+    };
+    // A canvas: a group row (the main canvas, or the macro's title), its
+    // timelines, then the canvases inside it.
+    std::function<void(const std::string&)> canvasRows = [&](const std::string& canvas) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        std::string label = "Main canvas";
+        if(!canvas.empty()) {
+            auto* macro = timeline.canvasContainer(canvas);
+            const std::string parent = parentPath(canvas);
+            label = macro != nullptr ? timeline.getMacroSequenceLabel(*macro)
+                : parent.empty() ? canvas : canvas.substr(parent.size() + 3);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, dim);
+        const bool open = ImGui::TreeNodeEx(("##canvas " + canvas).c_str(), ImGuiTreeNodeFlags_SpanAllColumns |
+                                            ImGuiTreeNodeFlags_DrawLinesToNodes | ImGuiTreeNodeFlags_DefaultOpen);
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip(canvas.empty() ? "The main canvas: its timelines, then the macros in it."
+                                             : "A macro: its timelines, then the macros in it.");
+        ImGui::SameLine(0.0f, 10.0f);
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::PopStyleColor();
+        if(!open) return;
+        for(const auto& ref : timelinesOf[canvas]) timelineRow(ref);
+        for(const auto& child : childrenOf[canvas]) canvasRows(child);
+        ImGui::TreePop();
+    };
+    canvasRows(std::string());
+    ImGui::EndTable();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+    if(picked) ImGui::CloseCurrentPopup();
+}
+
+// The shown timeline's actions, behind a "..." button.
+void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManager& timeline) {
+    const auto shown = scopeRef();
     if(ImGui::Button("...##timelineActions")) ImGui::OpenPopup("##timelineActionsMenu");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, delete, place, open in a window");
     if(ImGui::BeginPopup("##timelineActionsMenu")) {

@@ -307,12 +307,15 @@ private:
         return scopes.empty() ? ofxOceanodeTimelineManager::TimelineRef{} : scopes.back().ref;
     }
     // ---- Timelines: the list, the shown one's player, further windows ----
-    // The scope bar at the top of the window: which timeline is shown (a
-    // kind badge, the path to it, the timelines menu) and, for one other
-    // than the main, its player (whether it is independent, else its own tempo;
-    // an independent one's transport is the toolbar's).
+    // The scope bar at the top of the window: which timeline is shown (its
+    // name on a badge that opens the navigator, the actions menu) and, for
+    // one other than the main, its player (whether it is independent, else
+    // its own tempo; an independent one's transport is the toolbar's).
     void drawScopeBar(ofxOceanodeTimelineManager& timeline);
-    void drawTimelinesMenu(ofxOceanodeTimelineManager& timeline);
+    void drawTimelineActions(ofxOceanodeTimelineManager& timeline);
+    // The navigator: every timeline under its canvas, the canvases nested as
+    // they are, with how each plays, its tempo, meter and sync.
+    void drawTimelinesTree(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& shown);
     void drawTimelineRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
