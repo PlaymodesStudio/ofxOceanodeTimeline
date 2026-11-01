@@ -131,7 +131,7 @@ int main(int, char**) {
 _production = native.fixture.native_production
 def production():
     result = _production()
-    source = (native.CORE / 'src/Managers/ofxOceanodeContainer.cpp').read_text()
+    source = native.container_source()
     for signature in ['void ofxOceanodeContainer::encapsulateSelectedNodes(',
                       'bool ofxOceanodeContainer::hasAutomatedParameters(',
                       'ofxOceanodeNode* ofxOceanodeContainer::encapsulateNodes(',

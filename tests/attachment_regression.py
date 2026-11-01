@@ -12,6 +12,7 @@ CORE = Path(os.environ.get('OCEANODE_CORE_ROOT', ADDON.parent / 'ofxOceanode'))
 sys.path.insert(0, str(CORE / 'tests'))
 import macro_mixer_regression as fixture
 from new_preset_regression import block
+from of_environment import container_source
 
 original = fixture.native_production
 
@@ -19,7 +20,7 @@ def production():
     result = original().replace("void ofxOceanodeContainer::flushPendingScopeSave() { assert(false); }",
                                 "void ofxOceanodeContainer::flushPendingScopeSave() { assert(!scopeSavePending); }")
     result = result.replace('std::string ofxOceanodeContainer::getTimelineParameterPath(ofxOceanodeAbstractParameter&) const { assert(false); return {}; }', '')
-    source = (CORE / 'src/Managers/ofxOceanodeContainer.cpp').read_text()
+    source = container_source()
     start = source.index('namespace {\nconst char* const kTimelineCanvasSeparator')
     end = source.index('std::string ofxOceanodeContainer::getTimelineParameterPath', start)
     result += source[start:end]
