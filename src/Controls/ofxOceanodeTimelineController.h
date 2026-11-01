@@ -309,7 +309,8 @@ private:
     // ---- Timelines: the list, the shown one's player, further windows ----
     // The scope bar at the top of the window: which timeline is shown (a
     // kind badge, the path to it, the timelines menu) and, for one other
-    // than the main, its player (transport when independent, own tempo).
+    // than the main, its player (whether it is independent, else its own tempo;
+    // an independent one's transport is the toolbar's).
     void drawScopeBar(ofxOceanodeTimelineManager& timeline);
     void drawTimelinesMenu(ofxOceanodeTimelineManager& timeline);
     void drawTimelineRenamePopup(ofxOceanodeTimelineManager& timeline);

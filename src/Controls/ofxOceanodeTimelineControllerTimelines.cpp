@@ -267,9 +267,9 @@ void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager
     }
 }
 
-// The shown timeline's player, compact: whether it is independent, its
-// transport while it is, its own tempo, and a settings popup for the rest
-// (loop range, meter, quantize).
+// The shown timeline's player, compact: whether it is independent (then the
+// toolbar drives it), else its own tempo and a settings popup for the rest
+// (loop range, meter, quantize), used once it is.
 void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
     const auto* current = timeline.playSettings(ref);
     if(current == nullptr) return;
@@ -278,58 +278,20 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
     bool free = timeline.isFree(ref);
     if(ImGui::Checkbox("Independent##free", &free)) timeline.setFree(ref, free);
     if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("On: its own transport. Play, stop and seek it here, at its own tempo,\n"
-                          "alongside the main timeline; nodes can follow it as a Time Source.\n"
+        ImGui::SetTooltip("On: its own transport. The toolbar below plays, stops and seeks it, at its own\n"
+                          "tempo, alongside the main timeline; nodes can follow it as a Time Source.\n"
                           "Off: it plays only where clips of another timeline place it.");
-    auto transport = free ? timeline.transportFor(ref) : nullptr;
-    if(free && transport == nullptr) {
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("starting...");
+    if(free) {
+        // Its transport, tempo, meter and loop are the toolbar's while it is shown.
+        if(timeline.transportFor(ref) == nullptr) {
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("starting...");
+        }
         return;
     }
-    if(transport != nullptr) {
-        const auto state = transport->getState();
-        double pendingClock = 0.0;
-        bool pendingStarts = false;
-        const bool pending = transport->nextPendingAction(pendingClock, pendingStarts);
-        ImGui::SameLine(0.0f, 8.0f);
-        if(ImGui::Button("|<##toStart")) timeline.seekTimeline(ref, 0.0);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Back to its start");
-        ImGui::SameLine(0.0f, 2.0f);
-        if(ImGui::Button("Stop##stop")) timeline.stopTimeline(ref, true);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Stop and go back to its start (quantized)");
-        ImGui::SameLine(0.0f, 2.0f);
-        const bool playing = state.isPlaying;
-        const bool stopping = playing && pending && !pendingStarts;
-        if(playing) ImGui::PushStyleColor(ImGuiCol_Button, stopping ? ImVec4(0.55f, 0.45f, 0.2f, 1.0f) : ImVec4(0.2f, 0.55f, 0.3f, 1.0f));
-        if(ImGui::Button(stopping ? "Stopping##play" : playing ? "Pause##play" : (pending && pendingStarts ? "Armed##play" : "Play##play"))) {
-            if(pending) transport->cancelPendingActions(); // a pending start or stop: cancelled
-            else if(playing) timeline.stopTimeline(ref, false);
-            else timeline.playTimeline(ref);
-        }
-        if(playing) ImGui::PopStyleColor();
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip(pending ? "Waiting for its quantized instant (click to cancel)" : "Play or pause it (Space while this timeline is shown)");
-        ImGui::SameLine(0.0f, 4.0f);
-        ImGui::SetNextItemWidth(84.0f);
-        if(ImGui::Combo("##quantize", &settings.quantize, kQuantizeLabels, 3)) changed = true;
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
-                              "of the main timeline while it plays (else of the clock).");
-        ImGui::SameLine(0.0f, 8.0f);
-        {
-            const double beatsPerBar = std::max(1e-6, settings.timeSignatureNumerator * (4.0 / std::max(1, settings.timeSignatureDenominator)));
-            const double beat = std::max(0.0, state.beatPosition);
-            const int bar = static_cast<int>(std::floor(beat / beatsPerBar)) + 1;
-            const double inBar = beat - (bar - 1) * beatsPerBar;
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(playing ? ImVec4(0.47f, 0.92f, 0.63f, 1.0f) : ImVec4(0.9f, 0.9f, 0.93f, 1.0f),
-                               "%d.%d  %.1f BPM", bar, static_cast<int>(std::floor(inBar)) + 1, state.bpm);
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Its position (bar . beat) and tempo\nBeat %.3f", beat);
-        }
-    }
-    // Its own tempo: a fixed BPM, a ratio of the clock's, or its tempo lane.
+    // Its own tempo, for clips set to keep it: a fixed BPM, a ratio of the
+    // clock's, or its tempo lane.
     ImGui::SameLine(0.0f, 10.0f);
     const char* tempoModes[] = {"BPM", "x Clock", "Lane"};
     int tempoMode = settings.bpmAutomationEnabled ? 2 : settings.followClockTempo ? 1 : 0;
@@ -341,9 +303,8 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         changed = true;
     }
     if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", free ? "Its tempo.\nBPM: fixed. x Clock: the clock's tempo times a ratio. Lane: its own tempo points."
-                                     : "Its own tempo, used by clips set to Keep its own tempo (placed, it otherwise\n"
-                                       "follows the host). BPM: fixed. x Clock: the clock's tempo times a ratio. Lane: tempo points.");
+        ImGui::SetTooltip("Its own tempo, used by clips set to Keep its own tempo (placed, it otherwise\n"
+                          "follows the host). BPM: fixed. x Clock: the clock's tempo times a ratio. Lane: tempo points.");
     ImGui::SameLine(0.0f, 2.0f);
     ImGui::SetNextItemWidth(78.0f);
     if(tempoMode == 0) {
@@ -354,11 +315,6 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         if(ImGui::Button("Points...##tempoPoints")) ImGui::OpenPopup("##tempoPointsPopup");
         drawTempoPointsPopup(timeline, ref);
         settings = *timeline.playSettings(ref); // the popup may have changed them
-    }
-    if(free) {
-        ImGui::SameLine(0.0f, 8.0f);
-        if(ImGui::Checkbox("Loop##loop", &settings.loopEnabled)) changed = true;
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loop %.3g to %.3g (set the range in the settings)", settings.loopStartBeat, settings.loopEndBeat);
     }
     ImGui::SameLine(0.0f, 4.0f);
     if(ImGui::Button("...##playerSettings")) ImGui::OpenPopup("##playerSettingsPopup");

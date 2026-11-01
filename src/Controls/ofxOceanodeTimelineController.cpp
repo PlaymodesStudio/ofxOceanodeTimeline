@@ -1493,33 +1493,85 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::TextDisabled("%s", text);
         ImGui::SameLine(0.0f, 5.0f);
     };
+    // A timeline shown that plays on its own: the toolbar drives it (its
+    // transport, position, tempo, meter and loop) instead of the main one.
+    const auto shownRef = scopeRef();
+    const auto ownTransport = inMacroScope() && timeline.isFree(shownRef) ? timeline.transportFor(shownRef) : nullptr;
+    const ofxOceanodeTimelinePlaySettings* ownPlay = ownTransport != nullptr ? timeline.playSettings(shownRef) : nullptr;
+    const bool own = ownPlay != nullptr;
+    const auto ownState = own ? ownTransport->getState() : ofxOceanodeTransportState();
+    // Tap tempo: the average of the last taps; a pause of 2 s starts over.
+    auto tapTempo = [&](float& bpm) {
+        if(!iconButton("##tbTap", ToolIcon::Tap, "Tap tempo: tap on the beat")) return false;
+        const double now = ofGetElapsedTimef();
+        if(!tapTimes.empty() && now - tapTimes.back() > 2.0) tapTimes.clear();
+        tapTimes.push_back(now);
+        if(tapTimes.size() > 8) tapTimes.erase(tapTimes.begin());
+        if(tapTimes.size() < 2) return false;
+        const double interval = (tapTimes.back() - tapTimes.front()) / (tapTimes.size() - 1);
+        if(interval <= 0.0) return false;
+        bpm = ofClamp(static_cast<float>(60.0 / interval), 20.0f, 400.0f);
+        return true;
+    };
     // ---- Row 1: transport | position | tempo | meter | sync | timebase ----
     if(transport != nullptr) {
         // Following an external clock: position, play state and tempo come from it.
         const char* lockedTip = "Following an external clock";
-        if(inMacroScope()) {
-            // In another timeline these still drive the main one (the shown
-            // timeline's own transport is on the scope bar above).
-            caption("Main");
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("The main timeline's transport, position and tempo.");
-        }
-        if(iconButton("##tbToStart", ToolIcon::ToStart, externalClock ? lockedTip : "Back to the start", false, 0, !externalClock))
-            transport->seekToBeat(0.0);
-        ImGui::SameLine(0.0f, 2.0f);
-        if(iconButton("##tbStop", ToolIcon::Stop, externalClock ? lockedTip : "Stop (back to the start)", false, 0, !externalClock))
-            transport->stop();
-        ImGui::SameLine(0.0f, 2.0f);
-        if(iconButton("##tbPlay", transportState.isPlaying ? ToolIcon::Pause : ToolIcon::Play,
-                      externalClock ? lockedTip : (transportState.isPlaying ? "Pause (Space)" : "Play (Space)"),
-                      transportState.isPlaying, IM_COL32(90, 205, 125, 255), !externalClock))
-            transport->setIsPlaying(!transportState.isPlaying);
-        ImGui::SameLine(0.0f, 2.0f);
-        if(iconButton("##tbMetronome", ToolIcon::Metronome,
-                      timeline.isMetronomeEnabled() ? "Metronome: on (accent on the first beat of each bar)" : "Metronome: off",
-                      timeline.isMetronomeEnabled(), IM_COL32(240, 185, 80, 255)))
-            timeline.setMetronomeEnabled(!timeline.isMetronomeEnabled());
-        ImGui::SameLine(0.0f, 6.0f);
-        {
+        if(own) {
+            // Its own transport: Play and Stop land on its quantize instant.
+            double pendingClock = 0.0;
+            bool pendingStarts = false;
+            const bool pending = ownTransport->nextPendingAction(pendingClock, pendingStarts);
+            const bool stopping = ownState.isPlaying && pending && !pendingStarts;
+            const bool armed = !ownState.isPlaying && pending && pendingStarts;
+            if(iconButton("##tbToStart", ToolIcon::ToStart, "Back to its start")) timeline.seekTimeline(shownRef, 0.0);
+            ImGui::SameLine(0.0f, 2.0f);
+            if(iconButton("##tbStop", ToolIcon::Stop, "Stop (back to its start, quantized)")) timeline.stopTimeline(shownRef, true);
+            ImGui::SameLine(0.0f, 2.0f);
+            if(iconButton("##tbPlay", ownState.isPlaying && !stopping ? ToolIcon::Pause : ToolIcon::Play,
+                          pending ? (stopping ? "Stopping at its quantize instant (click to cancel)"
+                                              : "Starting at its quantize instant (click to cancel)")
+                                  : (ownState.isPlaying ? "Pause (Space)" : "Play (Space)"),
+                          ownState.isPlaying || armed,
+                          stopping || armed ? IM_COL32(230, 175, 70, 255) : IM_COL32(90, 205, 125, 255))) {
+                if(pending) ownTransport->cancelPendingActions();
+                else if(ownState.isPlaying) timeline.stopTimeline(shownRef, false);
+                else timeline.playTimeline(shownRef);
+            }
+            ImGui::SameLine(0.0f, 6.0f);
+            static const char* quantizeLabels[] = {"Now", "Next beat", "Next bar"};
+            int quantize = ownPlay->quantize;
+            ImGui::SetNextItemWidth(84.0f);
+            if(ImGui::Combo("##tbQuantize", &quantize, quantizeLabels, 3)) {
+                auto settings = *ownPlay;
+                settings.quantize = quantize;
+                timeline.setPlaySettings(shownRef, settings);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
+                                  "of the main timeline while it plays (else of the clock).");
+        } else {
+            if(inMacroScope()) {
+                // A placed timeline has no transport: these drive the main one.
+                caption("Main");
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("The main timeline's transport, position and tempo.");
+            }
+            if(iconButton("##tbToStart", ToolIcon::ToStart, externalClock ? lockedTip : "Back to the start", false, 0, !externalClock))
+                transport->seekToBeat(0.0);
+            ImGui::SameLine(0.0f, 2.0f);
+            if(iconButton("##tbStop", ToolIcon::Stop, externalClock ? lockedTip : "Stop (back to the start)", false, 0, !externalClock))
+                transport->stop();
+            ImGui::SameLine(0.0f, 2.0f);
+            if(iconButton("##tbPlay", transportState.isPlaying ? ToolIcon::Pause : ToolIcon::Play,
+                          externalClock ? lockedTip : (transportState.isPlaying ? "Pause (Space)" : "Play (Space)"),
+                          transportState.isPlaying, IM_COL32(90, 205, 125, 255), !externalClock))
+                transport->setIsPlaying(!transportState.isPlaying);
+            ImGui::SameLine(0.0f, 2.0f);
+            if(iconButton("##tbMetronome", ToolIcon::Metronome,
+                          timeline.isMetronomeEnabled() ? "Metronome: on (accent on the first beat of each bar)" : "Metronome: off",
+                          timeline.isMetronomeEnabled(), IM_COL32(240, 185, 80, 255)))
+                timeline.setMetronomeEnabled(!timeline.isMetronomeEnabled());
+            ImGui::SameLine(0.0f, 6.0f);
             bool playOnLoad = timeline.getPlayOnPresetLoad();
             if(ImGui::Checkbox("Play on load##tbPlayOnLoad", &playOnLoad)) timeline.setPlayOnPresetLoad(playOnLoad);
             if(ImGui::IsItemHovered())
@@ -1530,13 +1582,16 @@ void ofxOceanodeTimelineController::draw() {
         groupSeparator();
         {
             // Position readout: bar . beat . sixteenth, and the song time.
-            const double beatsPerBar = std::max(1e-6, timeline.getBeatsPerBar());
-            const double beat = std::max(0.0, transportState.beatPosition);
+            const auto& shownState = own ? ownState : transportState;
+            const double beatsPerBar = std::max(1e-6, own
+                ? ownPlay->timeSignatureNumerator * (4.0 / std::max(1, ownPlay->timeSignatureDenominator))
+                : timeline.getBeatsPerBar());
+            const double beat = std::max(0.0, shownState.beatPosition);
             const int bar = static_cast<int>(std::floor(beat / beatsPerBar)) + 1;
             const double inBar = beat - (bar - 1) * beatsPerBar;
             const int beatInBar = static_cast<int>(std::floor(inBar)) + 1;
             const int sixteenth = static_cast<int>(std::floor((inBar - std::floor(inBar)) * 4.0)) + 1;
-            const double seconds = timeline.beatToSeconds(beat, transportState.bpm);
+            const double seconds = own ? std::max(0.0, ownState.seconds) : timeline.beatToSeconds(beat, transportState.bpm);
             const int minutes = static_cast<int>(seconds / 60.0);
             char positionText[32];
             char timeText[32];
@@ -1550,16 +1605,51 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(255, 255, 255, 25), 3.0f);
             const float textY = pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f;
             dl->AddText(ImVec2(pos.x + 8.0f, textY),
-                        transportState.isPlaying ? IM_COL32(120, 235, 160, 255) : IM_COL32(230, 232, 238, 255), positionText);
+                        shownState.isPlaying ? IM_COL32(120, 235, 160, 255) : IM_COL32(230, 232, 238, 255), positionText);
             const float timeWidth = ImGui::CalcTextSize(timeText).x;
             dl->AddText(ImVec2(pos.x + size.x - timeWidth - 8.0f, textY), IM_COL32(150, 155, 165, 255), timeText);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Bar . beat . sixteenth    song time\nBeat %.3f", beat);
         }
 
         groupSeparator();
-        {
-            // In another timeline, this is still the main timeline's tempo
-            // (that timeline's own is on its breadcrumb row).
+        if(own) {
+            // Its own tempo: a fixed BPM, a ratio of the clock's, or its tempo points.
+            auto settings = *ownPlay;
+            bool changed = false;
+            const char* tempoModes[] = {"BPM", "x Clock", "Lane"};
+            int tempoMode = settings.bpmAutomationEnabled ? 2 : settings.followClockTempo ? 1 : 0;
+            ImGui::SetNextItemWidth(66.0f);
+            if(ImGui::Combo("##tbTempoMode", &tempoMode, tempoModes, 3)) {
+                settings.bpmAutomationEnabled = tempoMode == 2;
+                settings.followClockTempo = tempoMode == 1;
+                if(tempoMode == 2 && settings.bpmPoints.empty()) settings.bpmPoints.push_back({0.0, settings.bpm});
+                changed = true;
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Its tempo.\nBPM: fixed. x Clock: the clock's tempo times a ratio. Lane: its own tempo points.");
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(78.0f);
+            if(tempoMode == 0) {
+                if(ImGui::DragFloat("##tbBpm", &settings.bpm, 0.1f, 1.0f, 999.0f, "%.1f BPM")) changed = true;
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo (drag, or double-click to type)");
+                ImGui::SameLine(0.0f, 2.0f);
+                if(tapTempo(settings.bpm)) changed = true;
+            } else {
+                if(tempoMode == 1) {
+                    if(ImGui::DragFloat("##tbRatio", &settings.tempoRatio, 0.005f, 0.01f, 64.0f, "x %.3f")) changed = true;
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The clock's tempo times this");
+                } else {
+                    if(ImGui::Button("Points...##tbTempoPoints", ImVec2(78.0f, 0.0f))) ImGui::OpenPopup("##tempoPointsPopup");
+                    drawTempoPointsPopup(timeline, shownRef);
+                    settings = *timeline.playSettings(shownRef); // the popup may have changed them
+                }
+                ImGui::SameLine(0.0f, 6.0f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%.1f BPM", ownState.bpm);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Its tempo now");
+            }
+            if(changed) timeline.setPlaySettings(shownRef, settings);
+        } else {
             float bpm = transportState.bpm;
             if(externalClock || timeline.isBpmAutomationEnabled()) {
                 // Read-only: the tempo comes from the clock or the tempo lane.
@@ -1578,17 +1668,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::DragFloat("##tbBpm", &bpm, 0.1f, 1.0f, 999.0f, "%.1f BPM")) container->setBpm(bpm);
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo (drag, or double-click to type)");
                 ImGui::SameLine(0.0f, 2.0f);
-                // Tap tempo: the average of the last taps; a pause of 2 s starts over.
-                if(iconButton("##tbTap", ToolIcon::Tap, "Tap tempo: tap on the beat")) {
-                    const double now = ofGetElapsedTimef();
-                    if(!tapTimes.empty() && now - tapTimes.back() > 2.0) tapTimes.clear();
-                    tapTimes.push_back(now);
-                    if(tapTimes.size() > 8) tapTimes.erase(tapTimes.begin());
-                    if(tapTimes.size() >= 2) {
-                        const double interval = (tapTimes.back() - tapTimes.front()) / (tapTimes.size() - 1);
-                        if(interval > 0.0) container->setBpm(ofClamp(static_cast<float>(60.0 / interval), 20.0f, 400.0f));
-                    }
-                }
+                if(tapTempo(bpm)) container->setBpm(bpm);
             }
         }
 
@@ -1596,11 +1676,18 @@ void ofxOceanodeTimelineController::draw() {
         {
             // Meter: numerator is free (any meter is valid), the denominator is
             // a note value so getBeatsPerBar() always lands on a sane grid.
-            int tsNumerator = timeline.getTimeSignatureNumerator();
-            int tsDenominator = timeline.getTimeSignatureDenominator();
+            int tsNumerator = own ? ownPlay->timeSignatureNumerator : timeline.getTimeSignatureNumerator();
+            int tsDenominator = own ? ownPlay->timeSignatureDenominator : timeline.getTimeSignatureDenominator();
+            auto setMeter = [&](int numerator, int denominator) {
+                if(!own) { timeline.setTimeSignature(numerator, denominator); return; }
+                auto settings = *ownPlay;
+                settings.timeSignatureNumerator = numerator;
+                settings.timeSignatureDenominator = denominator;
+                timeline.setPlaySettings(shownRef, settings);
+            };
             ImGui::SetNextItemWidth(28.0f);
             if(ImGui::DragInt("##timeSigNum", &tsNumerator, 0.1f, 1, 64))
-                timeline.setTimeSignature(tsNumerator, tsDenominator);
+                setMeter(tsNumerator, tsDenominator);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time signature");
             ImGui::SameLine(0.0f, 3.0f);
             ImGui::AlignTextToFramePadding();
@@ -1614,7 +1701,7 @@ void ofxOceanodeTimelineController::draw() {
                     char optionLabel[8];
                     std::snprintf(optionLabel, sizeof(optionLabel), "%d", option);
                     if(ImGui::Selectable(optionLabel, option == tsDenominator))
-                        timeline.setTimeSignature(tsNumerator, option);
+                        setMeter(tsNumerator, option);
                 }
                 ImGui::EndCombo();
             }
@@ -1736,21 +1823,34 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SetTooltip("Redo timeline action (Shift+Cmd/Ctrl+Z)");
     groupSeparator();
     {
-        bool loopEnabled = timeline.isLoopEnabled();
-        const bool localLoopAvailable = !externalClock;
+        // The main timeline's loop, or the shown one's own while it plays on its own.
+        bool loopEnabled = own ? ownPlay->loopEnabled : timeline.isLoopEnabled();
+        const bool localLoopAvailable = own || !externalClock;
+        auto setLoop = [&](bool enabled, double start, double end) {
+            if(!own) {
+                if(enabled != timeline.isLoopEnabled()) timeline.setLoopEnabled(enabled);
+                timeline.setLoopRange(start, end);
+                return;
+            }
+            auto settings = *ownPlay;
+            settings.loopEnabled = enabled;
+            settings.loopStartBeat = start;
+            settings.loopEndBeat = end;
+            timeline.setPlaySettings(shownRef, settings);
+        };
+        double loopStart = own ? ownPlay->loopStartBeat : timeline.getLoopStartBeat();
+        double loopEnd = own ? ownPlay->loopEndBeat : timeline.getLoopEndBeat();
         const char* loopTip = localLoopAvailable ? (loopEnabled ? "Loop on" : "Loop off")
             : "Local loop unavailable while following an external clock";
         if(iconButton("##tbLoop", ToolIcon::Loop, loopTip,
                       loopEnabled && localLoopAvailable,
                       IM_COL32(120, 135, 240, 255), localLoopAvailable))
-            timeline.setLoopEnabled(!loopEnabled);
+            setLoop(!loopEnabled, loopStart, loopEnd);
         ImGui::SameLine(0.0f, 4.0f);
         ImGui::BeginDisabled(!loopEnabled || !localLoopAvailable);
-        double loopStart = timeline.getLoopStartBeat();
-        double loopEnd = timeline.getLoopEndBeat();
         ImGui::SetNextItemWidth(56.0f);
         if(ImGui::InputDouble("##loopStart", &loopStart, 0.0, 0.0, "%.3g"))
-            timeline.setLoopRange(snapBeat(loopStart), loopEnd);
+            setLoop(loopEnabled, snapBeat(loopStart), loopEnd);
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop start (beats)");
         ImGui::SameLine(0.0f, 3.0f);
         ImGui::AlignTextToFramePadding();
@@ -1758,7 +1858,7 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SameLine(0.0f, 3.0f);
         ImGui::SetNextItemWidth(56.0f);
         if(ImGui::InputDouble("##loopEnd", &loopEnd, 0.0, 0.0, "%.3g"))
-            timeline.setLoopRange(loopStart, std::max(loopStart + 1.0 / kPPQ, snapBeat(loopEnd)));
+            setLoop(loopEnabled, loopStart, std::max(loopStart + 1.0 / kPPQ, snapBeat(loopEnd)));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop end (beats)");
         ImGui::EndDisabled();
     }
