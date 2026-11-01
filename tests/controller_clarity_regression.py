@@ -208,6 +208,24 @@ int main() {
         for(int i=0;i<6;++i) { io.AddMouseWheelEvent(i%2?0.08f:0.0f,0.3f); frame(1250,zoomPoint,false); }
         assert(zoomView.pixelsPerSecond>swipeScale);
         assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-swipeTime)<0.0001);
+        // Shift turns a vertical swipe into scrolling; Cmd zooms at the playhead.
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        zoomView.scrollX=0; frame(1250,zoomPoint,false);
+        const float shiftScale=zoomView.pixelsPerSecond;
+        io.AddKeyEvent(ImGuiMod_Shift,true); frame(1250,zoomPoint,false);
+        for(int i=0;i<3;++i) { io.AddMouseWheelEvent(0,-0.5f); frame(1250,zoomPoint,false); }
+        io.AddKeyEvent(ImGuiMod_Shift,false); frame(1250,zoomPoint,false);
+        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX>0);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        owner->getTransport()->seekToBeat(2); zoomView.scrollX=0; frame(1250,zoomPoint,false);
+        const double playheadAt=model.beatToSeconds(2,120);
+        const double playheadScreenX=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
+        io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
+        io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
+        assert(zoomView.pixelsPerSecond>shiftScale);
+        assert(std::abs(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX-playheadScreenX)<0.001);
+        owner->getTransport()->seekToBeat(0);
     }
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {

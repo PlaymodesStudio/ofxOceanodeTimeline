@@ -2105,12 +2105,16 @@ void ofxOceanodeTimelineController::draw() {
         zoomAnchorUntil = ImGui::GetTime() + 0.7;
         zoomedThisFrame = true;
     };
+    // Zoom around the playhead while it is in view, else the view's centre.
+    auto playheadAnchor = [&]() {
+        const float playheadX = static_cast<float>(timeline.beatToSeconds(transportState.beatPosition,
+                                                                          transportState.bpm) * pixelsPerSecond) - timelineScrollX;
+        return playheadX >= 0.0f && playheadX <= visibleWidth ? playheadX : visibleWidth * 0.5f;
+    };
     if(!fittingTimeline && pixelsPerSecond != zoomBeforeToolbar) {
         const float newScale = pixelsPerSecond;
         pixelsPerSecond = zoomBeforeToolbar;
-        const float playheadX = static_cast<float>(timeline.beatToSeconds(transportState.beatPosition,
-                                                                          transportState.bpm) * zoomBeforeToolbar) - timelineScrollX;
-        zoomAt(newScale, playheadX >= 0.0f && playheadX <= visibleWidth ? playheadX : visibleWidth * 0.5f);
+        zoomAt(newScale, playheadAnchor());
     }
     // Resolve zoom before either child draws: ruler, clips and scrollbar all
     // use the new scale and its scroll limits in the very same frame.
@@ -2134,9 +2138,15 @@ void ofxOceanodeTimelineController::draw() {
             if(wheelAxisTravel.x + wheelAxisTravel.y >= kWheelAxisLockTravel)
                 wheelAxis = wheelAxisTravel.y >= wheelAxisTravel.x ? WheelAxis::Vertical : WheelAxis::Horizontal;
         }
+        // Vertical zooms at the mouse; with Shift it scrolls the timeline
+        // instead, with Cmd it zooms at the playhead.
         const float anchorX = wheelIO.MousePos.x - timelineAreaMin.x - kLabelWidth;
-        if(wheelAxis == WheelAxis::Vertical && anchorX >= 0.0f && std::abs(wheelIO.MouseWheel) > 0.001f)
-            zoomAt(pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel)), anchorX);
+        const float zoomScale = pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel));
+        if(wheelAxis == WheelAxis::Vertical && std::abs(wheelIO.MouseWheel) > 0.001f) {
+            if(wheelIO.KeyShift) timelineScrollX -= wheelIO.MouseWheel * 55.0f;
+            else if(wheelIO.KeyCtrl || wheelIO.KeySuper) zoomAt(zoomScale, playheadAnchor());
+            else if(anchorX >= 0.0f) zoomAt(zoomScale, anchorX);
+        }
         if(wheelAxis == WheelAxis::Horizontal)
             timelineScrollX -= wheelIO.MouseWheelH * 55.0f;
     }
