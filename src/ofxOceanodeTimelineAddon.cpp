@@ -12,7 +12,6 @@ public:
     explicit TimelineExtension(ofxOceanodeContainer* owner) : host(owner), manager(owner) {}
     ofxOceanodeContainer* host;
     ofxOceanodeTimelineManager manager;
-    char newTimelineName[64] = "";
     void clear() override { manager.clear(); }
     void beginParameterCache() override { manager.beginParameterCache(); }
     void evaluateAutomation() override { manager.evaluateAutomation(); }
@@ -131,23 +130,14 @@ public:
                        "##add" + ofxOceanodeTimelineManager::timeSourceId(ref);
             };
             // A new timeline (on the parameter's canvas or one around it), with
-            // the parameter on a first track, shown in the editor.
-            auto newTimelineItems = [&]() {
-                ImGui::SetNextItemWidth(180.0f);
-                ImGui::InputTextWithHint("##newTimelineName", "Name", newTimelineName, sizeof(newTimelineName));
-                for(const auto& [canvas, canvasContainer] : eligibleCanvases) {
-                    const bool root = canvas.empty();
-                    const std::string where = eligibleCanvases.size() == 1 ? std::string("Create")
-                        : root ? std::string("On the main canvas") : "In " + timelineManager.getMacroSequenceLabel(*canvasContainer);
-                    if(!ImGui::Selectable((where + "##newTimelineOn" + canvas).c_str())) continue;
-                    const auto ref = timelineManager.addTimeline(canvas, newTimelineName);
-                    if(auto* sequence = ref.canvas.empty() && ref.timeline.empty() ? nullptr : timelineManager.timelineFor(ref)) {
-                        const auto track = timelineManager.createTrack(*sequence, absParam.getName());
-                        timelineManager.addBinding(*sequence, track, absParam);
-                        timelineManager.requestTimelineScope(ref);
-                    }
-                    newTimelineName[0] = '\0';
-                }
+            // the parameter on a first track: named, coloured and placed in
+            // the New Timeline dialog, then shown in the editor.
+            auto requestNewTimeline = [&]() {
+                ofxOceanodeTimelineManager::NewTimelineRequest request;
+                for(const auto& entry : eligibleCanvases) request.canvases.push_back(entry.first);
+                if(!request.canvases.empty()) request.canvas = request.canvases.back(); // its own canvas
+                request.parameter = &absParam;
+                timelineManager.requestNewTimeline(request);
             };
             if(ImGui::BeginMenu("Add to Timeline")){
                 if(eligible.size() == 1) {
@@ -163,10 +153,7 @@ public:
                     }
                 }
                 ImGui::Separator();
-                if(ImGui::BeginMenu("New Timeline")) {
-                    newTimelineItems();
-                    ImGui::EndMenu();
-                }
+                if(ImGui::Selectable("New Timeline...")) requestNewTimeline();
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("A new timeline with this parameter on its first track:\n"
                                       "on this canvas or one around it (in a macro without a timeline yet,\n"
@@ -225,14 +212,16 @@ public:
         const bool root = &canvas == host || &canvas == &host->getAutomationHost();
         const std::string canvasId = root ? std::string() : canvas.getCanvasID();
         ImGui::Separator();
-        if(ImGui::Selectable("Add new timeline")) {
-            const auto ref = manager.addTimeline(canvasId, std::string());
-            if(!(ref.canvas.empty() && ref.timeline.empty())) manager.requestTimelineScope(ref); // {} : not made
+        if(ImGui::Selectable("Add new timeline...")) {
+            // Its name, colour and owner (this canvas preselected) in the New Timeline dialog.
+            ofxOceanodeTimelineManager::NewTimelineRequest request;
+            request.canvas = canvasId;
+            manager.requestNewTimeline(request);
             ImGui::CloseCurrentPopup();
         }
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", root ? "A new timeline on the main canvas, shown in the Timeline window."
-                                         : "A new timeline on this macro's canvas (its own one when it has none yet),\nshown in the Timeline window.");
+            ImGui::SetTooltip("%s", root ? "A new timeline, on the main canvas or a macro's, shown in the Timeline window."
+                                         : "A new timeline, on this macro's canvas (its own one when it has none yet)\nor another, shown in the Timeline window.");
     }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
                 // A macro's own timeline, opened in the timeline editor.

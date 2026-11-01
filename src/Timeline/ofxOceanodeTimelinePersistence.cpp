@@ -523,6 +523,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     json["play"] = {{"name", play.name}, {"bpm", play.bpm}, {"followClockTempo", play.followClockTempo},
                     {"tempoRatio", play.tempoRatio}, {"quantize", play.quantize}};
     if(play.playOnLoad) json["play"]["playOnLoad"] = true; // older files stay as they were
+    if(play.customColor) json["play"]["color"] = {{"r", play.color.r}, {"g", play.color.g}, {"b", play.color.b}};
     // The canvas's further timelines, and which timelines play on their own.
     if(mainSequence.nextTimelineNumber > 2) json["nextTimelineNumber"] = mainSequence.nextTimelineNumber;
     if(!mainSequence.timelines.empty()) {
@@ -1225,6 +1226,14 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         mainSequence.play.tempoRatio = ofClamp(play.value("tempoRatio", 1.0f), 0.01f, 64.0f);
         mainSequence.play.quantize = ofClamp(play.value("quantize", 2), 0, 2);
         mainSequence.play.playOnLoad = play.value("playOnLoad", false);
+        mainSequence.play.customColor = play.contains("color") && play["color"].is_object();
+        if(mainSequence.play.customColor) {
+            const auto& colorJson = play["color"];
+            mainSequence.play.color = ofColor(
+                static_cast<unsigned char>(ofClamp(colorJson.value("r", 160), 0, 255)),
+                static_cast<unsigned char>(ofClamp(colorJson.value("g", 100), 0, 255)),
+                static_cast<unsigned char>(ofClamp(colorJson.value("b", 210), 0, 255)));
+        }
     }
     if(json.contains("timelines") && json["timelines"].is_array()) {
         for(const auto& timelineJson : json["timelines"]) {

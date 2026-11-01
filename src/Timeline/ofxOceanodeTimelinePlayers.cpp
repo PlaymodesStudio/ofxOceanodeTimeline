@@ -39,7 +39,8 @@ bool ofxOceanodeTimelinePlaySettings::operator==(const ofxOceanodeTimelinePlaySe
         loopStartBeat == other.loopStartBeat && loopEndBeat == other.loopEndBeat &&
         timeSignatureNumerator == other.timeSignatureNumerator &&
         timeSignatureDenominator == other.timeSignatureDenominator && quantize == other.quantize &&
-        playOnLoad == other.playOnLoad;
+        playOnLoad == other.playOnLoad && customColor == other.customColor &&
+        (!customColor || color == other.color);
 }
 
 // ---- The transport a manager plays ----

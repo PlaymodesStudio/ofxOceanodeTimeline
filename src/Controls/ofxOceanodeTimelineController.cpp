@@ -5574,6 +5574,9 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         requestNoteSetupPopup = false;
     }
     drawNoteGroupSetupPopup(timeline);
+
+    // Every new timeline: the canvas, parameter and timelines menus.
+    drawNewTimelinePopup(timeline);
 }
 
 void ofxOceanodeTimelineController::jumpToBeat(double beat) {

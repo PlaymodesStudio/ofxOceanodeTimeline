@@ -1042,6 +1042,9 @@ struct ofxOceanodeTimelinePlaySettings {
     // project's or its macro's) loads, and whenever its macro turns active;
     // waits while the macro (or one around it) is inactive, stops when it is.
     bool playOnLoad = false;
+    // The colour its window's scope bar is tinted with; off: its kind's colour.
+    bool customColor = false;
+    ofColor color = ofColor(160, 100, 210);
     // A tempo of its own (not the default 120 BPM): new clips placing the
     // timeline then keep it (ofxOceanodeTimelineClip::ownTempo).
     bool hasOwnTempo() const { return bpmAutomationEnabled || followClockTempo || bpm != 120.0f; }
@@ -1293,6 +1296,26 @@ public:
         ref = pendingTimelineScope;
         return true;
     }
+    // Every new timeline goes through the editor's New Timeline dialog (its
+    // name, colour and owner canvas), picked up like the above.
+    struct NewTimelineRequest {
+        std::string canvas;                  // the owner preselected ("" the root)
+        std::vector<std::string> canvases;   // the owners offered; empty: every canvas
+        ofxOceanodeAbstractParameter* parameter = nullptr; // put on its first track
+        TimelineRef duplicateOf;             // a copy of this one (its canvas only)
+        bool duplicate = false;
+        int window = 0;                      // the Timeline window to show it in
+    };
+    void requestNewTimeline(const NewTimelineRequest& request) { pendingNewTimeline = request; newTimelineRequested = true; }
+    bool consumeNewTimelineRequest(NewTimelineRequest& request) {
+        if(!newTimelineRequested) return false;
+        newTimelineRequested = false;
+        request = pendingNewTimeline;
+        return true;
+    }
+    // Every canvas a timeline can belong to: the root (""), then each
+    // macro's, at any depth.
+    std::vector<std::string> allCanvases() const;
 
     // ---- Timelines by reference (TimelineRef), and independent players ----
     // The canvas's container (the root for ""), nullptr when gone.
@@ -2058,6 +2081,8 @@ private:
     void releaseClipTransport(ClipTransport& entry);
     TimelineRef pendingTimelineScope;
     bool timelineScopeRequested = false;
+    NewTimelineRequest pendingNewTimeline;
+    bool newTimelineRequested = false;
     std::vector<std::unique_ptr<Player>> players;
     std::set<std::string> registeredTimeSources;
     uint64_t timeSourcesFrame = 0;

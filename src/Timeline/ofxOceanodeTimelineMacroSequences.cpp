@@ -445,6 +445,24 @@ ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::str
     return containerWithCanvas(*container, canvas);
 }
 
+std::vector<std::string> ofxOceanodeTimelineManager::allCanvases() const {
+    std::vector<std::string> canvases{std::string()};
+    if(container == nullptr) return canvases;
+    std::function<void(ofxOceanodeContainer&)> walk = [&](ofxOceanodeContainer& from) {
+        for(auto* node : from.getAllModules()) {
+            auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
+            if(macro == nullptr || !macro->getContainer()) continue;
+            canvases.push_back(macro->getContainer()->getCanvasID());
+            walk(*macro->getContainer());
+        }
+    };
+    walk(*container);
+    // A macro's canvas after the one it is in.
+    std::sort(canvases.begin() + 1, canvases.end());
+    canvases.erase(std::unique(canvases.begin() + 1, canvases.end()), canvases.end());
+    return canvases;
+}
+
 ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas(const ofxOceanodeContainer& canvas,
                                                                                  const std::string& timeline) const {
     if(&canvas == container || isRootCanvas(canvas.getCanvasID())) return {std::string(), timeline};

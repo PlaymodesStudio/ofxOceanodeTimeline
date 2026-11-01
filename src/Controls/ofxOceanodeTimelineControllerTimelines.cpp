@@ -93,7 +93,9 @@ void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& tim
     const auto shown = scopeRef();
     const ScopeKind kind = scopeKindOf(shown);
     const bool free = !isMain(shown) && timeline.isFree(shown);
-    const ImU32 accent = scopeColor(kind);
+    const auto* play = isMain(shown) ? nullptr : timeline.playSettings(shown);
+    const ImU32 accent = play != nullptr && play->customColor
+        ? IM_COL32(play->color.r, play->color.g, play->color.b, 255) : scopeColor(kind);
     // The band is filled on channel 0 once the row's height is known.
     auto* dl = ImGui::GetWindowDrawList();
     dl->ChannelsSplit(2);
@@ -114,7 +116,11 @@ void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& tim
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         ImGui::Dummy(size);
         dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), accent, 3.0f);
-        dl->AddText(ImVec2(pos.x + 7.0f, pos.y + (size.y - textSize.y) * 0.5f), IM_COL32(15, 18, 24, 255), badge);
+        // Dark text, light on a dark colour picked for it.
+        const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(accent);
+        const bool darkAccent = rgb.x * 0.299f + rgb.y * 0.587f + rgb.z * 0.114f < 0.45f;
+        dl->AddText(ImVec2(pos.x + 7.0f, pos.y + (size.y - textSize.y) * 0.5f),
+                    darkAccent ? IM_COL32(235, 238, 245, 255) : IM_COL32(15, 18, 24, 255), badge);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", scopeExplanation(kind, free));
     }
     // The path to it: every timeline it is inside, each a way back (which
@@ -171,6 +177,7 @@ void ofxOceanodeTimelineController::drawTimelineRenamePopup(ofxOceanodeTimelineM
         ImGui::OpenPopup("Rename timeline##timelineRename");
         requestTimelineRename = false;
     }
+    centerNextModal();
     if(ImGui::BeginPopupModal("Rename timeline##timelineRename", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         const bool enter = ImGui::InputText("Name##timelineRenameInput", timelineNameBuffer, sizeof(timelineNameBuffer),
@@ -184,6 +191,166 @@ void ofxOceanodeTimelineController::drawTimelineRenamePopup(ofxOceanodeTimelineM
         if(ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+}
+
+// ---- New Timeline: its name, colour and owner, asked for every new one ----
+
+void ofxOceanodeTimelineController::openNewTimelineDialog(ofxOceanodeTimelineManager& timeline,
+                                                          const ofxOceanodeTimelineManager::NewTimelineRequest& request) {
+    newTimelineRequest = request;
+    if(request.duplicate) {
+        newTimelineRequest.duplicateOf = ofxOceanodeTimelineManager::normalizedRef(request.duplicateOf);
+        newTimelineOwners = {newTimelineRequest.duplicateOf.canvas}; // a copy stays on its canvas
+    } else {
+        newTimelineOwners = request.canvases.empty() ? timeline.allCanvases() : request.canvases;
+    }
+    for(auto& canvas : newTimelineOwners) if(rootCanvas(canvas)) canvas.clear();
+    newTimelineOwnerLabels.clear();
+    for(const auto& canvas : newTimelineOwners) {
+        if(canvas.empty()) { newTimelineOwnerLabels.push_back("Main canvas"); continue; }
+        // The macro's path, with its title when it has one of its own.
+        auto* macro = timeline.canvasContainer(canvas);
+        const std::string title = macro != nullptr ? timeline.getMacroSequenceLabel(*macro) : std::string();
+        const auto last = canvas.rfind(" / ");
+        const std::string tail = last == std::string::npos ? canvas : canvas.substr(last + 3);
+        newTimelineOwnerLabels.push_back(title.empty() || title == tail ? canvas : canvas + "  (" + title + ")");
+    }
+    const std::string wanted = rootCanvas(request.canvas) ? std::string() : request.canvas;
+    const auto at = std::find(newTimelineOwners.begin(), newTimelineOwners.end(), wanted);
+    newTimelineOwner = at == newTimelineOwners.end() ? 0 : static_cast<int>(at - newTimelineOwners.begin());
+    newTimelineNameEdited = false;
+    newTimelineColorEdited = false;
+    suggestNewTimelineDefaults(timeline);
+    requestNewTimelinePopup = true;
+}
+
+void ofxOceanodeTimelineController::suggestNewTimelineDefaults(ofxOceanodeTimelineManager& timeline) {
+    if(newTimelineOwners.empty()) return;
+    const std::string& canvas = newTimelineOwners[newTimelineOwner];
+    std::string name;
+    ImU32 color = scopeColor(ScopeKind::Further);
+    if(newTimelineRequest.duplicate) {
+        const auto& source = newTimelineRequest.duplicateOf;
+        name = timeline.timelineName(source) + " copy";
+        const auto* play = timeline.playSettings(source);
+        if(play != nullptr && play->customColor) color = IM_COL32(play->color.r, play->color.g, play->color.b, 255);
+    } else if(!timeline.timelineExists({canvas, std::string()})) {
+        // A macro with no timeline yet: this one becomes its own.
+        auto* macro = timeline.canvasContainer(canvas);
+        name = macro != nullptr ? timeline.getMacroSequenceLabel(*macro) : canvas;
+        color = scopeColor(ScopeKind::Macro);
+    } else {
+        // What createTimeline would call it (findTimeline: nothing made yet).
+        const auto* base = timeline.findTimeline({canvas, std::string()});
+        uint64_t number = base != nullptr ? std::max<uint64_t>(base->nextTimelineNumber, 2) : 2;
+        if(base != nullptr)
+            while(std::any_of(base->timelines.begin(), base->timelines.end(), [&](const auto& other) {
+                return other->timelineId == "tl_" + std::to_string(number); })) ++number;
+        name = "Timeline " + std::to_string(number);
+    }
+    if(!newTimelineNameEdited) std::snprintf(newTimelineName, sizeof(newTimelineName), "%s", name.c_str());
+    if(!newTimelineColorEdited) {
+        const ImVec4 rgb = ImGui::ColorConvertU32ToFloat4(color);
+        newTimelineColor[0] = rgb.x;
+        newTimelineColor[1] = rgb.y;
+        newTimelineColor[2] = rgb.z;
+    }
+}
+
+void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineManager& timeline) {
+    ofxOceanodeTimelineManager::NewTimelineRequest request;
+    if(timeline.consumeNewTimelineRequest(request)) openNewTimelineDialog(timeline, request);
+    if(requestNewTimelinePopup) {
+        ImGui::OpenPopup("New Timeline##newTimeline");
+        requestNewTimelinePopup = false;
+    }
+    centerNextModal();
+    if(!ImGui::BeginPopupModal("New Timeline##newTimeline", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if(newTimelineOwners.empty()) { ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return; }
+    const bool duplicate = newTimelineRequest.duplicate;
+    if(duplicate) ImGui::TextDisabled("A copy of %s", timeline.timelineName(newTimelineRequest.duplicateOf).c_str());
+    else if(newTimelineRequest.parameter != nullptr)
+        ImGui::TextDisabled("With %s on its first track", newTimelineRequest.parameter->getName().c_str());
+    const float fieldWidth = 320.0f;
+    if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(fieldWidth);
+    const bool entered = ImGui::InputText("Name##newTimelineName", newTimelineName, sizeof(newTimelineName),
+                                          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+    if(ImGui::IsItemEdited()) newTimelineNameEdited = true;
+    if(ImGui::ColorEdit3("Color##newTimelineColor", newTimelineColor,
+                         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+        newTimelineColorEdited = true;
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Its window's scope bar is tinted with it (change it later from the timelines menu).");
+    if(newTimelineColorEdited) {
+        ImGui::SameLine();
+        if(ImGui::SmallButton("Default##newTimelineColorDefault")) {
+            newTimelineColorEdited = false;
+            suggestNewTimelineDefaults(timeline);
+        }
+    }
+    ImGui::SetNextItemWidth(fieldWidth);
+    ImGui::BeginDisabled(newTimelineOwners.size() < 2);
+    if(ImGui::BeginCombo("Owner##newTimelineOwner", newTimelineOwnerLabels[newTimelineOwner].c_str(), ImGuiComboFlags_HeightLarge)) {
+        for(int i = 0; i < static_cast<int>(newTimelineOwners.size()); ++i) {
+            if(ImGui::Selectable((newTimelineOwnerLabels[i] + "##owner" + std::to_string(i)).c_str(), i == newTimelineOwner) &&
+               i != newTimelineOwner) {
+                newTimelineOwner = i;
+                suggestNewTimelineDefaults(timeline);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(duplicate ? "A copy stays on the canvas of the timeline it copies."
+                                    : "The canvas it belongs to: the main canvas or a macro's.\n"
+                                      "A timeline drives what is inside its canvas.");
+    const std::string& canvas = newTimelineOwners[newTimelineOwner];
+    if(!duplicate && !timeline.timelineExists({canvas, std::string()}))
+        ImGui::TextDisabled("It becomes this macro's own timeline (it has none yet).");
+    const bool named = newTimelineName[0] != '\0';
+    const bool ownerThere = timeline.canvasContainer(canvas) != nullptr;
+    if(!ownerThere) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.4f, 1.0f), "That canvas is gone.");
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!named || !ownerThere);
+    const bool create = ImGui::Button(duplicate ? "Duplicate" : "Create") || (entered && named && ownerThere);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if(create && named && ownerThere) {
+        TimelineRef made;
+        if(duplicate) {
+            const auto id = timeline.duplicateTimeline(newTimelineRequest.duplicateOf, newTimelineName);
+            if(!id.empty()) made = {newTimelineRequest.duplicateOf.canvas, id};
+        } else {
+            made = timeline.addTimeline(canvas, newTimelineName);
+        }
+        if(!made.canvas.empty() || !made.timeline.empty()) { // {}: not made
+            if(newTimelineColorEdited) {
+                if(const auto* play = timeline.playSettings(made)) {
+                    auto settings = *play;
+                    settings.customColor = true;
+                    settings.color = ofColor(static_cast<unsigned char>(ofClamp(newTimelineColor[0] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(newTimelineColor[1] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(newTimelineColor[2] * 255.0f, 0.0f, 255.0f)));
+                    timeline.setPlaySettings(made, settings);
+                }
+            }
+            if(auto* parameter = newTimelineRequest.parameter; parameter != nullptr && !duplicate)
+                if(auto* sequence = timeline.timelineFor(made)) {
+                    const auto track = timeline.createTrack(*sequence, parameter->getName());
+                    timeline.addBinding(*sequence, track, *parameter);
+                }
+            if(newTimelineRequest.window != 0) timeline.setTimelineWindowRef(newTimelineRequest.window, made);
+            else timeline.requestTimelineScope(made);
+        }
+        newTimelineRequest = {};
+        ImGui::CloseCurrentPopup();
+    } else if(cancel) {
+        newTimelineRequest = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager& timeline) {
@@ -215,22 +382,57 @@ void ofxOceanodeTimelineController::drawTimelinesMenu(ofxOceanodeTimelineManager
                           "any of them can play on its own or be placed in another as clips.");
     ImGui::SameLine(0.0f, 2.0f);
     if(ImGui::Button("...##timelineActions")) ImGui::OpenPopup("##timelineActionsMenu");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, delete, place, open in a window");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, delete, place, open in a window");
     if(ImGui::BeginPopup("##timelineActionsMenu")) {
         const std::string canvas = rootCanvas(shown.canvas) ? std::string() : shown.canvas;
-        if(ImGui::MenuItem("New timeline on this canvas")) {
-            const auto id = timeline.createTimeline(canvas, std::string());
-            if(!id.empty()) enterTimelineScope(timeline, {canvas, id});
+        // Both through the New Timeline dialog (name, colour, owner), shown in this window.
+        if(ImGui::MenuItem("New timeline...")) {
+            ofxOceanodeTimelineManager::NewTimelineRequest request;
+            request.canvas = canvas;
+            request.window = windowId;
+            timeline.requestNewTimeline(request);
         }
-        if(ImGui::MenuItem("Duplicate this timeline")) {
-            const auto id = timeline.duplicateTimeline(shown);
-            if(!id.empty()) enterTimelineScope(timeline, {canvas, id});
+        if(ImGui::MenuItem("Duplicate this timeline...")) {
+            ofxOceanodeTimelineManager::NewTimelineRequest request;
+            request.canvas = canvas;
+            request.duplicateOf = shown;
+            request.duplicate = true;
+            request.window = windowId;
+            timeline.requestNewTimeline(request);
         }
         if(ImGui::MenuItem("Rename...", nullptr, false, !isMain(shown))) {
             timelineRenameRef = shown;
             std::snprintf(timelineNameBuffer, sizeof(timelineNameBuffer), "%s", timeline.timelineName(shown).c_str());
             requestTimelineRename = true;
         }
+        // The scope bar's colour for it (the main timeline keeps its blue).
+        if(ImGui::BeginMenu("Color", !isMain(shown))) {
+            if(const auto* current = timeline.playSettings(shown)) {
+                const ImVec4 kindColor = ImGui::ColorConvertU32ToFloat4(scopeColor(scopeKindOf(shown)));
+                float rgb[3] = {kindColor.x, kindColor.y, kindColor.z};
+                if(current->customColor) {
+                    rgb[0] = current->color.r / 255.0f;
+                    rgb[1] = current->color.g / 255.0f;
+                    rgb[2] = current->color.b / 255.0f;
+                }
+                if(ImGui::ColorPicker3("##timelineColor", rgb, ImGuiColorEditFlags_NoSidePreview)) {
+                    auto settings = *current;
+                    settings.customColor = true;
+                    settings.color = ofColor(static_cast<unsigned char>(ofClamp(rgb[0] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(rgb[1] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(rgb[2] * 255.0f, 0.0f, 255.0f)));
+                    timeline.setPlaySettings(shown, settings);
+                }
+                if(ImGui::MenuItem("Default color", nullptr, false, current->customColor)) {
+                    auto settings = *current;
+                    settings.customColor = false;
+                    timeline.setPlaySettings(shown, settings);
+                }
+            }
+            ImGui::EndMenu();
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && isMain(shown))
+            ImGui::SetTooltip("The main timeline keeps its blue.");
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, !shown.timeline.empty())) {
             const auto removed = shown;
             leaveScopesTo(scopes.empty() ? 0 : scopes.size() - 1);

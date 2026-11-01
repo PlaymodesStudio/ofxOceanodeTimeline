@@ -349,6 +349,22 @@ private:
     char timelineNameBuffer[128] = {};
     ofxOceanodeTimelineManager::TimelineRef timelineRenameRef;
     bool requestTimelineRename = false;
+    // ---- New Timeline: every new timeline's name, colour and owner ----
+    // Asked through the manager (requestNewTimeline) from the canvas and
+    // parameter menus and the timelines menu; the main controller shows it.
+    void openNewTimelineDialog(ofxOceanodeTimelineManager& timeline,
+                               const ofxOceanodeTimelineManager::NewTimelineRequest& request);
+    void drawNewTimelinePopup(ofxOceanodeTimelineManager& timeline);
+    // The name and colour it gets on the owner picked (while not edited).
+    void suggestNewTimelineDefaults(ofxOceanodeTimelineManager& timeline);
+    ofxOceanodeTimelineManager::NewTimelineRequest newTimelineRequest;
+    std::vector<std::string> newTimelineOwners, newTimelineOwnerLabels;
+    int newTimelineOwner = 0;
+    char newTimelineName[128] = {};
+    bool newTimelineNameEdited = false;
+    float newTimelineColor[3] = {};
+    bool newTimelineColorEdited = false;
+    bool requestNewTimelinePopup = false;
     // Back to the scope at `depth` (0: the main timeline).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
