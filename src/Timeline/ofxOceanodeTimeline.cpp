@@ -4915,6 +4915,7 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.nextTimelineNumber = 2;
     mainSequence.play = {};
     freeTimelines.clear();
+    playOnLoadPending.clear();
     timelineWindows.clear();
     clipFollowCanvases.clear();
     markers.clear();

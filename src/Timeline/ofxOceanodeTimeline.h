@@ -26,6 +26,7 @@
 class ofxOceanodeAbstractParameter;
 class ofxOceanodeContainer;
 class ofxOceanodeNodeModel;
+class ofxOceanodeNodeMacro;
 struct ofxOceanodeTimelineInstrument;
 
 // How a binding's per-frame value should combine with whatever other
@@ -1037,6 +1038,10 @@ struct ofxOceanodeTimelinePlaySettings {
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     int quantize = 2;                // play/stop on: 0 now, 1 the next beat, 2 the next bar
+    // Playing on its own: starts from its beginning once a preset (the
+    // project's or its macro's) loads, and whenever its macro turns active;
+    // waits while the macro (or one around it) is inactive, stops when it is.
+    bool playOnLoad = false;
     // A tempo of its own (not the default 120 BPM): new clips placing the
     // timeline then keep it (ofxOceanodeTimelineClip::ownTempo).
     bool hasOwnTempo() const { return bpmAutomationEnabled || followClockTempo || bpm != 120.0f; }
@@ -2018,8 +2023,26 @@ private:
         uint64_t sourceSignature = 0;
         const ofxOceanodeTimelineSequence* source = nullptr;
         bool overridesCanvas = false;
+        // Play on load: armed by a preset load, it starts once its macro is active.
+        bool startArmed = false;
+        int wasActive = -1; // -1: not watched (not set to play on load)
+        // The macros around its canvas (outermost first), each with the canvas
+        // holding it (the root's, or a macro's) and that canvas's node revision
+        // when found: an unchanged revision keeps the macro pointer valid.
+        struct MacroLink {
+            const ofxOceanodeNodeMacro* macro;
+            std::weak_ptr<ofxOceanodeContainer> holder;
+            bool heldByRoot;
+            uint64_t revision;
+        };
+        std::vector<MacroLink> macros;
     };
     std::set<TimelineRef> freeTimelines;   // saved
+    std::set<TimelineRef> playOnLoadPending; // loaded since their players last ran
+    // Whether its macro and every macro around it are active (the root's: always).
+    bool macrosActive(Player& player) const;
+    // Arms, starts and stops the free timelines set to play on load.
+    void updatePlayOnLoad();
     std::vector<TimelineWindow> timelineWindows; // saved
     std::set<std::string> clipFollowCanvases;    // saved
     struct ClipTransport {

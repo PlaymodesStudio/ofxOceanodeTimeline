@@ -38,7 +38,8 @@ bool ofxOceanodeTimelinePlaySettings::operator==(const ofxOceanodeTimelinePlaySe
         sameTensions(bpmTensions, other.bpmTensions) && loopEnabled == other.loopEnabled &&
         loopStartBeat == other.loopStartBeat && loopEndBeat == other.loopEndBeat &&
         timeSignatureNumerator == other.timeSignatureNumerator &&
-        timeSignatureDenominator == other.timeSignatureDenominator && quantize == other.quantize;
+        timeSignatureDenominator == other.timeSignatureDenominator && quantize == other.quantize &&
+        playOnLoad == other.playOnLoad;
 }
 
 // ---- The transport a manager plays ----
@@ -393,6 +394,7 @@ void ofxOceanodeTimelineManager::updatePlayers() {
         }
         players.push_back(std::move(player));
     }
+    updatePlayOnLoad();
     if(players.empty()) return;
     // Inner canvases first: an outer timeline's value lands last.
     std::stable_sort(players.begin(), players.end(), [](const auto& a, const auto& b) {
@@ -436,6 +438,36 @@ void ofxOceanodeTimelineManager::updatePlayers() {
         engine.evaluateAutomation();
         engine.applyAutomation();
         engine.endParameterCache();
+    }
+}
+
+void ofxOceanodeTimelineManager::updatePlayOnLoad() {
+    // Loaded but not playing on its own: nothing to start.
+    for(auto it = playOnLoadPending.begin(); it != playOnLoadPending.end();)
+        if(freeTimelines.count(normalizedRef(*it)) == 0) it = playOnLoadPending.erase(it);
+        else ++it;
+    for(auto& player : players) {
+        const auto* sequence = timelineFor(player->ref);
+        if(sequence == nullptr) continue;
+        const bool loaded = playOnLoadPending.erase(player->ref) > 0;
+        if(!sequence->play.playOnLoad) {
+            player->startArmed = false;
+            player->wasActive = -1;
+            continue;
+        }
+        // Armed by a load or by its macro turning active; it starts (from its
+        // beginning, at its quantize) only while its macros are active, and
+        // stops when one turns inactive.
+        const bool active = macrosActive(*player);
+        const bool watched = player->wasActive >= 0;
+        if(loaded || (watched && active && player->wasActive == 0)) player->startArmed = true;
+        if(watched && !active && player->wasActive == 1) stopTimeline(player->ref, true, false);
+        player->wasActive = active ? 1 : 0;
+        if(player->startArmed && active) {
+            player->startArmed = false;
+            seekTimeline(player->ref, 0.0);
+            playTimeline(player->ref);
+        }
     }
 }
 

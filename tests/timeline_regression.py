@@ -465,6 +465,7 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
             # Timelines by reference: only the root canvas exists here.
             'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
+            'bool ofxOceanodeTimelineManager::macrosActive(Player&) const { return true; }\n'
             'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
             '{ return canvas.empty() ? container : nullptr; }\n'
             'ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas('

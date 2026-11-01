@@ -7,6 +7,7 @@
 #include "Nodes/ofxOceanodeNodeMacro.h"
 
 #include <filesystem>
+#include <functional>
 
 namespace {
 constexpr const char* kSequenceFile = "sequence.json";
@@ -112,6 +113,42 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
         if(ofFile::doesFileExist(file)) sequenceFromJson(*entry.sequence, ofLoadJson(file));
     }
     macroSequences.push_back(entry);
+    // Its timelines that play on their own and are set to play on load start
+    // (while the macro is active).
+    const std::string canvas = macroContainer.getCanvasID();
+    playOnLoadPending.insert({canvas, std::string()});
+    for(const auto& timeline : entry.sequence->timelines) playOnLoadPending.insert({canvas, timeline->timelineId});
+}
+
+bool ofxOceanodeTimelineManager::macrosActive(Player& player) const {
+    if(container == nullptr || player.ref.canvas.empty()) return true; // refs are normalized: "" is the root
+    auto canvas = player.canvas.lock();
+    if(canvas == nullptr) return true;
+    // Found again only when a canvas holding one of them changed its nodes.
+    bool stale = player.macros.empty();
+    for(const auto& link : player.macros) {
+        std::shared_ptr<ofxOceanodeContainer> held = link.heldByRoot ? nullptr : link.holder.lock();
+        const ofxOceanodeContainer* holder = link.heldByRoot ? container : held.get();
+        if(holder == nullptr || holder->getNodesRevision() != link.revision) { stale = true; break; }
+    }
+    if(stale) {
+        player.macros.clear();
+        std::function<bool(ofxOceanodeContainer&, const std::shared_ptr<ofxOceanodeContainer>&)> find =
+            [&](ofxOceanodeContainer& from, const std::shared_ptr<ofxOceanodeContainer>& fromShared) {
+                for(auto* node : from.getAllModules()) {
+                    auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
+                    if(macro == nullptr || !macro->getContainer()) continue;
+                    player.macros.push_back({macro, fromShared, fromShared == nullptr, from.getNodesRevision()});
+                    if(macro->getContainer() == canvas || find(*macro->getContainer(), macro->getContainer())) return true;
+                    player.macros.pop_back();
+                }
+                return false;
+            };
+        if(!find(*container, nullptr)) return true; // not under a macro after all
+    }
+    for(const auto& link : player.macros)
+        if(!link.macro->isActive()) return false;
+    return true;
 }
 
 bool ofxOceanodeTimelineManager::saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const {

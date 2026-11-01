@@ -4,11 +4,11 @@
 A further timeline on the root canvas plays free: started, stopped and
 seeked by itself at its own tempo while the main timeline is stopped, on the
 shared clock. It is listed as a time source, keeps its tempo, loop and meter,
-and saves with which timelines play free.
+and saves with which timelines play free and which play on load.
 """
 import timeline_regression as fixture
 
-CASES = fixture.CASES.split('int main()')[0] + r'''
+CASES = '#include <filesystem>\n' + fixture.CASES.split('int main()')[0] + r'''
 int main() {
     ofSeedRandom();
     ofxOceanodeContainer owner;
@@ -129,6 +129,50 @@ int main() {
     ofxOceanodeTimelineSequence copy;
     model.sequenceFromJson(copy, model.sequenceToJson(*pattern));
     assert(copy.play == pattern->play);
+    assert(!model.sequenceToJson(*pattern)["play"].contains("playOnLoad")); // off: not written
+
+    // Play on load: after its preset loads, a free timeline set to it starts
+    // from its beginning by itself; one not set to it stays stopped.
+    {
+        settings.playOnLoad = true;
+        settings.quantize = 0;
+        model.setPlaySettings(drums, settings);
+        model.sequenceFromJson(copy, model.sequenceToJson(*pattern));
+        assert(copy.play.playOnLoad && copy.play == pattern->play);
+        const auto still = model.createTimeline("", "Still");
+        model.setFree({"", still}, true);
+        frame(0.1);
+        const auto folder = std::filesystem::temp_directory_path() / ("oceanode-play-on-load-" + ofToString(ofGetSystemTimeMicros()));
+        std::filesystem::create_directories(folder);
+        assert(model.savePreset(folder.string()));
+        ofxOceanodeContainer loadedOwner;
+        loadedOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
+        ofxOceanodeTimelineManager loaded(&loadedOwner);
+        loaded.setSchedulingEnabled(false);
+        assert(loaded.loadPreset(folder.string()));
+        assert(loaded.playSettings(drums)->playOnLoad && !loaded.playSettings({"", still})->playOnLoad);
+        for(int i = 0; i < 5; ++i) {
+            loadedOwner.transport->advanceFrameStep(0.1);
+            loadedOwner.transport->latchFrameState();
+            loaded.update();
+        }
+        assert(loaded.transportFor(drums) != nullptr && loaded.transportFor(drums)->getState().isPlaying);
+        assert(loaded.transportFor(drums)->getState().beatPosition < 1.0);
+        assert(loaded.transportFor({"", still}) != nullptr && !loaded.transportFor({"", still})->getState().isPlaying);
+        assert(!loadedOwner.transport->getState().isPlaying); // the main timeline is not set to play on load
+        // Stopped by hand, it stays stopped: only a load starts it.
+        loaded.stopTimeline(drums, true, false);
+        for(int i = 0; i < 3; ++i) {
+            loadedOwner.transport->advanceFrameStep(0.1);
+            loadedOwner.transport->latchFrameState();
+            loaded.update();
+        }
+        assert(!loaded.transportFor(drums)->getState().isPlaying);
+        std::filesystem::remove_all(folder);
+        model.removeTimeline({"", still});
+        settings.playOnLoad = false;
+        model.setPlaySettings(drums, settings);
+    }
 
     // Added from a parameter's menu: on the root canvas, always a further one.
     const auto pads = model.addTimeline("", "Pads");
@@ -342,7 +386,7 @@ int main() {
         assert(events.front().value == "1");
         ofxOceanodeScheduling::unregisterOwner(&scheduled);
     }
-    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, nested timelines, own-tempo clips.\n";
+    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, play on load, nested timelines, own-tempo clips.\n";
 }
 '''
 

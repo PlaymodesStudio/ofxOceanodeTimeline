@@ -522,6 +522,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     const auto& play = mainSequence.play;
     json["play"] = {{"name", play.name}, {"bpm", play.bpm}, {"followClockTempo", play.followClockTempo},
                     {"tempoRatio", play.tempoRatio}, {"quantize", play.quantize}};
+    if(play.playOnLoad) json["play"]["playOnLoad"] = true; // older files stay as they were
     // The canvas's further timelines, and which timelines play on their own.
     if(mainSequence.nextTimelineNumber > 2) json["nextTimelineNumber"] = mainSequence.nextTimelineNumber;
     if(!mainSequence.timelines.empty()) {
@@ -1223,6 +1224,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         mainSequence.play.followClockTempo = play.value("followClockTempo", false);
         mainSequence.play.tempoRatio = ofClamp(play.value("tempoRatio", 1.0f), 0.01f, 64.0f);
         mainSequence.play.quantize = ofClamp(play.value("quantize", 2), 0, 2);
+        mainSequence.play.playOnLoad = play.value("playOnLoad", false);
     }
     if(json.contains("timelines") && json["timelines"].is_array()) {
         for(const auto& timelineJson : json["timelines"]) {
@@ -1532,6 +1534,8 @@ bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath)
             return false;
         }
         fromJson(json);
+        // Its free timelines set to play on load start once their players run.
+        for(const auto& ref : freeTimelines) playOnLoadPending.insert(ref);
         return true;
     } catch(const std::exception& e) {
         ofLogError("ofxOceanodeTimeline") << "Could not load timeline: " << e.what()

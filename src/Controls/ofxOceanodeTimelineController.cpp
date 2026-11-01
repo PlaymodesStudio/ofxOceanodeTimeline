@@ -1550,6 +1550,17 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::IsItemHovered())
                 ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
                                   "of the main timeline while it plays (else of the clock).");
+            ImGui::SameLine(0.0f, 6.0f);
+            bool playOnLoad = ownPlay->playOnLoad;
+            if(ImGui::Checkbox("Play on load##tbOwnPlayOnLoad", &playOnLoad)) {
+                auto settings = *ownPlay;
+                settings.playOnLoad = playOnLoad;
+                timeline.setPlaySettings(shownRef, settings);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Play on load: it plays from its start (at its quantize) once the preset or its\n"
+                                  "macro's preset loads, and each time its macro turns active. While the macro\n"
+                                  "(or one around it) is inactive it waits, and it stops when the macro turns off.");
         } else {
             if(inMacroScope()) {
                 // A placed timeline has no transport: these drive the main one.
