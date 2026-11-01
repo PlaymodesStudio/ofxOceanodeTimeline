@@ -225,6 +225,16 @@ int main() {
         io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
         assert(zoomView.pixelsPerSecond>shiftScale);
         assert(std::abs(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX-playheadScreenX)<0.001);
+        // Out of view, the playhead is brought to the middle and zoomed there.
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        zoomView.scrollX=playheadAt*zoomView.pixelsPerSecond+200; frame(1250,zoomPoint,false);
+        assert(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX<-100); // off to the left
+        const float hiddenScale=zoomView.pixelsPerSecond;
+        io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
+        io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
+        const double playheadShown=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
+        assert(zoomView.pixelsPerSecond>hiddenScale && playheadShown>=0 && playheadShown<=zoomVisible);
         owner->getTransport()->seekToBeat(0);
     }
     // Locate and click the actual toolbar button by its hover id.
