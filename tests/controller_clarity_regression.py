@@ -97,6 +97,10 @@ int main() {
     ImGui::CreateContext(); auto& io=ImGui::GetIO();
     io.IniFilename=nullptr; io.DisplaySize=ImVec2(1280,1000); io.DeltaTime=1.f/60;
     unsigned char* atlas; int aw,ah; io.Fonts->GetTexDataAsRGBA32(&atlas,&aw,&ah);
+    // Tracks start at the minimum height; the fixed screen points below
+    // were laid out for 80px rows.
+    assert(std::abs(model.getViewState().trackHeight-kMinTrackHeight)<0.01f);
+    model.getViewState().trackHeight=80.0f;
     ofxOceanodeTimelineController ui(owner);
     auto frame=[&](float width=1250,ImVec2 mouse=ImVec2(-100,-100),bool down=false,const char* screenshot=nullptr) {
         io.AddMousePosEvent(mouse.x,mouse.y); io.AddMouseButtonEvent(0,down);

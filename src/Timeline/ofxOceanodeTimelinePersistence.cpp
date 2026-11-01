@@ -595,7 +595,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
         viewState.scrollX = std::max(0.0f, view.value("scrollX", 0.0f));
         viewState.labelWidth = ofClamp(view.value("labelWidth", 280.0f), 200.0f, 520.0f);
-        viewState.trackHeight = ofClamp(view.value("trackHeight", 80.0f), kMinTrackHeight, kMaxTrackHeight);
+        viewState.trackHeight = ofClamp(view.value("trackHeight", kMinTrackHeight), kMinTrackHeight, kMaxTrackHeight);
     }
     playOnPresetLoad = json.value("playOnPresetLoad", false);
     if(!json.contains("tracks") || !json["tracks"].is_array()) return;

@@ -963,6 +963,9 @@ struct ofxOceanodeTimelineClipGroup {
     std::vector<std::pair<std::string, std::string>> members;
 };
 
+constexpr float kMinTrackHeight = 40.0f;
+constexpr float kMaxTrackHeight = 240.0f;
+
 // Editor viewport state belongs to the preset just like the timeline data:
 // switching presets should restore both the horizontal scale and the place
 // the user was looking at. Keeping it on the manager also means savePreset()
@@ -974,10 +977,8 @@ struct ofxOceanodeTimelineViewState {
     // Pinned left column width (track pads / lane properties), in pixels.
     float labelWidth = 280.0f;
     // Height of every track row in the Clips view (Wave tracks have their own).
-    float trackHeight = 80.0f;
+    float trackHeight = kMinTrackHeight;
 };
-constexpr float kMinTrackHeight = 40.0f;
-constexpr float kMaxTrackHeight = 240.0f;
 
 // Optional, addon-agnostic hook that lets a project which also includes
 // ofxOceanodeSuperCollider drive REAL audio playback for Wave tracks,
