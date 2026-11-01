@@ -321,6 +321,10 @@ private:
     // Seeks the timeline shown: its own transport when it plays on its own,
     // else the main one.
     void seekShownTimeline(ofxOceanodeTimelineManager& timeline, double beat);
+    // The loop of the timeline shown, true while it is on: the main one's, or
+    // its own while it plays on its own (a placed timeline never loops).
+    bool shownLoop(const ofxOceanodeTimelineManager& timeline, double& startBeat, double& endBeat) const;
+    void setShownLoop(ofxOceanodeTimelineManager& timeline, double startBeat, double endBeat);
     // Shows the timeline a timeline track places, from the next frame.
     void requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::TimelineRef pendingScope;

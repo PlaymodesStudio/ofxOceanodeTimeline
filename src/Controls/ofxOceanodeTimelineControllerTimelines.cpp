@@ -498,6 +498,34 @@ void ofxOceanodeTimelineController::seekShownTimeline(ofxOceanodeTimelineManager
     if(auto transport = container->getTransport()) transport->seekToBeat(beat);
 }
 
+bool ofxOceanodeTimelineController::shownLoop(const ofxOceanodeTimelineManager& timeline, double& startBeat, double& endBeat) const {
+    if(!inMacroScope()) {
+        startBeat = timeline.getLoopStartBeat();
+        endBeat = timeline.getLoopEndBeat();
+        return timeline.isLoopEnabled();
+    }
+    const auto& play = scopes.back().sequence->play;
+    startBeat = play.loopStartBeat;
+    endBeat = play.loopEndBeat;
+    return play.loopEnabled && timeline.isFree(scopeRef());
+}
+
+// Sets the range and turns the loop on.
+void ofxOceanodeTimelineController::setShownLoop(ofxOceanodeTimelineManager& timeline, double startBeat, double endBeat) {
+    if(!inMacroScope()) {
+        if(!timeline.isLoopEnabled()) timeline.setLoopEnabled(true);
+        timeline.setLoopRange(startBeat, endBeat);
+        return;
+    }
+    const auto* current = timeline.playSettings(scopeRef());
+    if(current == nullptr) return;
+    auto settings = *current;
+    settings.loopEnabled = true;
+    settings.loopStartBeat = startBeat;
+    settings.loopEndBeat = endBeat;
+    timeline.setPlaySettings(scopeRef(), settings);
+}
+
 void ofxOceanodeTimelineController::requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track) {
     auto* placed = timeline.placedTimeline(scope(timeline), track);
     if(placed == nullptr || !timeline.refOf(*placed, pendingScope)) return;

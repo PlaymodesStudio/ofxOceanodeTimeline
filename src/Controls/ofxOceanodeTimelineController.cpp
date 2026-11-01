@@ -871,10 +871,10 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
 double ofxOceanodeTimelineController::getContentEndBeat(const ofxOceanodeTimelineManager& timeline) const {
     const double barBeats = timeline.getBeatsPerBar();
     double endBeat = std::max(barBeats, static_cast<double>(visibleBars) * barBeats);
-    if(!inMacroScope()) { // loop and tempo belong to the main timeline
-        if(timeline.isLoopEnabled()) endBeat = std::max(endBeat, timeline.getLoopEndBeat());
+    double loopStartBeat = 0.0, loopEndBeat = 0.0;
+    if(shownLoop(timeline, loopStartBeat, loopEndBeat)) endBeat = std::max(endBeat, loopEndBeat);
+    if(!inMacroScope()) // the tempo lane belongs to the main timeline
         for(const auto& point : timeline.getBpmAutomationPoints()) endBeat = std::max(endBeat, point.beat);
-    }
     for(const auto& track : scope(timeline).tracks) {
         for(const auto& clip : track.clips) {
             endBeat = std::max(endBeat, clip.startBeat + clip.durationBeats);
@@ -2956,9 +2956,10 @@ void ofxOceanodeTimelineController::draw() {
         }
 
         auto drawGrid = [&](const ImVec2& min, const ImVec2& max) {
-            if(!inMacroScope() && timeline.isLoopEnabled()) { // the main timeline's loop
-                const float loopX1 = min.x + beatOffset(timeline.getLoopStartBeat());
-                const float loopX2 = min.x + beatOffset(timeline.getLoopEndBeat());
+            double loopStartBeat = 0.0, loopEndBeat = 0.0;
+            if(shownLoop(timeline, loopStartBeat, loopEndBeat)) {
+                const float loopX1 = min.x + beatOffset(loopStartBeat);
+                const float loopX2 = min.x + beatOffset(loopEndBeat);
                 dl->AddRectFilled(ImVec2(std::max(min.x, loopX1), min.y), ImVec2(std::min(max.x, loopX2), max.y), IM_COL32(95, 105, 220, 22));
                 dl->AddLine(ImVec2(loopX1, min.y), ImVec2(loopX1, max.y), IM_COL32(130, 145, 235, 95));
                 dl->AddLine(ImVec2(loopX2, min.y), ImVec2(loopX2, max.y), IM_COL32(130, 145, 235, 95));
@@ -5559,15 +5560,19 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     // A macro timeline counts its own beats: the main timeline's loop, markers,
     // seeking and tempo lane do not apply to it. Its playhead is the main
     // one as the macro clip playing it now maps it (off screen when none).
-    if(inMacroScope()) {
+    // One that plays on its own has its own loop and seeking, edited here
+    // like the main timeline's (markers stay the main timeline's).
+    if(inMacroScope() && !timeline.isFree(scopeRef())) {
         const float px = laneMin.x + beatToPixels(timeline, beatPosition, bpm);
         if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2.5f);
         dl->PopClipRect();
         return;
     }
-    if(timeline.isLoopEnabled()) {
-        const float loopX1 = laneMin.x + beatToPixels(timeline, timeline.getLoopStartBeat(), bpm);
-        const float loopX2 = laneMin.x + beatToPixels(timeline, timeline.getLoopEndBeat(), bpm);
+    double loopStartBeat = 0.0, loopEndBeat = 0.0;
+    const bool loopEnabled = shownLoop(timeline, loopStartBeat, loopEndBeat);
+    if(loopEnabled) {
+        const float loopX1 = laneMin.x + beatToPixels(timeline, loopStartBeat, bpm);
+        const float loopX2 = laneMin.x + beatToPixels(timeline, loopEndBeat, bpm);
         dl->AddRectFilled(ImVec2(loopX1, min.y), ImVec2(loopX2, max.y), IM_COL32(95, 105, 220, 48));
         dl->AddRectFilled(ImVec2(loopX1 - 3.0f, min.y), ImVec2(loopX1 + 3.0f, max.y), IM_COL32(150, 165, 255, 230));
         dl->AddRectFilled(ImVec2(loopX2 - 3.0f, min.y), ImVec2(loopX2 + 3.0f, max.y), IM_COL32(150, 165, 255, 230));
@@ -5578,6 +5583,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     std::string hoveredMarkerId;
     for(const auto& marker : timeline.getMarkers()) {
+        if(inMacroScope()) break;
         const float x = laneMin.x + beatToPixels(timeline, marker.beat, bpm);
         if(x < zoneLeft - 200.0f || x > max.x) continue;
         const ImVec2 textSize = ImGui::CalcTextSize(marker.name.c_str());
@@ -5597,7 +5603,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     const double rawMouseBeat = ofClamp(
         pixelsToBeat(timeline, mouse.x - laneMin.x, bpm, endBeat), 0.0, endBeat);
     const double mouseBeat = snapBeat(rawMouseBeat);
-    if(hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    if(hovered && !inMacroScope() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         markerMenuId = hoveredMarkerId;
         markerMenuBeat = mouseBeat;
         ImGui::OpenPopup("##rulerMarkerMenu");
@@ -5643,22 +5649,21 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     } else if(hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         const double loopLength = timeline.getBeatsPerBar();
         const double loopStart = snapBeat(std::max(0.0, mouseBeat - loopLength * 0.5));
-        timeline.setLoopEnabled(true);
-        timeline.setLoopRange(loopStart, loopStart + loopLength);
+        setShownLoop(timeline, loopStart, loopStart + loopLength);
         loopDragMode = LoopDragMode::None;
     } else if(hovered && markerDragId.empty() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const float loopStartX = laneMin.x + beatToPixels(timeline, timeline.getLoopStartBeat(), bpm);
-        const float loopEndX = laneMin.x + beatToPixels(timeline, timeline.getLoopEndBeat(), bpm);
-        if(timeline.isLoopEnabled() && std::abs(mouse.x - loopStartX) <= 7.0f) {
+        const float loopStartX = laneMin.x + beatToPixels(timeline, loopStartBeat, bpm);
+        const float loopEndX = laneMin.x + beatToPixels(timeline, loopEndBeat, bpm);
+        if(loopEnabled && std::abs(mouse.x - loopStartX) <= 7.0f) {
             loopDragMode = LoopDragMode::Start;
-        } else if(timeline.isLoopEnabled() && std::abs(mouse.x - loopEndX) <= 7.0f) {
+        } else if(loopEnabled && std::abs(mouse.x - loopEndX) <= 7.0f) {
             loopDragMode = LoopDragMode::End;
-        } else if(timeline.isLoopEnabled() && ImGui::GetIO().KeyShift &&
-                  mouseBeat > timeline.getLoopStartBeat() && mouseBeat < timeline.getLoopEndBeat()) {
+        } else if(loopEnabled && ImGui::GetIO().KeyShift &&
+                  mouseBeat > loopStartBeat && mouseBeat < loopEndBeat) {
             loopDragMode = LoopDragMode::Move;
             loopDragAnchorBeat = mouseBeat;
-            loopDragStartBeat = timeline.getLoopStartBeat();
-            loopDragEndBeat = timeline.getLoopEndBeat();
+            loopDragStartBeat = loopStartBeat;
+            loopDragEndBeat = loopEndBeat;
         } else if(container->getTransport() != nullptr) {
             loopDragMode = LoopDragMode::Scrub;
             seekShownTimeline(timeline, mouseBeat);
@@ -5668,13 +5673,13 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         if(loopDragMode == LoopDragMode::Scrub) {
             if(container->getTransport() != nullptr) seekShownTimeline(timeline, mouseBeat);
         } else if(loopDragMode == LoopDragMode::Start) {
-            timeline.setLoopRange(std::min(mouseBeat, timeline.getLoopEndBeat() - 1.0 / kPPQ), timeline.getLoopEndBeat());
+            setShownLoop(timeline, std::min(mouseBeat, loopEndBeat - 1.0 / kPPQ), loopEndBeat);
         } else if(loopDragMode == LoopDragMode::End) {
-            timeline.setLoopRange(timeline.getLoopStartBeat(), std::max(mouseBeat, timeline.getLoopStartBeat() + 1.0 / kPPQ));
+            setShownLoop(timeline, loopStartBeat, std::max(mouseBeat, loopStartBeat + 1.0 / kPPQ));
         } else if(loopDragMode == LoopDragMode::Move) {
             const double length = loopDragEndBeat - loopDragStartBeat;
             const double start = std::max(0.0, loopDragStartBeat + mouseBeat - loopDragAnchorBeat);
-            timeline.setLoopRange(start, start + length);
+            setShownLoop(timeline, start, start + length);
         }
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) loopDragMode = LoopDragMode::None;
@@ -5696,7 +5701,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
 
     // Tempo (BPM) lane visibility: a checkbox in the ruler's label column, and the
     // same toggle on right-click anywhere in that column.
-    {
+    if(!inMacroScope()) {
         bool tempoVisible = timeline.isBpmLaneVisible();
         ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 104.0f, min.y + 5.0f));
         if(ImGui::Checkbox("Tempo lane##rulerTempoLane", &tempoVisible)) timeline.setBpmLaneVisible(tempoVisible);
