@@ -212,6 +212,10 @@ constexpr float kEdgePixels = 8.0f;
 // Parameter rows are indented under their track header by half the clip
 // editor's indent (20 px), so the hierarchy reads track > row > editor.
 constexpr float kParameterRowIndent = 10.0f;
+// Wheel travel (ImGui wheel units) before a swipe picks zoom or scroll, and
+// the quiet time that ends the swipe.
+constexpr float kWheelAxisLockTravel = 0.35f;
+constexpr double kWheelGestureGap = 0.2;
 
 using ofxOceanodeTimelineCurve::CurveInterpolationMode;
 using ofxOceanodeTimelineCurve::curveInterpolationMode;
@@ -2113,11 +2117,27 @@ void ofxOceanodeTimelineController::draw() {
     const auto& wheelIO = ImGui::GetIO();
     const bool timelineHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
         hoverRect(timelineAreaMin, timelineAreaMax);
-    if(timelineHovered && !ImGui::IsAnyItemActive()) {
+    const bool wheelMoved = std::abs(wheelIO.MouseWheel) > 0.001f || std::abs(wheelIO.MouseWheelH) > 0.001f;
+    if(timelineHovered && !ImGui::IsAnyItemActive() && wheelMoved) {
+        // A pause between wheel events ends the gesture (macOS momentum
+        // keeps sending them, so it stays on the locked axis).
+        if(ImGui::GetTime() - lastWheelTime > kWheelGestureGap) {
+            wheelAxis = WheelAxis::None;
+            wheelAxisTravel = ImVec2(0.0f, 0.0f);
+        }
+        lastWheelTime = ImGui::GetTime();
+        if(wheelAxis == WheelAxis::None) {
+            // Wait for a little travel, then take the axis it mostly moved
+            // along; a mouse wheel notch decides at once.
+            wheelAxisTravel.x += std::abs(wheelIO.MouseWheelH);
+            wheelAxisTravel.y += std::abs(wheelIO.MouseWheel);
+            if(wheelAxisTravel.x + wheelAxisTravel.y >= kWheelAxisLockTravel)
+                wheelAxis = wheelAxisTravel.y >= wheelAxisTravel.x ? WheelAxis::Vertical : WheelAxis::Horizontal;
+        }
         const float anchorX = wheelIO.MousePos.x - timelineAreaMin.x - kLabelWidth;
-        if(anchorX >= 0.0f && std::abs(wheelIO.MouseWheel) > 0.001f)
+        if(wheelAxis == WheelAxis::Vertical && anchorX >= 0.0f && std::abs(wheelIO.MouseWheel) > 0.001f)
             zoomAt(pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel)), anchorX);
-        if(std::abs(wheelIO.MouseWheelH) > 0.001f && std::abs(wheelIO.MouseWheel) <= 0.001f)
+        if(wheelAxis == WheelAxis::Horizontal)
             timelineScrollX -= wheelIO.MouseWheelH * 55.0f;
     }
     const float timelineWidth = std::max(visibleWidth, beatToPixels(timeline, endBeat, transportState.bpm));

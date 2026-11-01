@@ -480,6 +480,13 @@ private:
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     float zoomAnchorViewportX = 0.0f;
     double zoomAnchorUntil = 0.0;
+    // A two-finger swipe over the clips zooms (vertical) or scrolls
+    // (horizontal), never both: it locks to the axis it mostly moves along
+    // and keeps it until the wheel goes quiet.
+    enum class WheelAxis { None, Vertical, Horizontal };
+    WheelAxis wheelAxis = WheelAxis::None;
+    ImVec2 wheelAxisTravel = ImVec2(0.0f, 0.0f);
+    double lastWheelTime = -1.0;
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
     std::vector<double> tapTimes;      // tap tempo (seconds)
 

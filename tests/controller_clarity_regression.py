@@ -194,6 +194,21 @@ int main() {
     const double rulerTime=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
     io.AddMouseWheelEvent(0,-1); frame(1250,rulerZoom,false);
     assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-rulerTime)<0.0001);
+    {
+        // A two-finger swipe locks to the axis it mostly moves along: a
+        // horizontal one with some vertical drift scrolls without zooming,
+        // a vertical one with some sideways drift zooms without scrolling.
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);   // the last swipe has ended
+        zoomView.scrollX=0; frame(1250,zoomPoint,false);
+        const float swipeScale=zoomView.pixelsPerSecond;
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(-0.3f,i%2?0.08f:0.0f); frame(1250,zoomPoint,false); }
+        assert(zoomView.pixelsPerSecond==swipeScale && zoomView.scrollX>0);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        const double swipeTime=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(i%2?0.08f:0.0f,0.3f); frame(1250,zoomPoint,false); }
+        assert(zoomView.pixelsPerSecond>swipeScale);
+        assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-swipeTime)<0.0001);
+    }
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {
         // Row 2 of the toolbar sits under the scope bar and row 1: scan the rows.
