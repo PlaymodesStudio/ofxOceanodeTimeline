@@ -81,7 +81,12 @@ public:
                     auto* canvasContainer = timelineManager.canvasContainer(canvas);
                     if(canvasContainer == nullptr) continue;
                     eligibleCanvases.push_back({canvas, canvasContainer});
-                    for(const auto& ref : timelineManager.timelinesOfCanvas(canvas))
+                    // A macro's own timeline is offered even while it is empty
+                    // (other lists skip it until then): adding to it makes it.
+                    auto refs = timelineManager.timelinesOfCanvas(canvas);
+                    if(std::none_of(refs.begin(), refs.end(), [](const TimelineRef& ref) { return ref.timeline.empty(); }))
+                        refs.insert(refs.begin(), TimelineRef{canvas, std::string()});
+                    for(const auto& ref : refs)
                         eligible.push_back({ref, canvasContainer});
                 }
             }
@@ -106,9 +111,9 @@ public:
                 if(!isMain) timelineManager.requestTimelineScope(ref);
             };
             auto trackItems = [&](const TimelineRef& ref, ofxOceanodeContainer* canvas) {
-                auto* sequence = timelineManager.timelineFor(ref);
-                if(sequence == nullptr) return;
                 if(ImGui::Selectable(("New Timeline Track##new" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str())) addTo(ref, std::string());
+                auto* sequence = timelineManager.findTimeline(ref); // none yet: a macro's timeline, made by adding to it
+                if(sequence == nullptr) return;
                 const std::string path = pathFor(canvas);
                 bool first = true;
                 for(const auto& track : sequence->tracks) {
@@ -146,7 +151,9 @@ public:
             };
             if(ImGui::BeginMenu("Add to Timeline")){
                 if(eligible.size() == 1) {
-                    trackItems(eligible.front().first, eligible.front().second); // one timeline: straight to its tracks
+                    // One timeline: straight to its tracks, under its name.
+                    ImGui::TextDisabled("%s", timelineManager.timelineName(eligible.front().first).c_str());
+                    trackItems(eligible.front().first, eligible.front().second);
                 } else {
                     for(const auto& [ref, canvas] : eligible) {
                         if(ImGui::BeginMenu(timelineLabel(ref).c_str())) {
@@ -172,7 +179,7 @@ public:
             struct BoundLocation { TimelineRef ref; std::string trackId, label, bindingId; };
             std::vector<BoundLocation> boundLocations;
             for(const auto& [ref, canvas] : eligible) {
-                auto* sequence = timelineManager.timelineFor(ref);
+                auto* sequence = timelineManager.findTimeline(ref);
                 if(sequence == nullptr) continue;
                 const std::string path = pathFor(canvas);
                 for(const auto& track : sequence->tracks)
@@ -252,9 +259,15 @@ public:
                                 canvases.push_back(prefix);
                             if(at == std::string::npos) break;
                         }
-                        for(const auto& canvas : canvases)
-                            for(const auto& ref : manager.timelinesOfCanvas(canvas))
+                        for(const auto& canvas : canvases) {
+                            if(manager.canvasContainer(canvas) == nullptr) continue;
+                            // An empty macro around it can host it too (adding the track makes its timeline).
+                            auto refs = manager.timelinesOfCanvas(canvas);
+                            if(std::none_of(refs.begin(), refs.end(), [](const TimelineRef& ref) { return ref.timeline.empty(); }))
+                                refs.insert(refs.begin(), TimelineRef{canvas, std::string()});
+                            for(const auto& ref : refs)
                                 if(!manager.timelineReaches(placed, ref)) hosts.push_back(ref);
+                        }
                         auto addTo = [&](const TimelineRef& host) {
                             auto* sequence = manager.timelineFor(host);
                             if(sequence == nullptr) return;
