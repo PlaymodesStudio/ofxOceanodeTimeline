@@ -15,13 +15,13 @@ void ofApp::setup() {
 }
 ```
 
-For a headless host, call `ofxOceanodeTimeline::attach(container)` and register `lfoTrack` yourself if needed; attachment forwards to the root host.
+For a headless host, call `ofxOceanodeTimeline::attach(container)` and register `lfoTrack` and `timelineTransport` yourself if needed; attachment forwards to the root host.
 
 The root container owns the timeline service. Macro containers share that service. Repeating `setup` on the same host does nothing. Without attachment, Oceanode has no timeline window, publishing menus or automation processing. Calling `getTimelineManager()` without attachment throws an explanatory exception; linking code that calls it requires this addon.
 
 The existing manager API stays available through `oceanode.getTimelineManager()` and `container.getTimelineManager()`. Existing `timeline.json` files, clip IDs, binding paths and LFO Track node names are unchanged. Timeline JSON is left untouched when saving a project with core alone. To use projects containing LFO Track nodes, attach this addon before loading them.
 
-Includes timeline model and persistence, portable multi-lane clip files with target remapping, clip/lane editors, parameter publishing menus and badges, piano roll and instrument setup, BPM automation and timebase retiming, LFO Track, wave clips and scheduling lookahead. Shared transport, deterministic random utilities and backend scheduling registration stay in core. Node instrument/value-scale metadata remains available in core so instrument addons do not need a timeline dependency.
+Includes timeline model and persistence, portable multi-lane clip files with target remapping, clip/lane editors, parameter publishing menus and badges, piano roll and instrument setup, BPM automation and timebase retiming, LFO Track, the Timeline node (play, stop and restart a timeline from the patch), wave clips and scheduling lookahead. Shared transport, deterministic random utilities and backend scheduling registration stay in core. Node instrument/value-scale metadata remains available in core so instrument addons do not need a timeline dependency.
 
 See [timeline model usage](docs/timeline.md) and `example-timeline` (generate its project files with the OF project generator).
 

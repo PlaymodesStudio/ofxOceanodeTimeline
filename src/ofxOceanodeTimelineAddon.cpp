@@ -3,6 +3,7 @@
 #include "ofxOceanode.h"
 #include "ofxOceanodeTimelineController.h"
 #include "lfoTrack.h"
+#include "timelineTransport.h"
 #include "imgui.h"
 #include <stdexcept>
 
@@ -357,5 +358,6 @@ void ofxOceanodeTimeline::setup(ofxOceanode& oceanode) {
     attach(*container);
     if(oceanode.getController<ofxOceanodeTimelineController>()) return;
     oceanode.registerModel<lfoTrack>("Generators");
+    oceanode.registerModel<timelineTransport>("Timeline");
     oceanode.addController(std::make_shared<ofxOceanodeTimelineController>(container));
 }
