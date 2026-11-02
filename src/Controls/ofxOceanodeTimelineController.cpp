@@ -6215,8 +6215,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         drawLanePlayback();
         {
             const float nameWidth = std::max(1.0f, rowZoneLeft - 6.0f - ImGui::GetCursorScreenPos().x);
-            ImGui::Selectable((fitText(laneLabel, nameWidth - 8.0f) + "##laneHeaderCollapsed" + lane->id).c_str(), isFocused,
-                              ImGuiSelectableFlags_None, ImVec2(nameWidth, 0));
+            laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeaderCollapsed" + lane->id, isFocused,
+                               ImVec2(nameWidth, 0));
         }
         if(ImGui::IsItemClicked()) editorState.editorLaneId = lane->id;
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s\n%s / %zu target(s)%s",
@@ -6298,8 +6298,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     drawLanePlayback();
     {
         const float nameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-        if(ImGui::Selectable((fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id).c_str(), isFocused,
-                             ImGuiSelectableFlags_None, ImVec2(nameWidth, 0)))
+        if(laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id, isFocused,
+                              ImVec2(nameWidth, 0)))
             editorState.editorLaneId = lane->id;
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s%s",
             track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), isFocused ? "\n(editing)" : "\nClick to edit this lane");

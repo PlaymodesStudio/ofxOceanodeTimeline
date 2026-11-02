@@ -113,8 +113,8 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         if(auto* lane = timeline.getLane(sequence, track.id, clip.id, key)) drawLanePlayback(*lane);
         if(ImGui::SmallButton((">##lfoExpand" + key).c_str())) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
-        ImGui::Selectable((label + "##lfoHeaderCollapsed" + key).c_str(), focused,
-                          ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
+        laneNameSelectable(label + "##lfoHeaderCollapsed" + key, focused,
+                           ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
         const bool clicked = ImGui::IsItemClicked();
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         return clicked;
@@ -267,8 +267,8 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         anyLfoCanvasHovered = anyLfoCanvasHovered || row.canvasHovered;
         beginRowProperties(row, lane.id);
         drawLanePlayback(lane);
-        if(ImGui::Selectable((lane.name + "##lfoLaneHeader" + lane.id).c_str(), focused,
-                             ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
+        if(laneNameSelectable(lane.name + "##lfoLaneHeader" + lane.id, focused,
+                              ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
             editorState.editorLaneId = lane.id;
         }
         ImGui::TextDisabled("Control envelope / %.3g", current);

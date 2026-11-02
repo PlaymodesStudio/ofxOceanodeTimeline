@@ -21,6 +21,15 @@ bool playbackToggle(const std::string& id, const char* label, bool on, const cha
     return clicked;
 }
 
+bool laneNameSelectable(const std::string& label, bool focused, const ImVec2& size) {
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
+    const bool clicked = ImGui::Selectable(label.c_str(), focused, ImGuiSelectableFlags_None, size);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
 
 int divisionIndexForBeats(double beats) {
     int best = 0;
