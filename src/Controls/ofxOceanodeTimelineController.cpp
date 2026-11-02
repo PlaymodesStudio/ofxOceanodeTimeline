@@ -2148,14 +2148,14 @@ void ofxOceanodeTimelineController::draw() {
                 wheelAxis = wheelAxisTravel.y >= wheelAxisTravel.x ? WheelAxis::Vertical : WheelAxis::Horizontal;
         }
         // Vertical zooms at the mouse; with Shift it scrolls the tracks up
-        // and down instead, with Cmd it zooms at the playhead, first centring
-        // it when it is out of view. Horizontal scrolls the time.
+        // and down instead, with Cmd it brings the playhead to the middle of
+        // the view and zooms there. Horizontal scrolls the time.
         const float anchorX = wheelIO.MousePos.x - timelineAreaMin.x - kLabelWidth;
         const float zoomScale = pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel));
         if(wheelAxis == WheelAxis::Vertical && std::abs(wheelIO.MouseWheel) > 0.001f) {
             if(wheelIO.KeyShift) wheelScrollY = wheelIO.MouseWheel;
             else if(wheelIO.KeyCtrl || wheelIO.KeySuper) {
-                if(!playheadInView()) timelineScrollX += playheadViewX() - visibleWidth * 0.5f;
+                timelineScrollX += playheadViewX() - visibleWidth * 0.5f;
                 zoomAt(zoomScale, playheadViewX());
             }
             else zoomAt(zoomScale, anchorX);

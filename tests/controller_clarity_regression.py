@@ -242,24 +242,22 @@ int main() {
         assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX==50);
         for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
         for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
-        owner->getTransport()->seekToBeat(2); zoomView.scrollX=0; frame(1250,zoomPoint,false);
-        const double playheadAt=model.beatToSeconds(2,120);
-        const double playheadScreenX=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
-        io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
-        io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
-        io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
-        assert(zoomView.pixelsPerSecond>shiftScale);
-        assert(std::abs(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX-playheadScreenX)<0.001);
-        // Out of view, the playhead is brought to the middle and zoomed there.
-        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
-        zoomView.scrollX=playheadAt*zoomView.pixelsPerSecond+200; frame(1250,zoomPoint,false);
-        assert(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX<-100); // off to the left
-        const float hiddenScale=zoomView.pixelsPerSecond;
-        io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
-        io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
-        io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
-        const double playheadShown=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
-        assert(zoomView.pixelsPerSecond>hiddenScale && playheadShown>=0 && playheadShown<=zoomVisible);
+        // With Cmd the playhead is brought to the middle of the view and
+        // zoomed there, whether it was in view (left of the middle) or not.
+        owner->getTransport()->seekToBeat(6); zoomView.pixelsPerSecond=400;
+        const double playheadAt=model.beatToSeconds(6,120);
+        for(const float startScroll : {900.0f, 0.0f}) {
+            for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+            zoomView.scrollX=startScroll; frame(1250,zoomPoint,false);
+            const double before=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
+            assert(startScroll==0 ? before>zoomVisible : before>0 && before<zoomVisible*0.5-100);
+            const float startScale=zoomView.pixelsPerSecond;
+            io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
+            io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
+            io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
+            assert(zoomView.pixelsPerSecond>startScale);
+            assert(std::abs(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX-zoomVisible*0.5)<2.0);
+        }
         owner->getTransport()->seekToBeat(0);
         // Alt+Z zooms to fit.
         zoomView.pixelsPerSecond=500; zoomView.scrollX=300; frame(1250,zoomPoint,false);
