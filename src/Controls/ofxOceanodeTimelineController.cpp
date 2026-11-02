@@ -5933,12 +5933,18 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         }
     }
 
-    // Tempo (BPM) lane visibility: a checkbox in the ruler's label column, and the
-    // same toggle on right-click anywhere in that column.
+    // Tempo (BPM) lane visibility: a toggle button in the ruler's label column
+    // (lit while the lane shows), and the same toggle on right-click anywhere
+    // in that column.
     if(!inMacroScope()) {
-        bool tempoVisible = timeline.isBpmLaneVisible();
-        ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 104.0f, min.y + 5.0f));
-        if(ImGui::Checkbox("Tempo lane##rulerTempoLane", &tempoVisible)) timeline.setBpmLaneVisible(tempoVisible);
+        const bool tempoVisible = timeline.isBpmLaneVisible();
+        const char* tempoLabel = "Tempo lane##rulerTempoLane";
+        const float tempoWidth = ImGui::CalcTextSize(tempoLabel, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 10.0f - tempoWidth, min.y + 5.0f));
+        if(tempoVisible) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+        if(ImGui::SmallButton(tempoLabel)) timeline.setBpmLaneVisible(!tempoVisible);
+        ImGui::PopStyleColor(tempoVisible ? 2 : 1);
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Show or hide the tempo (BPM) automation row.\nHidden, tempo automation still plays.");
         if(hoverRect(min, ImVec2(zoneLeft, max.y)) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
