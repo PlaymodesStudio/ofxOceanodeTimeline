@@ -161,7 +161,7 @@ void ofxOceanodeTimelineMultiSliderEditor::drawPreview(const ofxOceanodeTimeline
                 const float normalized = std::abs(span) < 1e-9f ? 0.0f
                     : ofClamp((lane->multiSliderValues[index] - lane->valueMin) / span, 0.0f, 1.0f);
                 const float barTop = max.y - 5.0f - normalized * (max.y - min.y - 10.0f);
-                dl->AddRectFilled(ImVec2(x1 + 1, barTop), ImVec2(x2 - 1, max.y - 5.0f), IM_COL32(245, 245, 245, 190));
+                dl->AddRectFilled(ImVec2(x1 + 1, barTop), ImVec2(x2 - 1, max.y - 5.0f), previewInk(preview, 190));
             }
         }
     }

@@ -330,13 +330,13 @@ void ofxOceanodeTimelineRegionEditor::drawPreview(const ofxOceanodeTimelineClipP
                 for(const auto& region : lane->multiValueRows[r]) {
                     const float x1 = min.x + beatOffset(sourceToTimelineBeat(clip, region.startBeat, cycle));
                     const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, region.end(), cycle));
-                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), IM_COL32(245, 245, 245, 170));
+                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), previewInk(preview, 170));
                 }
             } else if(!isValueRow && r < static_cast<int>(lane->multiGateRows.size())) {
                 for(const auto& region : lane->multiGateRows[r]) {
                     const float x1 = min.x + beatOffset(sourceToTimelineBeat(clip, region.startBeat, cycle));
                     const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, region.end(), cycle));
-                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), IM_COL32(245, 245, 245, 170));
+                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), previewInk(preview, 170));
                 }
             }
         }

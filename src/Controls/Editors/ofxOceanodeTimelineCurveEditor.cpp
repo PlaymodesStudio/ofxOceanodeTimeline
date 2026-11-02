@@ -409,8 +409,8 @@ void ofxOceanodeTimelineCurveEditor::drawPreview(const ofxOceanodeTimelineClipPr
                 const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, points[i].beat, cycle));
                 const float y1 = max.y - 5.0f - points[i - 1].value * (max.y - min.y - 10.0f);
                 const float y2 = max.y - 5.0f - points[i].value * (max.y - min.y - 10.0f);
-                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y1), IM_COL32(245, 245, 245, 200), 1.5f);
-                dl->AddLine(ImVec2(x2, y1), ImVec2(x2, y2), IM_COL32(245, 245, 245, 200), 1.5f);
+                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y1), previewInk(preview, 200), 1.5f);
+                dl->AddLine(ImVec2(x2, y1), ImVec2(x2, y2), previewInk(preview, 200), 1.5f);
                 continue;
             }
             const int samples = 20;
@@ -427,7 +427,7 @@ void ofxOceanodeTimelineCurveEditor::drawPreview(const ofxOceanodeTimelineClipPr
                 const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, source2, cycle));
                 const float y1 = max.y - 5.0f - value1 * (max.y - min.y - 10.0f);
                 const float y2 = max.y - 5.0f - value2 * (max.y - min.y - 10.0f);
-                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(245, 245, 245, 200), 1.5f);
+                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), previewInk(preview, 200), 1.5f);
             }
         }
     }

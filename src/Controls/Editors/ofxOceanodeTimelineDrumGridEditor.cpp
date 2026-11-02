@@ -1712,7 +1712,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawPreview(const ofxOceanodeTimelineCli
         for(int r = 0; r < rows; ++r) {
             const auto& row = lane->drumRows[static_cast<size_t>(r)];
             const float y = min.y + 3.0f + (r + 0.5f) * rowStep;
-            const ImU32 color = DrumGrid::rowAudible(*lane, row) ? IM_COL32(245, 245, 245, 210)
+            const ImU32 color = DrumGrid::rowAudible(*lane, row) ? previewInk(preview, 210)
                                                                    : IM_COL32(track.color.r, track.color.g, track.color.b, 90);
             const double length = std::max(DrumGrid::kMinLength, row.length);
             for(double base = 0.0; base < content && drawn < 20000; base += length) {

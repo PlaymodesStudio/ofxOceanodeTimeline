@@ -183,9 +183,9 @@ void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineCl
     for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
         for(const auto& point : lane->curvePoints) {
             const float x = min.x + beatOffset(sourceToTimelineBeat(clip, point.beat, cycle));
-            dl->AddLine(ImVec2(x, min.y + 4.0f), ImVec2(x, max.y - 4.0f), IM_COL32(245, 245, 245, 160));
+            dl->AddLine(ImVec2(x, min.y + 4.0f), ImVec2(x, max.y - 4.0f), previewInk(preview, 160));
             const std::string label = dropdown ? dropdownOptionLabel(options, point.value) : ofToString(point.value, 4);
-            dl->AddText(ImVec2(x + 4.0f, min.y + 4.0f), IM_COL32(245, 245, 245, 220), label.c_str());
+            dl->AddText(ImVec2(x + 4.0f, min.y + 4.0f), previewInk(preview, 220), label.c_str());
         }
     }
     dl->PopClipRect();

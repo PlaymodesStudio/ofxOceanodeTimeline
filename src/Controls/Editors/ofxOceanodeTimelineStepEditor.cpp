@@ -228,7 +228,7 @@ void ofxOceanodeTimelineStepEditor::drawPreview(const ofxOceanodeTimelineClipPre
                 const float top = max.y - 6.0f - probability * (max.y - min.y - 12.0f);
                 dl->AddRectFilled(ImVec2(std::max(sx1, min.x) + 2, top),
                                       ImVec2(std::min(sx2, max.x) - 2, max.y - 6),
-                                      IM_COL32(245, 245, 245, 85), 2);
+                                      previewInk(preview, 85), 2);
             }
         }
     }

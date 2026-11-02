@@ -603,7 +603,7 @@ void ofxOceanodeTimelineLfoEditor::drawPreview(const ofxOceanodeTimelineClipPrev
         const float sx2 = min.x + beatOffset(sourceToTimelineBeat(clip, source2, 0));
         dl->AddLine(ImVec2(sx1, graphBottom - value1 * (graphBottom - graphTop)),
                     ImVec2(sx2, graphBottom - value2 * (graphBottom - graphTop)),
-                    IM_COL32(245, 245, 245, 200), 1.5f);
+                    previewInk(preview, 200), 1.5f);
     }
     dl->PopClipRect();
     return;

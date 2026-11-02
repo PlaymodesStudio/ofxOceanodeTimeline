@@ -3164,6 +3164,12 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
         };
 
+        // A clip's content colour: its fill colour, lifted like the fill when selected.
+        auto clipInk = [&](const ofxOceanodeTimelineClip& clip, int alpha) {
+            const float lift = selectedClips.count({track.id, clip.id}) > 0 ? 0.45f : 0.0f;
+            auto lit = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * lift); };
+            return IM_COL32(lit(track.color.r), lit(track.color.g), lit(track.color.b), alpha);
+        };
         auto drawClip = [&](const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane* lane,
                             const ImVec2& min, const ImVec2& max, bool drawChrome = true,
                             bool drawContent = true) {
@@ -3181,9 +3187,10 @@ void ofxOceanodeTimelineController::draw() {
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
                                             clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
-                // The title band reads half as bright as the plotted area below it.
+                // The plot area below the title band is half as bright; its
+                // content is drawn in the clip's colour (clipInk).
                 const float titleBottom = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
-                dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, titleBottom), IM_COL32(0, 0, 0, 128));
+                dl->AddRectFilled(ImVec2(left + 1, titleBottom), ImVec2(right - 1, max.y - 3), IM_COL32(0, 0, 0, 128));
                 // A clip's persistent group and its (separate, ephemeral)
                 // Shift+click selection are drawn as extra outlines on top
                 // of the normal fill/border above, so a grouped clip that's
@@ -3303,7 +3310,7 @@ void ofxOceanodeTimelineController::draw() {
                                 const size_t index = static_cast<size_t>(ch) * kMiniPointsPerChannel + peakPoint;
                                 if(index >= clip.waveformPeaks.size()) continue;
                                 const float peak = ofClamp(clip.waveformPeaks[index] * clip.waveGain, -1.0f, 1.0f);
-                                dl->AddLine(ImVec2(x, midY), ImVec2(x, midY - peak * half), IM_COL32(245, 245, 245, 170), 1.0f);
+                                dl->AddLine(ImVec2(x, midY), ImVec2(x, midY - peak * half), clipInk(clip, 170), 1.0f);
                             }
                         }
                     }
@@ -3327,7 +3334,7 @@ void ofxOceanodeTimelineController::draw() {
                     for(const auto& candidate : played.lanes) if(candidate.id == lane->id) shownLane = &candidate;
             }
             const ofxOceanodeTimelineClipPreview preview{timeline, *container, scope(timeline), track, *shownClip, shownLane,
-                previewView, min, max, left, right, firstVisibleCycle, lastVisibleCycle};
+                previewView, min, max, left, right, firstVisibleCycle, lastVisibleCycle, clipInk(clip, 255)};
             if(clip.isLfo) lfoEditor.drawPreview(preview);
             else if(shownLane != nullptr) laneEditors.forType(shownLane->type).drawPreview(preview);
 

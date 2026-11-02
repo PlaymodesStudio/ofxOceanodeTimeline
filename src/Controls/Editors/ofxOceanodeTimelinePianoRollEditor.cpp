@@ -1290,7 +1290,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawPreview(const ofxOceanodeTimelineCl
             const float nx1 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat, cycle));
             const float nx2 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat + note.durationBeats, cycle));
             const float ny = max.y - 5.0f - (note.pitch % 12) / 12.0f * (max.y - min.y - 10.0f);
-            dl->AddRectFilled(ImVec2(nx1, ny - 3.0f), ImVec2(nx2, ny + 2.0f), IM_COL32(245, 245, 245, 180), 1.0f);
+            dl->AddRectFilled(ImVec2(nx1, ny - 3.0f), ImVec2(nx2, ny + 2.0f), previewInk(preview, 180), 1.0f);
         }
     }
     dl->PopClipRect();
