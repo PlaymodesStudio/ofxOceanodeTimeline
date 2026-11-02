@@ -533,11 +533,22 @@ int main() {
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
         const ImVec2 plusAt=plus();
-        click(plusAt);
+        {
+            // It opens at its final size: the first frame it shows is the
+            // same as a few frames later (no wrapped text settling its width).
+            frame(1250,plusAt,false); frame(1250,plusAt,true); frame(1250,plusAt,false);
+            std::vector<ImVec2> shown;
+            for(int i=0;i<6;++i) {
+                frame();
+                const auto* opened=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+                if(!opened->Hidden) shown.push_back(opened->Size);
+            }
+            assert(shown.size()>=4);
+            for(const auto& size:shown) assert(size.x==shown.back().x && size.y==shown.back().y);
+        }
         assert(addLanePopupOpen());
         {
             // It opens 20px right of the +, centred on its height.
-            frame();
             const auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
             const float gap=popup->Pos.x-plusAt.x;   // plusAt: the +'s left edge (found from the left)
             assert(gap>20.0f && gap<20.0f+ImGui::CalcTextSize("+").x+ImGui::GetStyle().FramePadding.x*2.0f+3.0f);

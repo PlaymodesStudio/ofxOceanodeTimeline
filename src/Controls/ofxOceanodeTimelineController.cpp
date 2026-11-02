@@ -6194,9 +6194,14 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             pendingDurationBeats = timeline.getBeatsPerBar();
             ImGui::OpenPopup("##addLaneTypePopup");
         }
-        // Beside the + that opened it, centred on it (also as switching tabs resizes it).
-        if(ImGui::IsPopupOpen("##addLaneTypePopup"))
+        // Beside the + that opened it, centred on it (also as switching tabs
+        // resizes it). Its width is fixed and only its height fits: wrapped
+        // text in a popup sized to its content would make it open narrow and
+        // tall, then settle over a few frames.
+        if(ImGui::IsPopupOpen("##addLaneTypePopup")) {
             ImGui::SetNextWindowPos(addLanePopupAnchor, ImGuiCond_Always, ImVec2(0.0f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_Always);
+        }
         if(ImGui::BeginPopup("##addLaneTypePopup")) {
             if(track.isWaveTrack) {
                 if(ImGui::MenuItem("Edit track volume automation")) {
