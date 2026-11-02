@@ -7,9 +7,9 @@
 namespace ofxOceanodeTimelineLaneEditorUi {
 bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip) {
     ImGui::PushID(id.c_str());
-    // Lit, Solo ("S") is black on green and Mute ("M") white on red.
+    // Lit, Solo ("S") is black on yellow and Mute ("M") white on red.
     const bool solo = label[0] == 'S';
-    const ImVec4 onColor = solo ? ImVec4(0.18f, 0.58f, 0.26f, 1.0f) : ImVec4(0.72f, 0.20f, 0.20f, 1.0f);
+    const ImVec4 onColor = solo ? ImVec4(1.0f, 190.0f / 255.0f, 0.0f, 1.0f) : ImVec4(0.72f, 0.20f, 0.20f, 1.0f);
     if(on) {
         ImGui::PushStyleColor(ImGuiCol_Button, onColor);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(onColor.x * 1.2f, onColor.y * 1.2f, onColor.z * 1.2f, 1.0f));
