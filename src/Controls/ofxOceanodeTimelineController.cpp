@@ -5438,26 +5438,62 @@ void ofxOceanodeTimelineController::draw() {
         const ImVec2 thumbMin(thumbX, trackMin.y + 2.0f);
         const ImVec2 thumbMax(thumbX + thumbWidth, trackMax.y - 2.0f);
 
+        scrollbarThumb = {thumbMin.x, thumbMin.y, thumbMax.x, thumbMax.y};
+
         ImGui::SetCursorScreenPos(trackMin);
         ImGui::InvisibleButton("##timelineHScrollbar", ImVec2(trackWidth, scrollbarHeight));
         const bool thumbHovered = ImGui::IsItemHovered();
         const bool thumbActive = ImGui::IsItemActive();
-        if(maxTimelineScrollX > 0.0f) {
-            if(ImGui::IsItemClicked() && !hoverRect(thumbMin, thumbMax)) {
-                const float targetThumbX = ofClamp(ImGui::GetIO().MousePos.x - thumbWidth * 0.5f,
-                                                   trackLeft, trackLeft + thumbTravel);
+        // A handle at each end of the thumb zooms; the middle scrolls.
+        constexpr float kHandleWidth = 6.0f;
+        const float mouseX = ImGui::GetIO().MousePos.x;
+        const bool overThumb = hoverRect(thumbMin, thumbMax);
+        const bool overStart = overThumb && mouseX < thumbMin.x + kHandleWidth;
+        const bool overEnd = overThumb && mouseX > thumbMax.x - kHandleWidth;
+        if(ImGui::IsItemClicked()) {
+            // The scrollbar spans the timeline (or the view, when it all fits), in seconds.
+            scrollbarDragSeconds = (maxTimelineScrollX + visibleWidth) / std::max(kMinPixelsPerSecond, pixelsPerSecond);
+            if(overStart || overEnd) {
+                scrollbarDrag = overStart ? ScrollbarDrag::Start : ScrollbarDrag::End;
+                scrollbarFixedSeconds = (timelineScrollX + (overStart ? visibleWidth : 0.0f)) / pixelsPerSecond;
+            } else if(overThumb) {
+                scrollbarDrag = ScrollbarDrag::Body;
+            } else if(maxTimelineScrollX > 0.0f) {
+                // A click beside the thumb jumps it there.
+                const float targetThumbX = ofClamp(mouseX - thumbWidth * 0.5f, trackLeft, trackLeft + thumbTravel);
                 timelineScrollX = ofClamp((targetThumbX - trackLeft) / std::max(1.0f, thumbTravel) * maxTimelineScrollX,
                                           0.0f, maxTimelineScrollX);
             }
-            if(thumbActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                timelineScrollX = ofClamp(timelineScrollX +
-                    ImGui::GetIO().MouseDelta.x / std::max(1.0f, thumbTravel) * maxTimelineScrollX,
-                    0.0f, maxTimelineScrollX);
-            }
         }
+        if(!thumbActive) scrollbarDrag = ScrollbarDrag::None;
+        if(thumbActive && scrollbarDrag == ScrollbarDrag::Body && maxTimelineScrollX > 0.0f &&
+           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            timelineScrollX = ofClamp(timelineScrollX +
+                ImGui::GetIO().MouseDelta.x / std::max(1.0f, thumbTravel) * maxTimelineScrollX,
+                0.0f, maxTimelineScrollX);
+        }
+        if(thumbActive && (scrollbarDrag == ScrollbarDrag::Start || scrollbarDrag == ScrollbarDrag::End)) {
+            // The dragged end goes under the mouse; the view's other edge keeps its time.
+            const double atMouse = ofClamp((mouseX - trackLeft) / trackWidth, 0.0f, 1.0f) * scrollbarDragSeconds;
+            const double shown = std::max(1e-3, scrollbarDrag == ScrollbarDrag::End ? atMouse - scrollbarFixedSeconds
+                                                                                     : scrollbarFixedSeconds - atMouse);
+            pixelsPerSecond = ofClamp(static_cast<float>(visibleWidth / shown), kMinPixelsPerSecond, kMaxPixelsPerSecond);
+            timelineScrollX = std::max(0.0f, static_cast<float>(scrollbarDrag == ScrollbarDrag::End
+                ? scrollbarFixedSeconds * pixelsPerSecond
+                : scrollbarFixedSeconds * pixelsPerSecond - visibleWidth));
+        }
+        if(overStart || overEnd || scrollbarDrag == ScrollbarDrag::Start || scrollbarDrag == ScrollbarDrag::End)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         footerDl->AddRectFilled(thumbMin, thumbMax,
                                 thumbActive ? IM_COL32(150, 150, 160, 255)
                                             : thumbHovered ? IM_COL32(120, 120, 130, 255) : IM_COL32(90, 90, 100, 255), 3.0f);
+        // The handles, lit while hovered or dragged.
+        auto drawHandle = [&](float x1, bool lit) {
+            footerDl->AddRectFilled(ImVec2(x1, thumbMin.y), ImVec2(x1 + kHandleWidth, thumbMax.y),
+                                    lit ? IM_COL32(215, 215, 225, 255) : IM_COL32(150, 150, 160, 255), 3.0f);
+        };
+        drawHandle(thumbMin.x, overStart || scrollbarDrag == ScrollbarDrag::Start);
+        drawHandle(thumbMax.x - kHandleWidth, overEnd || scrollbarDrag == ScrollbarDrag::End);
     }
 
     serviceClipFileRequest(timeline);

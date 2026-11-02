@@ -518,6 +518,13 @@ private:
     ImVec2 wheelAxisTravel = ImVec2(0.0f, 0.0f);
     double lastWheelTime = -1.0;
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
+    // The time scrollbar: its middle scrolls, a handle at either end of its
+    // thumb zooms, the view's other edge staying at the same time.
+    enum class ScrollbarDrag { None, Body, Start, End };
+    ScrollbarDrag scrollbarDrag = ScrollbarDrag::None;
+    double scrollbarDragSeconds = 0.0;   // the scrollbar's length in seconds when the drag began
+    double scrollbarFixedSeconds = 0.0;  // the view edge that stays put
+    struct { float x1 = 0, y1 = 0, x2 = 0, y2 = 0; } scrollbarThumb; // drawn this frame
     std::vector<double> tapTimes;      // tap tempo (seconds)
 
     // ---- Clip box selection ----

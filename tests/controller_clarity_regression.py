@@ -281,6 +281,35 @@ int main() {
         io.AddKeyEvent(ImGuiKey_Z,true); frame(1250,zoomPoint,false);
         io.AddKeyEvent(ImGuiKey_Z,false); io.AddKeyEvent(ImGuiMod_Alt,false); frame(1250,zoomPoint,false);
         assert(zoomView.pixelsPerSecond<500 && zoomView.scrollX==0);
+        {
+            // The time scrollbar: dragging an end of its thumb zooms with the
+            // other end staying put; dragging its middle scrolls.
+            zoomView.pixelsPerSecond=140; zoomView.scrollX=0;
+            for(int i=0;i<15;++i) frame();
+            auto drag=[&](ImVec2 from,float dx) {
+                frame(1250,from,false); frame(1250,from,true);
+                for(int i=1;i<=8;++i) frame(1250,ImVec2(from.x+dx*i/8.0f,from.y),true);
+                frame(1250,ImVec2(from.x+dx,from.y),false); frame(); frame();
+            };
+            const float barY=(ui.scrollbarThumb.y1+ui.scrollbarThumb.y2)*0.5f;
+            auto thumb=ui.scrollbarThumb;
+            assert(thumb.x2-thumb.x1>60);
+            float scale=zoomView.pixelsPerSecond;
+            drag(ImVec2(thumb.x2-2,barY),-80);                    // end handle, inwards: zoom in
+            assert(zoomView.pixelsPerSecond>scale && std::abs(ui.scrollbarThumb.x1-thumb.x1)<1.5f);
+            assert(std::abs(ui.scrollbarThumb.x2-(thumb.x2-82))<1.5f);   // the end follows the mouse
+            thumb=ui.scrollbarThumb; scale=zoomView.pixelsPerSecond;
+            drag(ImVec2(thumb.x1+2,barY),40);                     // start handle, inwards: zoom in
+            assert(zoomView.pixelsPerSecond>scale && std::abs(ui.scrollbarThumb.x2-thumb.x2)<1.5f);
+            thumb=ui.scrollbarThumb; scale=zoomView.pixelsPerSecond;
+            const float scrollBefore=zoomView.scrollX;
+            drag(ImVec2((thumb.x1+thumb.x2)*0.5f,barY),60);       // middle: scroll only
+            assert(zoomView.pixelsPerSecond==scale && zoomView.scrollX>scrollBefore);
+            thumb=ui.scrollbarThumb;
+            drag(ImVec2(thumb.x2-2,barY),120);                    // end handle, outwards: zoom out
+            assert(zoomView.pixelsPerSecond<scale && std::abs(ui.scrollbarThumb.x1-thumb.x1)<1.5f);
+            zoomView.pixelsPerSecond=140; zoomView.scrollX=0; for(int i=0;i<15;++i) frame();
+        }
     }
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {
