@@ -317,6 +317,24 @@ const ofxOceanodeTimelinePlaySettings* ofxOceanodeTimelineManager::playSettings(
     return sequence != nullptr ? &sequence->play : nullptr;
 }
 
+bool ofxOceanodeTimelineManager::customTimelineColor(const TimelineRef& ref, ofColor& color) {
+    const auto* sequence = timelineFor(ref);
+    if(sequence == nullptr || !sequence->play.customColor) return false;
+    color = sequence->play.color;
+    return true;
+}
+
+void ofxOceanodeTimelineManager::setTimelineColor(const TimelineRef& ref, const ofColor& color) {
+    if(auto* sequence = timelineFor(ref)) {
+        sequence->play.customColor = true;
+        sequence->play.color = color;
+    }
+}
+
+void ofxOceanodeTimelineManager::resetTimelineColor(const TimelineRef& ref) {
+    if(auto* sequence = timelineFor(ref)) sequence->play.customColor = false;
+}
+
 void ofxOceanodeTimelineManager::setPlaySettings(const TimelineRef& ref, const ofxOceanodeTimelinePlaySettings& settings) {
     if(isRootRef(ref)) return;
     if(auto* sequence = timelineFor(ref)) {

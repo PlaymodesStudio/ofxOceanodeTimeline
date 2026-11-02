@@ -361,11 +361,12 @@ scope bar at the top of the Timeline window says which one is shown: a badge
 with its kind (**MAIN**; **MACRO**, a macro's own timeline; **TIMELINE**, a
 further timeline of a canvas), the path to it (**Main > Macro 1 > ...**, each
 step a way back), and the timelines menu, which lists every timeline grouped
-by canvas; pick one to show it. The bar is tinted by that kind, so a macro
-timeline never looks like the main one. Its **...** button makes a **New
-timeline on this canvas**, duplicates, renames or deletes the one shown (a
-canvas's default timeline goes with its canvas), and opens it **in a new
-window**. A track that places a timeline shows the placed timeline's name
+by canvas; pick one to show it. The bar is tinted by that kind (black for the
+main timeline), so a macro timeline never looks like the main one, unless its
+**Color** (in the **...** menu, the main timeline's too) is changed. Its
+**...** button makes a **New timeline on this canvas**, duplicates, renames or
+deletes the one shown (a canvas's default timeline goes with its canvas), and
+opens it **in a new window**. A track that places a timeline shows the placed timeline's name
 after its own, in that kind's colour.
 
 **Add new timeline** in a canvas's right-click menu makes one on that canvas

@@ -1410,6 +1410,11 @@ public:
     // Tempo, loop and meter of a timeline that plays on its own.
     const ofxOceanodeTimelinePlaySettings* playSettings(const TimelineRef& ref);
     void setPlaySettings(const TimelineRef& ref, const ofxOceanodeTimelinePlaySettings& settings);
+    // A timeline's own colour (its scope bar's tint), the main one's
+    // included; false when it keeps its kind's colour.
+    bool customTimelineColor(const TimelineRef& ref, ofColor& color);
+    void setTimelineColor(const TimelineRef& ref, const ofColor& color);
+    void resetTimelineColor(const TimelineRef& ref);
 
     // Resolves a sequence's binding paths (its base, else this timeline's root).
     ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {

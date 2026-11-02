@@ -63,11 +63,16 @@ ScopeKind scopeKindOf(const TimelineRef& ref) {
 }
 ImU32 scopeColor(ScopeKind kind) {
     switch(kind) {
-        case ScopeKind::Main: return IM_COL32(80, 130, 190, 255);
+        case ScopeKind::Main: return IM_COL32(0, 0, 0, 255);
         case ScopeKind::Macro: return IM_COL32(160, 100, 210, 255);
         case ScopeKind::Further: return IM_COL32(50, 165, 150, 255);
     }
     return IM_COL32(120, 120, 120, 255);
+}
+// A timeline's colour: its own when it has one, else its kind's.
+ImU32 timelineAccent(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
+    ofColor color;
+    return timeline.customTimelineColor(ref, color) ? IM_COL32(color.r, color.g, color.b, 255) : scopeColor(scopeKindOf(ref));
 }
 const char* scopeExplanation(ScopeKind kind, bool free) {
     switch(kind) {
@@ -88,9 +93,7 @@ void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& tim
     const auto shown = scopeRef();
     const ScopeKind kind = scopeKindOf(shown);
     const bool free = !isMain(shown) && timeline.isFree(shown);
-    const auto* play = isMain(shown) ? nullptr : timeline.playSettings(shown);
-    const ImU32 accent = play != nullptr && play->customColor
-        ? IM_COL32(play->color.r, play->color.g, play->color.b, 255) : scopeColor(kind);
+    const ImU32 accent = timelineAccent(timeline, shown);
     // The band is filled on channel 0 once the row's height is known.
     auto* dl = ImGui::GetWindowDrawList();
     dl->ChannelsSplit(2);
@@ -219,8 +222,8 @@ void ofxOceanodeTimelineController::suggestNewTimelineDefaults(ofxOceanodeTimeli
     if(newTimelineRequest.duplicate) {
         const auto& source = newTimelineRequest.duplicateOf;
         name = timeline.timelineName(source) + " copy";
-        const auto* play = timeline.playSettings(source);
-        if(play != nullptr && play->customColor) color = IM_COL32(play->color.r, play->color.g, play->color.b, 255);
+        ofColor sourceColor;
+        if(timeline.customTimelineColor(source, sourceColor)) color = IM_COL32(sourceColor.r, sourceColor.g, sourceColor.b, 255);
     } else if(!timeline.timelineExists({canvas, std::string()})) {
         // A macro with no timeline yet: this one becomes its own.
         auto* macro = timeline.canvasContainer(canvas);
@@ -446,8 +449,7 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
         // Its colour, as its scope bar's, then its name.
         ImGui::SameLine(0.0f, 0.0f);
         {
-            const ImU32 accent = play != nullptr && play->customColor
-                ? IM_COL32(play->color.r, play->color.g, play->color.b, 255) : scopeColor(scopeKindOf(ref));
+            const ImU32 accent = timelineAccent(timeline, ref);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             const float height = ImGui::GetTextLineHeight();
             ImGui::Dummy(ImVec2(4.0f, height));
@@ -556,34 +558,19 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             std::snprintf(timelineNameBuffer, sizeof(timelineNameBuffer), "%s", timeline.timelineName(shown).c_str());
             requestTimelineRename = true;
         }
-        // The scope bar's colour for it (the main timeline keeps its blue).
-        if(ImGui::BeginMenu("Color", !isMain(shown))) {
-            if(const auto* current = timeline.playSettings(shown)) {
-                const ImVec4 kindColor = ImGui::ColorConvertU32ToFloat4(scopeColor(scopeKindOf(shown)));
-                float rgb[3] = {kindColor.x, kindColor.y, kindColor.z};
-                if(current->customColor) {
-                    rgb[0] = current->color.r / 255.0f;
-                    rgb[1] = current->color.g / 255.0f;
-                    rgb[2] = current->color.b / 255.0f;
-                }
-                if(ImGui::ColorPicker3("##timelineColor", rgb, ImGuiColorEditFlags_NoSidePreview)) {
-                    auto settings = *current;
-                    settings.customColor = true;
-                    settings.color = ofColor(static_cast<unsigned char>(ofClamp(rgb[0] * 255.0f, 0.0f, 255.0f)),
-                                             static_cast<unsigned char>(ofClamp(rgb[1] * 255.0f, 0.0f, 255.0f)),
-                                             static_cast<unsigned char>(ofClamp(rgb[2] * 255.0f, 0.0f, 255.0f)));
-                    timeline.setPlaySettings(shown, settings);
-                }
-                if(ImGui::MenuItem("Default color", nullptr, false, current->customColor)) {
-                    auto settings = *current;
-                    settings.customColor = false;
-                    timeline.setPlaySettings(shown, settings);
-                }
-            }
+        // The scope bar's colour for it (the main timeline's too).
+        if(ImGui::BeginMenu("Color")) {
+            const ImVec4 current = ImGui::ColorConvertU32ToFloat4(timelineAccent(timeline, shown));
+            float rgb[3] = {current.x, current.y, current.z};
+            if(ImGui::ColorPicker3("##timelineColor", rgb, ImGuiColorEditFlags_NoSidePreview))
+                timeline.setTimelineColor(shown, ofColor(static_cast<unsigned char>(ofClamp(rgb[0] * 255.0f, 0.0f, 255.0f)),
+                                                         static_cast<unsigned char>(ofClamp(rgb[1] * 255.0f, 0.0f, 255.0f)),
+                                                         static_cast<unsigned char>(ofClamp(rgb[2] * 255.0f, 0.0f, 255.0f))));
+            ofColor custom;
+            if(ImGui::MenuItem("Default color", nullptr, false, timeline.customTimelineColor(shown, custom)))
+                timeline.resetTimelineColor(shown);
             ImGui::EndMenu();
         }
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && isMain(shown))
-            ImGui::SetTooltip("The main timeline keeps its blue.");
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, !shown.timeline.empty())) {
             const auto removed = shown;
             leaveScopesTo(scopes.empty() ? 0 : scopes.size() - 1);

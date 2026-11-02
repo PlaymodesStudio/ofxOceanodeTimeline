@@ -116,6 +116,22 @@ int main() {
     // (its row, padding and spacing); fixed screen points add this.
     const float kScopeBar=31.0f;
     assert(!ui.targetsView && ui.clipScreenRects.size()==3);
+    {
+        // The main timeline's colour: its kind's (black) by default, its own
+        // once set (the scope bar tinted with it), saved with the timeline.
+        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        ofColor color;
+        assert(!model.customTimelineColor(mainRef,color));
+        model.setTimelineColor(mainRef,ofColor(200,40,90)); frame();
+        bool tinted=false;
+        for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer) tinted |= v.col==IM_COL32(200,40,90,255);
+        assert(tinted);
+        const auto saved=model.toJson();
+        model.resetTimelineColor(mainRef); assert(!model.customTimelineColor(mainRef,color));
+        model.fromJson(saved);
+        assert(model.customTimelineColor(mainRef,color) && color==ofColor(200,40,90));
+        model.resetTimelineColor(mainRef); frame();
+    }
     frame(1250,ImVec2(-100,-100),false,"clips");
     // Track pads own a separate selection; modifiers toggle tracks without
     // selecting their clips or mutating the preset. Both track types participate.
