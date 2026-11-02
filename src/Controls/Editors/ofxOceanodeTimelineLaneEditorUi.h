@@ -68,15 +68,7 @@ float smallButtonReserve(const char* label);
 bool pitchClassKeyboard(const char* id, int& mask, ImU32 onColor, float height = 34.0f);
 // Text shortened with "..." to fit maxWidth.
 std::string fitText(const std::string& text, float maxWidth);
-// Indentation of a clip editor's header and lane rows under the track.
+// Indentation of a clip editor's lane rows under the track.
 constexpr float kClipEditorIndent = 10.0f;
-// The header row of an open clip editor, kept inside the left column:
-// fold toggle, the clip's name (shortened to fit), then "+" (add lane, when
-// asked for) and "x" (close) pinned to the column's right edge.
-struct ClipEditorHeaderActions { bool toggleFold = false, rename = false, addLane = false, close = false; };
-ClipEditorHeaderActions drawClipEditorHeader(const ImVec2& rowMin, const ImVec2& rowMax,
-                                             const ofxOceanodeTimelineTrack& track,
-                                             const ofxOceanodeTimelineClip& clip,
-                                             bool folded, const char* tag, bool addLaneButton);
 void drawDivision(ofxOceanodeTimelineLane& lane);
 }

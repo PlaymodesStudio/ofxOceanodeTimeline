@@ -197,53 +197,6 @@ std::string fitText(const std::string& text, float maxWidth) {
     while(!shortened.empty() && ImGui::CalcTextSize((shortened + "...").c_str()).x > maxWidth) shortened.pop_back();
     return shortened + "...";
 }
-ClipEditorHeaderActions drawClipEditorHeader(const ImVec2& rowMin, const ImVec2& rowMax,
-                                             const ofxOceanodeTimelineTrack& track,
-                                             const ofxOceanodeTimelineClip& clip,
-                                             bool folded, const char* tag, bool addLaneButton) {
-    ClipEditorHeaderActions actions;
-    ImGui::PushID(clip.id.c_str());
-    const float buttonY = rowMin.y + (rowMax.y - rowMin.y - ImGui::GetFrameHeight()) * 0.5f + 1.0f;
-    const float right = rowMin.x + kLabelWidth - 5.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x * 0.5f;
-    auto buttonWidth = [](const char* label) {
-        return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    };
-    const float closeX = right - buttonWidth("x");
-    const float addX = addLaneButton ? closeX - spacing - buttonWidth("+") : closeX;
-
-    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kClipEditorIndent + 5.0f, buttonY));
-    if(ImGui::SmallButton(folded ? ">##foldClipEditor" : "v##foldClipEditor")) actions.toggleFold = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip(folded ? "Unfold the clip editor" : "Fold the clip editor to this header");
-    ImGui::SameLine(0.0f, spacing);
-
-    // The name fills the space between the fold toggle and the buttons.
-    std::string label = clip.name;
-    if(tag != nullptr) label += std::string("  [") + tag + "]";
-    if(clip.chance < 1.0f) label += "  " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%";
-    const ImVec2 namePos = ImGui::GetCursorScreenPos();
-    const float nameWidth = std::max(1.0f, addX - spacing - namePos.x);
-    ImGui::InvisibleButton("##clipEditorName", ImVec2(nameWidth, ImGui::GetFrameHeight()));
-    if(ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Track: %s > Clip: %s%s\nDouble-click to rename.", track.name.c_str(), clip.name.c_str(),
-                          clip.chance < 1.0f ? (" (chance " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%)").c_str() : "");
-        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) actions.rename = true;
-    }
-    ImGui::GetWindowDrawList()->AddText(ImVec2(namePos.x, namePos.y + ImGui::GetStyle().FramePadding.y * 0.5f),
-                                        IM_COL32(track.color.r, track.color.g, track.color.b, 255),
-                                        fitText(label, nameWidth).c_str());
-
-    if(addLaneButton) {
-        ImGui::SetCursorScreenPos(ImVec2(addX, buttonY));
-        if(ImGui::SmallButton("+##addLane")) actions.addLane = true;
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to this clip");
-    }
-    ImGui::SetCursorScreenPos(ImVec2(closeX, buttonY));
-    if(ImGui::SmallButton("x##closeClipEditor")) actions.close = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Close the clip editor");
-    ImGui::PopID();
-    return actions;
-}
 float smallButtonReserve(const char* label) {
     return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f +
            ImGui::GetStyle().ItemSpacing.x;

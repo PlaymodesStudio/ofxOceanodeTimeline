@@ -217,7 +217,8 @@ int main() {
         zoomView.scrollX=0; frame(1250,zoomPoint,false); frame(1250,zoomPoint,false);
         ImGuiWindow* viewport=nullptr;
         for(auto* window:ImGui::GetCurrentContext()->Windows)
-            if(std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
+            if(window->ParentWindow==ImGui::FindWindowByName("Timeline") &&
+               std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
         assert(viewport && viewport->ScrollMax.y>0 && viewport->Scroll.y==0);
         const float shiftScale=zoomView.pixelsPerSecond;
         io.AddKeyEvent(ImGuiMod_Shift,true); frame(1250,zoomPoint,false);
@@ -343,7 +344,7 @@ int main() {
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
         {
             // Right-clicking Range opens its direction menu, not the lane menu.
-            const ImVec2 range(150,444+kScopeBar);
+            const ImVec2 range(150,420+kScopeBar);
             frame(1250,range,false);
             io.AddMouseButtonEvent(1,true); frame(1250,range,false);
             io.AddMouseButtonEvent(1,false); frame(1250,range,false);
@@ -438,17 +439,51 @@ int main() {
             assert(ui.editorState.editorLaneId!=piano);
             auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
             const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
-            click(ImVec2(240,302+kScopeBar)); // "+": zoom in
+            click(ImVec2(240,278+kScopeBar)); // "+": zoom in
             auto* lane=model.getLane(t,c,piano);
             assert(lane->pianoHighPitch-lane->pianoLowPitch < high-low);
             const int zoomedLow=lane->pianoLowPitch;
-            click(ImVec2(240,600+kScopeBar)); // track near the bottom: jump down
+            click(ImVec2(240,576+kScopeBar)); // track near the bottom: jump down
             lane=model.getLane(t,c,piano);
             assert(lane->pianoLowPitch < zoomedLow);
             assert(ui.editorState.editorLaneId!=piano);
             lane->pianoLowPitch=low; lane->pianoHighPitch=high;
         }
         model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF; model.getLane(t,c,piano)->mutation.pitchDirection=0;
+    }
+    {
+        // The track header's arrow closes and reopens the clip editor (no
+        // clip header row of its own); its + opens the add-lane popup.
+        frame();
+        const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),
+            [&](const auto& r){return r.trackId==t && !r.isFolder;});
+        assert(row!=ui.trackHeaderRows.end());
+        const float rowY=(row->minY+row->maxY)*0.5f;
+        const float padLeft=ui.fileDropBounds.x-ofxOceanodeTimelineEditorUi::labelWidth;
+        const ImVec2 arrow(padLeft+12,rowY);
+        auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(); };
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
+        // + sits just left of M: find it by hovering, then open its popup.
+        ImVec2 plus(-1,-1);
+        for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-82-1;x>padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130 && plus.x<0;x-=2) {
+            frame(1250,ImVec2(x,rowY),false);
+            if(ImGui::GetCurrentContext()->HoveredId!=0) plus=ImVec2(x,rowY);
+        }
+        assert(plus.x>=0);
+        const auto lanesBefore=model.getClip(t,c)->lanes.size();
+        click(plus);
+        ImGuiWindow* viewport=nullptr;
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(window->ParentWindow==ImGui::FindWindowByName("Timeline") &&
+               std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
+        assert(viewport && ImGui::GetCurrentContext()->OpenPopupStack.size()==1);
+        assert(ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##addLaneTypePopup",0,viewport->ID));
+        ImGui::ClosePopupToLevel(0,true); frame();
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.selectedTracks.empty());
+        click(arrow);
+        assert(!ui.editorState.clipEditorOpen && ui.selectedTracks.empty());
+        click(arrow);
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t && ui.editorState.editorClipId==c);
     }
     selectTab("Targets"); frame();
     ui.targetsView=true;

@@ -445,13 +445,12 @@ int main() {
     editors.forgetTrack(trackId);
     // LFO owns its selection and reports shell requests without a controller.
     const auto lfoClip = model.createLfoClip(trackId, "", "LFO", 0, 4);
-    for(bool folded : {false, true}) {
-        if(folded) shell.foldedClipEditors.insert(lfoClip);
+    {
         beginFrame(ImVec2(1000, 800), false);
         auto& clip = *model.getClip(trackId, lfoClip);
         const ofxOceanodeTimelineEditorView view(model, 120.0f, 8.0, true, 0.25);
         shell.editorTrackId = trackId; shell.editorClipId = lfoClip;
-        assert(!lfoEditor.draw(model, model.getMainSequence(), owner, *model.getTrack(trackId), clip, view, shell, 1000, 1));
+        lfoEditor.draw(model, model.getMainSequence(), owner, *model.getTrack(trackId), clip, view, shell, 1000, 1);
         lfoEditor.drawPreview({model, owner, model.getMainSequence(), *model.getTrack(trackId), clip, nullptr, view,
                               ImVec2(230, 750), ImVec2(870, 800), 230, 870, 0, 2});
         assert(!lfoEditor.hasPointSelection(lfoClip));

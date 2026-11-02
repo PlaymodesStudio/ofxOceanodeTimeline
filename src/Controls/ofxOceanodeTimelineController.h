@@ -543,6 +543,7 @@ private:
     // removeLane can reallocate the clip's lane vector and the editor keeps
     // pointers into it for the rest of the frame it was requested on.
     bool requestAddLane = false;
+    bool requestAddLanePopup = false;   // the track header's + asks the clip editor for its add-lane popup
     int pendingAddLaneType = 0;
     bool requestDuplicateLane = false;
     std::string pendingDuplicateLaneId;
