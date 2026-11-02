@@ -197,7 +197,11 @@ constexpr float kMinPixelsPerSecond = ofxOceanodeTimelineEditorView::minPixelsPe
 constexpr float kMaxPixelsPerSecond = 600.0f;
 constexpr float kSnapMinimumSpacingPixels = 5.0f;
 
-constexpr float kRulerHeight = 64.0f;
+// The ruler's two rows (seconds, beats) each fit a line of text with a
+// small gap above and below it.
+constexpr float kRulerRowGap = 4.0f;
+float rulerRowHeight() { return ImGui::GetFontSize() + 2.0f * kRulerRowGap; }
+float rulerHeight() { return 2.0f * rulerRowHeight(); }
 constexpr float kHeaderHeight = 25.0f;
 constexpr float kRowHeight = 28.0f;
 constexpr float kCollapsedHeight = 38.0f;
@@ -2184,7 +2188,7 @@ void ofxOceanodeTimelineController::draw() {
 
     // The ruler (seconds / beats) lives in its own non-scrolling strip so it stays
     // pinned at the top while the tracks below scroll vertically.
-    ImGui::BeginChild("##TimelineRulerStrip", ImVec2(0, kRulerHeight), false,
+    ImGui::BeginChild("##TimelineRulerStrip", ImVec2(0, rulerHeight()), false,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
@@ -2198,7 +2202,7 @@ void ofxOceanodeTimelineController::draw() {
         // Applied from the next frame, so every row of this one stays aligned.
         const ImVec2 rulerPos = ImGui::GetWindowPos();
         ImGui::SetCursorScreenPos(ImVec2(rulerPos.x + kLabelWidth - 3.0f, rulerPos.y));
-        ImGui::InvisibleButton("##labelWidthHandle", ImVec2(7.0f, kRulerHeight));
+        ImGui::InvisibleButton("##labelWidthHandle", ImVec2(7.0f, rulerHeight()));
         const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
         if(ImGui::IsItemActivated()) labelWidthDragStart = viewState.labelWidth;
         if(active) viewState.labelWidth = ofClamp(labelWidthDragStart + ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.0f).x,
@@ -2210,12 +2214,12 @@ void ofxOceanodeTimelineController::draw() {
             if(!active) ImGui::SetTooltip("Drag to resize the left column. Double-click: default width.");
         }
         const float x = rulerPos.x + kLabelWidth - 0.5f;
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(x, rulerPos.y), ImVec2(x, rulerPos.y + kRulerHeight),
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(x, rulerPos.y), ImVec2(x, rulerPos.y + rulerHeight()),
             active ? IM_COL32(245, 195, 90, 230) : hovered ? IM_COL32(200, 200, 210, 200) : IM_COL32(90, 90, 98, 200),
             active || hovered ? 2.0f : 1.0f);
         // Grip dots so the handle can be found without hovering.
         for(int dot = -1; dot <= 1; ++dot)
-            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(x, rulerPos.y + kRulerHeight * 0.5f + dot * 5.0f), 1.5f,
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(x, rulerPos.y + rulerHeight() * 0.5f + dot * 5.0f), 1.5f,
                                                         IM_COL32(170, 170, 180, hovered || active ? 255 : 160));
     }
     ImGui::EndChild();
@@ -5738,14 +5742,14 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     const float timelineScrollX = viewState.scrollX;
     const float width = labelWidth + timelineWidth;
     ImGui::SetNextItemAllowOverlap(); // the tempo-lane toggle sits on top of it
-    ImGui::InvisibleButton("##timelineRuler", ImVec2(width, kRulerHeight));
+    ImGui::InvisibleButton("##timelineRuler", ImVec2(width, rulerHeight()));
     const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(min, max, IM_COL32(35, 35, 35, 255));
-    const float rulerDividerY = min.y + 31.0f;
+    const float rulerDividerY = min.y + rulerRowHeight();
     dl->AddLine(ImVec2(min.x, rulerDividerY), ImVec2(max.x, rulerDividerY), IM_COL32(80, 80, 80, 180));
-    dl->AddText(ImVec2(min.x + 7, min.y + 8), IM_COL32(165, 165, 165, 255), "SECONDS");
-    dl->AddText(ImVec2(min.x + 7, rulerDividerY + 8), IM_COL32(220, 220, 220, 255), "BEATS");
+    dl->AddText(ImVec2(min.x + 7, min.y + kRulerRowGap), IM_COL32(165, 165, 165, 255), "SECONDS");
+    dl->AddText(ImVec2(min.x + 7, rulerDividerY + kRulerRowGap), IM_COL32(220, 220, 220, 255), "BEATS");
     const float zoneLeft = min.x + labelWidth;
     const ImVec2 laneMin(zoneLeft - timelineScrollX, min.y);
     dl->PushClipRect(ImVec2(zoneLeft, min.y), ImVec2(max.x, max.y), true);
@@ -5770,7 +5774,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         if(bar && barNumber % barLabelStep == 0) {
             char beatLabel[16];
             std::snprintf(beatLabel, sizeof(beatLabel), "%d", barNumber + 1);
-            dl->AddText(ImVec2(x + 5, rulerDividerY + 5), IM_COL32(235, 235, 235, 255), beatLabel);
+            dl->AddText(ImVec2(x + 5, rulerDividerY + kRulerRowGap), IM_COL32(235, 235, 235, 255), beatLabel);
         }
     }
 
@@ -5787,7 +5791,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         if((second / secondsStep) % labelEvery == 0) {
             char secondsLabel[20];
             std::snprintf(secondsLabel, sizeof(secondsLabel), "%ds", second);
-            dl->AddText(ImVec2(x + 4.0f, min.y + 5.0f), IM_COL32(175, 175, 185, 255), secondsLabel);
+            dl->AddText(ImVec2(x + 4.0f, min.y + kRulerRowGap), IM_COL32(175, 175, 185, 255), secondsLabel);
         }
     }
 
@@ -5811,8 +5815,8 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         dl->AddRectFilled(ImVec2(loopX1 - 3.0f, min.y), ImVec2(loopX1 + 3.0f, max.y), IM_COL32(150, 165, 255, 230));
         dl->AddRectFilled(ImVec2(loopX2 - 3.0f, min.y), ImVec2(loopX2 + 3.0f, max.y), IM_COL32(150, 165, 255, 230));
     }
-    // Markers: a flag in the lower part of the seconds strip, with a line down
-    // through the ruler. Click jumps there, drag moves it, double-click renames,
+    // Markers: a flag filling the seconds strip, with a line down through
+    // the ruler. Click jumps there, drag moves it, double-click renames,
     // right-click for the menu.
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     std::string hoveredMarkerId;
@@ -5821,13 +5825,13 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         const float x = laneMin.x + beatToPixels(timeline, marker.beat, bpm);
         if(x < zoneLeft - 200.0f || x > max.x) continue;
         const ImVec2 textSize = ImGui::CalcTextSize(marker.name.c_str());
-        const ImVec2 flagMin(x, min.y + 15.0f), flagMax(x + textSize.x + 8.0f, rulerDividerY - 1.0f);
+        const ImVec2 flagMin(x, min.y + 1.0f), flagMax(x + textSize.x + 8.0f, rulerDividerY - 1.0f);
         const bool flagHovered = ImGui::IsItemHovered() && hoverRect(ImVec2(x - 3.0f, flagMin.y), flagMax) && mouse.x >= zoneLeft;
         if(flagHovered) hoveredMarkerId = marker.id;
         const bool active = flagHovered || markerDragId == marker.id;
-        dl->AddLine(ImVec2(x, min.y + 15.0f), ImVec2(x, max.y), IM_COL32(255, 196, 64, active ? 255 : 200), 1.5f);
+        dl->AddLine(ImVec2(x, flagMin.y), ImVec2(x, max.y), IM_COL32(255, 196, 64, active ? 255 : 200), 1.5f);
         dl->AddRectFilled(flagMin, flagMax, active ? IM_COL32(255, 206, 90, 255) : IM_COL32(230, 170, 50, 225), 2.0f);
-        dl->AddText(ImVec2(x + 4.0f, flagMin.y + 0.5f), IM_COL32(30, 20, 0, 255), marker.name.c_str());
+        dl->AddText(ImVec2(x + 4.0f, min.y + kRulerRowGap), IM_COL32(30, 20, 0, 255), marker.name.c_str());
     }
     const float px = laneMin.x + beatToPixels(timeline, beatPosition, bpm);
     if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2.5f);
@@ -5940,7 +5944,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         const bool tempoVisible = timeline.isBpmLaneVisible();
         const char* tempoLabel = "Tempo lane##rulerTempoLane";
         const float tempoWidth = ImGui::CalcTextSize(tempoLabel, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 10.0f - tempoWidth, min.y + 5.0f));
+        ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 10.0f - tempoWidth, min.y + kRulerRowGap));
         if(tempoVisible) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
         if(ImGui::SmallButton(tempoLabel)) timeline.setBpmLaneVisible(!tempoVisible);
