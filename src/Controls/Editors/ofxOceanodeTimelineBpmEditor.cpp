@@ -33,7 +33,7 @@ void ofxOceanodeTimelineBpmEditor::draw(
     ImGui::PushClipRect(min, ImVec2(zoneLeft, max.y), true);
     ImGui::SetCursorScreenPos(ImVec2(min.x + 5.0f, min.y + 4.0f));
     ImGui::SetNextItemAllowOverlap();
-    if(ImGui::SmallButton(collapsed ? ">##bpmCollapse" : "v##bpmCollapse"))
+    if(foldButton("##bpmCollapse", !collapsed))
         timeline.setBpmLaneCollapsed(!collapsed);
     ImGui::SameLine();
     ImGui::TextUnformatted("Global tempo (BPM)");

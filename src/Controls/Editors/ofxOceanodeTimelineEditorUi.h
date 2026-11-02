@@ -28,4 +28,25 @@ inline void contextMenuSection(const char* label, bool separator = true) {
     if(separator) ImGui::Separator();
     ImGui::TextDisabled("%s", label);
 }
+
+// A fold arrow: a solid triangle pointing right (folded) or down (open),
+// centred in the font-sized square whose top-left corner is pos.
+inline void drawFoldArrow(ImDrawList* dl, const ImVec2& pos, bool open, ImU32 color = labelTextColor) {
+    const float size = ImGui::GetFontSize();
+    const ImVec2 c(pos.x + size * 0.5f, pos.y + size * 0.5f);
+    const float r = size * 0.3f;
+    if(open) dl->AddTriangleFilled(ImVec2(c.x - r, c.y - r * 0.6f), ImVec2(c.x + r, c.y - r * 0.6f), ImVec2(c.x, c.y + r * 0.8f), color);
+    else dl->AddTriangleFilled(ImVec2(c.x - r * 0.6f, c.y - r), ImVec2(c.x + r * 0.8f, c.y), ImVec2(c.x - r * 0.6f, c.y + r), color);
+}
+
+// A SmallButton-sized button showing a fold arrow; id is an ImGui id ("##...").
+inline bool foldButton(const char* id, bool open) {
+    const float size = ImGui::GetFontSize();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.0f));
+    const bool clicked = ImGui::Button(id, ImVec2(size + ImGui::GetStyle().FramePadding.x, size));
+    ImGui::PopStyleVar();
+    const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+    drawFoldArrow(ImGui::GetWindowDrawList(), ImVec2((min.x + max.x - size) * 0.5f, min.y), open);
+    return clicked;
+}
 }

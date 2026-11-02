@@ -91,7 +91,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
                              mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
         if(auto* lane = timeline.getLane(sequence, track.id, clip.id, key)) drawLanePlayback(*lane);
-        if(ImGui::SmallButton((">##lfoExpand" + key).c_str())) editorState.collapsedLaneIds.erase(key);
+        if(foldButton(("##lfoExpand" + key).c_str(), false)) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
         laneNameSelectable(label + "##lfoHeaderCollapsed" + key, focused,
                            ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
@@ -166,7 +166,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
                           ImVec2(kLabelWidth - 10.0f - clipIndent,
                                  std::max(1.0f, row.height - 8.0f - kLaneResizeHandleHeight)), false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        if(ImGui::SmallButton(("v##lfoCollapse" + key).c_str())) editorState.collapsedLaneIds.insert(key);
+        if(foldButton(("##lfoCollapse" + key).c_str(), true)) editorState.collapsedLaneIds.insert(key);
         ImGui::SameLine();
     };
 

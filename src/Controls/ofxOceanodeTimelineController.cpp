@@ -421,6 +421,8 @@ void drawEditorSeparator(const ofxOceanodeTimelineTrack& track, float contentWid
 
 using ofxOceanodeTimelineEditorUi::finishAbsoluteLayout;
 using ofxOceanodeTimelineEditorUi::contextMenuSection;
+using ofxOceanodeTimelineEditorUi::drawFoldArrow;
+using ofxOceanodeTimelineEditorUi::foldButton;
 using ofxOceanodeTimelineEditorUi::labelTextColor;
 }
 
@@ -2458,7 +2460,7 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), ImVec2(rowMin.x + indent + 3.0f, rowMax.y), macroColor);
             const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
             if(innerTrack.isMacroTrack())
-                dl->AddText(ImVec2(rowMin.x + indent + 7, textY), IM_COL32(235, 235, 235, 255), innerTrack.macroUnfolded ? "v" : ">");
+                drawFoldArrow(dl, ImVec2(rowMin.x + indent + 5, textY), innerTrack.macroUnfolded);
             dl->PushClipRect(rowMin, ImVec2(rowMin.x + kLabelWidth - 85, rowMax.y), true);
             dl->AddText(ImVec2(rowMin.x + indent + 22, textY), IM_COL32(225, 225, 225, 255), innerTrack.name.c_str());
             dl->PopClipRect();
@@ -2670,7 +2672,7 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddRectFilled(ImVec2(rowMin.x + folderIndent, rowMin.y), ImVec2(rowMin.x + folderIndent + 3.0f, rowMax.y),
                               IM_COL32(track.color.r, track.color.g, track.color.b, 255));
             const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
-            dl->AddText(ImVec2(rowMin.x + folderIndent + 7, textY), IM_COL32(235, 235, 235, 255), track.collapsed ? ">" : "v");
+            drawFoldArrow(dl, ImVec2(rowMin.x + folderIndent + 5, textY), !track.collapsed);
             size_t inside = 0;
             for(const auto& other : scope(timeline).tracks)
                 if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) ++inside;
@@ -2867,13 +2869,10 @@ void ofxOceanodeTimelineController::draw() {
         // A macro track's arrow unfolds its macro's tracks under it; in the
         // Targets view an arrow folds a track's rows. A Wave Track there has
         // nothing to fold, so it gets no arrow.
-        if(track.isMacroTrack())
-            dl->AddText(ImVec2(headerMin.x + folderIndent + 7, headerTextY), IM_COL32(235, 235, 235, 255), track.macroUnfolded ? "v" : ">");
-        else if(targetsView && !track.isWaveTrack)
-            dl->AddText(ImVec2(headerMin.x + folderIndent + 7, headerTextY), IM_COL32(235, 235, 235, 255), trackCollapsed ? ">" : "v");
-        else if(editorArrow)
-            dl->AddText(ImVec2(headerMin.x + folderIndent + 7, headerTextY),
-                        editorArrowHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(235, 235, 235, 255), editorOpenHere ? "v" : ">");
+        const ImVec2 arrowAt(headerMin.x + folderIndent + 5, headerTextY);
+        if(track.isMacroTrack()) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
+        else if(targetsView && !track.isWaveTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
+        else if(editorArrow) drawFoldArrow(dl, arrowAt, editorOpenHere, editorArrowHovered ? IM_COL32(255, 255, 255, 255) : labelTextColor);
         if(editorArrowHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip(editorOpenHere ? "Close the clip editor" : "Open the clip editor");
         if(editorArrowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -6254,7 +6253,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         ImDrawList* rowDl = ImGui::GetWindowDrawList();
         rowDl->AddRectFilled(ImVec2(rowMin.x + clipIndent, rowMin.y), ImVec2(rowZoneLeft, rowMax.y), mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
-        if(ImGui::SmallButton((">##laneExpand" + lane->id).c_str())) editorState.collapsedLaneIds.erase(lane->id);
+        if(foldButton(("##laneExpand" + lane->id).c_str(), false)) editorState.collapsedLaneIds.erase(lane->id);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Expand lane");
         ImGui::SameLine();
         drawLanePlayback();
@@ -6337,7 +6336,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
                       ImGuiWindowFlags_None);
     // Header: fold, M/S, name; then a one-line summary of what the lane is.
-    if(ImGui::SmallButton(("v##laneCollapse" + lane->id).c_str())) editorState.collapsedLaneIds.insert(lane->id);
+    if(foldButton(("##laneCollapse" + lane->id).c_str(), true)) editorState.collapsedLaneIds.insert(lane->id);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse lane");
     ImGui::SameLine();
     drawLanePlayback();
