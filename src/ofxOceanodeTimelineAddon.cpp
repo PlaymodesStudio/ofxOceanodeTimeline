@@ -222,7 +222,7 @@ public:
         const bool root = &canvas == host || &canvas == &host->getAutomationHost();
         const std::string canvasId = root ? std::string() : canvas.getCanvasID();
         ImGui::Separator();
-        if(ImGui::Selectable("Add new timeline...")) {
+        if(ImGui::Selectable("New Timeline")) {
             // Its name, colour and owner (this canvas preselected) in the New Timeline dialog.
             ofxOceanodeTimelineManager::NewTimelineRequest request;
             request.canvas = canvasId;
