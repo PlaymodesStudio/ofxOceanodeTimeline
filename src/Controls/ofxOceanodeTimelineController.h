@@ -574,6 +574,7 @@ private:
     // pointers into it for the rest of the frame it was requested on.
     bool requestAddLane = false;
     bool requestAddLanePopup = false;   // the track header's + asks the clip editor for its add-lane popup
+    ImVec2 addLanePopupAnchor;          // where it sits: 20px right of the +, centred on it
     // That popup's New Clip tab: a clip on the track, made at the same fixed
     // point as a new lane (making it can move the clip the editor holds).
     bool requestTrackNewClip = false;

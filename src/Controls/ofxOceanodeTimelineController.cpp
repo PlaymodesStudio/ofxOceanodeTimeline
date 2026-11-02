@@ -2956,6 +2956,8 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::PopStyleColor();
             if(addLane) {
                 anyClipInteractionClaimedThisFrame = true;
+                addLanePopupAnchor = ImVec2(ImGui::GetItemRectMax().x + 20.0f,
+                                            (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
                 if(!editorOpenHere) openEditor();
                 requestAddLanePopup = true;   // opened by the clip editor below
             }
@@ -6192,6 +6194,9 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             pendingDurationBeats = timeline.getBeatsPerBar();
             ImGui::OpenPopup("##addLaneTypePopup");
         }
+        // Beside the + that opened it, centred on it (also as switching tabs resizes it).
+        if(ImGui::IsPopupOpen("##addLaneTypePopup"))
+            ImGui::SetNextWindowPos(addLanePopupAnchor, ImGuiCond_Always, ImVec2(0.0f, 0.5f));
         if(ImGui::BeginPopup("##addLaneTypePopup")) {
             if(track.isWaveTrack) {
                 if(ImGui::MenuItem("Edit track volume automation")) {

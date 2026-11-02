@@ -532,8 +532,17 @@ int main() {
         };
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
-        click(plus());
+        const ImVec2 plusAt=plus();
+        click(plusAt);
         assert(addLanePopupOpen());
+        {
+            // It opens 20px right of the +, centred on its height.
+            frame();
+            const auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const float gap=popup->Pos.x-plusAt.x;   // plusAt: the +'s left edge (found from the left)
+            assert(gap>20.0f && gap<20.0f+ImGui::CalcTextSize("+").x+ImGui::GetStyle().FramePadding.x*2.0f+3.0f);
+            assert(std::abs(popup->Pos.y+popup->Size.y*0.5f-plusAt.y)<1.5f);
+        }
         {
             // Two tabs, New Lane shown first; New Clip makes a clip on the
             // track (opened in the editor), in one undo step.
