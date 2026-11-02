@@ -580,7 +580,7 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             ImGui::SetTooltip("A canvas's default timeline goes with its canvas.");
         ImGui::Separator();
         // Timelines of this canvas or of canvases inside it, never one that plays this one.
-        if(ImGui::BeginMenu("Place a timeline here as clips")) {
+        if(ImGui::BeginMenu("Add a timeline track...")) {
             bool any = false;
             for(const auto& ref : timeline.allTimelines()) {
                 const bool inside = rootCanvas(canvas) || sameRef({ref.canvas, std::string()}, {canvas, std::string()}) ||

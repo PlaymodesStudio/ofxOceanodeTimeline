@@ -376,7 +376,7 @@ same **Add to Timeline** items as the parameter in its node.
 
 **Placing a timeline as clips.** A macro node's **Add to Timeline as Macro
 Track** asks which timeline it goes on (the main canvas's, or one of a macro
-around it) when there is more than one. **Place a timeline here as clips** (in the same
+around it) when there is more than one. **Add a timeline track...** (in the same
 **...** menu) adds a track to the timeline shown whose clips play another
 timeline, exactly like a macro track: move, repeat, stretch, offset and reverse
 the clips. Any timeline of the same canvas, or of a canvas inside it, can be
