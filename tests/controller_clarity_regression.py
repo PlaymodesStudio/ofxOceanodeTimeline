@@ -208,14 +208,33 @@ int main() {
         for(int i=0;i<6;++i) { io.AddMouseWheelEvent(i%2?0.08f:0.0f,0.3f); frame(1250,zoomPoint,false); }
         assert(zoomView.pixelsPerSecond>swipeScale);
         assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-swipeTime)<0.0001);
-        // Shift turns a vertical swipe into scrolling; Cmd zooms at the playhead.
+        // Shift turns a vertical swipe into scrolling the tracks; Cmd zooms
+        // at the playhead.
         for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
-        zoomView.scrollX=0; frame(1250,zoomPoint,false);
+        model.getViewState().trackHeight=kMaxTrackHeight;   // tall enough to scroll
+        std::vector<std::string> extraTracks;
+        for(int i=0;i<4;++i) extraTracks.push_back(model.createTrack("Scroll filler"));
+        zoomView.scrollX=0; frame(1250,zoomPoint,false); frame(1250,zoomPoint,false);
+        ImGuiWindow* viewport=nullptr;
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
+        assert(viewport && viewport->ScrollMax.y>0 && viewport->Scroll.y==0);
         const float shiftScale=zoomView.pixelsPerSecond;
         io.AddKeyEvent(ImGuiMod_Shift,true); frame(1250,zoomPoint,false);
         for(int i=0;i<3;++i) { io.AddMouseWheelEvent(0,-0.5f); frame(1250,zoomPoint,false); }
         io.AddKeyEvent(ImGuiMod_Shift,false); frame(1250,zoomPoint,false);
-        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX>0);
+        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX==0 && viewport->Scroll.y>0);
+        ImGui::SetScrollY(viewport,0.0f); model.getViewState().trackHeight=80.0f;
+        for(const auto& extra:extraTracks) model.removeTrack(extra);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        // Over the track column on the left, a swipe neither zooms nor scrolls the time.
+        const ImVec2 trackColumn(ui.fileDropBounds.x-100,zoomPoint.y);
+        zoomView.scrollX=50; frame(1250,trackColumn,false);
+        for(int i=0;i<3;++i) { io.AddMouseWheelEvent(-0.5f,0); frame(1250,trackColumn,false); }
+        for(int i=0;i<15;++i) frame(1250,trackColumn,false);
+        io.AddMouseWheelEvent(0,1); frame(1250,trackColumn,false);
+        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX==50);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
         for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
         owner->getTransport()->seekToBeat(2); zoomView.scrollX=0; frame(1250,zoomPoint,false);
         const double playheadAt=model.beatToSeconds(2,120);

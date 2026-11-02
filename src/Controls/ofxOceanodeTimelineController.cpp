@@ -2127,9 +2127,13 @@ void ofxOceanodeTimelineController::draw() {
     // Resolve zoom before either child draws: ruler, clips and scrollbar all
     // use the new scale and its scroll limits in the very same frame.
     const auto& wheelIO = ImGui::GetIO();
+    // Only the clips and the rulers above them take the wheel, not the
+    // track column on their left.
     const bool timelineHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-        hoverRect(timelineAreaMin, timelineAreaMax);
+        hoverRect(ImVec2(timelineAreaMin.x + kLabelWidth, timelineAreaMin.y), timelineAreaMax);
     const bool wheelMoved = std::abs(wheelIO.MouseWheel) > 0.001f || std::abs(wheelIO.MouseWheelH) > 0.001f;
+    // Shift + vertical swipe scrolls the tracks, applied in the viewport below.
+    float wheelScrollY = 0.0f;
     if(timelineHovered && !ImGui::IsAnyItemActive() && wheelMoved) {
         // A pause between wheel events ends the gesture (macOS momentum
         // keeps sending them, so it stays on the locked axis).
@@ -2146,18 +2150,18 @@ void ofxOceanodeTimelineController::draw() {
             if(wheelAxisTravel.x + wheelAxisTravel.y >= kWheelAxisLockTravel)
                 wheelAxis = wheelAxisTravel.y >= wheelAxisTravel.x ? WheelAxis::Vertical : WheelAxis::Horizontal;
         }
-        // Vertical zooms at the mouse; with Shift it scrolls the timeline
-        // instead, with Cmd it zooms at the playhead, first centring it when
-        // it is out of view.
+        // Vertical zooms at the mouse; with Shift it scrolls the tracks up
+        // and down instead, with Cmd it zooms at the playhead, first centring
+        // it when it is out of view. Horizontal scrolls the time.
         const float anchorX = wheelIO.MousePos.x - timelineAreaMin.x - kLabelWidth;
         const float zoomScale = pixelsPerSecond * static_cast<float>(std::pow(1.12f, wheelIO.MouseWheel));
         if(wheelAxis == WheelAxis::Vertical && std::abs(wheelIO.MouseWheel) > 0.001f) {
-            if(wheelIO.KeyShift) timelineScrollX -= wheelIO.MouseWheel * 55.0f;
+            if(wheelIO.KeyShift) wheelScrollY = wheelIO.MouseWheel;
             else if(wheelIO.KeyCtrl || wheelIO.KeySuper) {
                 if(!playheadInView()) timelineScrollX += playheadViewX() - visibleWidth * 0.5f;
                 zoomAt(zoomScale, playheadViewX());
             }
-            else if(anchorX >= 0.0f) zoomAt(zoomScale, anchorX);
+            else zoomAt(zoomScale, anchorX);
         }
         if(wheelAxis == WheelAxis::Horizontal)
             timelineScrollX -= wheelIO.MouseWheelH * 55.0f;
@@ -2231,7 +2235,9 @@ void ofxOceanodeTimelineController::draw() {
     bindNativeFileDrops();
     if(ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
        wheelIO.MousePos.x < zoneLeft && std::abs(wheelIO.MouseWheel) > 0.001f)
-        ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() - wheelIO.MouseWheel * 55.0f));
+        wheelScrollY = wheelIO.MouseWheel;
+    if(wheelScrollY != 0.0f)
+        ImGui::SetScrollY(std::max(0.0f, ImGui::GetScrollY() - wheelScrollY * 55.0f));
     // The wheel gesture may have changed the scale this frame. Refresh the
     // derived snap before handling timeline input.
     effectiveRulerSnapBeats = adaptiveSnapDivision(rulerSnapBeats,
