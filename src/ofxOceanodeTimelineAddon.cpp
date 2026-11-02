@@ -95,11 +95,12 @@ public:
                                       : host->getTimelineParameterPath(absParam, *canvas);
             };
             // A new clip driving it on a track of that timeline (a new track
-            // when trackId is empty), or a new lane in one of the track's
-            // clips, set up in the editor's dialog.
+            // when trackId is empty), a new lane in one of the track's clips,
+            // or one more target of a lane, set up in the editor's dialog.
+            using Kind = ofxOceanodeTimelineManager::ParameterClipRequest::Kind;
             auto requestClip = [&](const TimelineRef& ref, ofxOceanodeContainer* canvas, const std::string& trackId,
-                                   bool newLane = false) {
-                timelineManager.requestParameterClip({ref, trackId, pathFor(canvas), newLane});
+                                   Kind kind = Kind::Clip) {
+                timelineManager.requestParameterClip({ref, trackId, pathFor(canvas), kind});
             };
             auto timelineHeading = [&](const TimelineRef& ref) {
                 const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
@@ -144,7 +145,13 @@ public:
                             if(ImGui::BeginMenu(label.c_str())) {
                                 const bool hasClip = std::any_of(track.clips.begin(), track.clips.end(),
                                                                  [](const auto& clip) { return !clip.isLfo; });
-                                if(ImGui::MenuItem("New Lane...", nullptr, false, hasClip)) requestClip(ref, canvas, track.id, true);
+                                const bool hasLane = std::any_of(track.clips.begin(), track.clips.end(),
+                                                                 [](const auto& clip) { return !clip.isLfo && !clip.lanes.empty(); });
+                                if(ImGui::MenuItem("New Target...", nullptr, false, hasLane)) requestClip(ref, canvas, track.id, Kind::Target);
+                                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                    ImGui::SetTooltip(hasLane ? "Make an existing lane of this track drive this parameter too."
+                                                              : "This track has no lane to drive this parameter yet.");
+                                if(ImGui::MenuItem("New Lane...", nullptr, false, hasClip)) requestClip(ref, canvas, track.id, Kind::Lane);
                                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                                     ImGui::SetTooltip(hasClip ? "A new lane driving this parameter, in one of this track's clips."
                                                               : "This track has no clip to add a lane to yet.");

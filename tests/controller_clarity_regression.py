@@ -966,7 +966,7 @@ int main() {
         ui.selectedClips={{t,c}};
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
         const auto tracksBeforeLane=model.toJson()["tracks"];
-        model.requestParameterClip({mainRef,t,filterPath,true}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-lane");
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Lane}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-lane");
         assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterClipType==1);
         assert(confirmModal("Create Lane") && !popupOpen());
         assert(model.getClip(t,c)->lanes.size()==lanesBefore+1);
@@ -977,6 +977,28 @@ int main() {
         assert(newLane.name=="Cutoff" && newLane.type==ofxOceanodeTimelineLaneType::Curve);
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && ui.editorState.editorLaneId==newLane.id);
         assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
+        // New Target: an existing lane (the one being edited, in the selected
+        // clip) drives it too, on a row made for it; a lane it already drives
+        // cannot take it again.
+        ui.selectedClips={{t,c}}; ui.editorState.clipEditorOpen=true;
+        ui.editorState.editorTrackId=t; ui.editorState.editorClipId=c; ui.editorState.editorLaneId=curve; frame();
+        const auto targetsBefore=model.getLane(t,c,curve)->bindingIds;
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Target});
+        frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-target");
+        assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterTargetLaneId==curve);
+        assert(confirmModal("Add Target") && !popupOpen());
+        std::string targetBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==filterPath) targetBinding=binding.id;
+        auto targetsAfter=targetsBefore; targetsAfter.push_back(targetBinding);
+        assert(!targetBinding.empty() && model.getLane(t,c,curve)->bindingIds==targetsAfter);
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.editorState.editorLaneId==curve);
+        const auto targetedJson=model.toJson();
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Target}); frame(); frame();
+        assert(popupOpen() && ui.parameterTargetLaneId==curve);
+        confirmModal("Add Target");   // disabled: already a target
+        assert(popupOpen() && model.toJson()==targetedJson);
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        assert(!popupOpen() && model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
         // Cancel makes nothing.
         const auto beforeCancel=model.toJson();
         model.requestParameterClip({mainRef,"",filterPath}); frame(); frame();

@@ -138,11 +138,14 @@ private:
     void drawParameterClipPopup(ofxOceanodeTimelineManager& timeline);
     void drawParameterLanePopup(ofxOceanodeTimelineManager& timeline, ofxOceanodeAbstractParameter& parameter,
                                 const ofxOceanodeTimelineTrack& track);
+    void drawParameterTargetPopup(ofxOceanodeTimelineManager& timeline, ofxOceanodeAbstractParameter& parameter,
+                                  const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::ParameterClipRequest parameterClip;
     char parameterClipTrackName[128] = {};
     char parameterClipName[128] = {};
     int parameterClipType = 1; // Curve
-    std::string parameterLaneClipId; // New Lane: the clip it goes in
+    std::string parameterLaneClipId; // New Lane / New Target: the clip it goes in
+    std::string parameterTargetLaneId; // New Target: the lane that drives it too
     double parameterClipStart = 0.0;
     double parameterClipDuration = 4.0;
     bool requestParameterClipPopup = false;
