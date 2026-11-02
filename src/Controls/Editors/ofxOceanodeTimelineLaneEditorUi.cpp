@@ -7,7 +7,8 @@
 namespace ofxOceanodeTimelineLaneEditorUi {
 bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip) {
     ImGui::PushID(id.c_str());
-    // Lit, Solo ("S") is black on yellow and Mute ("M") white on red.
+    // Lit, Solo ("S") is black on yellow and Mute ("M") white on red;
+    // unlit, the letter is the same white as the track names.
     const bool solo = label[0] == 'S';
     const ImVec4 onColor = solo ? ImVec4(1.0f, 190.0f / 255.0f, 0.0f, 1.0f) : ImVec4(0.72f, 0.20f, 0.20f, 1.0f);
     if(on) {
@@ -15,9 +16,9 @@ bool playbackToggle(const std::string& id, const char* label, bool on, const cha
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(onColor.x * 1.2f, onColor.y * 1.2f, onColor.z * 1.2f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(onColor.x * 0.85f, onColor.y * 0.85f, onColor.z * 0.85f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, solo ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-    }
+    } else ImGui::PushStyleColor(ImGuiCol_Text, ofxOceanodeTimelineEditorUi::labelTextColor);
     const bool clicked = ImGui::SmallButton(label);
-    if(on) ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor(on ? 4 : 1);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
     ImGui::PopID();
     return clicked;

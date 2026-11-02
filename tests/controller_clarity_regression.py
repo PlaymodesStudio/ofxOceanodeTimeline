@@ -159,11 +159,16 @@ int main() {
         const ImVec2 point(ui.fileDropBounds.x+offset,(row->top+row->bottom)*0.5f);
         frame(1250,point,false); frame(1250,point,true); frame(1250,point,false);
     };
+    // M, S and the colour swatch (as wide as S) end at the column's edge, 6px in.
+    const float spacing=ImGui::GetStyle().ItemSpacing.x, padX=ImGui::GetStyle().FramePadding.x;
+    const float soloWidth=ImGui::CalcTextSize("S").x+padX*2, muteWidth=ImGui::CalcTextSize("M").x+padX*2;
+    const float soloOffset=-6-soloWidth-spacing-soloWidth*0.5f;
+    const float muteOffset=-6-soloWidth-spacing-soloWidth-spacing-muteWidth*0.5f;
     for(const auto& track : {t,wt}) {
-        trackToggle(track,-74); assert(model.getTrack(track)->muted);
-        trackToggle(track,-74); assert(!model.getTrack(track)->muted);
-        trackToggle(track,-49); assert(model.getTrack(track)->solo);
-        trackToggle(track,-49); assert(!model.getTrack(track)->solo);
+        trackToggle(track,muteOffset); assert(model.getTrack(track)->muted);
+        trackToggle(track,muteOffset); assert(!model.getTrack(track)->muted);
+        trackToggle(track,soloOffset); assert(model.getTrack(track)->solo);
+        trackToggle(track,soloOffset); assert(!model.getTrack(track)->solo);
     }
 
     // Wheel zoom keeps the time under the pointer fixed, including the right
@@ -466,9 +471,9 @@ int main() {
             return (row->minY+row->maxY)*0.5f;
         };
         auto arrow=[&]() { return ImVec2(padLeft+12,rowY()); };
-        auto plus=[&]() {   // just left of M: found by hovering
+        auto plus=[&]() {   // the first button right of the name: found by hovering
             const float y=rowY();
-            for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-83;x>padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x-=2) {
+            for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth;x+=2) {
                 frame(1250,ImVec2(x,y),false);
                 if(ImGui::GetCurrentContext()->HoveredId!=0) return ImVec2(x,y);
             }

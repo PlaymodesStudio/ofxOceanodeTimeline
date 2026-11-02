@@ -14,6 +14,8 @@ inline float labelWidth = defaultLabelWidth;
 constexpr ImU32 gridColor = IM_COL32(70, 70, 70, 115);
 constexpr ImU32 barColor = IM_COL32(125, 125, 125, 190);
 constexpr ImU32 playheadColor = IM_COL32(255, 85, 85, 255);
+// Track names, fold arrows and the unlit + / M / S buttons share one white.
+constexpr ImU32 labelTextColor = IM_COL32(235, 235, 235, 255);
 constexpr const char* curveInterpolationNames[] = {"Step", "Linear", "Log / Exp", "Sigmoid"};
 
 inline void finishAbsoluteLayout(const ImVec2& position) {

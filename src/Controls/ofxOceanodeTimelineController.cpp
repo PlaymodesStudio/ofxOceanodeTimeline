@@ -421,6 +421,7 @@ void drawEditorSeparator(const ofxOceanodeTimelineTrack& track, float contentWid
 
 using ofxOceanodeTimelineEditorUi::finishAbsoluteLayout;
 using ofxOceanodeTimelineEditorUi::contextMenuSection;
+using ofxOceanodeTimelineEditorUi::labelTextColor;
 }
 
 ofxOceanodeTimelineController::ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> _container)
@@ -2855,7 +2856,12 @@ void ofxOceanodeTimelineController::draw() {
         };
         const bool addLaneButton = editorClip != nullptr && !editorClip->isLfo && !track.isWaveTrack;
         const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
-        const float padRight = headerMin.x + kLabelWidth - 85 - addLaneWidth;
+        // + M S and the colour swatch (sized like S) sit at the column's
+        // right edge, one item spacing apart.
+        const ImVec2 swatchSize(ImGui::CalcTextSize("S").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFontSize());
+        const float muteX = headerMin.x + kLabelWidth - 6.0f - swatchSize.x - smallButtonReserve("S") - smallButtonReserve("M");
+        const float buttonY = headerMin.y + (trackHeaderHeight - ImGui::GetFontSize()) * 0.5f;
+        const float padRight = muteX - 3.0f - addLaneWidth;
         const bool editorArrowHovered = editorArrow &&
             hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + 22, headerMax.y));
         // A macro track's arrow unfolds its macro's tracks under it; in the
@@ -2952,15 +2958,18 @@ void ofxOceanodeTimelineController::draw() {
         }
 
         if(addLaneButton) {
-            ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 82 - addLaneWidth, headerMin.y + (trackHeaderHeight - 19.0f) * 0.5f));
-            if(ImGui::SmallButton(("+##addLane" + track.id).c_str())) {
+            ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, buttonY));
+            ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+            const bool addLane = ImGui::SmallButton(("+##addLane" + track.id).c_str());
+            ImGui::PopStyleColor();
+            if(addLane) {
                 anyClipInteractionClaimedThisFrame = true;
                 if(!editorOpenHere) openEditor();
                 requestAddLanePopup = true;   // opened by the clip editor below
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to %s", editorClip->name.c_str());
         }
-        ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 82, headerMin.y + (trackHeaderHeight - 19.0f) * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(muteX, buttonY));
         if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
             timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
         ImGui::SameLine();
@@ -2973,7 +2982,7 @@ void ofxOceanodeTimelineController::draw() {
             const std::string latencyLabel = ofToString(track.latencyOffsetMs, 1) + " ms";
             const std::string shown = (track.latencyOffsetMs > 0.0f ? "+" : "") + latencyLabel;
             const ImVec2 size = ImGui::CalcTextSize(shown.c_str());
-            const ImVec2 at(headerMin.x + kLabelWidth - 88 - addLaneWidth - size.x, headerMin.y + (trackHeaderHeight - size.y) * 0.5f);
+            const ImVec2 at(padRight - 3.0f - size.x, headerMin.y + (trackHeaderHeight - size.y) * 0.5f);
             ImGui::GetWindowDrawList()->AddText(at, IM_COL32(230, 190, 90, 220), shown.c_str());
             if(ImGui::IsMouseHoveringRect(at, ImVec2(at.x + size.x, at.y + size.y)))
                 ImGui::SetTooltip("Latency correction (track right-click menu)");
@@ -2981,11 +2990,11 @@ void ofxOceanodeTimelineController::draw() {
 
         // Use a ColorButton + explicit picker popup. ColorEdit4 with a local
         // temporary swatch was easy to click past and appeared non-persistent.
-        ImGui::SetCursorPos(ImVec2(kLabelWidth - 28, headerY + (trackHeaderHeight - 19.0f) * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 6.0f - swatchSize.x, buttonY));
         ImGui::SetNextItemAllowOverlap();
         const ImVec4 color(track.color.r / 255.0f, track.color.g / 255.0f, track.color.b / 255.0f, track.color.a / 255.0f);
         const std::string colorButtonId = "##trackColorButton" + track.id;
-        if(ImGui::ColorButton(colorButtonId.c_str(), color, ImGuiColorEditFlags_NoTooltip, ImVec2(20, 19))) ImGui::OpenPopup(("##trackColorPopup" + track.id).c_str());
+        if(ImGui::ColorButton(colorButtonId.c_str(), color, ImGuiColorEditFlags_NoTooltip, swatchSize)) ImGui::OpenPopup(("##trackColorPopup" + track.id).c_str());
         if(ImGui::BeginPopup(("##trackColorPopup" + track.id).c_str())) {
             float rgba[4] = {color.x, color.y, color.z, color.w};
             if(ImGui::ColorPicker4("##picker", rgba, ImGuiColorEditFlags_AlphaBar)) {
