@@ -127,15 +127,22 @@ private:
     struct NewClip { enum Kind { Clip, NoteGroupClip, NoteSetup } kind = Clip; std::string clipId, laneId; };
     NewClip createNewClip(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& bindingId,
                           int typeIndex, const std::string& name, double startBeat, double durationBeats);
+    // A lane of the chosen type in a clip of the shown timeline, driving the
+    // binding (a value lane spans its parameter's range). Returns its id.
+    std::string addBoundLane(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& clipId,
+                             const ofxOceanodeTimelineParameterBinding& binding, int typeIndex, const std::string& name);
     // A parameter's right-click "Add to Timeline": a new clip driving it on a
     // track of a timeline, or on a new track, set up in one dialog.
     void openParameterClipDialog(ofxOceanodeTimelineManager& timeline,
                                  const ofxOceanodeTimelineManager::ParameterClipRequest& request);
     void drawParameterClipPopup(ofxOceanodeTimelineManager& timeline);
+    void drawParameterLanePopup(ofxOceanodeTimelineManager& timeline, ofxOceanodeAbstractParameter& parameter,
+                                const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::ParameterClipRequest parameterClip;
     char parameterClipTrackName[128] = {};
     char parameterClipName[128] = {};
     int parameterClipType = 1; // Curve
+    std::string parameterLaneClipId; // New Lane: the clip it goes in
     double parameterClipStart = 0.0;
     double parameterClipDuration = 4.0;
     bool requestParameterClipPopup = false;

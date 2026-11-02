@@ -7085,28 +7085,36 @@ ofxOceanodeTimelineController::NewClip ofxOceanodeTimelineController::createNewC
         ? timeline.createLfoClip(sequence, trackId, bindingId, name.empty() ? "LFO" : name, startBeat, durationBeats)
         : timeline.createClip(sequence, trackId, name.empty() ? "Clip" : name, startBeat, durationBeats);
     if(isLfoClip || binding == nullptr || created.clipId.empty()) return created;
+    created.laneId = addBoundLane(timeline, trackId, created.clipId, *binding, typeIndex, binding->parameterPath);
+    return created;
+}
+
+std::string ofxOceanodeTimelineController::addBoundLane(ofxOceanodeTimelineManager& timeline, const std::string& trackId,
+                                                        const std::string& clipId, const ofxOceanodeTimelineParameterBinding& binding,
+                                                        int typeIndex, const std::string& name) {
+    auto& sequence = scope(timeline);
     const auto laneType = laneTypeFromOptionIndex(typeIndex);
-    created.laneId = timeline.createLane(sequence, trackId, created.clipId, binding->parameterPath, laneType);
-    if(created.laneId.empty()) return created;
-    if(typeIndex == kToggleOptionIndex) makeToggleLane(timeline.getLane(sequence, trackId, created.clipId, created.laneId));
-    timeline.addBindingToLane(sequence, trackId, created.clipId, created.laneId, binding->id);
-    auto* lane = timeline.getLane(sequence, trackId, created.clipId, created.laneId);
+    const auto laneId = timeline.createLane(sequence, trackId, clipId, name, laneType);
+    if(laneId.empty()) return laneId;
+    if(typeIndex == kToggleOptionIndex) makeToggleLane(timeline.getLane(sequence, trackId, clipId, laneId));
+    timeline.addBindingToLane(sequence, trackId, clipId, laneId, binding.id);
+    auto* lane = timeline.getLane(sequence, trackId, clipId, laneId);
     if(lane != nullptr && laneType != ofxOceanodeTimelineLaneType::PianoRoll &&
        laneType != ofxOceanodeTimelineLaneType::MultiGate &&
        laneType != ofxOceanodeTimelineLaneType::Wave &&
        !ofxOceanodeTimelineIsHeldValueLane(laneType)) {
         // A value lane spans the parameter's own range.
-        if(auto* parameter = timeline.resolverFor(sequence).find(binding->parameterPath)) {
-            if(binding->valueType == typeid(float).name()) {
+        if(auto* parameter = timeline.resolverFor(sequence).find(binding.parameterPath)) {
+            if(binding.valueType == typeid(float).name()) {
                 lane->valueMin = parameter->cast<float>().getParameter().getMin();
                 lane->valueMax = parameter->cast<float>().getParameter().getMax();
-            } else if(binding->valueType == typeid(int).name()) {
+            } else if(binding.valueType == typeid(int).name()) {
                 lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
                 lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
             }
         }
     }
-    return created;
+    return laneId;
 }
 
 void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineManager& timeline,
@@ -7130,6 +7138,27 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
     if(fresh.valueType == typeid(bool).name()) fresh.laneType = ofxOceanodeTimelineLaneType::MultiGate;
     if(!ofxOceanodeTimelineDropdownOptions(*parameter).empty()) fresh.laneType = ofxOceanodeTimelineLaneType::Dropdown;
     parameterClipType = optionIndexForBinding(existing != nullptr ? *existing : fresh);
+    if(request.newLane) {
+        // The clip it goes in: the track's selected one, else the one being
+        // edited, else the one at the playhead, else its first.
+        const auto* track = timeline.getTrack(*sequence, request.trackId);
+        if(track == nullptr) return;
+        auto usable = [&](const ofxOceanodeTimelineClip& clip) { return !clip.isLfo; };
+        parameterLaneClipId.clear();
+        for(const auto& clip : track->clips)
+            if(parameterLaneClipId.empty() && usable(clip) && selectedClips.count({track->id, clip.id})) parameterLaneClipId = clip.id;
+        for(const auto& clip : track->clips)
+            if(parameterLaneClipId.empty() && usable(clip) && editorState.clipEditorOpen &&
+               editorState.editorTrackId == track->id && editorState.editorClipId == clip.id) parameterLaneClipId = clip.id;
+        const double beat = container->getTransportState().beatPosition;
+        for(const auto& clip : track->clips)
+            if(parameterLaneClipId.empty() && usable(clip) && beat >= clip.startBeat && beat < clip.startBeat + clip.durationBeats)
+                parameterLaneClipId = clip.id;
+        for(const auto& clip : track->clips)
+            if(parameterLaneClipId.empty() && usable(clip)) parameterLaneClipId = clip.id;
+        if(parameterLaneClipId.empty()) return;   // nothing to add a lane to
+        parameterClipType = std::min(parameterClipType, kLaneTypeOptionCount - 1);
+    }
     // At the playhead on the main timeline; a timeline of its own starts at 0.
     const bool mainTimeline = sequence == &timeline.getMainSequence();
     parameterClipStart = mainTimeline ? snapBeat(std::max(0.0, container->getTransportState().beatPosition)) : 0.0;
@@ -7152,6 +7181,11 @@ void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineMa
         return;
     }
     ImGui::TextDisabled("%s > %s", timeline.timelineName(parameterClip.timeline).c_str(), newTrack ? "New track" : track->name.c_str());
+    if(parameterClip.newLane) {
+        drawParameterLanePopup(timeline, *parameter, *track);
+        ImGui::EndPopup();
+        return;
+    }
     // Labels on the left, fields lined up in one column.
     const float column = ImGui::CalcTextSize("New Track Name").x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
     auto field = [&](const char* label) {
@@ -7227,4 +7261,68 @@ void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineMa
     ImGui::SameLine();
     if(ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
+}
+
+void ofxOceanodeTimelineController::drawParameterLanePopup(ofxOceanodeTimelineManager& timeline,
+                                                           ofxOceanodeAbstractParameter& parameter,
+                                                           const ofxOceanodeTimelineTrack& track) {
+    const float column = ImGui::CalcTextSize("New Lane Name").x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    auto field = [&](const char* label) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine(column);
+        ImGui::SetNextItemWidth(260.0f);
+    };
+    field("Clip");
+    const auto* chosen = timeline.getClip(*timeline.timelineFor(parameterClip.timeline), track.id, parameterLaneClipId);
+    if(ImGui::BeginCombo("##parameterLaneClip", chosen == nullptr ? "" : chosen->name.c_str())) {
+        for(const auto& clip : track.clips) {
+            if(clip.isLfo) continue;
+            if(ImGui::Selectable((clip.name + "##" + clip.id).c_str(), clip.id == parameterLaneClipId)) parameterLaneClipId = clip.id;
+        }
+        ImGui::EndCombo();
+    }
+    if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
+    field("New Lane Name");
+    ImGui::InputText("##parameterLaneName", parameterClipName, sizeof(parameterClipName), ImGuiInputTextFlags_AutoSelectAll);
+    field("Lane Type");
+    ImGui::Combo("##parameterLaneType", &parameterClipType, kLaneTypeOptions, kLaneTypeOptionCount);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(column + 260.0f);
+    ImGui::TextWrapped("%s", contentDescription(parameterClipType));
+    if(laneTypeFromOptionIndex(parameterClipType) == ofxOceanodeTimelineLaneType::PianoRoll)
+        ImGui::TextDisabled("Assign pitch, gate and velocity in the lane's Targets tab after creating it.");
+    ImGui::PopTextWrapPos();
+    ImGui::BeginDisabled(chosen == nullptr);
+    const bool confirmed = ImGui::Button("Create Lane");
+    ImGui::EndDisabled();
+    if(confirmed && chosen != nullptr) {
+        // Shown in the editor, where it is made; the track's row for this
+        // parameter, or a new one.
+        enterTimelineScope(timeline, parameterClip.timeline);
+        auto& shown = scope(timeline);
+        std::string bindingId;
+        for(const auto& binding : track.bindings)
+            if(binding.parameterPath == parameterClip.parameterPath) bindingId = binding.id;
+        if(bindingId.empty()) bindingId = timeline.addBinding(shown, track.id, parameter);
+        const auto* binding = timeline.getBinding(shown, track.id, bindingId);
+        const std::string clipId = parameterLaneClipId;
+        const auto laneId = binding == nullptr ? std::string()
+            : addBoundLane(timeline, track.id, clipId, *binding, parameterClipType,
+                           parameterClipName[0] == '\0' ? parameter.getName() : std::string(parameterClipName));
+        if(!laneId.empty()) {
+            editorAnchorBindingId.clear();
+            editorState.editorTrackId = track.id;
+            editorState.editorClipId = clipId;
+            editorState.editorLaneId = laneId;
+            editorRowScope = {};
+            editorState.clipEditorOpen = true;
+            editorState.collapsedLaneIds.erase(laneId);
+            selectedClips = {{track.id, clipId}};
+            selectedTracks.clear();
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
 }

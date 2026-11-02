@@ -926,6 +926,12 @@ int main() {
             const ImVec2 addItem(330,200+ImGui::GetStyle().WindowPadding.y+ImGui::GetTextLineHeight()*0.5f);
             for(int i=0;i<30;++i) menuFrame(addItem,nullptr);
             menuFrame(addItem,"add-to-timeline-menu");
+            // A track (the third row: Main, New Track..., Synth phrases): New Lane / New Clip.
+            auto* list=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const ImVec2 trackItem(list->Pos.x+40,list->Pos.y+ImGui::GetStyle().WindowPadding.y+ImGui::GetTextLineHeightWithSpacing()*2.5f);
+            for(int i=0;i<30;++i) menuFrame(ImVec2(addItem.x+60,trackItem.y),nullptr);   // across, then down
+            for(int i=0;i<30;++i) menuFrame(trackItem,nullptr);
+            menuFrame(trackItem,"add-to-timeline-track");
             ImGui::ClosePopupToLevel(0,true); frame();
         }
         model.requestParameterClip({mainRef,"",filterPath}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-dialog");
@@ -955,6 +961,22 @@ int main() {
         const auto* added=model.getClip(t,ui.editorState.editorClipId);
         assert(added && added->name=="Pitch" && added->lanes.size()==1 && added->lanes[0].bindingIds==std::vector<std::string>{pitchBinding});
         assert(model.undoTimelineEdit() && model.getTrack(t)->clips.size()==clipsBefore);
+        // New Lane: a lane driving it in one of the track's clips (the selected
+        // one), on a row made for the parameter; undone at once.
+        ui.selectedClips={{t,c}};
+        const auto lanesBefore=model.getClip(t,c)->lanes.size();
+        const auto tracksBeforeLane=model.toJson()["tracks"];
+        model.requestParameterClip({mainRef,t,filterPath,true}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-lane");
+        assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterClipType==1);
+        assert(confirmModal("Create Lane") && !popupOpen());
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore+1);
+        std::string filterBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==filterPath) filterBinding=binding.id;
+        const auto& newLane=model.getClip(t,c)->lanes.back();
+        assert(!filterBinding.empty() && newLane.bindingIds==std::vector<std::string>{filterBinding});
+        assert(newLane.name=="Cutoff" && newLane.type==ofxOceanodeTimelineLaneType::Curve);
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && ui.editorState.editorLaneId==newLane.id);
+        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
         // Cancel makes nothing.
         const auto beforeCancel=model.toJson();
         model.requestParameterClip({mainRef,"",filterPath}); frame(); frame();

@@ -1318,12 +1318,14 @@ public:
         return true;
     }
     // A parameter's right-click "Add to Timeline": a new clip driving it on
-    // a track of that timeline (a new track when trackId is empty), set up
-    // in the editor's dialog, picked up like the above.
+    // a track of that timeline (a new track when trackId is empty), or a new
+    // lane driving it in one of the track's clips, set up in the editor's
+    // dialog, picked up like the above.
     struct ParameterClipRequest {
         TimelineRef timeline;
         std::string trackId;        // empty: a new track
         std::string parameterPath;  // as that timeline saves it
+        bool newLane = false;       // a lane in an existing clip of the track
     };
     void requestParameterClip(const ParameterClipRequest& request) { pendingParameterClip = request; parameterClipRequested = true; }
     bool consumeParameterClipRequest(ParameterClipRequest& request) {
