@@ -493,6 +493,16 @@ int main() {
     model.getTrack(t)->collapsed=true; frame(); assert(ui.editorState.clipEditorOpen);
     model.getTrack(t)->collapsed=false;
     frame(460); frame(460,ImVec2(-100,-100),false,"narrow");
+    {
+        // A sideways swipe moves only the clips area, never the window around it.
+        auto* window=ImGui::FindWindowByName("Timeline");
+        assert(window && window->ScrollMax.x>0 && window->Scroll.x==0);
+        const ImVec2 clips(ui.fileDropBounds.x+40,ui.fileDropBounds.y+25);
+        for(int i=0;i<15;++i) frame(460,clips,false);
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(-0.5f,0); frame(460,clips,false); }
+        assert(window->Scroll.x==0);
+        model.getViewState().scrollX=0; for(int i=0;i<15;++i) frame(460);
+    }
     ui.targetsView=false;
     ui.editorState.editorClipId=lc; ui.editorState.editorLaneId=model.getClip(t,lc)->lanes.front().id;
     frame(); frame(1250,ImVec2(-100,-100),false,"lfo");

@@ -1268,6 +1268,12 @@ void ofxOceanodeTimelineController::draw() {
     editorScreenValid = false;
     auto& timeline = container->getTimelineManager();
     lastTimelineDrawFrame = ImGui::GetFrameCount();
+    // A horizontal swipe would also make ImGui scroll this whole window
+    // sideways; only the clips area moves (handled further down), so the
+    // window holds the horizontal wheel while hovered. ImGui hands the
+    // ownership back each frame, so it lapses once the mouse leaves.
+    if(ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows))
+        ImGui::SetKeyOwner(ImGuiKey_MouseWheelX, ImGui::GetID("##timelineWheelX"));
     const auto& historyIO = ImGui::GetIO();
     if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
        !historyIO.WantTextInput && !ImGui::IsAnyItemActive() &&
