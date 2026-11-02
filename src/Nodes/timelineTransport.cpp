@@ -10,11 +10,11 @@ void timelineTransport::setup() {
     color = ofColor::red;
     description = "Plays, stops and restarts the selected timeline. Stop goes back to its start, "
                   "Restart plays it again from its start. Play and Stop follow the timeline's quantize "
-                  "setting. A timeline other than the main one only responds while it plays on its own "
-                  "(Independent in its settings); the others are marked as not independent.";
+                  "setting on its own transport (free, or the preview of a dependent one); a timeline "
+                  "linked to the global transport plays, stops and seeks that transport at once.";
 
     timelineRefs = {TimelineRef{}};
-    timelineNames = {"Main"};
+    timelineNames = {"Timeline 1"};
     // Not saved as an index: the timeline reference is saved in presetSave instead.
     timelineSelectorParam = addParameterDropdown(timelineSelector, "Timeline", 0, timelineNames,
         ofxOceanodeParameterFlags_DisableSavePreset | ofxOceanodeParameterFlags_DisableSaveProject);
@@ -52,7 +52,7 @@ void timelineTransport::refreshTimelineList() {
     for(const auto& ref : manager.allTimelines()) {
         const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
         std::string name = (root ? std::string() : ref.canvas + " > ") + manager.timelineName(ref);
-        if(manager.transportFor(ref) == nullptr) name += " (not independent)";
+        if(manager.clockSourceOf(ref) == ofxOceanodeTimelineManager::ClockSource::Dependent) name += " (dependent)";
         refs.push_back(ofxOceanodeTimelineManager::normalizedRef(ref));
         names.push_back(name);
     }

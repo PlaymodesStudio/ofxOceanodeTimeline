@@ -11,6 +11,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <array>
 #include <memory>
 #include <set>
 #include <string>
@@ -352,13 +353,23 @@ private:
     void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     // The main controller draws the further windows (before the core's windows).
     void drawTimelineWindows();
-    // Seeks the timeline shown: its own transport when it plays on its own,
-    // else the main one.
+    // Seeks the timeline shown: its own transport (free, or a dependent
+    // one's preview), else the global one it is linked to.
     void seekShownTimeline(ofxOceanodeTimelineManager& timeline, double beat);
-    // The loop of the timeline shown, true while it is on: the main one's, or
-    // its own while it plays on its own (a placed timeline never loops).
+    // The loop of the timeline shown, true while it is on: the global
+    // transport's for one linked to it, else its own.
     bool shownLoop(const ofxOceanodeTimelineManager& timeline, double& startBeat, double& endBeat) const;
     void setShownLoop(ofxOceanodeTimelineManager& timeline, double startBeat, double endBeat);
+    // Whether the timeline shown plays on a transport of its own (its loop
+    // and tempo are its own) rather than the global one.
+    bool shownOwnsTransport(const ofxOceanodeTimelineManager& timeline) const;
+    // The BPM lane of the timeline shown: the global one for a timeline
+    // linked to the global transport, its own for a free one, none for a
+    // dependent one (it follows its host's tempo).
+    const std::vector<ofxOceanodeTimelineCurvePoint>* shownBpmLane(const ofxOceanodeTimelineManager& timeline) const;
+    ofxOceanodeTimelineTempoLane shownBpmLaneTarget(ofxOceanodeTimelineManager& timeline);
+    // No timeline to show (none made yet on this canvas): how to make one.
+    void drawEmptyState(ofxOceanodeTimelineManager& timeline);
     // Shows the timeline a timeline track places, from the next frame.
     void requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::TimelineRef pendingScope;
@@ -526,6 +537,9 @@ private:
     double scrollbarFixedSeconds = 0.0;  // the view edge that stays put
     struct { float x1 = 0, y1 = 0, x2 = 0, y2 = 0; } scrollbarThumb; // drawn this frame
     std::vector<double> tapTimes;      // tap tempo (seconds)
+    // The BPM fields are text fields (a number typed applies on Enter): the
+    // text of each while it is edited, refreshed from the tempo otherwise.
+    std::map<unsigned int, std::array<char, 24>> bpmFieldText;
 
     // ---- Clip box selection ----
     struct ClipScreenRect { std::string trackId, clipId; float x1, y1, x2, y2; };

@@ -483,7 +483,12 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {\n'
             '    auto* sequence = timelineFor(ref);\n'
             '    if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;\n'
-            '    return ref.timeline.empty() ? std::string("Main") : ref.timeline;\n}\n')
+            '    return ref.timeline.empty() ? std::string("Timeline 1") : ref.timeline;\n}\n'
+            'std::vector<ofxOceanodeTimelineManager::TimelineRef> ofxOceanodeTimelineManager::allTimelines() {\n'
+            '    std::vector<TimelineRef> refs;\n'
+            '    if(timelineExists({})) refs.push_back({});\n'
+            '    for(const auto& timeline : mainSequence.timelines) refs.push_back({std::string(), timeline->timelineId});\n'
+            '    return refs;\n}\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"

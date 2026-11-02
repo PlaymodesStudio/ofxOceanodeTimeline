@@ -247,8 +247,7 @@ std::vector<MacroPlacement> macroClipPlacements(const ofxOceanodeTimelineClip& c
                                                 double visibleFrom, double visibleTo) {
     std::vector<MacroPlacement> placements;
     const double content = sourceDuration(clip);
-    // An own-tempo clip lasts as long as its timeline does at that tempo.
-    const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip) * (clip.repeatContent ? clip.ownTempoScale() : 1.0);
+    const double stretch = ofxOceanodeTimelineClipTime::effectiveStretch(clip);
     const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
     const double clipEnd = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
     const double cycle = std::max(1e-6, clip.repeatContent ? content * stretch : clipEnd - clip.startBeat);
@@ -618,8 +617,6 @@ void ofxOceanodeTimelineController::queueAudioDrop(const std::vector<std::string
 
 void ofxOceanodeTimelineController::importDroppedAudio(ofxOceanodeTimelineManager& timeline) {
     if(pendingAudioDrops.empty()) return;
-    // Wave tracks are not part of macro timelines (yet).
-    if(inMacroScope()) { pendingAudioDrops.clear(); return; }
     auto drops = std::move(pendingAudioDrops);
     pendingAudioDrops.clear();
     timeline.beginTimelineEdit();
@@ -884,8 +881,8 @@ double ofxOceanodeTimelineController::getContentEndBeat(const ofxOceanodeTimelin
     double endBeat = std::max(barBeats, static_cast<double>(visibleBars) * barBeats);
     double loopStartBeat = 0.0, loopEndBeat = 0.0;
     if(shownLoop(timeline, loopStartBeat, loopEndBeat)) endBeat = std::max(endBeat, loopEndBeat);
-    if(!inMacroScope()) // the tempo lane belongs to the main timeline
-        for(const auto& point : timeline.getBpmAutomationPoints()) endBeat = std::max(endBeat, point.beat);
+    if(const auto* lane = shownBpmLane(timeline))
+        for(const auto& point : *lane) endBeat = std::max(endBeat, point.beat);
     for(const auto& track : scope(timeline).tracks) {
         for(const auto& clip : track.clips) {
             endBeat = std::max(endBeat, clip.startBeat + clip.durationBeats);
@@ -1318,6 +1315,12 @@ void ofxOceanodeTimelineController::draw() {
     importDroppedAudio(timeline);
     beginHistoryGesture(timeline);
     drawScopeBar(timeline);
+    // No timeline here yet: nothing to draw but the way to make one.
+    if(!timeline.timelineExists(scopeRef())) {
+        drawEmptyState(timeline);
+        finishHistoryGesture(timeline);
+        return;
+    }
     auto& viewState = timeline.getViewState();
     viewState.labelWidth = ofClamp(viewState.labelWidth, ofxOceanodeTimelineEditorUi::minLabelWidth,
                                    ofxOceanodeTimelineEditorUi::maxLabelWidth);
@@ -1325,17 +1328,18 @@ void ofxOceanodeTimelineController::draw() {
     float& pixelsPerSecond = viewState.pixelsPerSecond;
     const float zoomBeforeToolbar = pixelsPerSecond;
     float& timelineScrollX = viewState.scrollX;
-    auto transportState = container->getTransportState();
-    // In a macro timeline the playhead is where the macro clip playing this
-    // macro now has it; off screen when no clip plays it here.
+    // The timeline shown plays on its transport: the global one, its own,
+    // or (dependent) where the timeline placing it has it; its playhead is
+    // off screen while it has none (no player yet).
     constexpr double kHiddenPlayheadBeat = -1.0e6;
-    // A timeline that plays on its own shows its own playhead.
-    auto macroScopeBeat = [&]() {
-        double beat = kHiddenPlayheadBeat;
-        if(!timeline.timelinePlayheadBeat(scopeRef(), beat)) beat = kHiddenPlayheadBeat;
-        return beat;
+    auto shownState = [&]() {
+        const auto shown = scopeRef();
+        auto shownTransport = timeline.transportFor(shown);
+        auto state = shownTransport != nullptr ? shownTransport->getState() : container->getTransportState();
+        if(!timeline.timelinePlayheadBeat(shown, state.beatPosition)) state.beatPosition = kHiddenPlayheadBeat;
+        return state;
     };
-    if(inMacroScope()) transportState.beatPosition = macroScopeBeat();
+    auto transportState = shownState();
     auto transport = container->getTransport();
     const bool externalClock = transport != nullptr && transport->hasExternalClock();
     // The grid division is the timeline's (saved with it; Drum Grid lanes may follow it).
@@ -1349,14 +1353,14 @@ void ofxOceanodeTimelineController::draw() {
        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
        !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
        ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
-        // A timeline that plays on its own: Space plays and pauses it (quantized).
+        // Space plays and pauses the timeline shown (quantized when it has
+        // a transport of its own; the global one at once).
         const auto shown = scopeRef();
-        if(inMacroScope() && timeline.isFree(shown) && timeline.transportFor(shown) != nullptr) {
-            if(timeline.transportFor(shown)->getState().isPlaying) timeline.stopTimeline(shown, false);
+        if(auto shownTransport = timeline.transportFor(shown)) {
+            if(shownTransport->getState().isPlaying) timeline.stopTimeline(shown, false);
             else timeline.playTimeline(shown);
         } else transport->togglePlay();
-        transportState = container->getTransportState();
-        if(inMacroScope()) transportState.beatPosition = macroScopeBeat();
+        transportState = shownState();
     }
 
     // S is deliberately a timeline-level shortcut rather than a text-field
@@ -1522,13 +1526,46 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::TextDisabled("%s", text);
         ImGui::SameLine(0.0f, 5.0f);
     };
-    // A timeline shown that plays on its own: the toolbar drives it (its
-    // transport, position, tempo, meter and loop) instead of the main one.
+    // The toolbar drives the timeline shown: its own transport (free, or
+    // the preview of a dependent one), else the global transport it is
+    // linked to. `own`: a transport of its own, with its own tempo and loop.
     const auto shownRef = scopeRef();
-    const auto ownTransport = inMacroScope() && timeline.isFree(shownRef) ? timeline.transportFor(shownRef) : nullptr;
-    const ofxOceanodeTimelinePlaySettings* ownPlay = ownTransport != nullptr ? timeline.playSettings(shownRef) : nullptr;
-    const bool own = ownPlay != nullptr;
+    const auto shownSource = timeline.clockSourceOf(shownRef);
+    const bool dependent = shownSource == ofxOceanodeTimelineManager::ClockSource::Dependent;
+    const auto shownTransport = timeline.transportFor(shownRef);
+    const auto ownTransport = shownTransport != nullptr && shownTransport->isDerived() ? shownTransport : nullptr;
+    const ofxOceanodeTimelinePlaySettings* ownPlay = timeline.playSettings(shownRef);
+    const bool own = ownTransport != nullptr && ownPlay != nullptr;
+    // The global timeline (the root canvas's default, linked to the global
+    // transport) keeps its meter on the manager; every other has its own.
+    const bool ownMeter = ownPlay != nullptr && (own || inMacroScope());
     const auto ownState = own ? ownTransport->getState() : ofxOceanodeTransportState();
+    // A dependent timeline's host, for the captions.
+    ofxOceanodeTimelineManager::TimelineRef hostRef;
+    const std::string hostName = dependent && timeline.placedBy(shownRef, hostRef) ? timeline.timelineName(hostRef) : std::string();
+    // The BPM field applies on Enter (typing alone changes nothing): a text
+    // field (ImGui's number fields apply as you type), refreshed from the
+    // tempo while it is not being edited.
+    auto bpmInput = [&](const char* id, float& bpm, bool enabled = true) {
+        const ImGuiID key = ImGui::GetID(id);
+        auto& text = bpmFieldText[key];
+        if(ImGui::GetActiveID() != key || !enabled) std::snprintf(text.data(), text.size(), "%.1f", bpm);
+        ImGui::BeginDisabled(!enabled);
+        ImGui::SetNextItemWidth(60.0f);
+        const bool entered = ImGui::InputText(id, text.data(), text.size(),
+                                              ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
+                                              ImGuiInputTextFlags_CharsDecimal);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0.0f, 3.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("BPM");
+        if(!entered || !enabled) return false;
+        char* end = nullptr;
+        const float typed = std::strtof(text.data(), &end);
+        if(end == text.data() || !std::isfinite(typed)) return false;
+        bpm = ofClamp(typed, 1.0f, 999.0f);
+        return true;
+    };
     // Tap tempo: the average of the last taps; a pause of 2 s starts over.
     auto tapTempo = [&](float& bpm) {
         if(!iconButton("##tbTap", ToolIcon::Tap, "Tap tempo: tap on the beat")) return false;
@@ -1546,6 +1583,15 @@ void ofxOceanodeTimelineController::draw() {
     if(transport != nullptr) {
         // Following an external clock: position, play state and tempo come from it.
         const char* lockedTip = "Following an external clock";
+        // The metronome clicks along the timeline shown, in its meter.
+        auto metronomeButton = [&]() {
+            const bool on = timeline.isMetronomeEnabled(shownRef);
+            if(iconButton("##tbMetronome", ToolIcon::Metronome,
+                          on ? "Metronome: on, along this timeline (accent on the first beat of each bar)"
+                             : "Metronome: off (on: it clicks along this timeline, whatever its clock source)",
+                          on, IM_COL32(240, 185, 80, 255)))
+                timeline.setMetronomeEnabled(!on, shownRef);
+        };
         if(own) {
             // Its own transport: Play and Stop land on its quantize instant.
             double pendingClock = 0.0;
@@ -1561,7 +1607,9 @@ void ofxOceanodeTimelineController::draw() {
             if(iconButton("##tbPlay", ownState.isPlaying && !stopping ? ToolIcon::Pause : ToolIcon::Play,
                           pending ? (stopping ? "Stopping at its quantize instant (click to cancel)"
                                               : "Starting at its quantize instant (click to cancel)")
-                                  : (ownState.isPlaying ? "Pause (Space)" : "Play (Space)"),
+                                  : dependent ? (ownState.isPlaying ? "Pause the preview (Space)"
+                                                                    : "Preview this timeline alone (Space): the timeline placing it stays as it is")
+                                              : (ownState.isPlaying ? "Pause (Space)" : "Play (Space)"),
                           ownState.isPlaying || armed,
                           stopping || armed ? IM_COL32(230, 175, 70, 255) : IM_COL32(90, 205, 125, 255))) {
                 if(pending) ownTransport->cancelPendingActions();
@@ -1569,6 +1617,8 @@ void ofxOceanodeTimelineController::draw() {
                 else timeline.playTimeline(shownRef);
             }
             swappedButtons = false;
+            ImGui::SameLine(0.0f, 2.0f);
+            metronomeButton();
             ImGui::SameLine(0.0f, 6.0f);
             static const char* quantizeLabels[] = {"Now", "Next beat", "Next bar"};
             int quantize = ownPlay->quantize;
@@ -1580,24 +1630,22 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(ImGui::IsItemHovered())
                 ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
-                                  "of the main timeline while it plays (else of the clock).");
-            ImGui::SameLine(0.0f, 6.0f);
-            bool playOnLoad = ownPlay->playOnLoad;
-            if(ImGui::Checkbox("Play on load##tbOwnPlayOnLoad", &playOnLoad)) {
-                auto settings = *ownPlay;
-                settings.playOnLoad = playOnLoad;
-                timeline.setPlaySettings(shownRef, settings);
+                                  "of the global transport while it plays (else of the clock).");
+            if(!dependent) {
+                ImGui::SameLine(0.0f, 6.0f);
+                bool playOnLoad = ownPlay->playOnLoad;
+                if(ImGui::Checkbox("Play on load##tbOwnPlayOnLoad", &playOnLoad)) {
+                    auto settings = *ownPlay;
+                    settings.playOnLoad = playOnLoad;
+                    timeline.setPlaySettings(shownRef, settings);
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Play on load: it plays from its start (at its quantize) once the preset or its\n"
+                                      "macro's preset loads, and each time its macro turns active. While the macro\n"
+                                      "(or one around it) is inactive it waits, and it stops when the macro turns off.");
             }
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Play on load: it plays from its start (at its quantize) once the preset or its\n"
-                                  "macro's preset loads, and each time its macro turns active. While the macro\n"
-                                  "(or one around it) is inactive it waits, and it stops when the macro turns off.");
         } else {
-            if(inMacroScope()) {
-                // A placed timeline has no transport: these drive the main one.
-                caption("Main");
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("The main timeline's transport, position and tempo.");
-            }
+            // Linked to the global transport: these drive it.
             if(iconButton("##tbToStart", ToolIcon::ToStart, externalClock ? lockedTip : "Back to the start", false, 0, !externalClock))
                 transport->seekToBeat(0.0);
             ImGui::SameLine(0.0f, 2.0f);
@@ -1609,15 +1657,12 @@ void ofxOceanodeTimelineController::draw() {
                           transportState.isPlaying, IM_COL32(90, 205, 125, 255), !externalClock))
                 transport->setIsPlaying(!transportState.isPlaying);
             ImGui::SameLine(0.0f, 2.0f);
-            if(iconButton("##tbMetronome", ToolIcon::Metronome,
-                          timeline.isMetronomeEnabled() ? "Metronome: on (accent on the first beat of each bar)" : "Metronome: off",
-                          timeline.isMetronomeEnabled(), IM_COL32(240, 185, 80, 255)))
-                timeline.setMetronomeEnabled(!timeline.isMetronomeEnabled());
+            metronomeButton();
             ImGui::SameLine(0.0f, 6.0f);
             bool playOnLoad = timeline.getPlayOnPresetLoad();
             if(ImGui::Checkbox("Play on load##tbPlayOnLoad", &playOnLoad)) timeline.setPlayOnPresetLoad(playOnLoad);
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Play on preset load: when this preset is loaded, the timeline plays from the start.\n"
+                ImGui::SetTooltip("Play on preset load: when this preset is loaded, the global transport plays from the start.\n"
                                   "Saved with the preset (off by default).");
         }
 
@@ -1625,7 +1670,7 @@ void ofxOceanodeTimelineController::draw() {
         {
             // Position readout: bar . beat . sixteenth, and the song time.
             const auto& shownState = own ? ownState : transportState;
-            const double beatsPerBar = std::max(1e-6, own
+            const double beatsPerBar = std::max(1e-6, ownMeter
                 ? ownPlay->timeSignatureNumerator * (4.0 / std::max(1, ownPlay->timeSignatureDenominator))
                 : timeline.getBeatsPerBar());
             const double beat = std::max(0.0, shownState.beatPosition);
@@ -1654,8 +1699,19 @@ void ofxOceanodeTimelineController::draw() {
         }
 
         groupSeparator();
-        if(own) {
-            // Its own tempo: a fixed BPM, a ratio of the clock's, or its tempo points.
+        if(dependent) {
+            // Its tempo is the timeline placing it: shown, not changed here.
+            float bpm = ownState.bpm;
+            bpmInput("##tbBpmHost", bpm, false);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Dependent: it plays at the tempo of %s, the timeline placing it\n"
+                                  "(through its clips' stretch), and previews alone at that tempo.", hostName.c_str());
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImVec4(0.75f, 0.7f, 0.95f, 1.0f), "DEP");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo from %s", hostName.c_str());
+        } else if(own) {
+            // Its own tempo: a fixed BPM, a ratio of the clock's, or its BPM lane.
             auto settings = *ownPlay;
             bool changed = false;
             const char* tempoModes[] = {"BPM", "x Clock", "Lane"};
@@ -1665,18 +1721,20 @@ void ofxOceanodeTimelineController::draw() {
                 settings.bpmAutomationEnabled = tempoMode == 2;
                 settings.followClockTempo = tempoMode == 1;
                 if(tempoMode == 2 && settings.bpmPoints.empty()) settings.bpmPoints.push_back({0.0, settings.bpm});
+                if(tempoMode == 2) settings.bpmLaneVisible = true;
                 changed = true;
             }
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Its tempo.\nBPM: fixed. x Clock: the clock's tempo times a ratio. Lane: its own tempo points.");
+                ImGui::SetTooltip("Its tempo.\nBPM: fixed. x Clock: the clock's tempo times a ratio. Lane: its BPM lane (below the ruler).");
             ImGui::SameLine(0.0f, 2.0f);
-            ImGui::SetNextItemWidth(78.0f);
             if(tempoMode == 0) {
-                if(ImGui::DragFloat("##tbBpm", &settings.bpm, 0.1f, 1.0f, 999.0f, "%.1f BPM")) changed = true;
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo (drag, or double-click to type)");
+                float bpm = settings.bpm;
+                if(bpmInput("##tbBpm", bpm)) { settings.bpm = bpm; changed = true; }
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo: type it and press Enter");
                 ImGui::SameLine(0.0f, 2.0f);
                 if(tapTempo(settings.bpm)) changed = true;
             } else {
+                ImGui::SetNextItemWidth(78.0f);
                 if(tempoMode == 1) {
                     if(ImGui::DragFloat("##tbRatio", &settings.tempoRatio, 0.005f, 0.01f, 64.0f, "x %.3f")) changed = true;
                     if(ImGui::IsItemHovered()) ImGui::SetTooltip("The clock's tempo times this");
@@ -1692,23 +1750,20 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(changed) timeline.setPlaySettings(shownRef, settings);
         } else {
+            // The global tempo.
             float bpm = transportState.bpm;
             if(externalClock || timeline.isBpmAutomationEnabled()) {
-                // Read-only: the tempo comes from the clock or the tempo lane.
-                ImGui::BeginDisabled();
-                ImGui::SetNextItemWidth(78.0f);
-                ImGui::DragFloat("##tbBpmRead", &bpm, 0.0f, 0.0f, 0.0f, "%.1f BPM");
-                ImGui::EndDisabled();
+                // Read-only: the tempo comes from the clock or the BPM lane.
+                bpmInput("##tbBpmRead", bpm, false);
                 ImGui::SameLine(0.0f, 4.0f);
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextColored(externalClock ? ImVec4(0.45f, 0.95f, 0.5f, 1.0f) : ImVec4(0.95f, 0.75f, 0.35f, 1.0f),
-                                   externalClock ? "EXT" : "AUTO");
+                                   externalClock ? "EXT" : "LANE");
                 if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip(externalClock ? "Tempo from the external clock" : "Tempo from the tempo lane");
+                    ImGui::SetTooltip(externalClock ? "Tempo from the external clock" : "Tempo from the BPM lane");
             } else {
-                ImGui::SetNextItemWidth(78.0f);
-                if(ImGui::DragFloat("##tbBpm", &bpm, 0.1f, 1.0f, 999.0f, "%.1f BPM")) container->setBpm(bpm);
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo (drag, or double-click to type)");
+                if(bpmInput("##tbBpm", bpm)) container->setBpm(bpm);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Global tempo: type it and press Enter");
                 ImGui::SameLine(0.0f, 2.0f);
                 if(tapTempo(bpm)) container->setBpm(bpm);
             }
@@ -1718,10 +1773,10 @@ void ofxOceanodeTimelineController::draw() {
         {
             // Meter: numerator is free (any meter is valid), the denominator is
             // a note value so getBeatsPerBar() always lands on a sane grid.
-            int tsNumerator = own ? ownPlay->timeSignatureNumerator : timeline.getTimeSignatureNumerator();
-            int tsDenominator = own ? ownPlay->timeSignatureDenominator : timeline.getTimeSignatureDenominator();
+            int tsNumerator = ownMeter ? ownPlay->timeSignatureNumerator : timeline.getTimeSignatureNumerator();
+            int tsDenominator = ownMeter ? ownPlay->timeSignatureDenominator : timeline.getTimeSignatureDenominator();
             auto setMeter = [&](int numerator, int denominator) {
-                if(!own) { timeline.setTimeSignature(numerator, denominator); return; }
+                if(!ownMeter) { timeline.setTimeSignature(numerator, denominator); return; }
                 auto settings = *ownPlay;
                 settings.timeSignatureNumerator = numerator;
                 settings.timeSignatureDenominator = denominator;
@@ -1730,7 +1785,7 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::SetNextItemWidth(28.0f);
             if(ImGui::DragInt("##timeSigNum", &tsNumerator, 0.1f, 1, 64))
                 setMeter(tsNumerator, tsDenominator);
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time signature");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ownMeter ? "This timeline's time signature" : "The global time signature");
             ImGui::SameLine(0.0f, 3.0f);
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("/");
@@ -1865,7 +1920,7 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SetTooltip("Redo timeline action (Shift+Cmd/Ctrl+Z)");
     groupSeparator();
     {
-        // The main timeline's loop, or the shown one's own while it plays on its own.
+        // The global transport's loop, or the shown timeline's own on its own transport.
         bool loopEnabled = own ? ownPlay->loopEnabled : timeline.isLoopEnabled();
         const bool localLoopAvailable = own || !externalClock;
         auto setLoop = [&](bool enabled, double start, double end) {
@@ -1951,6 +2006,27 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SetNextItemWidth(62.0f);
         ImGui::DragInt("##tbBars", &visibleBars, 0.25f, 1, 256, "%d bars");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Timeline length");
+        // The BPM lane: the global tempo's for a timeline linked to the
+        // global transport, its own for a free one; none for a dependent one.
+        ImGui::SameLine(0.0f, 6.0f);
+        {
+            const bool laneVisible = !dependent && (own ? ownPlay->bpmLaneVisible : timeline.isBpmLaneVisible());
+            if(laneVisible) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            ImGui::BeginDisabled(dependent);
+            if(ImGui::Button("BPM Lane##tbBpmLane")) {
+                if(own) {
+                    auto settings = *ownPlay;
+                    settings.bpmLaneVisible = !laneVisible;
+                    timeline.setPlaySettings(shownRef, settings);
+                } else timeline.setBpmLaneVisible(!laneVisible);
+            }
+            ImGui::EndDisabled();
+            if(laneVisible) ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(dependent ? "A dependent timeline follows its host's tempo: no BPM lane of its own."
+                                  : own ? "Show or hide this timeline's BPM lane (its tempo over time, when enabled).\nHidden, it still plays."
+                                        : "Show or hide the global BPM lane (the global tempo over time, when enabled).\nHidden, it still plays.");
+        }
     }
 
     groupSeparator();
@@ -1985,14 +2061,13 @@ void ofxOceanodeTimelineController::draw() {
     // A Wave Track is created together with its first audio clip. Selecting
     // the file here avoids leaving an empty track behind and makes the
     // waveform visible immediately after the track is added.
-    ImGui::BeginDisabled(inMacroScope());
     if(ImGui::Button("+ Wave Track")) {
         waveFileRequest = WaveFileRequest::NewTrack;
-        waveFileRequestBeat = transportState.beatPosition;
+        waveFileRequestBeat = std::max(0.0, transportState.beatPosition);
     }
-    ImGui::EndDisabled();
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", inMacroScope() ? "Macro timelines hold automation only." : "New track with an audio file");
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("New track with an audio file. Wave tracks play on the timeline's own transport\n"
+                          "(a dependent timeline's only while it previews).");
     auto sameLineIfRoom = [&](float width) {
         const float right = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
         if(ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width < right) ImGui::SameLine();
@@ -2173,7 +2248,8 @@ void ofxOceanodeTimelineController::draw() {
     auto beatOffset = [&](double beat) { return beatToPixels(timeline, beat, transportState.bpm); };
     auto beatAtOffset = [&](float pixels) { return pixelsToBeat(timeline, pixels, transportState.bpm, endBeat); };
     // Give a manual zoom time to settle before automatic playback paging.
-    if(followPlayhead && !inMacroScope() && transportState.isPlaying && !zoomedThisFrame && ImGui::GetTime() >= zoomAnchorUntil) {
+    if(followPlayhead && transportState.isPlaying && transportState.beatPosition > kHiddenPlayheadBeat + 1.0 &&
+       !zoomedThisFrame && ImGui::GetTime() >= zoomAnchorUntil) {
         const float playheadX = beatOffset(transportState.beatPosition);
         if(playheadX > timelineScrollX + visibleWidth * 0.9f || playheadX < timelineScrollX)
             timelineScrollX = playheadX - visibleWidth * 0.1f;
@@ -2248,9 +2324,8 @@ void ofxOceanodeTimelineController::draw() {
     fileDropOriginX = zoneLeft - timelineScrollX;
     fileDropBpm = transportState.bpm;
     fileDropEndBeat = endBeat;
-    if(!inMacroScope() && timeline.isBpmLaneVisible()) // tempo belongs to the main timeline
-        bpmEditor.draw(timeline, *container, editorView(timeline, transportState.bpm, endBeat),
-                       contentWidth, transportState.beatPosition);
+    if(auto lane = shownBpmLaneTarget(timeline); lane.points != nullptr && *lane.visible)
+        bpmEditor.draw(lane, editorView(timeline, transportState.bpm, endBeat), contentWidth, transportState.beatPosition);
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Reset once per frame, before any track's handleClip can set it --
@@ -3629,16 +3704,8 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::MenuItem("Restore length"))
                         timeline.restoreClipLength(scope(timeline), track.id, clip.id);
                     if(ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Undo its stretch: its timeline at its natural speed again\n"
-                                          "(its own tempo when it keeps it), with as many repeats as now.");
+                        ImGui::SetTooltip("Undo its stretch: its timeline beat for beat again, with as many repeats as now.");
                 }
-                if(ImGui::MenuItem("Keep its own tempo", nullptr, clip.ownTempo, !clip.reversed))
-                    timeline.setClipOwnTempo(scope(timeline), track.id, clip.id, !clip.ownTempo);
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("On: the clip plays its timeline at that timeline's own tempo (its BPM, ratio\n"
-                                      "of the clock or tempo lane), not the host's; the clip's stretch still slows it.\n"
-                                      "Its repeats last as long as the timeline does at that tempo (following both tempo maps):\n"
-                                      "4 beats at 180 BPM take 2.667 beats at 120. Not for a reversed clip.");
                 if(ImGui::MenuItem("Clip properties...")) {
                     editorState.editorTrackId = track.id;
                     editorState.editorClipId = clip.id;
@@ -5755,12 +5822,15 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
 }
 
 void ofxOceanodeTimelineController::jumpToBeat(double beat) {
-    auto transport = container == nullptr ? nullptr : container->getTransport();
+    if(container == nullptr) return;
+    auto& timeline = container->getTimelineManager();
+    auto transport = timeline.transportFor(scopeRef());
     if(transport == nullptr || transport->hasExternalClock()) return;
     const auto state = transport->getState();
     if(quantizeJumps && state.isPlaying) {
         // Wait for the next bar line; the jump keeps the position within the bar.
-        const double beatsPerBar = std::max(1.0, container->getTimelineManager().getBeatsPerBar());
+        const auto* shownSequence = timeline.findTimeline(scopeRef());
+        const double beatsPerBar = std::max(1.0, shownSequence != nullptr ? timeline.beatsPerBarOf(*shownSequence) : timeline.getBeatsPerBar());
         double at = std::ceil(state.beatPosition / beatsPerBar - 1e-9) * beatsPerBar;
         if(at <= state.beatPosition + 1e-6) at += beatsPerBar;
         pendingJump = true;
@@ -5857,17 +5927,9 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         }
     }
 
-    // A macro timeline counts its own beats: the main timeline's loop, markers,
-    // seeking and tempo lane do not apply to it. Its playhead is the main
-    // one as the macro clip playing it now maps it (off screen when none).
-    // One that plays on its own has its own loop and seeking, edited here
-    // like the main timeline's (markers stay the main timeline's).
-    if(inMacroScope() && !timeline.isFree(scopeRef())) {
-        const float px = laneMin.x + beatToPixels(timeline, beatPosition, bpm);
-        if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2.5f);
-        dl->PopClipRect();
-        return;
-    }
+    // Every timeline has its loop and seeking here: the global transport's
+    // for one linked to it, its own otherwise (a dependent one's preview).
+    // Markers stay the root canvas's default timeline's.
     double loopStartBeat = 0.0, loopEndBeat = 0.0;
     const bool loopEnabled = shownLoop(timeline, loopStartBeat, loopEndBeat);
     if(loopEnabled) {
@@ -5999,30 +6061,6 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         }
     }
 
-    // Tempo (BPM) lane visibility: a toggle button in the ruler's label column
-    // (lit while the lane shows), and the same toggle on right-click anywhere
-    // in that column.
-    if(!inMacroScope()) {
-        const bool tempoVisible = timeline.isBpmLaneVisible();
-        const char* tempoLabel = "Tempo lane##rulerTempoLane";
-        const float tempoWidth = ImGui::CalcTextSize(tempoLabel, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        ImGui::SetCursorScreenPos(ImVec2(min.x + labelWidth - 10.0f - tempoWidth, min.y + kRulerRowGap));
-        if(tempoVisible) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
-        if(ImGui::SmallButton(tempoLabel)) timeline.setBpmLaneVisible(!tempoVisible);
-        ImGui::PopStyleColor(tempoVisible ? 2 : 1);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Show or hide the tempo (BPM) automation row.\nHidden, tempo automation still plays.");
-        if(hoverRect(min, ImVec2(zoneLeft, max.y)) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-            ImGui::OpenPopup("##rulerLabelMenu");
-        if(ImGui::BeginPopup("##rulerLabelMenu")) {
-            ImGui::TextUnformatted("Ruler");
-            contextMenuSection("Lanes");
-            if(ImGui::MenuItem("Show tempo (BPM) lane", nullptr, timeline.isBpmLaneVisible()))
-                timeline.setBpmLaneVisible(!timeline.isBpmLaneVisible());
-            ImGui::EndPopup();
-        }
-    }
 }
 
 void ofxOceanodeTimelineController::drawSharedClipProperties(ofxOceanodeTimelineManager& timeline,
@@ -6730,8 +6768,11 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         addFromGroup(sourceModel->getParameterGroup(), true);
         addInstrument(sourceModel);
     }
+    // Only what the timeline shown can drive: its own canvas (a timeline
+    // never reaches above its canvas), else the parameter's.
     ofxOceanodeContainer* candidateContainer = container.get();
-    if(sourceModel != nullptr && sourceModel->getHostContainer() != nullptr)
+    if(inMacroScope() && scopes.back().container != nullptr) candidateContainer = scopes.back().container;
+    else if(sourceModel != nullptr && sourceModel->getHostContainer() != nullptr)
         candidateContainer = sourceModel->getHostContainer();
     for(auto* node : candidateContainer->getAllModules()) {
         if(node == nullptr) continue;
@@ -7271,9 +7312,12 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
             if(parameterTargetLaneId.empty() && !clip->lanes.empty()) parameterTargetLaneId = clip->lanes.front().id;
         }
     }
-    // At the playhead on the main timeline; a timeline of its own starts at 0.
-    const bool mainTimeline = sequence == &timeline.getMainSequence();
-    parameterClipStart = mainTimeline ? snapBeat(std::max(0.0, container->getTransportState().beatPosition)) : 0.0;
+    // At that timeline's playhead (0 while it has none).
+    double playhead = 0.0;
+    ofxOceanodeTimelineManager::TimelineRef ref;
+    if(sequence != nullptr && timeline.refOf(*sequence, ref) && timeline.timelinePlayheadBeat(ref, playhead)) playhead = std::max(0.0, playhead);
+    else playhead = 0.0;
+    parameterClipStart = snapBeat(playhead);
     parameterClipDuration = timeline.getBeatsPerBar();
     requestParameterClipPopup = true;
 }

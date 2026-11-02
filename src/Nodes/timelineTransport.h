@@ -2,10 +2,10 @@
 //  timelineTransport.h
 //  ofxOceanode
 //
-//  Plays, stops and restarts a timeline of the project from the patch: the
-//  main one, a further one, or a macro's. A timeline other than the main one
-//  has its own transport only while it plays on its own ("Independent"), so
-//  the triggers do nothing for the others (marked in the dropdown).
+//  Plays, stops and restarts a timeline of the project from the patch: any
+//  of the main canvas's or a macro's. One linked to the global transport
+//  plays, stops and seeks that transport; a free one its own; a dependent
+//  one (placed as clips in another, marked in the dropdown) its preview.
 //
 
 #ifndef timelineTransport_h

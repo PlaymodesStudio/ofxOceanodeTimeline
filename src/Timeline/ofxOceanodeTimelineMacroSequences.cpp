@@ -113,11 +113,18 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
         if(ofFile::doesFileExist(file)) sequenceFromJson(*entry.sequence, ofLoadJson(file));
     }
     macroSequences.push_back(entry);
+    const std::string canvas = macroContainer.getCanvasID();
+    // Older project files kept which timelines played free, and whose nodes
+    // followed clips, apart from the macro: now in its own settings.
+    if(legacyFreeTimelines.count({canvas, std::string()}) > 0) entry.sequence->play.free = true;
+    if(legacyClipFollowCanvases.count(canvas) > 0) entry.sequence->play.nodesFollowClips = true;
+    for(auto& timeline : entry.sequence->timelines)
+        if(legacyFreeTimelines.count({canvas, timeline->timelineId}) > 0) timeline->play.free = true;
     // Its timelines that play on their own and are set to play on load start
     // (while the macro is active).
-    const std::string canvas = macroContainer.getCanvasID();
     playOnLoadPending.insert({canvas, std::string()});
     for(const auto& timeline : entry.sequence->timelines) playOnLoadPending.insert({canvas, timeline->timelineId});
+    invalidateEvaluationIndexes();
 }
 
 bool ofxOceanodeTimelineManager::macrosActive(Player& player) const {
@@ -218,35 +225,8 @@ ofxOceanodeContainer* ofxOceanodeTimelineManager::findMacroContainer(const ofxOc
     return containerWithCanvas(*container, canvas);
 }
 
-std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
-                                                        double startBeat, double durationBeats) {
-    const auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || !track->isMacroTrack()) return std::string();
-    auto* macroSequence = placedTimeline(sequence, *track);
-    const double length = macroSequence == nullptr ? getBeatsPerBar() : macroTimelineLength(*macroSequence);
-    const auto id = createClip(sequence, trackId, track->name, startBeat, durationBeats > 0.0 ? durationBeats : length);
-    if(auto* clip = getClip(sequence, trackId, id)) {
-        clip->contentDurationBeats = length;
-        clip->contentStretch = 1.0;
-        clip->repeatContent = true;
-        // A timeline with a tempo of its own plays at it, so the clip lasts
-        // as long as the timeline does at that tempo.
-        clip->ownTempo = macroSequence != nullptr && macroSequence->play.hasOwnTempo();
-        if(clip->ownTempo) {
-            clip->ownTempoFactor = ownTempoFactorFor(sequence, *clip, *macroSequence);
-            if(durationBeats <= 0.0) clip->durationBeats = std::max(1.0 / 24.0, length * clip->ownTempoFactor);
-        }
-    }
-    invalidateEvaluationIndexes();
-    return id;
-}
-
 std::string ofxOceanodeTimelineManager::createMacroTrack(ofxOceanodeContainer& macroContainer) {
     return createMacroTrack(mainSequence, macroContainer);
-}
-
-std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& trackId, double startBeat, double durationBeats) {
-    return createMacroClip(mainSequence, trackId, startBeat, durationBeats);
 }
 
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter(const ofxOceanodeContainer& macroContainer,
@@ -270,8 +250,9 @@ std::string relativeTo(const std::string& base, const std::string& path) {
 
 int ofxOceanodeTimelineManager::retargetAllParameterPaths(const std::map<std::string, std::string>& oldToNew) {
     int changed = retargetParameterPaths(mainSequence, oldToNew);
+    for(auto& timeline : mainSequence.timelines) changed += retargetParameterPaths(*timeline, oldToNew);
     pruneMacroSequences();
-    // Macro timelines hold paths relative to their macro.
+    // Macro timelines (and their canvas's further ones) hold paths relative to their macro.
     for(const auto& entry : macroSequences) {
         const std::string base = entry.address->getCanvasID();
         std::map<std::string, std::string> relative;
@@ -279,21 +260,47 @@ int ofxOceanodeTimelineManager::retargetAllParameterPaths(const std::map<std::st
             const auto relativeFrom = relativeTo(base, from), relativeNew = relativeTo(base, to);
             if(!relativeFrom.empty() && !relativeNew.empty()) relative[relativeFrom] = relativeNew;
         }
-        if(!relative.empty()) changed += retargetParameterPaths(*entry.sequence, relative);
+        if(relative.empty()) continue;
+        changed += retargetParameterPaths(*entry.sequence, relative);
+        for(auto& timeline : entry.sequence->timelines) changed += retargetParameterPaths(*timeline, relative);
     }
     return changed;
 }
 
 void ofxOceanodeTimelineManager::collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const {
     if(container == nullptr) return;
-    for(const auto& track : mainSequence.tracks)
-        for(const auto& binding : track.bindings)
-            if(auto* parameter = container->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
-    pruneMacroSequences();
-    for(const auto& entry : macroSequences)
-        for(const auto& track : entry.sequence->tracks)
+    auto collect = [&](const ofxOceanodeTimelineSequence& sequence, const ofxOceanodeContainer& base) {
+        for(const auto& track : sequence.tracks)
             for(const auto& binding : track.bindings)
-                if(auto* parameter = entry.address->findTimelineParameter(binding.parameterPath)) result.insert(parameter);
+                if(auto* parameter = base.findTimelineParameter(binding.parameterPath)) result.insert(parameter);
+    };
+    collect(mainSequence, *container);
+    for(const auto& timeline : mainSequence.timelines) collect(*timeline, *container);
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences) {
+        collect(*entry.sequence, *entry.address);
+        for(const auto& timeline : entry.sequence->timelines) collect(*timeline, *entry.address);
+    }
+}
+
+void ofxOceanodeTimelineManager::removeBindingsOf(ofxOceanodeAbstractParameter& parameter) {
+    // Every timeline: by the path each one saves for the parameter.
+    auto remove = [&](ofxOceanodeTimelineSequence& sequence) {
+        const std::string path = resolverFor(sequence).pathOf(parameter);
+        if(path.empty()) return;
+        std::vector<std::pair<std::string, std::string>> bindings;
+        for(const auto& track : sequence.tracks)
+            for(const auto& binding : track.bindings)
+                if(binding.parameterPath == path) bindings.emplace_back(track.id, binding.id);
+        for(const auto& binding : bindings) removeBinding(sequence, binding.first, binding.second);
+    };
+    remove(mainSequence);
+    for(auto& timeline : mainSequence.timelines) remove(*timeline);
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences) {
+        remove(*entry.sequence);
+        for(auto& timeline : entry.sequence->timelines) remove(*timeline);
+    }
 }
 
 ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::sequenceForCanvas(ofxOceanodeContainer& canvas) {
@@ -497,13 +504,15 @@ std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {
     auto* sequence = findTimeline(ref);
     if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;
     if(!ref.timeline.empty()) return ref.timeline;
-    if(isRootCanvas(ref.canvas)) return "Main";
+    if(isRootCanvas(ref.canvas)) return "Timeline 1";
     if(auto* canvas = canvasContainer(ref.canvas)) return getMacroSequenceLabel(*canvas);
     return ref.canvas;
 }
 
 std::vector<ofxOceanodeTimelineManager::TimelineRef> ofxOceanodeTimelineManager::allTimelines() {
-    std::vector<TimelineRef> refs{{}};
+    std::vector<TimelineRef> refs;
+    // (A canvas's default timeline only once it is there: see timelineExists.)
+    if(timelineExists({})) refs.push_back({});
     for(const auto& timeline : mainSequence.timelines) refs.push_back({std::string(), timeline->timelineId});
     // (A macro's own timeline only once it is there: see timelineExists.)
     pruneMacroSequences();

@@ -59,7 +59,7 @@ ofJson ofxOceanodeTimelineManager::timelineEditData() const {
     // Not part of a main-timeline edit: the canvas's further timelines (each
     // with its own history), which timelines play free, the windows and the
     // clip-following macros stay as they are across undo.
-    for(const char* key : {"timelines", "nextTimelineNumber", "players", "windows", "clipFollow"}) state.erase(key);
+    for(const char* key : {"timelines", "nextTimelineNumber", "windows"}) state.erase(key);
     return state;
 }
 
@@ -98,16 +98,12 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     const auto keptTimelines = mainSequence.timelines;
     const auto keptPlay = mainSequence.play;
     const auto keptNextTimeline = mainSequence.nextTimelineNumber;
-    const auto keptFree = freeTimelines;
     const auto keptWindows = timelineWindows;
-    const auto keptClipFollow = clipFollowCanvases;
     clear();
     mainSequence.timelines = keptTimelines;
     mainSequence.play = keptPlay;
     mainSequence.nextTimelineNumber = keptNextTimeline;
-    freeTimelines = keptFree;
     timelineWindows = keptWindows;
-    clipFollowCanvases = keptClipFollow;
     mainSequence.tracks = state.tracks;
     mainSequence.clipGroups = state.groups;
     markers = state.markers;

@@ -874,20 +874,28 @@ ofxOceanodeTimelineManager::ofxOceanodeTimelineManager(ofxOceanodeContainer* own
     playContext.salt = clipChanceSalt;
 }
 
-bool ofxOceanodeTimelineManager::setMetronomeEnabled(bool enabled) {
+bool ofxOceanodeTimelineManager::setMetronomeEnabled(bool enabled, const TimelineRef& given) {
+    const auto ref = normalizedRef(given);
     if(!enabled) {
         metronome.reset();
         return true;
     }
-    if(metronome) return true;
-    if(container == nullptr || container->getTransport() == nullptr) return false;
-    auto output = std::make_unique<ofxOceanodeTimelineMetronome>(container->getTransport());
-    output->setMeter(timeSignatureNumerator, timeSignatureDenominator);
+    if(metronome && ref == metronomeRef) return true;
+    // That timeline's transport, whatever its clock source (the global one,
+    // its own, or its preview when dependent).
+    auto transport = transportFor(ref);
+    if(transport == nullptr) return false;
+    auto output = std::make_unique<ofxOceanodeTimelineMetronome>(transport);
+    const auto* sequence = timelineFor(ref);
+    if(sequence != nullptr && !(isMainSequence(*sequence) && mainPlayedByPrimary()))
+        output->setMeter(sequence->play.timeSignatureNumerator, sequence->play.timeSignatureDenominator);
+    else output->setMeter(timeSignatureNumerator, timeSignatureDenominator);
     if(!output->start()) {
         ofLogWarning("ofxOceanodeTimeline") << "Could not open metronome audio output";
         return false;
     }
     metronome = std::move(output);
+    metronomeRef = ref;
     return true;
 }
 
@@ -4353,7 +4361,7 @@ const ofxOceanodeTimelineMarker* ofxOceanodeTimelineManager::getMarker(const std
 }
 
 void ofxOceanodeTimelineManager::syncLoopToTransport() {
-    if(container == nullptr) return;
+    if(container == nullptr || engineSharesRoot) return; // the global loop is the root's default timeline's to set
     const auto transport = playTransport();
     if(transport == nullptr) return;
     // An external clock owns position and looping. Preserve the timeline's
@@ -4550,11 +4558,25 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Timelines playing on their own first: the main timeline then applies
     // over them on any path both drive.
     if(!isEngine()) {
-        refreshOwnTempoFactors();
         updatePlayers();
         updateTimeSources();
+        if(metronome) {
+            // It follows its timeline: that one's transport (a new one when
+            // its clock source changed) and meter; gone with the timeline.
+            const auto transport = transportFor(metronomeRef);
+            if(transport == nullptr) metronome.reset();
+            else if(transport != metronome->getTransport()) {
+                metronome.reset();
+                setMetronomeEnabled(true, metronomeRef);
+            }
+            if(metronome) {
+                const auto* sequence = findTimeline(metronomeRef);
+                if(sequence != nullptr && !(isMainSequence(*sequence) && mainPlayedByPrimary()))
+                    metronome->setMeter(sequence->play.timeSignatureNumerator, sequence->play.timeSignatureDenominator);
+                else metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
+            }
+        }
     }
-    if(metronome) metronome->setMeter(timeSignatureNumerator, timeSignatureDenominator);
     // Track/binding/clip storage may have changed through the editor since
     // the previous update. Rebuild only then, and share the indexes across the
     // frame evaluation, scheduler probes and both applyAutomation passes.
@@ -4566,14 +4588,17 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Following an external clock (MIDI clock): the master owns the root's
     // position, tempo and looping (a timeline playing on its own keeps its own).
     const auto ownerTransportPtr = playTransport();
-    const bool externalClock = !isEngine() && ownerTransportPtr != nullptr && ownerTransportPtr->hasExternalClock();
+    const bool externalClock = (!isEngine() || engineSharesRoot) && ownerTransportPtr != nullptr && ownerTransportPtr->hasExternalClock();
 
     // The transport owns the loop (it wraps exactly at the loop end, keeping
     // the overshoot). Hand it the range; an external clock owns looping itself.
-    // Each timeline sets its own transport's loop and meter.
+    // Each timeline sets its own transport's loop and meter; an engine on
+    // the global transport reads them (the root's default timeline sets them).
     if(auto ownerTransport = playTransport()) {
-        ownerTransport->setLoop(!externalClock && loopEnabled, loopStartBeat, loopEndBeat);
-        ownerTransport->setBeatsPerBar(getBeatsPerBar());
+        if(!engineSharesRoot) {
+            ownerTransport->setLoop(!externalClock && loopEnabled, loopStartBeat, loopEndBeat);
+            ownerTransport->setBeatsPerBar(getBeatsPerBar());
+        }
         transport = ownerTransport->getState();
     }
 
@@ -4696,7 +4721,10 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     lastEvaluatedTransportBeat = transport.beatPosition;
     hasEvaluatedTransportBeat = true;
 
-    if(bpmAutomationEnabled && !externalClock) { // an external clock sets the tempo
+    if(engineSharesRoot) {
+        // The global transport's tempo is the root's default timeline's to
+        // set (its tempo lane is known here to look ahead along it).
+    } else if(bpmAutomationEnabled && !externalClock) { // an external clock sets the tempo
         const float automatedBpm = evaluateBpm(transport.beatPosition, transport.bpm);
         if(std::abs(automatedBpm - transport.bpm) > 0.001f) {
             if(isEngine()) engineTransport->setBpm(automatedBpm);
@@ -4820,6 +4848,13 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         if(stateCapturePathsCache.count(path) > 0)
             stateCaptureLastAppliedValues[path] = parameterValueForAutomation(*parameter);
     }
+    // A dependent timeline previewing (played by hand) is heard over the
+    // timelines placing it, playing or stopped at a clip of it: its values
+    // land after theirs.
+    if(!isEngine())
+        for(auto& player : players)
+            if(player->source == ClockSource::Dependent && player->ranLastFrame && player->engine != nullptr)
+                player->engine->applyAutomation();
     // A gate released this frame whose binding is no longer active -- bypassed,
     // or gone with an undo or a load -- has nothing above to close it. Close it
     // once, at its own width, and leave it alone afterwards.
@@ -4914,10 +4949,12 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.timelines.clear();
     mainSequence.nextTimelineNumber = 2;
     mainSequence.play = {};
-    freeTimelines.clear();
     playOnLoadPending.clear();
     timelineWindows.clear();
-    clipFollowCanvases.clear();
+    placedTimelines.clear();
+    placedTimelinesValid = false;
+    legacyFreeTimelines.clear();
+    legacyClipFollowCanvases.clear();
     markers.clear();
     viewState = {};
     playOnPresetLoad = false;

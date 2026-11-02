@@ -1,6 +1,9 @@
 #include "ofxOceanodeTimelineBpmEditor.h"
 #include "ofxOceanodeTimelineEditorView.h"
 #include "ofxOceanodeTimelineEditorUi.h"
+#include "imgui_internal.h"
+#include <cstdio>
+#include <cstdlib>
 #include "Timeline/ofxOceanodeTimeline.h"
 #include "ofxOceanodeContainer.h"
 #include <algorithm>
@@ -9,13 +12,13 @@
 using namespace ofxOceanodeTimelineEditorUi;
 using namespace ofxOceanodeTimelineCurve;
 
-void ofxOceanodeTimelineBpmEditor::draw(
-    ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& container,
-    const ofxOceanodeTimelineEditorView& view, float contentWidth, double beatPosition) {
+void ofxOceanodeTimelineBpmEditor::draw(const ofxOceanodeTimelineTempoLane& lane,
+                                        const ofxOceanodeTimelineEditorView& view, float contentWidth, double beatPosition) {
+    if(lane.points == nullptr || lane.tensions == nullptr) return;
     const double endBeat = view.endBeat;
-    const float fallbackBpm = view.fallbackBpm;
-    const float timelineScrollX = timeline.getViewState().scrollX;
-    const bool collapsed = timeline.isBpmLaneCollapsed();
+    const float fallbackBpm = lane.manualBpm;
+    const float timelineScrollX = view.timeline.getViewState().scrollX;
+    const bool collapsed = lane.collapsed;
     const float height = collapsed ? 29.0f : 132.0f;
     ImGui::Dummy(ImVec2(contentWidth, height));
     const ImVec2 min = ImGui::GetItemRectMin();
@@ -34,29 +37,34 @@ void ofxOceanodeTimelineBpmEditor::draw(
     ImGui::SetCursorScreenPos(ImVec2(min.x + 5.0f, min.y + 4.0f));
     ImGui::SetNextItemAllowOverlap();
     if(foldButton("##bpmCollapse", !collapsed))
-        timeline.setBpmLaneCollapsed(!collapsed);
+        if(lane.setCollapsed) lane.setCollapsed(!collapsed);
     ImGui::SameLine();
-    ImGui::TextUnformatted("Global tempo (BPM)");
+    ImGui::TextUnformatted("BPM");
     ImGui::SameLine();
-    bool enabled = timeline.isBpmAutomationEnabled();
-    if(ImGui::Checkbox("Auto##bpmAuto", &enabled)) timeline.setBpmAutomationEnabled(enabled);
+    bool enabled = lane.enabled;
+    if(ImGui::Checkbox("Enable##bpmEnable", &enabled))
+        if(lane.setEnabled) lane.setEnabled(enabled);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Enabled, the tempo follows these points; off, it stays at the BPM beside (the flat line).");
     if(!enabled) {
-        // With automation off, this lane still shows Oceanode's actual BPM
-        // (the flat line below), but there was no way to type an exact
-        // value here - only via the separate transport toolbar or the Time
-        // controller. Both write through container.setBpm(), and this
-        // reads transportState.bpm fresh every frame, so all three stay in
-        // sync regardless of which one last changed it.
+        // With the lane off it still shows the tempo (the flat line below);
+        // typed here, it applies on Enter (as in the toolbar).
         ImGui::SameLine();
-        float manualBpm = fallbackBpm;
-        ImGui::SetNextItemWidth(70.0f);
-        if(ImGui::DragFloat("##bpmManual", &manualBpm, 0.1f, 1.0f, 999.0f, "%.1f"))
-            container.setBpm(manualBpm);
+        if(ImGui::GetActiveID() != ImGui::GetID("##bpmManual"))
+            std::snprintf(manualBpmText, sizeof(manualBpmText), "%.1f", fallbackBpm);
+        ImGui::SetNextItemWidth(60.0f);
+        if(ImGui::InputText("##bpmManual", manualBpmText, sizeof(manualBpmText),
+                            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
+                            ImGuiInputTextFlags_CharsDecimal)) {
+            char* end = nullptr;
+            const float typed = std::strtof(manualBpmText, &end);
+            if(end != manualBpmText && std::isfinite(typed) && lane.setManualBpm) lane.setManualBpm(ofClamp(typed, 1.0f, 999.0f));
+        }
     }
     // Same 4 shapes as a curve lane (Step/Linear/Log-Exp/Sigmoid), reusing
     // the shared curve math so the BPM curve is evaluated, drawn and timed
     // the exact same way a regular automation curve is.
-    const auto bpmInterpolation = curveInterpolationMode(timeline.getBpmInterpolation());
+    const auto bpmInterpolation = curveInterpolationMode(lane.interpolation);
     if(!collapsed) {
         int interpolationMode = static_cast<int>(bpmInterpolation);
         ImGui::SetCursorScreenPos(ImVec2(min.x + 5.0f, min.y + 35.0f));
@@ -64,11 +72,11 @@ void ofxOceanodeTimelineBpmEditor::draw(
         ImGui::SetCursorScreenPos(ImVec2(min.x + 55.0f, min.y + 31.0f));
         ImGui::SetNextItemWidth(std::max(1.0f, zoneLeft - min.x - 61.0f));
         if(ImGui::Combo("##bpmInterpolation", &interpolationMode, curveInterpolationNames, 4)) {
-            timeline.setBpmInterpolation(curveInterpolationNames[interpolationMode]);
+            if(lane.setInterpolation) lane.setInterpolation(curveInterpolationNames[interpolationMode]);
             bpmTensionSegment = -1;
         }
-        float minimum = timeline.getBpmMinimum();
-        float maximum = timeline.getBpmMaximum();
+        float minimum = lane.minimum;
+        float maximum = lane.maximum;
         const float rangeStartX = min.x + 55.0f;
         const float rangeAvailable = std::max(2.0f, zoneLeft - rangeStartX - 6.0f);
         const float rangeFieldWidth = std::max(1.0f, (rangeAvailable - 4.0f) * 0.5f);
@@ -76,11 +84,11 @@ void ofxOceanodeTimelineBpmEditor::draw(
         ImGui::TextUnformatted("Range");
         ImGui::SetCursorScreenPos(ImVec2(rangeStartX, min.y + 60.0f));
         ImGui::SetNextItemWidth(rangeFieldWidth);
-        if(ImGui::DragFloat("##bpmMin", &minimum, 0.5f, 1.0f, 998.0f, "%.0f")) timeline.setBpmRange(minimum, maximum);
+        if(ImGui::DragFloat("##bpmMin", &minimum, 0.5f, 1.0f, 998.0f, "%.0f")) if(lane.setRange) lane.setRange(minimum, maximum);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Minimum BPM");
         ImGui::SameLine(0.0f, 4.0f);
         ImGui::SetNextItemWidth(rangeFieldWidth);
-        if(ImGui::DragFloat("##bpmMax", &maximum, 0.5f, minimum + 1.0f, 999.0f, "%.0f")) timeline.setBpmRange(minimum, maximum);
+        if(ImGui::DragFloat("##bpmMax", &maximum, 0.5f, minimum + 1.0f, 999.0f, "%.0f")) if(lane.setRange) lane.setRange(minimum, maximum);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Maximum BPM");
         ImGui::SetCursorScreenPos(ImVec2(min.x + 55.0f, min.y + 89.0f));
         if(bpmInterpolation == CurveInterpolationMode::LogExp) ImGui::TextDisabled("Alt-drag vertically");
@@ -97,9 +105,9 @@ void ofxOceanodeTimelineBpmEditor::draw(
     const float graphTop = min.y + (collapsed ? 4.0f : 8.0f);
     const float graphBottom = max.y - (collapsed ? 4.0f : 8.0f);
     dl->PushClipRect(ImVec2(zoneLeft, graphTop), ImVec2(max.x, graphBottom), true);
-    if(timeline.isLoopEnabled()) {
-        const float loopX1 = timelineMin.x + view.beatToPixels(timeline.getLoopStartBeat());
-        const float loopX2 = timelineMin.x + view.beatToPixels(timeline.getLoopEndBeat());
+    if(lane.loopEnabled) {
+        const float loopX1 = timelineMin.x + view.beatToPixels(lane.loopStartBeat);
+        const float loopX2 = timelineMin.x + view.beatToPixels(lane.loopEndBeat);
         dl->AddRectFilled(ImVec2(std::max(timelineMin.x, loopX1), graphTop), ImVec2(std::min(max.x, loopX2), graphBottom), IM_COL32(95, 105, 220, 25));
     }
     const double grid = view.displayGridBeats();
@@ -107,22 +115,22 @@ void ofxOceanodeTimelineBpmEditor::draw(
     for(int i = 0; i <= gridLines; ++i) {
         const double beat = i * grid;
         const float x = timelineMin.x + view.beatToPixels(beat);
-        const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
+        const bool bar = std::fmod(beat, std::max(1e-6, lane.beatsPerBar)) < 0.001;
         if(bar || view.beatToPixels(beat + grid) - view.beatToPixels(beat) >= 4.0f)
             dl->AddLine(ImVec2(x, graphTop), ImVec2(x, graphBottom), bar ? barColor : gridColor, bar ? 1.5f : 1.0f);
     }
 
-    auto& sourcePoints = timeline.getBpmAutomationPoints();
-    auto& sourceTensions = timeline.getBpmCurveTensions();
+    auto& sourcePoints = *lane.points;
+    auto& sourceTensions = *lane.tensions;
     if(bpmDragPointIndex < 0 && bpmTensionSegment < 0)
         std::sort(sourcePoints.begin(), sourcePoints.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
     sourceTensions.resize(sourcePoints.empty() ? 0 : sourcePoints.size() - 1);
     std::vector<ofxOceanodeTimelineCurvePoint> points = sourcePoints;
     if(points.empty()) points.push_back({0.0, fallbackBpm});
     std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
-    const float bpmSpan = std::max(1.0f, timeline.getBpmMaximum() - timeline.getBpmMinimum());
+    const float bpmSpan = std::max(1.0f, lane.maximum - lane.minimum);
     auto bpmToY = [&](float value) {
-        const float normalized = ofClamp((value - timeline.getBpmMinimum()) / bpmSpan, 0.0f, 1.0f);
+        const float normalized = ofClamp((value - lane.minimum) / bpmSpan, 0.0f, 1.0f);
         return graphBottom - normalized * (graphBottom - graphTop);
     };
     if(points.size() == 1) {
@@ -163,16 +171,16 @@ void ofxOceanodeTimelineBpmEditor::draw(
     if(!collapsed && canvasHovered) {
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const double beat = view.snapBeat(view.pixelsToBeat(mouse.x - timelineMin.x));
-        const float value = ofClamp(timeline.getBpmMinimum() +
+        const float value = ofClamp(lane.minimum +
             (graphBottom - mouse.y) / std::max(1.0f, graphBottom - graphTop) * bpmSpan,
-            timeline.getBpmMinimum(), timeline.getBpmMaximum());
+            lane.minimum, lane.maximum);
         const double tolerance = std::max(1.0 / ofxOceanodeTimelineEditorView::ppq,
             std::abs(view.pixelsToBeat(mouse.x - timelineMin.x + 5.0f) - beat));
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             bpmValuePointIndex = -1;
             if(sourcePoints.empty() && std::abs(mouse.x - timelineMin.x) <= 8.0f &&
                std::abs(bpmToY(fallbackBpm) - mouse.y) <= 9.0f) {
-                sourcePoints.push_back({0.0, ofClamp(fallbackBpm, timeline.getBpmMinimum(), timeline.getBpmMaximum())});
+                sourcePoints.push_back({0.0, ofClamp(fallbackBpm, lane.minimum, lane.maximum)});
                 bpmValuePointIndex = 0;
             }
             for(int i = static_cast<int>(sourcePoints.size()) - 1; i >= 0; --i) {
@@ -269,7 +277,7 @@ void ofxOceanodeTimelineBpmEditor::draw(
             ImGui::SetNextItemWidth(110.0f);
             if(ImGui::InputFloat("BPM", &bpmNumericValue, 0.1f, 1.0f, "%.3f")) {
                 sourcePoints[bpmValuePointIndex].value = ofClamp(bpmNumericValue,
-                    timeline.getBpmMinimum(), timeline.getBpmMaximum());
+                    lane.minimum, lane.maximum);
             }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete point")) {
@@ -288,7 +296,7 @@ void ofxOceanodeTimelineBpmEditor::draw(
         bpmTensionSegment = -1;
     }
     if(collapsed && canvasHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-        timeline.setBpmLaneCollapsed(false);
+        if(lane.setCollapsed) lane.setCollapsed(false);
 
     const float playheadX = timelineMin.x + view.beatToPixels(beatPosition);
     if(playheadX >= zoneLeft && playheadX <= max.x)

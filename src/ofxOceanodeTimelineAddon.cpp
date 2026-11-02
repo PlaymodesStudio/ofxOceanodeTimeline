@@ -51,12 +51,7 @@ public:
         return manager.saveMacroSequence(macroContainer, folder);
     }
     void removeParameterBindings(ofxOceanodeAbstractParameter& parameter) override {
-        const auto path = host->getTimelineParameterPath(parameter);
-        std::vector<std::pair<std::string, std::string>> bindings;
-        for(const auto& track : manager.getTracks())
-            for(const auto& binding : track.bindings)
-                if(binding.parameterPath == path) bindings.emplace_back(track.id, binding.id);
-        for(const auto& binding : bindings) manager.removeBinding(binding.first, binding.second);
+        manager.removeBindingsOf(parameter);
     }
     void drawParameterMenu(ofxOceanodeAbstractParameter& absParam) override {
         if(manager.isStepLaneCompatible(absParam)){
@@ -125,9 +120,12 @@ public:
                     if(!timelineManager.timelineExists(ref)) {
                         // A macro with no timeline yet: its own is made in the New
                         // Timeline dialog (name, colour, owner), this parameter on it.
-                        if(ImGui::Selectable((ref.canvas + " > New Timeline...").c_str())) requestNewTimeline(ref.canvas);
+                        const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
+                        if(ImGui::Selectable(((root ? std::string("Main canvas") : ref.canvas) + " > New Timeline...").c_str()))
+                            requestNewTimeline(ref.canvas);
                         if(ImGui::IsItemHovered())
-                            ImGui::SetTooltip("This macro has no timeline yet: make its own,\nwith this parameter on its first track.");
+                            ImGui::SetTooltip(root ? "The main canvas has no timeline yet: make one,\nwith this parameter on its first track."
+                                                   : "This macro has no timeline yet: make its own,\nwith this parameter on its first track.");
                         ImGui::PopID();
                         continue;
                     }
@@ -186,10 +184,8 @@ public:
                             boundLocations.push_back({ref, track.id, timelineManager.timelineName(ref) + " > " + track.name, binding.id});
             }
             auto removeAt = [&](const BoundLocation& location) {
-                if(auto* sequence = timelineManager.timelineFor(location.ref)) {
-                    if(sequence == &timelineManager.getMainSequence()) timelineManager.removeBinding(location.trackId, location.bindingId);
-                    else timelineManager.removeBinding(*sequence, location.trackId, location.bindingId);
-                }
+                if(auto* sequence = timelineManager.timelineFor(location.ref))
+                    timelineManager.removeBinding(*sequence, location.trackId, location.bindingId);
             };
             if(boundLocations.size() == 1){
                 if(ImGui::Selectable("Remove from Timeline")) removeAt(boundLocations.front());
@@ -292,27 +288,32 @@ public:
                         } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
                     }
                     {
+                        using ClockSource = ofxOceanodeTimelineManager::ClockSource;
                         const auto ref = manager.refForCanvas(*macro->getContainer());
-                        bool free = manager.isFree(ref);
-                        if(ImGui::MenuItem("Independent tempo for its timeline", nullptr, free)) {
+                        const bool exists = manager.timelineExists(ref);
+                        const ClockSource source = manager.clockSourceOf(ref);
+                        const bool free = source == ClockSource::Free;
+                        const bool dependent = source == ClockSource::Dependent;
+                        if(ImGui::MenuItem("Free tempo for its timeline", nullptr, free, exists && !dependent)) {
                             manager.setFree(ref, !free);
                             ImGui::CloseCurrentPopup();
                         }
-                        if(ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Its timeline gets its own transport: play, stop and seek it by itself,\n"
-                                              "at its own tempo, alongside the main timeline. Nodes inside the macro\n"
-                                              "set to Auto follow it. (Its macro clips still play it too.)");
+                        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip(dependent ? "Its timeline is placed as clips in another: it depends on that one."
+                                              : "Its timeline gets its own transport: play, stop and seek it by itself,\n"
+                                                "at its own tempo, alongside the global transport. Nodes inside the macro\n"
+                                                "set to Auto follow it. Off: linked to the global transport.");
                         bool followsClips = manager.nodesFollowClips(ref.canvas);
-                        if(ImGui::MenuItem("Nodes inside follow its clips", nullptr, followsClips, !free)) {
+                        if(ImGui::MenuItem("Nodes inside follow its clips", nullptr, followsClips, exists && !free)) {
                             manager.setNodesFollowClips(ref.canvas, !followsClips);
                             ImGui::CloseCurrentPopup();
                         }
                         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip(free ? "Its timeline has an independent tempo: nodes inside follow it."
+                            ImGui::SetTooltip(free ? "Its timeline is free: nodes inside follow it."
                                                    : "Nodes inside set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
                                                      "the macro clip playing it: its beat, restarting with each clip and repeat,\n"
                                                      "at its stretched tempo. Off: they follow the timeline around the macro.");
-                        if(ImGui::MenuItem("Open its timeline in a new window")) {
+                        if(ImGui::MenuItem("Open its timeline in a new window", nullptr, false, exists)) {
                             manager.openTimelineWindow(ref);
                             ImGui::CloseCurrentPopup();
                         }
