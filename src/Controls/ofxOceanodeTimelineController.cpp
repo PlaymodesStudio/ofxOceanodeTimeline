@@ -1362,6 +1362,13 @@ void ofxOceanodeTimelineController::draw() {
         else if(selectedTrack != nullptr)
             timeline.splitClip(scope(timeline), selected.first, selected.second, transportState.beatPosition);
     }
+    // Alt+Z zooms to fit, like the toolbar's Fit button.
+    if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+       !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
+       !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) &&
+       ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeySuper &&
+       ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        requestZoomToFit = true;
 
     // ======================= Toolbar =======================
     // Two rows of grouped controls. Row 1: transport, position, tempo, meter,

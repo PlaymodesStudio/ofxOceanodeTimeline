@@ -236,6 +236,12 @@ int main() {
         const double playheadShown=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
         assert(zoomView.pixelsPerSecond>hiddenScale && playheadShown>=0 && playheadShown<=zoomVisible);
         owner->getTransport()->seekToBeat(0);
+        // Alt+Z zooms to fit.
+        zoomView.pixelsPerSecond=500; zoomView.scrollX=300; frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiMod_Alt,true); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiKey_Z,true); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiKey_Z,false); io.AddKeyEvent(ImGuiMod_Alt,false); frame(1250,zoomPoint,false);
+        assert(zoomView.pixelsPerSecond<500 && zoomView.scrollX==0);
     }
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {
