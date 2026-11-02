@@ -169,8 +169,6 @@ public:
                                       "it becomes the macro's own).");
                 ImGui::EndMenu();
             }
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Choose the timeline (this canvas's or one around it), then the track.");
             // Wherever it is bound, in any of those timelines.
             struct BoundLocation { TimelineRef ref; std::string trackId, label, bindingId; };
             std::vector<BoundLocation> boundLocations;
