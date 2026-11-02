@@ -5679,6 +5679,15 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
     }
     drawRenamePopup(timeline);
 
+    // "Add to Timeline" from a parameter's right-click menu.
+    ofxOceanodeTimelineManager::ParameterClipRequest parameterClipRequest;
+    if(timeline.consumeParameterClipRequest(parameterClipRequest)) openParameterClipDialog(timeline, parameterClipRequest);
+    if(requestParameterClipPopup) {
+        ImGui::OpenPopup("Add to Timeline##parameterClip");
+        requestParameterClipPopup = false;
+    }
+    drawParameterClipPopup(timeline);
+
     // "Add to Timeline as Piano Roll..." from a parameter's right-click menu.
     if(auto* noteSource = timeline.consumePendingNoteGroupSetup())
         openNoteGroupSetup(timeline, noteSource, std::string(), std::string());
@@ -7021,77 +7030,196 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
     if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
                                                        : "Next: choose the pitch, gate and velocity parameters");
     if(ImGui::Button(pianoRollClip ? "Next..." : "Create Clip")) {
-        const double startBeat = snapBeat(pendingStartBeat);
-        const double durationBeats = std::max(1.0 / kPPQ, snapBeat(pendingDurationBeats));
-        const auto* pianoTrack = timeline.getTrack(scope(timeline), pendingTrackId);
-        const auto* pianoGroup = pianoTrack == nullptr ? nullptr
-            : ofxOceanodeTimelineManager::findNoteGroupForBinding(*pianoTrack, pendingClipBindingId);
-        if(pianoRollClip && pianoGroup != nullptr) {
+        const auto created = createNewClip(timeline, pendingTrackId, pendingClipBindingId, pendingClipLaneType, pendingClipName,
+                                           snapBeat(pendingStartBeat), std::max(1.0 / kPPQ, snapBeat(pendingDurationBeats)));
+        if(created.kind == NewClip::NoteGroupClip && !created.clipId.empty()) {
+            // The row already plays in a note group: its new clip opens in the editor.
+            editorAnchorBindingId = pendingClipBindingId;
+            editorState.editorTrackId = pendingTrackId;
+            editorState.editorClipId = created.clipId;
+            editorState.editorLaneId = created.laneId;
+            editorRowScope = {};
+            editorState.clipEditorOpen = true;
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+ofxOceanodeTimelineController::NewClip ofxOceanodeTimelineController::createNewClip(
+    ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& bindingId,
+    int typeIndex, const std::string& name, double startBeat, double durationBeats) {
+    NewClip created;
+    auto& sequence = scope(timeline);
+    const bool isLfoClip = typeIndex == kLfoClipOptionIndex;
+    const bool drumGridClip = !isLfoClip && typeIndex == kDrumGridOptionIndex;
+    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+        laneTypeFromOptionIndex(typeIndex) == ofxOceanodeTimelineLaneType::PianoRoll);
+    const auto* binding = timeline.getBinding(sequence, trackId, bindingId);
+    if(pianoRollClip) {
+        const auto* track = timeline.getTrack(sequence, trackId);
+        if(const auto* group = track == nullptr ? nullptr : ofxOceanodeTimelineManager::findNoteGroupForBinding(*track, bindingId)) {
             // The row already plays in a note group: a new clip for that group.
-            std::string laneId;
-            const std::string groupId = pianoGroup->id;
-            const std::string clipId = timeline.createNoteGroupClip(scope(timeline), pendingTrackId, groupId, pendingClipName,
-                                                                    startBeat, durationBeats, &laneId,
-                                                                    drumGridClip ? ofxOceanodeTimelineLaneType::DrumGrid
-                                                                                 : ofxOceanodeTimelineLaneType::PianoRoll);
-            if(!clipId.empty()) {
-                editorAnchorBindingId = pendingClipBindingId;
-                editorState.editorTrackId = pendingTrackId;
-                editorState.editorClipId = clipId;
-                editorState.editorLaneId = laneId;
+            created.kind = NewClip::NoteGroupClip;
+            created.clipId = timeline.createNoteGroupClip(sequence, trackId, group->id, name, startBeat, durationBeats, &created.laneId,
+                                                          drumGridClip ? ofxOceanodeTimelineLaneType::DrumGrid
+                                                                       : ofxOceanodeTimelineLaneType::PianoRoll);
+            return created;
+        }
+        // A piano roll plays several parameters: pick them (this row's
+        // parameter is the starting point), then the group row is made.
+        created.kind = NewClip::NoteSetup;
+        auto* source = binding == nullptr ? nullptr : timeline.resolverFor(sequence).find(binding->parameterPath);
+        openNoteGroupSetup(timeline, source, trackId, std::string(), startBeat, durationBeats);
+        noteSetupEditor = drumGridClip ? 0 : 1;
+        if(source == nullptr && binding != nullptr) noteSetupRolePaths[drumGridClip ? 1 : 0] = binding->parameterPath;
+        if(!name.empty()) {
+            std::strncpy(noteSetupName, name.c_str(), sizeof(noteSetupName) - 1);
+            noteSetupName[sizeof(noteSetupName) - 1] = '\0';
+        }
+        return created;
+    }
+    created.clipId = isLfoClip
+        ? timeline.createLfoClip(sequence, trackId, bindingId, name.empty() ? "LFO" : name, startBeat, durationBeats)
+        : timeline.createClip(sequence, trackId, name.empty() ? "Clip" : name, startBeat, durationBeats);
+    if(isLfoClip || binding == nullptr || created.clipId.empty()) return created;
+    const auto laneType = laneTypeFromOptionIndex(typeIndex);
+    created.laneId = timeline.createLane(sequence, trackId, created.clipId, binding->parameterPath, laneType);
+    if(created.laneId.empty()) return created;
+    if(typeIndex == kToggleOptionIndex) makeToggleLane(timeline.getLane(sequence, trackId, created.clipId, created.laneId));
+    timeline.addBindingToLane(sequence, trackId, created.clipId, created.laneId, binding->id);
+    auto* lane = timeline.getLane(sequence, trackId, created.clipId, created.laneId);
+    if(lane != nullptr && laneType != ofxOceanodeTimelineLaneType::PianoRoll &&
+       laneType != ofxOceanodeTimelineLaneType::MultiGate &&
+       laneType != ofxOceanodeTimelineLaneType::Wave &&
+       !ofxOceanodeTimelineIsHeldValueLane(laneType)) {
+        // A value lane spans the parameter's own range.
+        if(auto* parameter = timeline.resolverFor(sequence).find(binding->parameterPath)) {
+            if(binding->valueType == typeid(float).name()) {
+                lane->valueMin = parameter->cast<float>().getParameter().getMin();
+                lane->valueMax = parameter->cast<float>().getParameter().getMax();
+            } else if(binding->valueType == typeid(int).name()) {
+                lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
+                lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
+            }
+        }
+    }
+    return created;
+}
+
+void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineManager& timeline,
+                                                            const ofxOceanodeTimelineManager::ParameterClipRequest& request) {
+    auto* sequence = timeline.timelineFor(request.timeline);
+    auto* parameter = sequence == nullptr ? nullptr : timeline.resolverFor(*sequence).find(request.parameterPath);
+    if(parameter == nullptr) return;
+    parameterClip = request;
+    const std::string name = parameter->getName();
+    std::strncpy(parameterClipTrackName, name.c_str(), sizeof(parameterClipTrackName) - 1);
+    parameterClipTrackName[sizeof(parameterClipTrackName) - 1] = '\0';
+    std::strncpy(parameterClipName, name.c_str(), sizeof(parameterClipName) - 1);
+    parameterClipName[sizeof(parameterClipName) - 1] = '\0';
+    // The type it already has on that track, else the one a new row of it gets.
+    const ofxOceanodeTimelineParameterBinding* existing = nullptr;
+    if(const auto* track = request.trackId.empty() ? nullptr : timeline.getTrack(*sequence, request.trackId))
+        for(const auto& binding : track->bindings)
+            if(binding.parameterPath == request.parameterPath) existing = &binding;
+    ofxOceanodeTimelineParameterBinding fresh;
+    fresh.valueType = parameter->valueType();
+    if(fresh.valueType == typeid(bool).name()) fresh.laneType = ofxOceanodeTimelineLaneType::MultiGate;
+    if(!ofxOceanodeTimelineDropdownOptions(*parameter).empty()) fresh.laneType = ofxOceanodeTimelineLaneType::Dropdown;
+    parameterClipType = optionIndexForBinding(existing != nullptr ? *existing : fresh);
+    // At the playhead on the main timeline; a timeline of its own starts at 0.
+    const bool mainTimeline = sequence == &timeline.getMainSequence();
+    parameterClipStart = mainTimeline ? snapBeat(std::max(0.0, container->getTransportState().beatPosition)) : 0.0;
+    parameterClipDuration = timeline.getBeatsPerBar();
+    requestParameterClipPopup = true;
+}
+
+void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineManager& timeline) {
+    centerNextModal();
+    if(!ImGui::BeginPopupModal("Add to Timeline##parameterClip", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    // Looked up again every frame: the node may go while the dialog is open.
+    auto* sequence = timeline.timelineFor(parameterClip.timeline);
+    auto* parameter = sequence == nullptr ? nullptr : timeline.resolverFor(*sequence).find(parameterClip.parameterPath);
+    const bool newTrack = parameterClip.trackId.empty();
+    const auto* track = sequence == nullptr || newTrack ? nullptr : timeline.getTrack(*sequence, parameterClip.trackId);
+    if(parameter == nullptr || (!newTrack && track == nullptr)) {
+        ImGui::TextDisabled("This parameter or track is gone.");
+        if(ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::TextDisabled("%s > %s", timeline.timelineName(parameterClip.timeline).c_str(), newTrack ? "New track" : track->name.c_str());
+    // Labels on the left, fields lined up in one column.
+    const float column = ImGui::CalcTextSize("New Track Name").x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    auto field = [&](const char* label) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine(column);
+        ImGui::SetNextItemWidth(260.0f);
+    };
+    if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
+    if(newTrack) {
+        field("New Track Name");
+        ImGui::InputText("##parameterClipTrackName", parameterClipTrackName, sizeof(parameterClipTrackName), ImGuiInputTextFlags_AutoSelectAll);
+    }
+    field("New Clip Name");
+    ImGui::InputText("##parameterClipName", parameterClipName, sizeof(parameterClipName), ImGuiInputTextFlags_AutoSelectAll);
+    field("Clip Type");
+    ImGui::Combo("##parameterClipType", &parameterClipType, kLaneTypeOptions, kClipCreationOptionCount);
+    ImGui::Separator();
+    const bool isLfoClip = parameterClipType == kLfoClipOptionIndex;
+    const bool drumGridClip = !isLfoClip && parameterClipType == kDrumGridOptionIndex;
+    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+        laneTypeFromOptionIndex(parameterClipType) == ofxOceanodeTimelineLaneType::PianoRoll);
+    ImGui::PushTextWrapPos(column + 260.0f);
+    ImGui::TextWrapped("%s", contentDescription(parameterClipType));
+    ImGui::PopTextWrapPos();
+    field("Start beat");
+    ImGui::InputDouble("##parameterClipStart", &parameterClipStart, editIncrement(), 1.0, "%.4f");
+    field("Duration");
+    ImGui::InputDouble("##parameterClipDuration", &parameterClipDuration, editIncrement(), 1.0, "%.4f");
+    if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
+                                                       : "Next: choose the pitch, gate and velocity parameters");
+    const bool trackNamed = !newTrack || parameterClipTrackName[0] != '\0';
+    ImGui::BeginDisabled(!trackNamed);
+    const bool confirmed = ImGui::Button(pianoRollClip ? "Next..." : (newTrack ? "Create Track and Clip" : "Create Clip"));
+    ImGui::EndDisabled();
+    if(confirmed && trackNamed) {
+        // Shown in the editor, where it is made.
+        enterTimelineScope(timeline, parameterClip.timeline);
+        auto& shown = scope(timeline);
+        const double startBeat = snapBeat(std::max(0.0, parameterClipStart));
+        const double durationBeats = std::max(1.0 / kPPQ, snapBeat(parameterClipDuration));
+        std::string trackId = parameterClip.trackId;
+        std::string bindingId;
+        if(const auto* target = trackId.empty() ? nullptr : timeline.getTrack(shown, trackId))
+            for(const auto& binding : target->bindings)
+                if(binding.parameterPath == parameterClip.parameterPath) bindingId = binding.id;
+        if(pianoRollClip && bindingId.empty()) {
+            // Its note roles are picked next; the track and its rows are only
+            // made when that is confirmed (a new track takes this name).
+            openNoteGroupSetup(timeline, parameter, trackId, std::string(), startBeat, durationBeats);
+            noteSetupEditor = drumGridClip ? 0 : 1;
+            const char* name = newTrack ? parameterClipTrackName : parameterClipName;
+            std::strncpy(noteSetupName, name, sizeof(noteSetupName) - 1);
+            noteSetupName[sizeof(noteSetupName) - 1] = '\0';
+        } else {
+            if(newTrack) trackId = timeline.createTrack(shown, parameterClipTrackName);
+            if(bindingId.empty() && !trackId.empty()) bindingId = timeline.addBinding(shown, trackId, *parameter);
+            const auto created = createNewClip(timeline, trackId, bindingId, parameterClipType, parameterClipName, startBeat, durationBeats);
+            if(created.kind != NewClip::NoteSetup && !created.clipId.empty()) {
+                editorAnchorBindingId.clear();
+                editorState.editorTrackId = trackId;
+                editorState.editorClipId = created.clipId;
+                editorState.editorLaneId = created.laneId;
                 editorRowScope = {};
                 editorState.clipEditorOpen = true;
-            }
-            ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-            return;
-        }
-        if(pianoRollClip) {
-            // A piano roll plays several parameters: pick them (this row's
-            // parameter is the starting point), then the group row is made.
-            const auto* binding = timeline.getBinding(scope(timeline), pendingTrackId, pendingClipBindingId);
-            auto* source = binding == nullptr ? nullptr : container->findTimelineParameter(binding->parameterPath);
-            openNoteGroupSetup(timeline, source, pendingTrackId, std::string(), startBeat, durationBeats);
-            noteSetupEditor = drumGridClip ? 0 : 1;
-            if(source == nullptr && binding != nullptr) noteSetupRolePaths[drumGridClip ? 1 : 0] = binding->parameterPath;
-            if(pendingClipName[0] != '\0') {
-                std::strncpy(noteSetupName, pendingClipName, sizeof(noteSetupName) - 1);
-                noteSetupName[sizeof(noteSetupName) - 1] = '\0';
-            }
-            ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-            return;
-        }
-        const auto clipId = isLfoClip
-            ? timeline.createLfoClip(scope(timeline), pendingTrackId, pendingClipBindingId,
-                                     pendingClipName[0] == '\0' ? "LFO" : pendingClipName,
-                                     startBeat, durationBeats)
-            : timeline.createClip(scope(timeline), pendingTrackId, pendingClipName[0] == '\0' ? "Clip" : pendingClipName,
-                                  startBeat, durationBeats);
-        if(!isLfoClip) {
-            if(const auto* binding = timeline.getBinding(scope(timeline), pendingTrackId, pendingClipBindingId)) {
-            const auto laneType = laneTypeFromOptionIndex(pendingClipLaneType);
-            const auto laneId = timeline.createLane(scope(timeline), pendingTrackId, clipId, binding->parameterPath, laneType);
-            if(!laneId.empty()) {
-                if(pendingClipLaneType == kToggleOptionIndex) makeToggleLane(timeline.getLane(scope(timeline), pendingTrackId, clipId, laneId));
-                timeline.addBindingToLane(scope(timeline), pendingTrackId, clipId, laneId, binding->id);
-                if(auto* lane = timeline.getLane(scope(timeline), pendingTrackId, clipId, laneId)) {
-                    if(laneType != ofxOceanodeTimelineLaneType::PianoRoll &&
-                       laneType != ofxOceanodeTimelineLaneType::MultiGate &&
-                       laneType != ofxOceanodeTimelineLaneType::Wave &&
-                       !ofxOceanodeTimelineIsHeldValueLane(laneType)) {
-                        if(auto* parameter = container->findTimelineParameter(binding->parameterPath)) {
-                            if(binding->valueType == typeid(float).name()) {
-                                lane->valueMin = parameter->cast<float>().getParameter().getMin();
-                                lane->valueMax = parameter->cast<float>().getParameter().getMax();
-                            } else if(binding->valueType == typeid(int).name()) {
-                                lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
-                                lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
-                            }
-                        }
-                    }
-                }
-            }
+                editorState.collapsedLaneIds.erase(created.laneId);
+                selectedClips = {{trackId, created.clipId}};
+                selectedTracks.clear();
             }
         }
         ImGui::CloseCurrentPopup();

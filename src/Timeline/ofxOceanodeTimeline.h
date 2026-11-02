@@ -1317,6 +1317,21 @@ public:
         request = pendingNewTimeline;
         return true;
     }
+    // A parameter's right-click "Add to Timeline": a new clip driving it on
+    // a track of that timeline (a new track when trackId is empty), set up
+    // in the editor's dialog, picked up like the above.
+    struct ParameterClipRequest {
+        TimelineRef timeline;
+        std::string trackId;        // empty: a new track
+        std::string parameterPath;  // as that timeline saves it
+    };
+    void requestParameterClip(const ParameterClipRequest& request) { pendingParameterClip = request; parameterClipRequested = true; }
+    bool consumeParameterClipRequest(ParameterClipRequest& request) {
+        if(!parameterClipRequested) return false;
+        parameterClipRequested = false;
+        request = pendingParameterClip;
+        return true;
+    }
     // Every canvas a timeline can belong to: the root (""), then each
     // macro's, at any depth.
     std::vector<std::string> allCanvases() const;
@@ -2087,6 +2102,8 @@ private:
     bool timelineScopeRequested = false;
     NewTimelineRequest pendingNewTimeline;
     bool newTimelineRequested = false;
+    ParameterClipRequest pendingParameterClip;
+    bool parameterClipRequested = false;
     std::vector<std::unique_ptr<Player>> players;
     std::set<std::string> registeredTimeSources;
     uint64_t timeSourcesFrame = 0;

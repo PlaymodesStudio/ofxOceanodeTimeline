@@ -886,6 +886,84 @@ int main() {
     assert(model.getClip(lfoOnly,oldLfo)->isLfo && model.getTrack(lfoOnly)->clips.size()==2);
     assert(!model.getClip(lfoOnly,ui.editorState.editorClipId)->isLfo);
 
+    // A parameter's "Add to Timeline" opens one dialog: New Track... names the
+    // track and the clip, a track gets a new clip; Create makes it all at once
+    // (one undo step) driving the parameter and opens it, Cancel makes nothing.
+    auto popupOpen=[&]() { return !ImGui::GetCurrentContext()->OpenPopupStack.empty(); };
+    auto confirmModal=[&](const char* label) {   // the button, found down the dialog's left edge
+        auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID button=ImHashStr(label,0,popup->ID);
+        const float x=popup->Pos.x+ImGui::GetStyle().WindowPadding.x+6;
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y;y+=2) {
+            frame(1250,ImVec2(x,y),false);
+            if(ImGui::GetCurrentContext()->HoveredId!=button) continue;
+            frame(1250,ImVec2(x,y),true); frame(1250,ImVec2(x,y),false); frame();
+            return true;
+        }
+        return false;
+    };
+    {
+        const auto editorBefore=ui.editorState; const auto selectionBefore=ui.selectedClips;
+        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        auto& filter=static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Cutoff"));
+        const std::string filterPath=owner->getTimelineParameterPath(filter);
+        const auto tracksBefore=model.toJson()["tracks"];
+        const auto trackCount=model.getTracks().size();
+        {
+            // The parameter's own menu, Add to Timeline hovered: every timeline
+            // with New Track... and its tracks under it (a screenshot only).
+            auto menuFrame=[&](ImVec2 mouse,const char* shot) {
+                io.AddMousePosEvent(mouse.x,mouse.y);
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(1250,980));
+                ImGui::Begin("Timeline",nullptr,ImGuiWindowFlags_NoDecoration);
+                if(!ImGui::IsPopupOpen("##parameterMenu")) { ImGui::SetNextWindowPos(ImVec2(300,200)); ImGui::OpenPopup("##parameterMenu"); }
+                if(ImGui::BeginPopup("##parameterMenu")) { owner->getAutomationExtension()->drawParameterMenu(filter); ImGui::EndPopup(); }
+                ImGui::End(); ImGui::Render();
+                if(shot) capture(shot,atlas,aw,ah);
+            };
+            menuFrame(ImVec2(-100,-100),nullptr);
+            const ImVec2 addItem(330,200+ImGui::GetStyle().WindowPadding.y+ImGui::GetTextLineHeight()*0.5f);
+            for(int i=0;i<30;++i) menuFrame(addItem,nullptr);
+            menuFrame(addItem,"add-to-timeline-menu");
+            ImGui::ClosePopupToLevel(0,true); frame();
+        }
+        model.requestParameterClip({mainRef,"",filterPath}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-dialog");
+        assert(popupOpen() && ui.parameterClipType==1);   // a float: Curve
+        assert(std::string(ui.parameterClipTrackName)=="Cutoff" && std::string(ui.parameterClipName)=="Cutoff");
+        // The track name is focused and selected: typing replaces it.
+        io.AddInputCharactersUTF8("Filter"); frame();
+        std::strcpy(ui.parameterClipName,"Sweep");
+        assert(confirmModal("Create Track and Clip") && !popupOpen());
+        assert(model.getTracks().size()==trackCount+1);
+        const auto& made=model.getTracks().back();
+        assert(made.name=="Filter" && made.bindings.size()==1 && made.bindings[0].parameterPath==filterPath);
+        assert(made.clips.size()==1 && made.clips[0].name=="Sweep" && made.clips[0].lanes.size()==1);
+        assert(made.clips[0].lanes[0].type==ofxOceanodeTimelineLaneType::Curve);
+        assert(made.clips[0].lanes[0].bindingIds==std::vector<std::string>{made.bindings[0].id});
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==made.id && ui.editorState.editorClipId==made.clips[0].id);
+        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBefore);
+        // A track that already has the parameter: a new clip on its row.
+        const std::string pitchPath=owner->getTimelineParameterPath(addedParameter);
+        const auto clipsBefore=model.getTrack(t)->clips.size(), bindingsBefore=model.getTrack(t)->bindings.size();
+        std::string pitchBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==pitchPath) pitchBinding=binding.id;
+        assert(!pitchBinding.empty());
+        model.requestParameterClip({mainRef,t,pitchPath}); frame(); frame();
+        assert(popupOpen() && confirmModal("Create Clip") && !popupOpen());
+        assert(model.getTrack(t)->clips.size()==clipsBefore+1 && model.getTrack(t)->bindings.size()==bindingsBefore);
+        const auto* added=model.getClip(t,ui.editorState.editorClipId);
+        assert(added && added->name=="Pitch" && added->lanes.size()==1 && added->lanes[0].bindingIds==std::vector<std::string>{pitchBinding});
+        assert(model.undoTimelineEdit() && model.getTrack(t)->clips.size()==clipsBefore);
+        // Cancel makes nothing.
+        const auto beforeCancel=model.toJson();
+        model.requestParameterClip({mainRef,"",filterPath}); frame(); frame();
+        assert(popupOpen());
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        assert(!popupOpen() && model.toJson()==beforeCancel);
+        ui.editorState=editorBefore; ui.selectedClips=selectionBefore; frame();
+    }
+
     // A note selection owns Delete before the arrangement can remove its clip,
     // even if the shell's last-click flag is stale and the mouse has moved away.
     const auto dt=model.createTrack("Delete test");
@@ -1024,6 +1102,17 @@ int main() {
         const auto pl=model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
         model.addBindingToLane(*pattern,pt,pc,pl,pb);
         assert(model.toJson()["tracks"]==mainBefore); // the main timeline is untouched
+        {
+            // "Add to Timeline" into the macro's own timeline: its sequence
+            // gets the track (shown in the editor), the main one stays as it was.
+            model.requestParameterClip({model.refForCanvas(*inside),"","Synth_1/Cutoff"}); frame(); frame();
+            assert(popupOpen() && confirmModal("Create Track and Clip"));
+            assert(pattern->tracks.size()==2 && pattern->tracks[1].bindings.size()==1);
+            assert(pattern->tracks[1].bindings[0].parameterPath=="Synth_1/Cutoff" && pattern->tracks[1].clips.size()==1);
+            assert(model.toJson()["tracks"]==mainBefore && &ui.scope(model)==pattern);
+            model.removeTrack(*pattern,pattern->tracks[1].id);
+            ui.leaveScopesTo(0); for(int i=0;i<25;++i) frame();
+        }
 
         // "Edit Timeline": the editor shows the macro's sequence.
         for(int i=0;i<25;++i) frame();

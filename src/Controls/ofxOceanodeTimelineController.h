@@ -119,6 +119,26 @@ private:
     void drawClipRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawClipPopup(ofxOceanodeTimelineManager& timeline);
+    // What the New Clip dialogs create on a track of the shown timeline,
+    // driving one binding: a clip with one lane of the chosen type (an LFO
+    // clip for the LFO entry), a clip of the binding's note group, or --
+    // for a Piano Roll / Drum Grid not in a group yet -- nothing yet: the
+    // note setup dialog opens to pick its parameters.
+    struct NewClip { enum Kind { Clip, NoteGroupClip, NoteSetup } kind = Clip; std::string clipId, laneId; };
+    NewClip createNewClip(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& bindingId,
+                          int typeIndex, const std::string& name, double startBeat, double durationBeats);
+    // A parameter's right-click "Add to Timeline": a new clip driving it on a
+    // track of a timeline, or on a new track, set up in one dialog.
+    void openParameterClipDialog(ofxOceanodeTimelineManager& timeline,
+                                 const ofxOceanodeTimelineManager::ParameterClipRequest& request);
+    void drawParameterClipPopup(ofxOceanodeTimelineManager& timeline);
+    ofxOceanodeTimelineManager::ParameterClipRequest parameterClip;
+    char parameterClipTrackName[128] = {};
+    char parameterClipName[128] = {};
+    int parameterClipType = 1; // Curve
+    double parameterClipStart = 0.0;
+    double parameterClipDuration = 4.0;
+    bool requestParameterClipPopup = false;
     bool createWaveClipFromFile(ofxOceanodeTimelineManager& timeline,
                                 const std::string& trackId,
                                 const std::string& filePath,
