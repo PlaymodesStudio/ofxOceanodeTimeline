@@ -5067,6 +5067,21 @@ void ofxOceanodeTimelineController::draw() {
             makeToggleLane(timeline.getLane(scope(timeline), editorState.editorTrackId, editorState.editorClipId, newLaneId));
     }
 
+    if(requestTrackNewClip) {
+        requestTrackNewClip = false;
+        const auto created = createNewClip(timeline, trackNewClipTrackId, pendingClipBindingId, pendingClipLaneType, pendingClipName,
+                                           snapBeat(pendingStartBeat), std::max(1.0 / kPPQ, snapBeat(pendingDurationBeats)));
+        if(created.kind != NewClip::NoteSetup && !created.clipId.empty()) {
+            // The new clip opens in the editor.
+            editorState.editorTrackId = trackNewClipTrackId;
+            editorState.editorClipId = created.clipId;
+            editorState.editorLaneId = created.laneId;
+            editorRowScope = {};
+            editorState.clipEditorOpen = true;
+            selectedClips = {{trackNewClipTrackId, created.clipId}};
+        }
+    }
+
     if(requestDuplicateLane) {
         requestDuplicateLane = false;
         const auto newId = timeline.duplicateLane(scope(timeline), editorState.editorTrackId, editorState.editorClipId,
@@ -6169,6 +6184,12 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             requestAddLanePopup = false;
             pendingAddLaneTarget.clear();
             pendingAddLaneChoice = 1;
+            // The New Clip tab starts like the track menu's New clip, at the playhead.
+            pendingClipName[0] = '\0';
+            pendingClipBindingId = track.bindings.empty() ? std::string() : track.bindings.front().id;
+            pendingClipLaneType = track.bindings.empty() ? 1 : optionIndexForBinding(track.bindings.front());
+            pendingStartBeat = snapBeat(std::max(0.0, beatPosition));
+            pendingDurationBeats = timeline.getBeatsPerBar();
             ImGui::OpenPopup("##addLaneTypePopup");
         }
         if(ImGui::BeginPopup("##addLaneTypePopup")) {
@@ -6177,25 +6198,62 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                     timeline.createWaveVolumeLane(scope(timeline), track.id, clip->id);
                     editorState.editorLaneId.clear();
                 }
-            } else {
-                ImGui::TextUnformatted("New lane in this clip");
-                ImGui::Combo("Content", &pendingAddLaneChoice, kLaneTypeOptions, kLaneTypeOptionCount);
-                ImGui::TextWrapped("%s", contentDescription(pendingAddLaneChoice));
-                const auto* selected = timeline.getBinding(scope(timeline), track.id, pendingAddLaneTarget);
-                if(ImGui::BeginCombo(pendingAddLaneChoice == 2 ? "Pitch target" : "Target",
-                                    selected == nullptr ? "No target (assign later)" : selected->parameterPath.c_str())) {
-                    if(ImGui::Selectable("No target (assign later)", selected == nullptr)) pendingAddLaneTarget.clear();
-                    for(const auto& binding : track.bindings)
-                        if(ImGui::Selectable(binding.parameterPath.c_str(), binding.id == pendingAddLaneTarget)) pendingAddLaneTarget = binding.id;
-                    ImGui::EndCombo();
+            } else if(ImGui::BeginTabBar("##addLaneOrClip")) {
+                // New Lane (in the clip being edited) is picked each time it opens.
+                if(ImGui::BeginTabItem("New Lane", nullptr, ImGui::IsWindowAppearing() ? ImGuiTabItemFlags_SetSelected : 0)) {
+                    ImGui::TextUnformatted("New lane in this clip");
+                    ImGui::Combo("Content", &pendingAddLaneChoice, kLaneTypeOptions, kLaneTypeOptionCount);
+                    ImGui::TextWrapped("%s", contentDescription(pendingAddLaneChoice));
+                    const auto* selected = timeline.getBinding(scope(timeline), track.id, pendingAddLaneTarget);
+                    if(ImGui::BeginCombo(pendingAddLaneChoice == 2 ? "Pitch target" : "Target",
+                                        selected == nullptr ? "No target (assign later)" : selected->parameterPath.c_str())) {
+                        if(ImGui::Selectable("No target (assign later)", selected == nullptr)) pendingAddLaneTarget.clear();
+                        for(const auto& binding : track.bindings)
+                            if(ImGui::Selectable(binding.parameterPath.c_str(), binding.id == pendingAddLaneTarget)) pendingAddLaneTarget = binding.id;
+                        ImGui::EndCombo();
+                    }
+                    if(pendingAddLaneChoice == 2) ImGui::TextWrapped("Assign pitch, gate and velocity in the lane's Targets tab after creating it.");
+                    ImGui::TextWrapped("All lanes share this clip's timing, stretch and repeats.");
+                    if(ImGui::Button("Add lane")) {
+                        requestAddLane = true;
+                        pendingAddLaneType = pendingAddLaneChoice;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndTabItem();
                 }
-                if(pendingAddLaneChoice == 2) ImGui::TextWrapped("Assign pitch, gate and velocity in the lane's Targets tab after creating it.");
-                ImGui::TextWrapped("All lanes share this clip's timing, stretch and repeats.");
-                if(ImGui::Button("Add lane")) {
-                    requestAddLane = true;
-                    pendingAddLaneType = pendingAddLaneChoice;
-                    ImGui::CloseCurrentPopup();
+                if(ImGui::BeginTabItem("New Clip")) {
+                    ImGui::TextUnformatted("New clip on this track");
+                    ImGui::InputText("Name", pendingClipName, sizeof(pendingClipName));
+                    ImGui::Combo("Start with", &pendingClipLaneType, kLaneTypeOptions, kClipCreationOptionCount);
+                    const bool isLfoClip = pendingClipLaneType == kLfoClipOptionIndex;
+                    ImGui::TextWrapped("%s", contentDescription(pendingClipLaneType));
+                    const auto* target = timeline.getBinding(scope(timeline), track.id, pendingClipBindingId);
+                    if(ImGui::BeginCombo("Target", target == nullptr ? "No target" : compactParameterName(target->parameterPath).c_str())) {
+                        for(const auto& binding : track.bindings) {
+                            if(ImGui::Selectable(compactParameterName(binding.parameterPath).c_str(), binding.id == pendingClipBindingId)) {
+                                pendingClipBindingId = binding.id;
+                                // Its usual type, never over an explicit LFO choice.
+                                if(!isLfoClip) pendingClipLaneType = optionIndexForBinding(binding);
+                            }
+                            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", binding.parameterPath.c_str());
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::InputDouble("Start beat", &pendingStartBeat, editIncrement(), 1.0, "%.4f");
+                    ImGui::InputDouble("Duration", &pendingDurationBeats, editIncrement(), 1.0, "%.4f");
+                    const bool drumGridClip = !isLfoClip && pendingClipLaneType == kDrumGridOptionIndex;
+                    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+                        laneTypeFromOptionIndex(pendingClipLaneType) == ofxOceanodeTimelineLaneType::PianoRoll);
+                    if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
+                                                                       : "Next: choose the pitch, gate and velocity parameters");
+                    if(ImGui::Button(pianoRollClip ? "Next..." : "Create Clip")) {
+                        requestTrackNewClip = true;
+                        trackNewClipTrackId = track.id;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndTabItem();
                 }
+                ImGui::EndTabBar();
             }
             ImGui::EndPopup();
         }

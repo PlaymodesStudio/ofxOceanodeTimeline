@@ -518,6 +518,43 @@ int main() {
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
         click(plus());
         assert(addLanePopupOpen());
+        {
+            // Two tabs, New Lane shown first; New Clip makes a clip on the
+            // track (opened in the editor), in one undo step.
+            auto tabBar=[&]() -> ImGuiTabBar* {
+                for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+                    if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+                        for(auto& tab:bar->Tabs) if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="New Clip") return bar;
+                return nullptr;
+            };
+            auto tabId=[&](const char* name) { ImGuiID id=0;
+                for(auto& tab:tabBar()->Tabs) if(std::string(ImGui::TabBarGetTabName(tabBar(),&tab))==name) id=tab.ID;
+                return id; };
+            assert(tabBar() && tabBar()->SelectedTabId==tabId("New Lane"));
+            selectTab("New Clip"); frame(); frame(1250,ImVec2(-100,-100),false,"track-plus-new-clip");
+            assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Clip"));
+            const auto editorBefore=ui.editorState;
+            const auto plusTracks=model.toJson()["tracks"];
+            const auto clipsBefore=model.getTrack(t)->clips.size();
+            std::strcpy(ui.pendingClipName,"From plus");
+            auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const ImGuiID create=ImHashStr("Create Clip",0,tabId("New Clip"));
+            bool created=false;
+            for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && !created;y+=2) {
+                const ImVec2 at(popup->Pos.x+ImGui::GetStyle().WindowPadding.x+6,y);
+                frame(1250,at,false);
+                if(ImGui::GetCurrentContext()->HoveredId!=create) continue;
+                click(at); created=true;
+            }
+            assert(created && ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            assert(model.getTrack(t)->clips.size()==clipsBefore+1);
+            const auto* made=model.getClip(t,ui.editorState.editorClipId);
+            assert(made && made->name=="From plus" && ui.editorState.clipEditorOpen);
+            assert(model.undoTimelineEdit() && model.toJson()["tracks"]==plusTracks);
+            ui.editorState=editorBefore; frame();
+            click(plus());
+            assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Lane"));   // New Lane again on reopening
+        }
         ImGui::ClosePopupToLevel(0,true); frame();
         assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.selectedTracks.empty());
         click(arrow());

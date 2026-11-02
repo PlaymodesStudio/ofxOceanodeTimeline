@@ -574,6 +574,10 @@ private:
     // pointers into it for the rest of the frame it was requested on.
     bool requestAddLane = false;
     bool requestAddLanePopup = false;   // the track header's + asks the clip editor for its add-lane popup
+    // That popup's New Clip tab: a clip on the track, made at the same fixed
+    // point as a new lane (making it can move the clip the editor holds).
+    bool requestTrackNewClip = false;
+    std::string trackNewClipTrackId;
     int pendingAddLaneType = 0;
     bool requestDuplicateLane = false;
     std::string pendingDuplicateLaneId;
