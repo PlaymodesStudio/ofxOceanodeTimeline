@@ -2073,17 +2073,6 @@ void ofxOceanodeTimelineController::draw() {
     sameLineIfRoom(ImGui::CalcTextSize("What drives this target?").x + ImGui::GetStyle().FramePadding.x * 2);
     if(ImGui::Button("What drives this target?")) targetInspectorOpen = !targetInspectorOpen;
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Inspect lanes, winning clips, cross-track blending and final output at the playhead.");
-    if(editorState.clipEditorOpen) {
-        auto& edited = editorSequence(timeline);
-        const auto* track = timeline.getTrack(edited, editorState.editorTrackId);
-        const auto* clip = timeline.getClip(edited, editorState.editorTrackId, editorState.editorClipId);
-        const auto* lane = timeline.getLane(edited, editorState.editorTrackId, editorState.editorClipId, editorState.editorLaneId);
-        if(track != nullptr && clip != nullptr) {
-            const std::string scope = lane == nullptr || track->isWaveTrack ? std::string()
-                : std::string(clip->isLfo ? " > Control: " : " > Lane: ") + lane->name;
-            ImGui::TextWrapped("Editing: Track: %s > Clip: %s%s", track->name.c_str(), clip->name.c_str(), scope.c_str());
-        }
-    }
     if(targetInspectorOpen) drawTargetInspector(timeline);
 
     const double endBeat = getContentEndBeat(timeline);

@@ -349,7 +349,23 @@ int main() {
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
         {
             // Right-clicking Range opens its direction menu, not the lane menu.
-            const ImVec2 range(150,420+kScopeBar);
+            // Found by hovering the lane's properties panel for its id.
+            ImGuiWindow* panel=nullptr;
+            for(auto* window:ImGui::GetCurrentContext()->Windows)
+                if(window->Active && std::string(window->Name).find("##clipProperties"+t+c+piano)!=std::string::npos) panel=window;
+            assert(panel);
+            ImGuiID mutateTab=0;
+            for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+                if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+                    for(auto& tab:bar->Tabs)
+                        if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Mutate") mutateTab=tab.ID;
+            assert(mutateTab);
+            ImVec2 range(-1,-1);
+            for(float y=panel->Pos.y;y<panel->Pos.y+panel->Size.y && range.x<0;y+=2) {
+                frame(1250,ImVec2(150,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId==ImHashStr("##mutationPitchRange",0,mutateTab)) range=ImVec2(150,y);
+            }
+            assert(range.x>=0);
             frame(1250,range,false);
             io.AddMouseButtonEvent(1,true); frame(1250,range,false);
             io.AddMouseButtonEvent(1,false); frame(1250,range,false);
@@ -444,11 +460,22 @@ int main() {
             assert(ui.editorState.editorLaneId!=piano);
             auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
             const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
-            click(ImVec2(240,278+kScopeBar)); // "+": zoom in
+            // "+" is the first control down the keys' scrollbar column, beside the lane's panel.
+            ImGuiWindow* pianoPanel=nullptr;
+            for(auto* window:ImGui::GetCurrentContext()->Windows)
+                if(window->Active && std::string(window->Name).find("##clipProperties"+t+c+piano)!=std::string::npos) pianoPanel=window;
+            assert(pianoPanel);
+            ImVec2 zoomIn(-1,-1);
+            for(float y=pianoPanel->Pos.y;y<pianoPanel->Pos.y+pianoPanel->Size.y && zoomIn.x<0;y+=2) {
+                frame(1250,ImVec2(240,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId!=0) zoomIn=ImVec2(240,y+2);
+            }
+            assert(zoomIn.x>=0);
+            click(zoomIn); // "+": zoom in
             auto* lane=model.getLane(t,c,piano);
             assert(lane->pianoHighPitch-lane->pianoLowPitch < high-low);
             const int zoomedLow=lane->pianoLowPitch;
-            click(ImVec2(240,576+kScopeBar)); // track near the bottom: jump down
+            click(ImVec2(240,zoomIn.y+298)); // track near the bottom: jump down
             lane=model.getLane(t,c,piano);
             assert(lane->pianoLowPitch < zoomedLow);
             assert(ui.editorState.editorLaneId!=piano);
