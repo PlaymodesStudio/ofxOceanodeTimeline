@@ -2826,12 +2826,33 @@ void ofxOceanodeTimelineController::draw() {
         }
         const float headerTextY = headerMin.y + (trackHeaderHeight - ImGui::GetTextLineHeight()) * 0.5f;
         // In the Clips view a track's arrow opens and closes its clip editor,
-        // as double-clicking a clip does; while that editor shows a lane
-        // clip, + adds a lane to it.
+        // as double-clicking a clip does, and + adds a lane to the clip the
+        // editor shows (opening it first when it is closed).
         const bool editorArrow = !targetsView && !track.isMacroTrack() && !track.clips.empty();
         const bool editorOpenHere = scopeEditorOnTrack(track.id);
-        const auto* editorClip = editorOpenHere ? timeline.getClip(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline)),
-                                                                   track.id, editorState.editorClipId) : nullptr;
+        // The clip the editor shows, or would open on: the selected clip of
+        // this track, else the one it last edited, else its first.
+        const ofxOceanodeTimelineClip* editorClip = nullptr;
+        if(editorOpenHere)
+            editorClip = timeline.getClip(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline)), track.id, editorState.editorClipId);
+        else if(editorArrow) {
+            auto editable = [&](const ofxOceanodeTimelineClip& clip) { return track.isWaveTrack || !clip.lanes.empty(); };
+            for(const auto& clip : track.clips)
+                if(!editorClip && editable(clip) && selectedClips.count({track.id, clip.id})) editorClip = &clip;
+            for(const auto& clip : track.clips)
+                if(!editorClip && editable(clip) && editorState.editorTrackId == track.id && clip.id == editorState.editorClipId) editorClip = &clip;
+            if(editorClip == nullptr)
+                for(const auto& clip : track.clips)
+                    if(editable(clip) && (editorClip == nullptr || clip.startBeat < editorClip->startBeat)) editorClip = &clip;
+        }
+        auto openEditor = [&]() {
+            editorState.editorTrackId = track.id;
+            editorState.editorClipId = editorClip->id;
+            editorState.editorLaneId = editorClip->lanes.empty() ? std::string() : editorClip->lanes.front().id;
+            editorAnchorBindingId.clear();
+            editorRowScope = {};
+            editorState.clipEditorOpen = true;
+        };
         const bool addLaneButton = editorClip != nullptr && !editorClip->isLfo && !track.isWaveTrack;
         const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
         const float padRight = headerMin.x + kLabelWidth - 85 - addLaneWidth;
@@ -2852,26 +2873,7 @@ void ofxOceanodeTimelineController::draw() {
         if(editorArrowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             anyClipInteractionClaimedThisFrame = true;   // keeps the selection the editor follows
             if(editorOpenHere) editorState.clipEditorOpen = false;
-            else {
-                // The selected clip of this track, else the one it last edited, else its first.
-                const ofxOceanodeTimelineClip* open = nullptr;
-                auto editable = [&](const ofxOceanodeTimelineClip& clip) { return track.isWaveTrack || !clip.lanes.empty(); };
-                for(const auto& clip : track.clips)
-                    if(!open && editable(clip) && selectedClips.count({track.id, clip.id})) open = &clip;
-                for(const auto& clip : track.clips)
-                    if(!open && editable(clip) && editorState.editorTrackId == track.id && clip.id == editorState.editorClipId) open = &clip;
-                if(open == nullptr)
-                    for(const auto& clip : track.clips)
-                        if(editable(clip) && (open == nullptr || clip.startBeat < open->startBeat)) open = &clip;
-                if(open != nullptr) {
-                    editorState.editorTrackId = track.id;
-                    editorState.editorClipId = open->id;
-                    editorState.editorLaneId = open->lanes.empty() ? std::string() : open->lanes.front().id;
-                    editorAnchorBindingId.clear();
-                    editorRowScope = {};
-                    editorState.clipEditorOpen = true;
-                }
-            }
+            else if(editorClip != nullptr) openEditor();
         }
         dl->PushClipRect(headerMin, ImVec2(padRight, headerMax.y), true);
         dl->AddText(ImVec2(headerMin.x + folderIndent + 22, headerTextY), IM_COL32(235, 235, 235, 255), track.name.c_str());
@@ -2953,6 +2955,7 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 82 - addLaneWidth, headerMin.y + (trackHeaderHeight - 19.0f) * 0.5f));
             if(ImGui::SmallButton(("+##addLane" + track.id).c_str())) {
                 anyClipInteractionClaimedThisFrame = true;
+                if(!editorOpenHere) openEditor();
                 requestAddLanePopup = true;   // opened by the clip editor below
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to %s", editorClip->name.c_str());

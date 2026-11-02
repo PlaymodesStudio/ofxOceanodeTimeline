@@ -453,36 +453,51 @@ int main() {
     }
     {
         // The track header's arrow closes and reopens the clip editor (no
-        // clip header row of its own); its + opens the add-lane popup.
+        // clip header row of its own); its + opens the add-lane popup, and
+        // opens the editor first when it is closed. Rows move when the
+        // editor's breadcrumb line above the ruler comes and goes, so the
+        // points are found again each time.
         frame();
-        const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),
-            [&](const auto& r){return r.trackId==t && !r.isFolder;});
-        assert(row!=ui.trackHeaderRows.end());
-        const float rowY=(row->minY+row->maxY)*0.5f;
         const float padLeft=ui.fileDropBounds.x-ofxOceanodeTimelineEditorUi::labelWidth;
-        const ImVec2 arrow(padLeft+12,rowY);
+        auto rowY=[&]() {
+            const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),
+                [&](const auto& r){return r.trackId==t && !r.isFolder;});
+            assert(row!=ui.trackHeaderRows.end());
+            return (row->minY+row->maxY)*0.5f;
+        };
+        auto arrow=[&]() { return ImVec2(padLeft+12,rowY()); };
+        auto plus=[&]() {   // just left of M: found by hovering
+            const float y=rowY();
+            for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-83;x>padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x-=2) {
+                frame(1250,ImVec2(x,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId!=0) return ImVec2(x,y);
+            }
+            assert(false && "+ not found"); return ImVec2();
+        };
         auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(); };
-        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
-        // + sits just left of M: find it by hovering, then open its popup.
-        ImVec2 plus(-1,-1);
-        for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-82-1;x>padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130 && plus.x<0;x-=2) {
-            frame(1250,ImVec2(x,rowY),false);
-            if(ImGui::GetCurrentContext()->HoveredId!=0) plus=ImVec2(x,rowY);
-        }
-        assert(plus.x>=0);
-        const auto lanesBefore=model.getClip(t,c)->lanes.size();
-        click(plus);
         ImGuiWindow* viewport=nullptr;
         for(auto* window:ImGui::GetCurrentContext()->Windows)
             if(window->ParentWindow==ImGui::FindWindowByName("Timeline") &&
                std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
-        assert(viewport && ImGui::GetCurrentContext()->OpenPopupStack.size()==1);
-        assert(ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##addLaneTypePopup",0,viewport->ID));
+        assert(viewport);
+        auto addLanePopupOpen=[&]() {
+            return ImGui::GetCurrentContext()->OpenPopupStack.size()==1 &&
+                   ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##addLaneTypePopup",0,viewport->ID);
+        };
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
+        const auto lanesBefore=model.getClip(t,c)->lanes.size();
+        click(plus());
+        assert(addLanePopupOpen());
         ImGui::ClosePopupToLevel(0,true); frame();
         assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.selectedTracks.empty());
-        click(arrow);
+        click(arrow());
         assert(!ui.editorState.clipEditorOpen && ui.selectedTracks.empty());
-        click(arrow);
+        click(plus());
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && addLanePopupOpen());
+        ImGui::ClosePopupToLevel(0,true); frame();
+        click(arrow());
+        assert(!ui.editorState.clipEditorOpen);
+        click(arrow());
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t && ui.editorState.editorClipId==c);
     }
     selectTab("Targets"); frame();
