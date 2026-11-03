@@ -903,6 +903,75 @@ double ofxOceanodeTimelineController::snapBeat(double beat) const {
     return ofxOceanodeTimelineEditorView::snapBeat(beat, snapEnabled, effectiveRulerSnapBeats);
 }
 
+ofxOceanodeTimelineController::ClipDragMode ofxOceanodeTimelineController::rightEdgeDragMode(bool waveTrack) const {
+    // On macOS Cmd is the stretch modifier. Ctrl is reserved by the
+    // canvas/ImGui interaction layer and can turn a drag into a
+    // context-menu gesture. ImGui deliberately maps macOS Cmd to its logical
+    // Ctrl modifier (and physical Ctrl to Super). Using KeySuper here was
+    // why Cmd+drag never selected Stretch.
+    const auto& io = ImGui::GetIO();
+    const bool commandDown = io.KeyCtrl || (io.KeyMods & ImGuiMod_Ctrl) != 0;
+    // Wave clips are complete audio slices: every edge drag (plain, Cmd or
+    // Shift) stretches the whole source.
+    return waveTrack ? ClipDragMode::Stretch
+         : io.KeyShift ? ClipDragMode::Resize
+         : commandDown ? ClipDragMode::Stretch
+         : endEditTool == 1 ? ClipDragMode::Resize
+         : endEditTool == 2 ? ClipDragMode::Stretch : ClipDragMode::Repeat;
+}
+
+void ofxOceanodeTimelineController::showEdgeCursor(ClipDragMode mode) const {
+    if(mode != ClipDragMode::Resize && mode != ClipDragMode::TrimStart &&
+       mode != ClipDragMode::Stretch && mode != ClipDragMode::Repeat) return;
+    // The system's resize arrow cannot tell the three apart, so each is drawn
+    // in its place: the clip's edge with arrows either side, a bracket round
+    // the clip for trim, a spring for stretch, a loop for repeat.
+    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    auto* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 p = ImGui::GetIO().MousePos;
+    const bool trim = mode == ClipDragMode::Resize || mode == ClipDragMode::TrimStart;
+    // Which side the clip is on: left of a right edge, right of a left one.
+    const float clipSide = mode == ClipDragMode::TrimStart ? 1.0f : -1.0f;
+    for(int pass = 0; pass < 2; ++pass) {
+        const ImU32 color = pass == 0 ? IM_COL32(0, 0, 0, 220) : IM_COL32(255, 255, 255, 255);
+        const float thickness = pass == 0 ? 3.5f : 1.5f;
+        auto line = [&](float ax, float ay, float bx, float by) {
+            dl->AddLine(ImVec2(p.x + ax, p.y + ay), ImVec2(p.x + bx, p.y + by), color, thickness);
+        };
+        line(0.0f, -9.0f, 0.0f, 9.0f);
+        if(trim) {
+            line(0.0f, -9.0f, 4.0f * clipSide, -9.0f);
+            line(0.0f, 9.0f, 4.0f * clipSide, 9.0f);
+        }
+        for(const float side : {-1.0f, 1.0f}) {
+            const float tip = 11.0f * side;
+            if(mode == ClipDragMode::Stretch) {
+                // A spring from the edge to the arrowhead.
+                float x = 2.5f * side;
+                for(int i = 0; i < 4; ++i) {
+                    const float next = x + 1.6f * side;
+                    line(x, i == 0 ? 0.0f : (i % 2 ? -2.5f : 2.5f), next, i == 3 ? 0.0f : (i % 2 ? 2.5f : -2.5f));
+                    x = next;
+                }
+                line(x, 0.0f, tip, 0.0f);
+            } else {
+                line(2.5f * side, 0.0f, tip, 0.0f);
+            }
+            line(tip, 0.0f, tip - 3.0f * side, -3.0f);
+            line(tip, 0.0f, tip - 3.0f * side, 3.0f);
+        }
+        if(mode == ClipDragMode::Repeat) {
+            // A loop arrow above the right-hand arrow.
+            const ImVec2 center(p.x + 8.0f, p.y - 8.0f);
+            dl->PathArcTo(center, 3.5f, -IM_PI * 0.35f, IM_PI * 1.25f, 12);
+            dl->PathStroke(color, 0, thickness);
+            const ImVec2 end(center.x + 3.5f * std::cos(-IM_PI * 0.35f), center.y + 3.5f * std::sin(-IM_PI * 0.35f));
+            dl->AddLine(end, ImVec2(end.x - 3.0f, end.y - 0.5f), color, thickness);
+            dl->AddLine(end, ImVec2(end.x + 0.5f, end.y + 3.0f), color, thickness);
+        }
+    }
+}
+
 double ofxOceanodeTimelineController::editIncrement() const {
     return effectiveRulerSnapBeats > 0.0 ? effectiveRulerSnapBeats : 1.0 / kPPQ;
 }
@@ -2611,7 +2680,7 @@ void ofxOceanodeTimelineController::draw() {
                     // Edges only where the clip's own edge is (not where a placement cuts it).
                     const bool edge = std::abs(clipRight - hit->x2) < 1.0f && mouse.x >= hit->x2 - edgeZone;
                     const bool leftEdge = !edge && std::abs(clipLeft - hit->x1) < 1.0f && mouse.x <= hit->x1 + edgeZone;
-                    if(edge || leftEdge) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                    if(edge || leftEdge) showEdgeCursor(edge ? rightEdgeDragMode(innerTrack.isWaveTrack) : ClipDragMode::TrimStart);
                     if(!ImGui::IsAnyItemActive())
                         ImGui::SetTooltip("%s", (clip->name + "  (" + macroLabel + ")\n" +
                             ofxOceanodeTimelinePresentation::clipSummary(*clip, innerTrack.isWaveTrack) + "\n"
@@ -2634,16 +2703,11 @@ void ofxOceanodeTimelineController::draw() {
                                 editorRowGroup = group;
                             }
                         } else {
-                            const bool commandDown = ImGui::GetIO().KeyCtrl || (ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) != 0;
                             innerDrag = {};
                             innerDrag.at = placement.at;
                             innerDrag.trackId = innerTrack.id;
                             innerDrag.clipId = clip->id;
-                            innerDrag.mode = edge ? (innerTrack.isWaveTrack ? ClipDragMode::Stretch
-                                                     : ImGui::GetIO().KeyShift ? ClipDragMode::Resize
-                                                     : commandDown ? ClipDragMode::Stretch
-                                                     : endEditTool == 1 ? ClipDragMode::Resize
-                                                     : endEditTool == 2 ? ClipDragMode::Stretch : ClipDragMode::Repeat)
+                            innerDrag.mode = edge ? rightEdgeDragMode(innerTrack.isWaveTrack)
                                            : leftEdge ? ClipDragMode::TrimStart : ClipDragMode::Move;
                             innerDrag.initial = *clip;
                             innerDrag.grabOffsetBeats = placement.at.map.toSequence(beatAtOffset(mouse.x - unfoldedOriginX)) - clip->startBeat;
@@ -3549,8 +3613,8 @@ void ofxOceanodeTimelineController::draw() {
                     track.isWaveTrack ? "Stretch audio (changes speed)" : ofxOceanodeTimelinePresentation::endEditName(
                         static_cast<ofxOceanodeTimelineEndEdit>(endEditTool)));
                 const float hoverEdgeZone = std::min(kEdgePixels, (x2 - x1) * 0.25f);
-                if(mouse.x >= x2 - hoverEdgeZone || mouse.x <= x1 + hoverEdgeZone)
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if(mouse.x >= x2 - hoverEdgeZone) showEdgeCursor(rightEdgeDragMode(track.isWaveTrack));
+                else if(mouse.x <= x1 + hoverEdgeZone) showEdgeCursor(ClipDragMode::TrimStart);
             }
             if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 if(clipInteractionClaimedThisFrame) return;
@@ -3634,22 +3698,10 @@ void ofxOceanodeTimelineController::draw() {
                         selectedClips.clear();
                         selectedClips.insert(memberKey);
                     }
-                    // On macOS Cmd is the stretch modifier. Ctrl is reserved
-                    // by the canvas/ImGui interaction layer and can turn a
-                    // drag into a context-menu gesture.
-                    // ImGui deliberately maps macOS Cmd to its logical Ctrl
-                    // modifier (and physical Ctrl to Super). Using KeySuper
-                    // here was why Cmd+drag never selected Stretch.
                     const bool commandDown = ImGui::GetIO().KeyCtrl ||
                         (ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) != 0;
-                    // Wave clips are complete audio slices: every edge drag
-                    // (plain, Cmd or Shift) stretches the whole source.
                     // Cmd on the body (not on an edge) drags out a copy instead.
-                    clipDragMode = edge ? (track.isWaveTrack ? ClipDragMode::Stretch
-                                           : ImGui::GetIO().KeyShift ? ClipDragMode::Resize
-                                           : commandDown ? ClipDragMode::Stretch
-                                                         : endEditTool == 1 ? ClipDragMode::Resize
-                                                         : endEditTool == 2 ? ClipDragMode::Stretch : ClipDragMode::Repeat)
+                    clipDragMode = edge ? rightEdgeDragMode(track.isWaveTrack)
                                         : leftEdge ? ClipDragMode::TrimStart
                                         : commandDown ? ClipDragMode::Duplicate
                                         : ClipDragMode::Move;
@@ -5269,7 +5321,8 @@ void ofxOceanodeTimelineController::draw() {
                         timeline.resizeClipEnd(scope(timeline), innerDrag.trackId, innerDrag.clipId,
                                                std::max(1.0 / kPPQ, snapBeat(mouseBeat - initial.startBeat)), operation);
                     }
-                    ImGui::SetMouseCursor(innerDrag.mode == ClipDragMode::Move ? ImGuiMouseCursor_Hand : ImGuiMouseCursor_ResizeEW);
+                    if(innerDrag.mode == ClipDragMode::Move) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    else showEdgeCursor(innerDrag.mode);
                     ImGui::SetTooltip("%s in the macro's timeline\nStart: %.3f beats | Length: %.3f beats",
                         innerDrag.mode == ClipDragMode::Move ? "Move clip" : innerDrag.mode == ClipDragMode::TrimStart ? "Trim clip start"
                             : innerDrag.mode == ClipDragMode::Stretch ? "Stretch source" : innerDrag.mode == ClipDragMode::Resize
@@ -5301,6 +5354,8 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
     if(clipDragMode != ClipDragMode::None) {
+        // An edge drag keeps its cursor from the press to the release.
+        if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) showEdgeCursor(clipDragMode);
         // A duplicate can be dropped straight up or down onto another row,
         // so vertical movement starts that drag too.
         const float dragThreshold = std::max(3.0f, ImGui::GetIO().MouseDragThreshold);
@@ -5381,7 +5436,6 @@ void ofxOceanodeTimelineController::draw() {
                                               trimTrack != nullptr ? IM_COL32(trimTrack->color.r, trimTrack->color.g, trimTrack->color.b, 70)
                                                                    : IM_COL32(200, 200, 200, 60));
                     trimDl->AddLine(ImVec2(newX, dragRowTop), ImVec2(newX, dragRowBottom), IM_COL32(255, 210, 90, 240), 2.0f);
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
                 }
             }
         } else if(ImGui::IsMouseDown(ImGuiMouseButton_Left) && !clipDragCommitted) {

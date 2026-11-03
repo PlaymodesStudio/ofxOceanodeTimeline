@@ -217,6 +217,11 @@ private:
     // mouse is over (same row, another parameter row, another track).
     enum class ClipDragMode { None, Move, Resize, Stretch, Repeat, TrimStart, Duplicate };
     ClipDragMode clipDragMode = ClipDragMode::None;
+    // What dragging a clip's right edge does now: the End edit tool, or the
+    // one Shift (trim / extend) or Cmd (stretch) holds; Wave clips stretch.
+    ClipDragMode rightEdgeDragMode(bool waveTrack) const;
+    // Shows the cursor of an edge drag (trim, stretch or repeat) at the mouse.
+    void showEdgeCursor(ClipDragMode mode) const;
     std::string draggingTrackId;
     std::string draggingClipId;
     // Chance knob at a clip's top-left: a vertical drag sets the clip chance.
