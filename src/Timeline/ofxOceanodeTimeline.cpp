@@ -952,10 +952,7 @@ std::string ofxOceanodeTimelineResolver::pathOf(ofxOceanodeAbstractParameter& pa
     return base == nullptr ? std::string() : base->getTimelineParameterPath(parameter, *base);
 }
 
-std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
-    ofxOceanodeTimelineTrack track;
-    track.id = sequence.makeUniqueTrackId();
-    track.name = sequence.makeUniqueTrackName(requestedName);
+ofColor ofxOceanodeTimelineManager::defaultTrackColor(size_t trackIndex) {
     static const ofColor defaultColors[] = {
         ofColor(65, 165, 245, 255),
         ofColor(75, 190, 125, 255),
@@ -963,7 +960,14 @@ std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence&
         ofColor(190, 95, 220, 255),
         ofColor(235, 90, 95, 255)
     };
-    track.color = defaultColors[sequence.tracks.size() % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
+    return defaultColors[trackIndex % (sizeof(defaultColors) / sizeof(defaultColors[0]))];
+}
+
+std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    ofxOceanodeTimelineTrack track;
+    track.id = sequence.makeUniqueTrackId();
+    track.name = sequence.makeUniqueTrackName(requestedName);
+    track.color = defaultTrackColor(sequence.tracks.size());
     ++sequence.nextTrackNumber;
     sequence.tracks.push_back(std::move(track));
     invalidateEvaluationIndexes();

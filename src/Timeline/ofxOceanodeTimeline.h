@@ -1176,6 +1176,7 @@ public:
     void clearPianoKeyPreview(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     void clear();
 
+    static ofColor defaultTrackColor(size_t trackIndex);
     std::string createTrack(const std::string& requestedName = "Timeline Track");
     std::string createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Timeline Track");
     // A track with no bindings, dedicated to Wave clips (see

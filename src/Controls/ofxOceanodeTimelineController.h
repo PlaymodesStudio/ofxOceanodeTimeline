@@ -13,6 +13,7 @@
 #include <map>
 #include <array>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -143,6 +144,7 @@ private:
                                   const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::ParameterClipRequest parameterClip;
     char parameterClipTrackName[128] = {};
+    float parameterClipTrackColor[4] = {};
     char parameterClipName[128] = {};
     int parameterClipType = 1; // Curve
     std::string parameterLaneClipId; // New Lane / New Target: the clip it goes in
@@ -642,6 +644,7 @@ private:
     char noteSetupName[128] = "";
     char noteSetupFilter[64] = "";
     std::string noteSetupTrackId;             // empty: a new track
+    std::optional<ofColor> noteSetupTrackColor; // new track color from Add to Timeline
     bool noteSetupTrackFixed = false;         // opened from a track row
     std::string noteSetupEditGroupId;         // retargeting this group
     double noteSetupClipStart = 0.0;

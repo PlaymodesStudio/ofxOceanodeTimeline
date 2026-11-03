@@ -6867,6 +6867,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
     for(auto& path : noteSetupRolePaths) path.clear();
     noteSetupFilter[0] = '\0';
     noteSetupTrackId = trackId;
+    noteSetupTrackColor.reset();
     noteSetupTrackFixed = !trackId.empty();
     noteSetupEditGroupId = editGroupId;
     const auto transportState = container->getTransportState();
@@ -7140,7 +7141,11 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
     if(confirmed && valid) {
         const std::string name = noteSetupName[0] == '\0' ? std::string("Notes") : std::string(noteSetupName);
         std::string trackId = noteSetupTrackId;
-        if(trackId.empty() || timeline.getTrack(scope(timeline), trackId) == nullptr) trackId = timeline.createTrack(scope(timeline), name);
+        if(trackId.empty() || timeline.getTrack(scope(timeline), trackId) == nullptr) {
+            trackId = timeline.createTrack(scope(timeline), name);
+            if(noteSetupTrackColor)
+                if(auto* track = timeline.getTrack(scope(timeline), trackId)) track->color = *noteSetupTrackColor;
+        }
         // The binding for each role: the track's existing row for that
         // parameter, or a new one.
         std::string roleIds[3];
@@ -7413,6 +7418,11 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
     auto* parameter = sequence == nullptr ? nullptr : timeline.resolverFor(*sequence).find(request.parameterPath);
     if(parameter == nullptr) return;
     parameterClip = request;
+    const ofFloatColor color = timeline.defaultTrackColor(sequence->tracks.size());
+    parameterClipTrackColor[0] = color.r;
+    parameterClipTrackColor[1] = color.g;
+    parameterClipTrackColor[2] = color.b;
+    parameterClipTrackColor[3] = color.a;
     const std::string name = parameter->getName();
     std::strncpy(parameterClipTrackName, name.c_str(), sizeof(parameterClipTrackName) - 1);
     parameterClipTrackName[sizeof(parameterClipTrackName) - 1] = '\0';
@@ -7501,7 +7511,12 @@ void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineMa
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
     if(newTrack) {
         field("New Track Name");
+        ImGui::SetNextItemWidth(260.0f - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
         ImGui::InputText("##parameterClipTrackName", parameterClipTrackName, sizeof(parameterClipTrackName), ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::SameLine();
+        ImGui::ColorEdit4("##parameterClipTrackColor", parameterClipTrackColor,
+                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track color");
     }
     field("New Clip Name");
     ImGui::InputText("##parameterClipName", parameterClipName, sizeof(parameterClipName), ImGuiInputTextFlags_AutoSelectAll);
@@ -7540,12 +7555,19 @@ void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineMa
             // Its note roles are picked next; the track and its rows are only
             // made when that is confirmed (a new track takes this name).
             openNoteGroupSetup(timeline, parameter, trackId, std::string(), startBeat, durationBeats);
+            if(newTrack) noteSetupTrackColor = ofColor(ofFloatColor(parameterClipTrackColor[0], parameterClipTrackColor[1],
+                                                                   parameterClipTrackColor[2], parameterClipTrackColor[3]));
             noteSetupEditor = drumGridClip ? 0 : 1;
             const char* name = newTrack ? parameterClipTrackName : parameterClipName;
             std::strncpy(noteSetupName, name, sizeof(noteSetupName) - 1);
             noteSetupName[sizeof(noteSetupName) - 1] = '\0';
         } else {
-            if(newTrack) trackId = timeline.createTrack(shown, parameterClipTrackName);
+            if(newTrack) {
+                trackId = timeline.createTrack(shown, parameterClipTrackName);
+                if(auto* track = timeline.getTrack(shown, trackId))
+                    track->color = ofColor(ofFloatColor(parameterClipTrackColor[0], parameterClipTrackColor[1],
+                                                       parameterClipTrackColor[2], parameterClipTrackColor[3]));
+            }
             if(bindingId.empty() && !trackId.empty()) bindingId = timeline.addBinding(shown, trackId, *parameter);
             const auto created = createNewClip(timeline, trackId, bindingId, parameterClipType, parameterClipName, startBeat, durationBeats);
             if(created.kind != NewClip::NoteSetup && !created.clipId.empty()) {
