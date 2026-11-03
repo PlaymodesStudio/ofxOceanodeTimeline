@@ -442,6 +442,9 @@ private:
     // null: a clip of the scope's own). The ids say which clip, since ids
     // repeat between sequences.
     RowScope editorRowScope;
+    // The unfolded macro timeline whose clip's chance knob is dragged
+    // (sequence null: a clip of the scope's own).
+    RowScope chanceDragScope;
     std::string editorRowTrackId, editorRowClipId;
     std::string editorRowGroup; // the unfolded rows it docks in (macro track ids)
     bool innerEditorOpen() const {

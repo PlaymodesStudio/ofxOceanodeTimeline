@@ -213,6 +213,28 @@ constexpr float kWaveTrackMinHeight = 48.0f;
 constexpr float kWaveTrackMaxHeight = 360.0f;
 constexpr float kTrackResizeHandleHeight = 6.0f;
 constexpr float kEdgePixels = 8.0f;
+
+// The chance knob sits in a clip's top-right corner when it fits, just
+// inside the right-edge drag strip so resizing still works. top and bottom
+// are the row's; the clip is drawn 3 px inside them.
+bool chanceKnob(float left, float right, float top, float bottom, ImVec2& center, float& radius) {
+    radius = std::min(6.0f, (bottom - top - 8.0f) * 0.5f);
+    center = ImVec2(right - kEdgePixels - 1.0f - radius, top + 4.0f + radius);
+    return radius >= 4.0f && right - left >= radius * 2.0f + kEdgePixels + 24.0f;
+}
+
+void drawChanceKnob(ImDrawList* dl, float clipChance, bool active, const ImVec2& center, float radius) {
+    // Ring = 100%; the filled arc shows how likely the clip is to play.
+    const float chance = ofClamp(clipChance, 0.0f, 1.0f);
+    dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
+    if(chance > 0.0f) {
+        const float a0 = -IM_PI * 0.5f;
+        dl->PathLineTo(center);
+        dl->PathArcTo(center, radius - 1.0f, a0, a0 + IM_PI * 2.0f * chance, 24);
+        dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
+    }
+    dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
+}
 // Parameter rows are indented under their track header by half the clip
 // editor's indent (20 px), so the hierarchy reads track > row > editor.
 constexpr float kParameterRowIndent = 10.0f;
@@ -2414,12 +2436,14 @@ void ofxOceanodeTimelineController::draw() {
         if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             const float pixelsPerUnit = ImGui::GetIO().KeyShift ? 600.0f : 150.0f;
             const float chance = ofClamp(chanceDragStartValue + (chanceDragStartMouseY - ImGui::GetIO().MousePos.y) / pixelsPerUnit, 0.0f, 1.0f);
+            const RowScopeGuard dragging(*this, chanceDragScope.sequence != nullptr ? &chanceDragScope : nullptr);
             timeline.setClipChance(scope(timeline), chanceDragTrackId, chanceDragClipId, std::round(chance * 100.0f) / 100.0f);
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             ImGui::SetTooltip("Clip chance: %d%%", static_cast<int>(std::round(chance * 100.0f)));
         } else {
             chanceDragClipId.clear();
             chanceDragTrackId.clear();
+            chanceDragScope = {};
         }
     }
 
@@ -2470,13 +2494,24 @@ void ofxOceanodeTimelineController::draw() {
         dl->PushClipRect(ImVec2(x1, y1), ImVec2(x2, y2), true);
         float contentTop = y1;
         if(chrome) {
+            // As any clip: a title band in the track's colour over a plot
+            // area half as bright, and the chance knob in its corner.
             auto lift = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * (highlighted ? 0.45f : 0.0f)); };
             dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2),
-                              IM_COL32(lift(color.r), lift(color.g), lift(color.b), innerClip.muted ? 45 : highlighted ? 215 : 120));
+                              IM_COL32(lift(color.r), lift(color.g), lift(color.b), innerClip.muted ? 45 : highlighted ? 235 : 185));
             if(y2 - y1 >= 30.0f && x2 - x1 > 30.0f) {
-                const std::string label = innerClip.name + (innerClip.muted ? " [Muted]" : "");
-                dl->AddText(ImVec2(x1 + 5.0f, y1 + 2.0f), IM_COL32(245, 250, 255, 255), label.c_str());
-                contentTop = y1 + 17.0f;
+                contentTop = std::min(y2, y1 + 6.0f + ImGui::GetTextLineHeight());
+                dl->AddRectFilled(ImVec2(x1 + 1.0f, contentTop), ImVec2(x2 - 1.0f, y2), IM_COL32(0, 0, 0, 128));
+                ImVec2 knobCenter;
+                float knobRadius = 0.0f;
+                const bool knob = !innerTrack.isMacroTrack() && chanceKnob(x1, x2, y1 - 3.0f, y2 + 3.0f, knobCenter, knobRadius);
+                std::string label = innerClip.name + (innerClip.muted ? " [Muted]" : "");
+                if(innerClip.chance < 1.0f) label += " " + ofToString(static_cast<int>(std::round(innerClip.chance * 100.0f))) + "%";
+                dl->PushClipRect(ImVec2(x1, y1), ImVec2(knob ? knobCenter.x - knobRadius - 3.0f : x2, contentTop), true);
+                dl->AddText(ImVec2(x1 + 5.0f, y1 + 3.0f), IM_COL32(245, 250, 255, 255), label.c_str());
+                dl->PopClipRect();
+                if(knob) drawChanceKnob(dl, innerClip.chance, chanceDragScope.sequence == &shown &&
+                                        chanceDragTrackId == innerTrack.id && chanceDragClipId == innerClip.id, knobCenter, knobRadius);
             }
         } else {
             dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(color.r, color.g, color.b, 70));
@@ -2675,6 +2710,34 @@ void ofxOceanodeTimelineController::draw() {
                     }
                     const auto* clip = timeline.getClip(*inner, innerTrack.id, hit->clipId);
                     if(clip == nullptr) break;
+                    {
+                        ImVec2 knobCenter;
+                        float knobRadius = 0.0f;
+                        if(chanceDragClipId.empty() && !innerTrack.isMacroTrack() &&
+                           rowMax.y - rowMin.y - 6.0f >= 30.0f && hit->x2 - hit->x1 > 30.0f &&
+                           chanceKnob(hit->x1, hit->x2, rowMin.y, rowMax.y, knobCenter, knobRadius)) {
+                            const float kx = mouse.x - knobCenter.x, ky = mouse.y - knobCenter.y;
+                            if(kx * kx + ky * ky <= (knobRadius + 2.0f) * (knobRadius + 2.0f)) {
+                                ImGui::SetTooltip("Clip chance: %d%%\nProbability that the whole clip plays, rolled again each time it starts.\nDrag up/down to set (Shift: fine). Double-click: 100%%.",
+                                                  static_cast<int>(std::round(clip->chance * 100.0f)));
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                                if(clicked) {
+                                    anyClipInteractionClaimedThisFrame = true;
+                                    if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                        const RowScopeGuard editing(*this, &placement.at);
+                                        timeline.setClipChance(scope(timeline), innerTrack.id, clip->id, 1.0f);
+                                    } else {
+                                        chanceDragScope = placement.at;
+                                        chanceDragTrackId = innerTrack.id;
+                                        chanceDragClipId = clip->id;
+                                        chanceDragStartMouseY = mouse.y;
+                                        chanceDragStartValue = clip->chance;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
                     const float edgeZone = std::min(kEdgePixels, (hit->x2 - hit->x1) * 0.25f);
                     const float clipRight = unfoldedOriginX + beatOffset(placement.at.map.toTimeline(clip->startBeat + clip->durationBeats));
                     const float clipLeft = unfoldedOriginX + beatOffset(placement.at.map.toTimeline(clip->startBeat));
@@ -3349,27 +3412,10 @@ void ofxOceanodeTimelineController::draw() {
             }
         };
 
-        // The chance knob sits in a clip's top-right corner when it fits,
-        // just inside the right-edge drag strip so resizing still works.
-        auto chanceKnob = [&](float left, float right, const ImVec2& min, const ImVec2& max,
-                              ImVec2& center, float& radius) {
-            radius = std::min(6.0f, (max.y - min.y - 8.0f) * 0.5f);
-            center = ImVec2(right - kEdgePixels - 1.0f - radius, min.y + 4.0f + radius);
-            return radius >= 4.0f && right - left >= radius * 2.0f + kEdgePixels + 24.0f;
-        };
         const bool transportPlaying = container->getTransportState().isPlaying;
-        auto drawChanceKnob = [&](const ofxOceanodeTimelineClip& clip, const ImVec2& center, float radius) {
-            // Ring = 100%; the filled arc shows how likely the clip is to play.
-            const float chance = ofClamp(clip.chance, 0.0f, 1.0f);
-            const bool active = chanceDragClipId == clip.id && chanceDragTrackId == track.id;
-            dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
-            if(chance > 0.0f) {
-                const float a0 = -IM_PI * 0.5f;
-                dl->PathLineTo(center);
-                dl->PathArcTo(center, radius - 1.0f, a0, a0 + IM_PI * 2.0f * chance, 24);
-                dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
-            }
-            dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
+        auto drawClipChanceKnob = [&](const ofxOceanodeTimelineClip& clip, const ImVec2& center, float radius) {
+            drawChanceKnob(dl, clip.chance, chanceDragScope.sequence == nullptr && chanceDragClipId == clip.id &&
+                           chanceDragTrackId == track.id, center, radius);
         };
 
         // A clip's content colour: its fill colour, lifted like the fill when selected.
@@ -3416,7 +3462,7 @@ void ofxOceanodeTimelineController::draw() {
                 // also currently selected shows both at once.
                 ImVec2 knobCenter;
                 float knobRadius = 0.0f;
-                const bool knob = chanceKnob(left, right, min, max, knobCenter, knobRadius);
+                const bool knob = chanceKnob(left, right, min.y, max.y, knobCenter, knobRadius);
                 // Right-hand chrome (group marker, then the knob) ends here.
                 const float chromeLeft = knob ? knobCenter.x - knobRadius - 3.0f : right - 3.0f;
                 if(const auto* group = timeline.getGroupForClip(scope(timeline), track.id, clip.id)) {
@@ -3431,7 +3477,7 @@ void ofxOceanodeTimelineController::draw() {
                     dl->AddText(ImVec2(chromeLeft - 10.0f, min.y + 3), groupColor, "G");
                 }
                 // A wave clip's knob goes on top of its waveform, drawn with the content.
-                if(knob && !track.isWaveTrack) drawChanceKnob(clip, knobCenter, knobRadius);
+                if(knob && !track.isWaveTrack) drawClipChanceKnob(clip, knobCenter, knobRadius);
                 const float labelLeft = left + 6.0f;
                 const float labelRight = chromeLeft - (timeline.getGroupForClip(scope(timeline), track.id, clip.id) ? 14.0f : 0.0f);
                 if(labelRight - labelLeft > 39) {
@@ -3537,7 +3583,7 @@ void ofxOceanodeTimelineController::draw() {
                 dl->PopClipRect();
                 ImVec2 knobCenter;
                 float knobRadius = 0.0f;
-                if(chanceKnob(left, right, min, max, knobCenter, knobRadius)) drawChanceKnob(clip, knobCenter, knobRadius);
+                if(chanceKnob(left, right, min.y, max.y, knobCenter, knobRadius)) drawClipChanceKnob(clip, knobCenter, knobRadius);
                 return;
             }
             const auto previewView = editorView(timeline, transportState.bpm, endBeat);
@@ -3579,7 +3625,7 @@ void ofxOceanodeTimelineController::draw() {
                 float knobRadius = 0.0f;
                 const float left = std::max(min.x, x1), right = std::min(max.x, x2);
                 const bool knob = clipDragMode == ClipDragMode::None && chanceDragClipId.empty() &&
-                    chanceKnob(left, right, min, max, knobCenter, knobRadius);
+                    chanceKnob(left, right, min.y, max.y, knobCenter, knobRadius);
                 const float dx = mouse.x - knobCenter.x, dy = mouse.y - knobCenter.y;
                 if(knob && dx * dx + dy * dy <= (knobRadius + 2.0f) * (knobRadius + 2.0f)) {
                     ImGui::SetTooltip("Clip chance: %d%%\nProbability that the whole clip plays, rolled again each time it starts.\nDrag up/down to set (Shift: fine). Double-click: 100%%.",
@@ -3591,6 +3637,7 @@ void ofxOceanodeTimelineController::draw() {
                         if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                             timeline.setClipChance(scope(timeline), track.id, clip.id, 1.0f);
                         } else {
+                            chanceDragScope = {};
                             chanceDragTrackId = track.id;
                             chanceDragClipId = clip.id;
                             chanceDragStartMouseY = mouse.y;
