@@ -2181,6 +2181,7 @@ void ofxOceanodeTimelineController::draw() {
        !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
        !selectedClips.empty() && !lastClickInEditor && // in the editor, Delete edits the clip's content
        !(editorState.clipEditorOpen && laneEditors.hasNoteSelection(editorState.editorLaneId)) &&
+       !(editorState.clipEditorOpen && laneEditors.hasCurvePointSelection(editorState.editorLaneId)) && // Delete removes the selected curve points instead
        !(editorState.clipEditorOpen && lfoEditor.hasPointSelection(editorState.editorClipId)) && // Delete removes the selected LFO point instead
 
        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {

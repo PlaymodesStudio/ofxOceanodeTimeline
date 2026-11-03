@@ -13,6 +13,7 @@ CASES = r'''
 #include <set>
 #define private public
 #include "Controls/Editors/ofxOceanodeTimelinePianoRollEditor.h"
+#include "Controls/Editors/ofxOceanodeTimelineCurveEditor.h"
 #undef private
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Controls/Editors/ofxOceanodeTimelineDrumGridEditor.h"
@@ -235,6 +236,58 @@ int main() {
     frame(curveClip, curveLane, true, ImVec2(270, 230), true);
     assert(model.getLane(trackId, curveClip, curveLane)->curvePoints.size() > initialPoints);
     frame(curveClip, curveLane, true, ImVec2(270, 230), false);
+    {
+        // Curve points: a click selects one, Shift+click adds or removes,
+        // Delete removes the selection; clicking an empty spot still adds.
+        // Canvas x from 230 (beats through the same view), values 108 (top) .. 362 (bottom).
+        const ofxOceanodeTimelineEditorView curveView(model, 120.0f, 8.0, true, 0.25);
+        auto beatX = [&](double beat) { return 230 + curveView.beatToPixels(beat); };
+        auto& curveEditor = static_cast<ofxOceanodeTimelineCurveEditor&>(editors.forType(ofxOceanodeTimelineLaneType::Curve));
+        auto curve = [&]() -> ofxOceanodeTimelineLane& { return *model.getLane(trackId, curveClip, curveLane); };
+        curve().curveInterpolation = "Linear";
+        curve().curvePoints = {{0.0, 0.0f}, {1.0, 0.5f}, {2.0, 1.0f}, {3.0, 0.5f}};
+        curve().curveTensions.assign(3, {});
+        auto at = [&](int i) {
+            const auto& point = curve().curvePoints[i];
+            return ImVec2(beatX(point.beat), 362 - point.value * 254);
+        };
+        auto click = [&](ImVec2 position) {
+            frame(curveClip, curveLane, true, position, false);
+            frame(curveClip, curveLane, true, position, true);
+            frame(curveClip, curveLane, true, position, false);
+        };
+        auto pressDelete = [&]() {
+            io.AddKeyEvent(ImGuiKey_Delete, true); frame(curveClip, curveLane, true, ImVec2(900, 700), false);
+            io.AddKeyEvent(ImGuiKey_Delete, false); frame(curveClip, curveLane, true, ImVec2(900, 700), false);
+        };
+        const auto untouched = curve().curvePoints;
+        click(at(1));
+        assert((curveEditor.curveSelectedPointIndices == std::set<int>{1}));
+        assert(curve().curvePoints.size() == 4 && curve().curvePoints[1].beat == untouched[1].beat &&
+               curve().curvePoints[1].value == untouched[1].value); // a still click moves nothing
+        assert(editors.hasCurvePointSelection(curveLane) && !editors.hasCurvePointSelection(pianoLane));
+        io.AddKeyEvent(ImGuiMod_Shift, true);
+        click(at(3));
+        assert((curveEditor.curveSelectedPointIndices == std::set<int>{1, 3}));
+        click(at(2)); click(at(2)); // Shift+click twice: in, then out again
+        assert((curveEditor.curveSelectedPointIndices == std::set<int>{1, 3}));
+        assert(curve().curvePoints.size() == 4); // Shift+click no longer deletes
+        io.AddKeyEvent(ImGuiMod_Shift, false);
+        pressDelete();
+        assert(curve().curvePoints.size() == 2 && curve().curveTensions.size() == 1);
+        assert(curve().curvePoints[0].beat == 0.0 && curve().curvePoints[1].beat == 2.0);
+        assert(curveEditor.curveSelectedPointIndices.empty() && !editors.hasCurvePointSelection(curveLane));
+        pressDelete(); // nothing selected: nothing removed
+        assert(curve().curvePoints.size() == 2);
+        click(ImVec2(beatX(3.5), 235)); // an empty spot: a new point, selected
+        assert(curve().curvePoints.size() == 3 && (curveEditor.curveSelectedPointIndices == std::set<int>{2}));
+        // Delete reaches only the focused curve editor.
+        io.AddKeyEvent(ImGuiKey_Delete, true); frame(curveClip, curveLane, false);
+        io.AddKeyEvent(ImGuiKey_Delete, false); frame(curveClip, curveLane, false);
+        assert(curve().curvePoints.size() == 3);
+        pressDelete();
+        assert(curve().curvePoints.size() == 2);
+    }
     const auto sliderClip = model.createClip(trackId, "Slider", 0, 4);
     const auto sliderLane = model.createLane(trackId, sliderClip, "Slider", ofxOceanodeTimelineLaneType::MultiSlider);
     frame(sliderClip, sliderLane, true);

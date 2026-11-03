@@ -165,8 +165,24 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     // reordered here. Stable, so two points on one beat (a vertical step)
     // never swap -- an unstable sort could reorder them every frame.
     const auto byBeat = [](const auto& a, const auto& b) { return a.beat < b.beat; };
-    if(!std::is_sorted(lane->curvePoints.begin(), lane->curvePoints.end(), byBeat))
+    if(!std::is_sorted(lane->curvePoints.begin(), lane->curvePoints.end(), byBeat)) {
         std::stable_sort(lane->curvePoints.begin(), lane->curvePoints.end(), byBeat);
+        if(curveSelectionLaneId == lane->id) curveSelectedPointIndices.clear(); // the indices no longer name them
+    }
+    // The selection belongs to one lane: focusing another starts afresh.
+    // Indices an undo or another edit took away are dropped.
+    if(isFocused && curveSelectionLaneId != lane->id) {
+        curveSelectionLaneId = lane->id;
+        curveSelectedPointIndices.clear();
+    }
+    if(curveSelectionLaneId == lane->id)
+        for(auto it = curveSelectedPointIndices.begin(); it != curveSelectedPointIndices.end();) {
+            if(*it < 0 || *it >= static_cast<int>(lane->curvePoints.size())) it = curveSelectedPointIndices.erase(it);
+            else ++it;
+        }
+    const auto pointSelected = [&](size_t i) {
+        return curveSelectionLaneId == lane->id && curveSelectedPointIndices.count(static_cast<int>(i)) > 0;
+    };
     const size_t segments = lane->curvePoints.empty() ? 0 : lane->curvePoints.size() - 1;
     if(lane->curveTensions.size() != segments) lane->curveTensions.resize(segments);
     const auto& points = lane->curvePoints;
@@ -238,7 +254,13 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         for(size_t i = 0; i < points.size(); ++i) {
             const ImVec2 p(timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, points[i].beat, cycle)), curveValueToY(points[i].value));
             const float radius = cycle == 0 ? 4.0f : 3.0f;
-            if(static_cast<int>(i) == litPoint && cycle == litCycle)
+            const bool lit = static_cast<int>(i) == litPoint && cycle == litCycle;
+            if(pointSelected(i)) {
+                // Selected: a larger amber dot in a white ring, on every repeat.
+                dl->AddCircleFilled(p, radius + 2.0f, IM_COL32(255, 185, 50, cycle == 0 ? 255 : 150));
+                dl->AddCircle(p, radius + 4.5f, lit ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
+                                                    : IM_COL32(255, 255, 255, cycle == 0 ? 235 : 120), 0, 1.5f);
+            } else if(lit)
                 dl->AddCircleFilled(p, radius + 3.0f, ImGui::GetColorU32(ImGuiCol_SliderGrabActive));
             else
                 dl->AddCircleFilled(p, radius, IM_COL32(245, 245, 245, cycle == 0 ? 230 : 115));
@@ -286,13 +308,16 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             ImGui::OpenPopup("Curve point value");
         }
     }
+    // Click a point: select it alone (and drag it). Shift+click a point adds
+    // it to the selection or takes it out; Delete removes the selection.
     if(curveHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         curveDragPointIndex = hitPoint();
         curveTensionSegment = -1;
         if(curveDragPointIndex >= 0 && ImGui::GetIO().KeyShift) {
-            eraseCurvePointWithTensions(*lane, static_cast<size_t>(curveDragPointIndex));
+            if(!curveSelectedPointIndices.erase(curveDragPointIndex)) curveSelectedPointIndices.insert(curveDragPointIndex);
             curveDragPointIndex = -1;
-            curveValuePointIndex = -1;
+        } else if(curveDragPointIndex >= 0) {
+            curveSelectedPointIndices = {curveDragPointIndex};
         } else if(curveDragPointIndex < 0 && ImGui::GetIO().KeyAlt &&
                   (interpolation == CurveInterpolationMode::LogExp || interpolation == CurveInterpolationMode::Sigmoid) &&
                   lane->curvePoints.size() > 1) {
@@ -320,6 +345,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             curveDragPointIndex = insertCurvePoint(*lane, {
                 std::max(0.0, std::min(content, view.snapBeat(curveSourceBeat))), curveValue
             });
+            curveSelectedPointIndices = {curveDragPointIndex}; // the new point, as if clicked
         }
     }
     // Once a point or a tension handle has been grabbed, keep updating
@@ -352,6 +378,17 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         curveDragPointIndex = -1;
         curveTensionSegment = -1;
     }
+    // Delete / Backspace removes the selected points (Timeline focused, nothing
+    // being edited). One key press: the controller records it as one undo step.
+    if(!curveSelectedPointIndices.empty() && curveDragPointIndex < 0 &&
+       ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+       !ImGui::IsPopupOpen("Curve point value") && !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput &&
+       (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
+        for(auto it = curveSelectedPointIndices.rbegin(); it != curveSelectedPointIndices.rend(); ++it)
+            eraseCurvePointWithTensions(*lane, static_cast<size_t>(*it));
+        curveSelectedPointIndices.clear();
+        curveValuePointIndex = -1;
+    }
     if(ImGui::BeginPopup("Curve point value")) {
         if(curveValuePointIndex >= 0 && curveValuePointIndex < static_cast<int>(lane->curvePoints.size())) {
             ImGui::TextUnformatted("Curve point");
@@ -376,6 +413,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete point")) {
                 eraseCurvePointWithTensions(*lane, static_cast<size_t>(curveValuePointIndex));
+                curveSelectedPointIndices.clear();
                 curveValuePointIndex = -1;
                 ImGui::CloseCurrentPopup();
             }
