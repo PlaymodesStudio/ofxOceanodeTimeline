@@ -33,6 +33,10 @@ private:
     double regionDragOriginalDuration = 0.0;
     // A Chords lane plays one chord at a time: the block drawn or moved
     // carves its span out of the other rows when it is let go.
+    // A Chords lane's row menu (right-click a chord in the header): its lane
+    // and row, drawn by the node (ofxOceanodeTimelineInstrument::rowMenu).
+    std::string chordMenuLaneId;
+    int chordMenuRow = -1;
     static void carveOtherRows(ofxOceanodeTimelineLane& lane, int row, double start, double end);
     // MultiValue's double-click "edit value" popup (mirrors the Curve
     // lane's "Curve point value" popup).

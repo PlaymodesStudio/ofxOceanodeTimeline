@@ -193,13 +193,34 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
             if(r == playing) dl->AddRect(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom), IM_COL32(255, 255, 255, 230), 2, 0, 1.5f);
             if(rBottom - rTop >= ImGui::GetTextLineHeight() - 2.0f) {
                 std::string label = ofToString(r + 1) + "  " + (real ? chordName(r) : std::string("-"));
+                const bool locked = real && r < static_cast<int>(chords.rowLocked.size()) && chords.rowLocked[r];
+                if(locked) {
+                    // a locked chord (Generate keeps it): a small bar at the header's right
+                    dl->AddRectFilled(ImVec2(headerRight - 5.0f, rTop + 2.0f), ImVec2(headerRight - 2.0f, rBottom - 2.0f),
+                                      IM_COL32(20, 20, 20, 200), 1.0f);
+                }
                 while(label.size() > 1 && ImGui::CalcTextSize(label.c_str()).x > headerRight - headerLeft - 8.0f) label.pop_back();
                 dl->AddText(ImVec2(headerLeft + 4, rTop + std::max(0.0f, (rBottom - rTop - ImGui::GetTextLineHeight()) * 0.5f)),
                             real ? IM_COL32(20, 20, 20, 240) : IM_COL32(150, 150, 150, 200), label.c_str());
             }
-            if(ImGui::IsMouseHoveringRect(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom)))
-                ImGui::SetTooltip(real ? "Chord %d: %s\nDrag in its row to hold it." : "Row %d: no chord in the bank\n(its blocks play nothing).",
+            const bool overHeader = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                    ImGui::IsMouseHoveringRect(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom));
+            if(overHeader && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+                ImGui::SetTooltip(real ? "Chord %d: %s\nDrag in its row to hold it.\nRight-click: change this chord" : "Row %d: no chord in the bank\n(its blocks play nothing).",
                                   r + 1, chordName(r).c_str());
+                if(real && chords.rowMenu && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    context.focusedLaneId = lane->id;
+                    chordMenuLaneId = lane->id;
+                    chordMenuRow = r;
+                    ImGui::OpenPopup(("##chordRowMenu" + lane->id).c_str());
+                }
+            }
+        }
+        if(chordMenuLaneId == lane->id && ImGui::BeginPopup(("##chordRowMenu" + lane->id).c_str())) {
+            // the node's own menu for that chord (it may change the chord, never the rows)
+            if(chordMenuRow >= 0 && chordMenuRow < chordCount && chords.rowMenu) chords.rowMenu(chordMenuRow);
+            else ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
         }
     }
     if(isFocused) {

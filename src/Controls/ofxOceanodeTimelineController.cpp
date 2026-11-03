@@ -6763,6 +6763,13 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                 ImGui::EndTabItem();
             }
         }
+        // A chord bank's own panel (generate, style...), drawn by the node.
+        if(chordLane && chordBank.panel) {
+            if(ImGui::BeginTabItem(chordBank.panelLabel.empty() ? "Chords" : chordBank.panelLabel.c_str())) {
+                chordBank.panel();
+                ImGui::EndTabItem();
+            }
+        }
         const bool clipTab = ImGui::BeginTabItem("Clip");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip: %s\nChance and timing apply to every lane in this clip.", clip->name.c_str());
         if(clipTab) {
