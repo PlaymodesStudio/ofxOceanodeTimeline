@@ -1147,6 +1147,74 @@ int main() {
         assert(std::abs(model.getClip(t,lc)->startBeat-(lfoStart+1.0))<1e-6);
         model.ungroupClip(t,c);
     }
+    {
+        // Four clips one after the other, all selected: right-click one and
+        // "Merge 4 clips" turns them into a single clip.
+        for(int i=0;i<25;++i) frame();
+        const auto mt=model.createTrack("Merge test");
+        assert(model.moveTrack(mt,"",0)); // on screen
+        const auto mb=model.addBinding(mt,addedParameter);
+        std::vector<std::string> quarters;
+        for(int i=0;i<4;++i) {
+            const auto id=model.createClip(mt,"Q"+ofToString(i),i*2.0,2);
+            const auto laneId=model.createLane(mt,id,"Pitch",ofxOceanodeTimelineLaneType::Number);
+            model.addBindingToLane(mt,id,laneId,mb);
+            quarters.push_back(id);
+        }
+        ui.selectedClips.clear();
+        for(const auto& id:quarters) ui.selectedClips.insert({mt,id});
+        frame(); frame();
+        const auto it=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==quarters[1];});
+        assert(it!=ui.clipScreenRects.end());
+        const ImVec2 at((it->x1+it->x2)*0.5f,(it->y1+it->y2)*0.5f);
+        io.AddMousePosEvent(at.x,at.y); frame(1250,at,false);
+        io.AddMouseButtonEvent(1,true); frame(1250,at,false);
+        io.AddMouseButtonEvent(1,false); frame(1250,at,false);
+        assert(popupOpen() && ui.selectedClips.size()==4);
+        auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID item=ImHashStr("Merge 4 clips",0,popup->ID);
+        ImVec2 found(-1,-1);
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && found.x<0;y+=2) {
+            const ImVec2 p(popup->Pos.x+30,y);
+            frame(1250,p,false);
+            if(ImGui::GetCurrentContext()->HoveredId==item) found=p;
+        }
+        assert(found.x>=0);
+        frame(1250,found,true); frame(1250,found,false); frame(); frame();
+        const auto* merged=model.getTrack(mt);
+        if(merged->clips.size()!=1) { std::cerr<<"merge left "<<merged->clips.size()<<" clips\n"; std::abort(); }
+        assert(merged->clips.front().id==quarters[0] && merged->clips.front().lanes.size()==1);
+        assert(std::abs(merged->clips.front().durationBeats-8)<1e-9);
+        // Grouped instead of selected (only the right-clicked clip is
+        // selected): the menu merges the whole group.
+        std::vector<std::string> grouped;
+        for(int i=0;i<4;++i) grouped.push_back(model.createClip(mt,"G"+ofToString(i),8+i*1.0,1));
+        std::vector<std::pair<std::string,std::string>> members;
+        for(const auto& id:grouped) members.push_back({mt,id});
+        assert(!model.groupClips(members).empty());
+        ui.selectedClips.clear(); frame(); frame();
+        const auto gt=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==grouped[1];});
+        assert(gt!=ui.clipScreenRects.end());
+        const ImVec2 gat((gt->x1+gt->x2)*0.5f,(gt->y1+gt->y2)*0.5f);
+        for(int i=0;i<25;++i) frame(1250,gat,false);
+        io.AddMouseButtonEvent(1,true); frame(1250,gat,false);
+        io.AddMouseButtonEvent(1,false); frame(1250,gat,false);
+        assert(popupOpen() && ui.selectedClips.size()==1);
+        popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID groupItem=ImHashStr("Merge 4 clips",0,popup->ID);
+        found=ImVec2(-1,-1);
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && found.x<0;y+=2) {
+            const ImVec2 p(popup->Pos.x+30,y);
+            frame(1250,p,false);
+            if(ImGui::GetCurrentContext()->HoveredId==groupItem) found=p;
+        }
+        assert(found.x>=0);
+        frame(1250,found,true); frame(1250,found,false); frame(); frame();
+        assert(model.getTrack(mt)->clips.size()==2 && model.getClip(mt,grouped[0]) && !model.getClip(mt,grouped[1]));
+        assert(std::abs(model.getClip(mt,grouped[0])->durationBeats-4)<1e-9);
+        assert(model.getGroupForClip(mt,grouped[0])==nullptr);
+        model.removeTrack(mt); frame();
+    }
     // Track folders: drag a header into a folder, fold it, drag it back out.
     for(int i=0;i<25;++i) frame(); // no double-click with the clicks above
     const auto folder=model.createFolder("Group");

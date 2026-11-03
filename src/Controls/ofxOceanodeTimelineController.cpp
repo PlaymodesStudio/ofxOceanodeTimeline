@@ -4025,27 +4025,33 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::CloseCurrentPopup();
                 }
             }
-            // Two or more clips of this track selected: they can become one
+            // Two or more clips of this track selected, or else this clip's
+            // group when all of it is on this track: they can become one
             // clip. Its own section: merging is not grouping.
-            if(selectedClips.size() >= 2 && selectedClips.count({track.id, clip.id}) > 0 &&
-               std::all_of(selectedClips.begin(), selectedClips.end(), [&](const auto& key) { return key.first == track.id; })) {
+            std::vector<std::pair<std::string, std::string>> mergeCandidates;
+            if(selectedClips.size() >= 2 && selectedClips.count({track.id, clip.id}) > 0)
+                mergeCandidates.assign(selectedClips.begin(), selectedClips.end());
+            else if(const auto* group = timeline.getGroupForClip(scope(timeline), track.id, clip.id))
+                mergeCandidates = group->members;
+            if(mergeCandidates.size() >= 2 &&
+               std::all_of(mergeCandidates.begin(), mergeCandidates.end(), [&](const auto& key) { return key.first == track.id; })) {
                 contextMenuSection("Merge");
-                const bool mergeable = !track.isWaveTrack &&
-                    std::all_of(selectedClips.begin(), selectedClips.end(), [&](const auto& key) {
+                const bool mergeable = !track.isWaveTrack && !track.isMacroTrack() &&
+                    std::all_of(mergeCandidates.begin(), mergeCandidates.end(), [&](const auto& key) {
                         const auto* selected = timeline.getClip(scope(timeline), track.id, key.second);
                         return selected != nullptr && !selected->isLfo && !selected->isStateCapture;
                     });
-                const std::string mergeLabel = "Merge " + ofToString(selectedClips.size()) + " clips";
+                const std::string mergeLabel = "Merge " + ofToString(mergeCandidates.size()) + " clips";
                 if(ImGui::MenuItem(mergeLabel.c_str(), nullptr, false, mergeable)) {
                     mergeTrackId = track.id;
                     mergeClipIds.clear();
-                    for(const auto& key : selectedClips) mergeClipIds.push_back(key.second);
+                    for(const auto& key : mergeCandidates) mergeClipIds.push_back(key.second);
                     ImGui::CloseCurrentPopup();
                 }
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", mergeable
                         ? "One clip spanning them all. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
-                        : "Wave, LFO and state-capture clips cannot be merged.");
+                        : "Wave, LFO, state-capture and macro clips cannot be merged.");
             }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete clip")) {
