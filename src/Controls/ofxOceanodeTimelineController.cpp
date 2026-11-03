@@ -4019,30 +4019,33 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::CloseCurrentPopup();
                 }
             }
-            // Two clips of this track selected: they can become one clip.
-            if(selectedClips.size() == 2 && selectedClips.count({track.id, clip.id}) > 0 &&
-               std::all_of(selectedClips.begin(), selectedClips.end(), [&](const auto& key) { return key.first == track.id; })) {
-                const auto& other = selectedClips.begin()->second == clip.id ? std::next(selectedClips.begin())->second
-                                                                            : selectedClips.begin()->second;
-                const auto* otherClip = timeline.getClip(scope(timeline), track.id, other);
-                const bool mergeable = !track.isWaveTrack && !clip.isLfo && !clip.isStateCapture &&
-                    otherClip != nullptr && !otherClip->isLfo && !otherClip->isStateCapture;
-                if(ImGui::MenuItem("Merge 2 clips", nullptr, false, mergeable)) {
-                    mergeTrackId = track.id;
-                    mergeFirstClipId = clip.id;
-                    mergeSecondClipId = other;
-                    ImGui::CloseCurrentPopup();
-                }
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("%s", mergeable
-                        ? "One clip spanning both. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
-                        : "Wave, LFO and state-capture clips cannot be merged.");
-            }
             if(isGrouped) {
                 if(ImGui::MenuItem("Ungroup clips")) {
                     timeline.ungroupClip(scope(timeline), track.id, clip.id);
                     ImGui::CloseCurrentPopup();
                 }
+            }
+            // Two or more clips of this track selected: they can become one
+            // clip. Its own section: merging is not grouping.
+            if(selectedClips.size() >= 2 && selectedClips.count({track.id, clip.id}) > 0 &&
+               std::all_of(selectedClips.begin(), selectedClips.end(), [&](const auto& key) { return key.first == track.id; })) {
+                contextMenuSection("Merge");
+                const bool mergeable = !track.isWaveTrack &&
+                    std::all_of(selectedClips.begin(), selectedClips.end(), [&](const auto& key) {
+                        const auto* selected = timeline.getClip(scope(timeline), track.id, key.second);
+                        return selected != nullptr && !selected->isLfo && !selected->isStateCapture;
+                    });
+                const std::string mergeLabel = "Merge " + ofToString(selectedClips.size()) + " clips";
+                if(ImGui::MenuItem(mergeLabel.c_str(), nullptr, false, mergeable)) {
+                    mergeTrackId = track.id;
+                    mergeClipIds.clear();
+                    for(const auto& key : selectedClips) mergeClipIds.push_back(key.second);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", mergeable
+                        ? "One clip spanning them all. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
+                        : "Wave, LFO and state-capture clips cannot be merged.");
             }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete clip")) {
@@ -5109,23 +5112,24 @@ void ofxOceanodeTimelineController::draw() {
     }
 
     if(!mergeTrackId.empty()) {
-        const std::string trackId = mergeTrackId, firstId = mergeFirstClipId, secondId = mergeSecondClipId;
-        mergeTrackId.clear(); mergeFirstClipId.clear(); mergeSecondClipId.clear();
-        // Neither clip may stay referenced while the manager replaces one and removes the other.
-        if(editorState.clipEditorOpen && editorState.editorTrackId == trackId &&
-           (editorState.editorClipId == firstId || editorState.editorClipId == secondId)) {
+        const std::string trackId = mergeTrackId;
+        const std::vector<std::string> clipIds = std::move(mergeClipIds);
+        mergeTrackId.clear(); mergeClipIds.clear();
+        auto merging = [&](const std::string& id) { return std::find(clipIds.begin(), clipIds.end(), id) != clipIds.end(); };
+        // No clip may stay referenced while the manager replaces one and removes the others.
+        if(editorState.clipEditorOpen && editorState.editorTrackId == trackId && merging(editorState.editorClipId)) {
             editorState.clipEditorOpen = false;
             editorState.editorClipId.clear();
             editorState.editorLaneId.clear();
             laneEditors.clearSelection();
         }
-        if(draggingTrackId == trackId && (draggingClipId == firstId || draggingClipId == secondId)) {
+        if(draggingTrackId == trackId && merging(draggingClipId)) {
             clipDragMode = ClipDragMode::None;
             draggingTrackId.clear();
             draggingClipId.clear();
             groupDragSnapshot.clear();
         }
-        const auto mergedId = timeline.mergeClips(scope(timeline), trackId, firstId, secondId);
+        const auto mergedId = timeline.mergeClips(scope(timeline), trackId, clipIds);
         if(mergedId.empty()) {
             ofLogWarning("ofxOceanodeTimelineController") << "Cannot merge these clips: a Drum Grid would need a row longer than "
                 << ofxOceanodeTimelineDrumGrid::kMaxLength << " beats";

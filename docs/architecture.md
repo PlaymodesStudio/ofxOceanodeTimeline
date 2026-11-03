@@ -196,7 +196,9 @@ edge back past the start reverses the clip from its drag-start state.
 repeat or offset): each clip's lanes are laid out as they played (repeats
 unrolled, stretch applied, pattern lanes as one pattern over the whole clip),
 lanes on the same parameters with the same kind of lane become one lane, and
-the later clip's data wins where the clips overlap.
+the later clip's data wins where the clips overlap. The list form merges any
+number of clips by folding the pair merge in start order, after checking every
+clip first so a refusal changes nothing.
 
 `resizeClipEnd` is the canonical Repeat / Trim / Stretch operation for numeric
 length edits and edge drags. Drag snapshots restore the original source mapping

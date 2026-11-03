@@ -1625,6 +1625,13 @@ public:
     std::string mergeClips(const std::string& trackId, const std::string& firstClipId, const std::string& secondClipId);
     std::string mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                            const std::string& firstClipId, const std::string& secondClipId);
+    // Any number of clips of one track, joined the same way in start order:
+    // the earliest keeps its id, and where clips overlap the later one wins.
+    // All or nothing: refused (and nothing changes) when any clip could not
+    // be merged.
+    std::string mergeClips(const std::string& trackId, const std::vector<std::string>& clipIds);
+    std::string mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                           const std::vector<std::string>& clipIds);
     std::string splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat);
     // Copies a clip, with fresh clip/lane ids, to dstTrackId at newStartBeat
     // and returns the new clip's id ("" when it cannot go there).

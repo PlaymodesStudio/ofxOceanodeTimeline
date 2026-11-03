@@ -111,6 +111,41 @@ int main() {
     const auto lfo = model.createLfoClip(t, lb, "LFO", 20, 4);
     assert(model.mergeClips(t, a, lfo).empty() && model.getClip(t, lfo));
     assert(model.mergeClips(t, a, a).empty());
+    // Four clips one after the other merge at once: the shared Level number
+    // lanes become one lane, the Cutoff curve on only one clip stays its own.
+    const auto t4 = model.createTrack("Four");
+    const auto l4 = model.addBinding(t4, level), c4 = model.addBinding(t4, cutoff);
+    std::vector<std::string> four;
+    for(int i = 0; i < 4; ++i) {
+        const auto id = model.createClip(t4, "Q" + ofToString(i), i * 2.0, 2);
+        const auto laneId = model.createLane(t4, id, "Level", ofxOceanodeTimelineLaneType::Number);
+        model.addBindingToLane(t4, id, laneId, l4);
+        model.setClipNumber(t4, id, laneId, 0, 0.1f + 0.2f * i);
+        four.push_back(id);
+    }
+    const auto curveId = model.createLane(t4, four[2], "Cutoff", ofxOceanodeTimelineLaneType::Curve);
+    model.addBindingToLane(t4, four[2], curveId, c4);
+    model.getLane(t4, four[2], curveId)->curvePoints = {{0, 0.2f}, {2, 0.6f}};
+    model.setTrackMuted(t, true);
+    auto read4 = [&](double at) { owner.transport->seekToBeat(at); model.update(); model.applyAutomation(); };
+    std::vector<std::pair<float, float>> before4;
+    for(double at = 0.07; at < 8.0; at += 0.25) { read4(at); before4.push_back({levelValue.get(), cutoffValue.get()}); }
+    // Refused as a whole (an LFO among them): nothing changes.
+    const auto lfo4 = model.createLfoClip(t4, l4, "LFO", 20, 4);
+    auto withLfo = four; withLfo.push_back(lfo4);
+    assert(model.mergeClips(t4, withLfo).empty() && model.getTrack(t4)->clips.size() == 5);
+    model.removeClip(t4, lfo4);
+    const auto merged4 = model.mergeClips(t4, {four[3], four[1], four[0], four[2]}); // any order
+    assert(merged4 == four[0] && model.getTrack(t4)->clips.size() == 1);
+    const auto* clip4 = model.getClip(t4, merged4);
+    assert(std::abs(clip4->startBeat) < 1e-9 && std::abs(clip4->durationBeats - 8) < 1e-9 && clip4->lanes.size() == 2);
+    size_t i4 = 0;
+    for(double at = 0.07; at < 8.0; at += 0.25, ++i4) {
+        read4(at);
+        near(levelValue, before4[i4].first);
+        // The curve is its clip's alone: merged it also holds a value outside it.
+        if(at > 4.0 && at < 6.0) near(cutoffValue, before4[i4].second);
+    }
     std::cout << "Merge clips passed: joined and separate lanes, repeats, stretch, offset, gap, overlap, refusals.\n";
 }
 '''

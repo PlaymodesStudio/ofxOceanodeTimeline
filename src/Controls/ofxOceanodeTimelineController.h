@@ -487,8 +487,9 @@ private:
     std::vector<ofxOceanodeTimelineSequence*> unfoldedSequences, unfoldedSequencesDrawn;
     std::vector<ofxOceanodeTimelineSequence*> historySequences(ofxOceanodeTimelineManager& timeline) const;
     std::vector<ofxOceanodeTimelineSequence*> undoOrder, redoOrder;
-    // Two clips of one track to merge (applied after the track iteration).
-    std::string mergeTrackId, mergeFirstClipId, mergeSecondClipId;
+    // Clips of one track to merge into one (applied after the track iteration).
+    std::string mergeTrackId;
+    std::vector<std::string> mergeClipIds;
     bool requestClipDeletion = false;
     std::string clipDeletionTrackId;
     std::string clipDeletionClipId;

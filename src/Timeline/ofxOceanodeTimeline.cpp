@@ -2889,6 +2889,39 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
     return mergedId;
 }
 
+std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                   const std::vector<std::string>& clipIds) {
+    const auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || clipIds.size() < 2) return std::string();
+    // Everything is checked first, so a refusal never leaves a partial merge.
+    struct Entry { std::string id; double start; size_t order; };
+    std::vector<Entry> entries;
+    double start = std::numeric_limits<double>::max(), end = std::numeric_limits<double>::lowest();
+    bool hasDrumGrid = false;
+    for(const auto& id : clipIds) {
+        const auto found = std::find_if(track->clips.begin(), track->clips.end(), [&](const auto& c) { return c.id == id; });
+        if(found == track->clips.end() || found->isLfo || found->isStateCapture) return std::string();
+        if(std::any_of(entries.begin(), entries.end(), [&](const Entry& e) { return e.id == id; })) return std::string();
+        entries.push_back({id, found->startBeat, static_cast<size_t>(found - track->clips.begin())});
+        start = std::min(start, found->startBeat);
+        end = std::max(end, found->startBeat + found->durationBeats);
+        for(const auto& lane : found->lanes) hasDrumGrid = hasDrumGrid || lane.type == ofxOceanodeTimelineLaneType::DrumGrid;
+    }
+    // The last pairwise merge spans all of them, so this is the only Drum Grid refusal.
+    if(hasDrumGrid && end - start > ofxOceanodeTimelineDrumGrid::kMaxLength + kEpsilon) return std::string();
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        return std::abs(a.start - b.start) > kEpsilon ? a.start < b.start : a.order < b.order;
+    });
+    // Folding in start order: each next clip joins the clip merged so far,
+    // which is never later than it, so later clips win where they overlap.
+    std::string merged = entries.front().id;
+    for(size_t i = 1; i < entries.size(); ++i) {
+        merged = mergeClips(sequence, trackId, merged, entries[i].id);
+        if(merged.empty()) return std::string();
+    }
+    return merged;
+}
+
 std::string ofxOceanodeTimelineManager::splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat) {
     auto* track = getTrack(sequence, trackId);
     const auto* sourceClip = getClip(sequence, trackId, clipId);
@@ -5358,4 +5391,8 @@ bool ofxOceanodeTimelineManager::removeFolder(const std::string& folderId, bool 
 std::string ofxOceanodeTimelineManager::mergeClips(const std::string& trackId, const std::string& firstClipId,
                                                    const std::string& secondClipId) {
     return mergeClips(mainSequence, trackId, firstClipId, secondClipId);
+}
+
+std::string ofxOceanodeTimelineManager::mergeClips(const std::string& trackId, const std::vector<std::string>& clipIds) {
+    return mergeClips(mainSequence, trackId, clipIds);
 }
