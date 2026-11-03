@@ -1278,6 +1278,8 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
     if(auto* model = parameter.getNodeModel()) binding.valueScale = model->getTimelineValueScale(parameter);
     // a toggle's clips default to a Toggle lane (a one-row gate)
     if(binding.valueType == typeid(bool).name()) binding.laneType = ofxOceanodeTimelineLaneType::MultiGate;
+    // a chord bank's gates to a Chords lane (a Multi Gate, one row per chord)
+    if(ofxOceanodeTimelineChordInstrument(&parameter)) binding.laneType = ofxOceanodeTimelineLaneType::MultiGate;
     // and a dropdown's to a Dropdown lane
     if(!ofxOceanodeTimelineDropdownOptions(parameter).empty()) binding.laneType = ofxOceanodeTimelineLaneType::Dropdown;
     track->bindings.push_back(binding);

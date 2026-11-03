@@ -322,7 +322,18 @@ public:
                 // An instrument (a synth that takes notes): a piano-roll row
                 // playing it, set up in the timeline's dialog.
                 ofxOceanodeTimelineInstrument instrument;
-                if(model.getTimelineInstrument(instrument) &&
+                if(model.getTimelineInstrument(instrument) && instrument.chords && instrument.gate != nullptr){
+                    // A chord bank: a track with a Chords lane, one row per chord.
+                    ImGui::Separator();
+                    if(ImGui::Selectable("Add to Timeline as Chord Track")){
+                        const std::string trackId = manager.createTrack(model.getParameterGroup().getName());
+                        if(!manager.requestParameterLane(trackId, *instrument.gate)) manager.removeTrack(trackId);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A track whose clips hold the chords: one row per chord of the bank,\n"
+                                          "drag in a row to play that chord for that long.");
+                }else if(model.getTimelineInstrument(instrument) &&
                    (instrument.gate != nullptr || instrument.pitch != nullptr)){
                     ImGui::Separator();
                     if(ImGui::Selectable("Add to Timeline as Instrument...")){

@@ -5860,7 +5860,11 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
             if(atPlayhead != nullptr) clipId = atPlayhead->id;
             else if(count == 1) clipId = onlyClip->id;
         }
-        if(clipId.empty()) clipId = timeline.createClip(scope(timeline), request.first, track->name, snapBeat(beat), timeline.getBeatsPerBar());
+        // A chord bank's gates: a Chords lane, four bars to write a progression in.
+        ofxOceanodeTimelineInstrument chordBank;
+        const bool chords = ofxOceanodeTimelineChordInstrument(container->findTimelineParameter(binding->parameterPath), &chordBank);
+        if(clipId.empty()) clipId = timeline.createClip(scope(timeline), request.first, track->name, snapBeat(beat),
+                                                        timeline.getBeatsPerBar() * (chords ? 4 : 1));
         auto* clip = timeline.getClip(scope(timeline), request.first, clipId);
         if(clip == nullptr) continue;
         std::string laneId;
@@ -5872,6 +5876,11 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
             auto* lane = timeline.getLane(scope(timeline), request.first, clipId, laneId);
             auto* parameter = container->findTimelineParameter(binding->parameterPath);
             if(lane != nullptr && binding->valueType == typeid(bool).name()) makeToggleLane(lane);
+            if(lane != nullptr && chords) {
+                timeline.setLaneMultiRowCount(scope(timeline), request.first, clipId, laneId, std::max(1, chordBank.voices));
+                lane->name = "Chords";
+                lane->beatsPerStep = 1.0;   // chords on beats; Division makes it finer
+            }
             if(lane != nullptr && parameter != nullptr) {
                 if(binding->valueType == typeid(float).name()) {
                     lane->valueMin = parameter->cast<float>().getParameter().getMin();
@@ -6534,7 +6543,12 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         continue;
     }
 
-    const float defaultEditorHeight = laneEditors.defaultHeight(lane->type);
+    // A Chords lane (a chord bank's gates) gets the chords' header and room for them.
+    ofxOceanodeTimelineInstrument chordBank;
+    const bool chordLane = timeline.chordLaneInstrument(track, *lane, &chordBank);
+    const float defaultEditorHeight = chordLane
+        ? std::max(laneEditors.defaultHeight(lane->type), 16.0f + std::max(lane->multiRowCount, chordBank.voices) * (ImGui::GetTextLineHeight() + 7.0f))
+        : laneEditors.defaultHeight(lane->type);
     const auto laneHeightIt = editorState.laneEditorHeights.find(lane->id);
     const float editorHeight = laneHeightIt != editorState.laneEditorHeights.end() ? laneHeightIt->second : defaultEditorHeight;
     // Reserve the whole dock row first, then give only the timeline half an
@@ -6593,7 +6607,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     ImGui::SetCursorScreenPos(ImVec2(editorMin.x + 5.0f + clipIndent, editorMin.y + 4.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5.0f, 4.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
-    const float pianoKeyboardReserve = laneEditors.keyboardReserve(lane->type);
+    const float pianoKeyboardReserve = chordLane ? ofxOceanodeTimelineRegionEditor::chordHeaderWidth()
+                                                 : laneEditors.keyboardReserve(lane->type);
     ImGui::BeginChild(("##clipProperties" + editorState.editorTrackId + editorState.editorClipId + lane->id).c_str(),
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
@@ -7393,7 +7408,8 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
             if(binding.parameterPath == request.parameterPath) existing = &binding;
     ofxOceanodeTimelineParameterBinding fresh;
     fresh.valueType = parameter->valueType();
-    if(fresh.valueType == typeid(bool).name()) fresh.laneType = ofxOceanodeTimelineLaneType::MultiGate;
+    if(fresh.valueType == typeid(bool).name() || ofxOceanodeTimelineChordInstrument(parameter))
+        fresh.laneType = ofxOceanodeTimelineLaneType::MultiGate;
     if(!ofxOceanodeTimelineDropdownOptions(*parameter).empty()) fresh.laneType = ofxOceanodeTimelineLaneType::Dropdown;
     parameterClipType = optionIndexForBinding(existing != nullptr ? *existing : fresh);
     if(request.kind != ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Clip) {

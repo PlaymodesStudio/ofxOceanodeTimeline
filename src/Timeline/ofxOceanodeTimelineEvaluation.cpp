@@ -1315,6 +1315,22 @@ std::vector<ofxOceanodeTimelinePianoNote> ofxOceanodeTimelineManager::repeatNote
     return deviated(std::move(notes));
 }
 
+bool ofxOceanodeTimelineChordInstrument(ofxOceanodeAbstractParameter* parameter,
+                                        ofxOceanodeTimelineInstrument* instrumentOut) {
+    auto* model = parameter == nullptr ? nullptr : parameter->getNodeModel();
+    ofxOceanodeTimelineInstrument instrument;
+    if(model == nullptr || !model->getTimelineInstrument(instrument) || !instrument.chords || instrument.gate != parameter) return false;
+    if(instrumentOut != nullptr) *instrumentOut = std::move(instrument);
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::chordLaneInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                                                     ofxOceanodeTimelineInstrument* instrument) const {
+    if(lane.type != ofxOceanodeTimelineLaneType::MultiGate || lane.bindingIds.empty() || container == nullptr) return false;
+    const auto* binding = bindingInTrack(track, lane.bindingIds.front());
+    return binding != nullptr && ofxOceanodeTimelineChordInstrument(container->findTimelineParameter(binding->parameterPath), instrument);
+}
+
 bool ofxOceanodeTimelineManager::drumGridInstrument(const ofxOceanodeTimelineTrack& track,
                                                     const ofxOceanodeTimelineLane& lane,
                                                     int& voices, std::vector<std::string>& names, bool* kit,

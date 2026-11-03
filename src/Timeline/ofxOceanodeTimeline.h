@@ -85,6 +85,11 @@ inline bool ofxOceanodeTimelineIsHeldValueLane(ofxOceanodeTimelineLaneType type)
 // The option names of a scalar int/float dropdown parameter, empty for any
 // other parameter.
 std::vector<std::string> ofxOceanodeTimelineDropdownOptions(ofxOceanodeAbstractParameter& parameter);
+// A chord bank's gate input (ofxOceanodeTimelineInstrument::chords, HarmonyBox):
+// true, with what the node reports (its chords: voices, rowNames, rowColors).
+// A Multi Gate lane bound to one is a Chords lane, one row per chord.
+bool ofxOceanodeTimelineChordInstrument(ofxOceanodeAbstractParameter* parameter,
+                                        ofxOceanodeTimelineInstrument* instrument = nullptr);
 
 // Determines what stays fixed when the manual transport tempo changes.
 // Beats is the traditional musical timeline: beat positions are unchanged,
@@ -1555,6 +1560,10 @@ public:
                             int& voices, std::vector<std::string>& names, bool* kit = nullptr,
                             std::vector<ofColor>* colors = nullptr,
                             ofxOceanodeTimelineInstrument* instrument = nullptr) const;
+    // A Chords lane: a Multi Gate lane whose first target is a chord bank's
+    // gate (see ofxOceanodeTimelineChordInstrument). False for any other lane.
+    bool chordLaneInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                             ofxOceanodeTimelineInstrument* instrument = nullptr) const;
     // The same for a note group's roles.
     bool noteGroupInstrument(const std::string& trackId, const std::string& groupId,
                              int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
