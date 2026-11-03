@@ -3334,6 +3334,17 @@ void ofxOceanodeTimelineController::draw() {
                 // content is drawn in the clip's colour (clipInk).
                 const float titleBottom = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
                 dl->AddRectFilled(ImVec2(left + 1, titleBottom), ImVec2(right - 1, max.y - 3), IM_COL32(0, 0, 0, 128));
+                // A clip playing its content at another rate than 1x gets a
+                // soft hatching behind its content, anchored to the clip's start.
+                if(std::abs(ofxOceanodeTimelineClipTime::effectiveStretch(clip) - 1.0) > 1e-4 && max.y - 3.0f > titleBottom) {
+                    constexpr float kHatchSpacing = 7.0f;
+                    const float top = titleBottom, bottom = max.y - 3.0f, height = bottom - top;
+                    dl->PushClipRect(ImVec2(left + 1, top), ImVec2(right - 1, bottom), true);
+                    const float first = x1 + std::floor((left - height - x1) / kHatchSpacing) * kHatchSpacing;
+                    for(float x = first; x < right; x += kHatchSpacing)
+                        dl->AddLine(ImVec2(x, bottom), ImVec2(x + height, top), IM_COL32(255, 255, 255, 18), 1.0f);
+                    dl->PopClipRect();
+                }
                 // A clip's persistent group and its (separate, ephemeral)
                 // Shift+click selection are drawn as extra outlines on top
                 // of the normal fill/border above, so a grouped clip that's
