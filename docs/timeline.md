@@ -471,11 +471,16 @@ own timeline when that plays free), **Clock** (always running at the global
 tempo), or any timeline by name, this canvas's first: the global transport
 for one linked to it, its own transport otherwise (a dependent timeline's
 preview). The choice is saved by id, so renaming a timeline keeps it; a
-deleted one shows *(missing)* and the node holds stopped. **Beat Transport**
-also plays, stops and seeks the timeline it follows (its **Play**, **Stop** and
-**Seek** inputs), quantized to the next beat or bar, and reads that
-timeline's meter and loop. The **Timeline** node plays, stops and restarts
-any timeline from the patch.
+deleted one shows *(missing)* and the node holds stopped. **Global
+transport** in that list always follows the global transport, wherever the
+node is. **Beat Transport** has the same choice on the node itself, its
+**Transport** dropdown: **Global Transport** (the default), then every
+timeline that has a transport, this canvas's first (a dependent timeline's
+is its preview). It reads that transport's beat, tempo, play state, meter and
+loop, and plays, stops and seeks it (its **Play**, **Stop** and **Seek**
+inputs), quantized to the next beat or bar. Patches saved before keep their
+choice (*Auto (this canvas)* for an older Auto). The **Timeline** node plays,
+stops and restarts any timeline from the patch.
 
 **Adding a parameter.** **Add to Timeline** in a parameter's right-click menu
 first asks which timeline (those of the parameter's canvas and of every canvas
