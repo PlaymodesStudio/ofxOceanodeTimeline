@@ -900,6 +900,53 @@ bool ofxOceanodeTimelineManager::placedPlayheadBeat(const TimelineRef& given, do
     return found;
 }
 
+bool ofxOceanodeTimelineManager::heldPlayheadBeat(const TimelineRef& given, double& beat) {
+    if(container == nullptr) return false;
+    const auto ref = normalizedRef(given);
+    bool found = false;
+    // Past the end of the clips placing it, its playhead stays where the
+    // last of them left it (a precomposition holds its last frame): the
+    // latest clip ended before the playhead, on a macro track of a timeline
+    // playing there, by a playing timeline first.
+    for(int pass = 0; pass < 2 && !found; ++pass)
+        forEachPlayingManager([&](ofxOceanodeTimelineManager& manager, const ofxOceanodeTransportState& state) {
+            if(found || (pass == 0) != state.isPlaying) return;
+            if(!manager.evaluationIndexesValid) manager.rebuildEvaluationIndexes();
+            const double playhead = state.beatPosition;
+            double latestEnd = -std::numeric_limits<double>::infinity();
+            for(const auto& outer : manager.playedSequences(manager.playContext, playhead, playhead)) {
+                const double at = outer.map.toSequence(playhead);
+                const auto outerContext = outer.contextFrom(manager.playContext);
+                for(const auto& track : outer.sequence->tracks) {
+                    if(!track.isMacroTrack() || !manager.isTrackAudible(track)) continue;
+                    for(const auto& clip : track.clips) {
+                        if(clip.muted || clip.isLfo || ofxOceanodeTimelineClipChanceSilenced(clip, outerContext)) continue;
+                        const double end = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
+                        if(end > at + 1e-9 || end <= latestEnd) continue;
+                        const auto* played = manager.playedMacroAt(track, clip.reversed);
+                        if(played == nullptr || played->canvas != ref.canvas || played->timeline != ref.timeline) continue;
+                        // Its last beat as ofxOceanodeTimelineClipTime plays
+                        // it: a whole repeat ends at the content's end, not
+                        // back at its start.
+                        const double stretch = std::max(1e-9, ofxOceanodeTimelineClipTime::effectiveStretch(clip));
+                        const double content = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+                        const double elapsed = end - clip.startBeat;
+                        const double cycle = clip.repeatContent ? content * stretch : elapsed;
+                        double inCycle = std::fmod(elapsed, std::max(1e-9, cycle));
+                        if(inCycle < 1e-9) inCycle = cycle;
+                        double position = inCycle / stretch + ofxOceanodeTimelineClipTime::contentOffset(clip);
+                        if(position > content + 1e-6) position -= content;
+                        const double mirrorShift = clip.reversed ? played->mirrorLength - content : 0.0;
+                        beat = clip.reversed ? played->mirrorLength - (position + mirrorShift) : position;
+                        latestEnd = end;
+                        found = true;
+                    }
+                }
+            }
+        });
+    return found;
+}
+
 bool ofxOceanodeTimelineManager::timelinePlayheadBeat(const TimelineRef& given, double& beat) {
     const auto ref = normalizedRef(given);
     auto transport = transportFor(ref);
@@ -912,7 +959,7 @@ bool ofxOceanodeTimelineManager::timelinePlayheadBeat(const TimelineRef& given, 
             bool starts = false;
             previewing = transport->getState().isPlaying || transport->nextPendingAction(at, starts);
         }
-        if(!previewing && placedPlayheadBeat(ref, beat)) return true;
+        if(!previewing && (placedPlayheadBeat(ref, beat) || heldPlayheadBeat(ref, beat))) return true;
     }
     if(transport != nullptr) {
         beat = transport->getState().beatPosition;

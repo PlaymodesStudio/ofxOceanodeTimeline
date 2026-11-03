@@ -364,6 +364,15 @@ int main() {
         nest.transport->play();
         at(5.0); // the host plays: its placement drives the playhead again
         assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 0.5);
+        // Past the clip's end its playhead holds where the clip left it: the
+        // end of its content, not back at 0.
+        at(9.0);
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 2.0);
+        clip->contentOffsetBeats = 0.5;
+        at(9.0);
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 0.5);
+        clip->contentOffsetBeats = 0.0;
+        at(5.0);
         // A new clip placing a timeline lasts one pass of it: the end of its
         // last clip, at least a bar of its own meter.
         fillSettings.timeSignatureNumerator = 3;

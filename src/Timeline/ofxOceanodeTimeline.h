@@ -1414,6 +1414,9 @@ public:
     bool timelinePlayheadBeat(const TimelineRef& ref, double& beat);
     // Where a clip of a playing timeline places it now (false: none does).
     bool placedPlayheadBeat(const TimelineRef& ref, double& beat);
+    // Where the last clip that ended before the playhead left it (false:
+    // none has ended yet).
+    bool heldPlayheadBeat(const TimelineRef& ref, double& beat);
     // Timeline windows besides the main one: which timeline each shows.
     // Saved with the timeline; the editor opens and closes them.
     struct TimelineWindow { int id = 0; TimelineRef ref; };
