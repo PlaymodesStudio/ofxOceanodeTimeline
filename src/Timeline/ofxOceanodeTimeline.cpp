@@ -4988,7 +4988,10 @@ void ofxOceanodeTimelineManager::clear() {
     mainSequence.timelines.clear();
     mainSequence.nextTimelineNumber = 2;
     mainSequence.play = {};
-    playOnLoadPending.clear();
+    // Only the root's: a preset's macros load their timelines (and arm them to
+    // play on load) before its root timeline is read, and those stay.
+    for(auto it = playOnLoadPending.begin(); it != playOnLoadPending.end();)
+        it = normalizedRef(*it).canvas.empty() ? playOnLoadPending.erase(it) : std::next(it);
     timelineWindows.clear();
     placedTimelines.clear();
     placedTimelinesValid = false;

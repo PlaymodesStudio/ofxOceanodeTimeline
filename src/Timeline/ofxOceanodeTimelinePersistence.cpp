@@ -1606,7 +1606,8 @@ bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath)
         }
         fromJson(json);
         // Its free timelines set to play on load start once their players run.
-        playOnLoadPending.insert({});
+        // (Named: a bare insert({}) picks the initializer_list overload and inserts nothing.)
+        playOnLoadPending.insert(TimelineRef{});
         for(const auto& timeline : mainSequence.timelines) playOnLoadPending.insert({std::string(), timeline->timelineId});
         return true;
     } catch(const std::exception& e) {
