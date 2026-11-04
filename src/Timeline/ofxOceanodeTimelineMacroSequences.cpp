@@ -12,7 +12,9 @@
 namespace {
 constexpr const char* kSequenceFile = "sequence.json";
 
-// The macro node whose container is `target`, searched from `from` down.
+// The macro node whose container is `target`, searched from `from` down:
+// through its macros, and through its timeline guests (a MacroMixer's graphs,
+// each a canvas holding the source as a Macro).
 ofxOceanodeNodeMacro* owningMacro(ofxOceanodeContainer& from, const ofxOceanodeContainer& target) {
     for(auto* node : from.getAllModules()) {
         auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
@@ -20,6 +22,8 @@ ofxOceanodeNodeMacro* owningMacro(ofxOceanodeContainer& from, const ofxOceanodeC
         if(macro->getContainer().get() == &target) return macro;
         if(auto* inner = owningMacro(*macro->getContainer(), target)) return inner;
     }
+    for(const auto& guest : from.getTimelineGuests())
+        if(auto* inner = owningMacro(*guest, target)) return inner;
     return nullptr;
 }
 
@@ -92,12 +96,33 @@ std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContain
 void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder) {
     if(container == nullptr) return;
     auto* macro = owningMacro(*container, macroContainer);
-    if(macro == nullptr) return; // not a macro's container (e.g. a mixer graph)
+    if(macro == nullptr) return; // not a macro's container
     pruneMacroSequences();
+    const std::string canvas = macroContainer.getCanvasID();
     const std::string library = macro->isLocal() ? std::string() : libraryKey(folder);
-    // This container's previous sequence (a reload, or a switch between local and library).
-    macroSequences.erase(std::remove_if(macroSequences.begin(), macroSequences.end(),
-        [&](const auto& entry) { return entry.address == &macroContainer; }), macroSequences.end());
+    // This container's previous sequence (a reload, or a switch between local
+    // and library): what it played stops and rewinds, and what it drove is no
+    // longer marked as timelined, before the loaded one takes its place.
+    const auto previous = std::find_if(macroSequences.begin(), macroSequences.end(),
+        [&](const auto& entry) { return entry.address == &macroContainer; });
+    if(previous != macroSequences.end()) {
+        std::vector<TimelineRef> refs{{canvas, std::string()}};
+        for(const auto& timeline : previous->sequence->timelines) refs.push_back({canvas, timeline->timelineId});
+        for(const auto& ref : refs) {
+            // Its own transport only: the global one is not the macro's to stop.
+            if(auto transport = transportFor(ref); transport != nullptr && transport->isDerived()) {
+                transport->cancelPendingActions();
+                transport->stop();
+            }
+            const auto* sequence = timelineFor(ref);
+            if(sequence == nullptr) continue;
+            for(const auto& track : sequence->tracks)
+                for(const auto& binding : track.bindings)
+                    if(auto* parameter = container->findTimelineParameter(absolutePathIn(canvas, binding.parameterPath)))
+                        parameter->setTimelined(false);
+        }
+        macroSequences.erase(previous);
+    }
     MacroSequenceEntry entry;
     entry.container = macro->getContainer();
     entry.address = &macroContainer;
@@ -109,11 +134,14 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
     if(!entry.sequence) {
         entry.sequence = std::make_shared<ofxOceanodeTimelineSequence>();
         entry.sequence->base = &macroContainer;
-        const std::string file = ofFilePath::join(folder, kSequenceFile);
+        // A macro's own timelines (sequence.json), or, for a preset folder
+        // loaded as a Macro (a MacroMixer's source), the preset's own
+        // timelines (timeline.json): its root canvas's become this macro's.
+        std::string file = ofFilePath::join(folder, kSequenceFile);
+        if(!ofFile::doesFileExist(file)) file = ofFilePath::join(folder, "timeline.json");
         if(ofFile::doesFileExist(file)) sequenceFromJson(*entry.sequence, ofLoadJson(file));
     }
     macroSequences.push_back(entry);
-    const std::string canvas = macroContainer.getCanvasID();
     // Older project files kept which timelines played free, and whose nodes
     // followed clips, apart from the macro: now in its own settings.
     if(legacyFreeTimelines.count({canvas, std::string()}) > 0) entry.sequence->play.free = true;
@@ -149,6 +177,10 @@ bool ofxOceanodeTimelineManager::macrosActive(Player& player) const {
                     if(macro->getContainer() == canvas || find(*macro->getContainer(), macro->getContainer())) return true;
                     player.macros.pop_back();
                 }
+                // A timeline guest (a MacroMixer's graph) is no macro: only the
+                // Macros inside it count.
+                for(const auto& guest : from.getTimelineGuests())
+                    if(find(*guest, guest)) return true;
                 return false;
             };
         if(!find(*container, nullptr)) return true; // not under a macro after all
@@ -180,16 +212,21 @@ bool ofxOceanodeTimelineManager::isLiveSequence(const ofxOceanodeTimelineSequenc
 }
 
 namespace {
-// The macro container with this canvas id, searched from `from` down.
+// The macro container with this canvas id, searched from `from` down (a
+// timeline guest's canvas, a MacroMixer's graph, nests under its host's).
 ofxOceanodeContainer* containerWithCanvas(ofxOceanodeContainer& from, const std::string& canvasID) {
+    auto within = [&](ofxOceanodeContainer& inner) -> ofxOceanodeContainer* {
+        if(inner.getCanvasID() == canvasID) return &inner;
+        if(canvasID.rfind(inner.getCanvasID() + " / ", 0) == 0) return containerWithCanvas(inner, canvasID);
+        return nullptr;
+    };
     for(auto* node : from.getAllModules()) {
         auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
         if(macro == nullptr || !macro->getContainer()) continue;
-        auto& inner = *macro->getContainer();
-        if(inner.getCanvasID() == canvasID) return &inner;
-        if(canvasID.rfind(inner.getCanvasID() + " / ", 0) == 0)
-            if(auto* found = containerWithCanvas(inner, canvasID)) return found;
+        if(auto* found = within(*macro->getContainer())) return found;
     }
+    for(const auto& guest : from.getTimelineGuests())
+        if(auto* found = within(*guest)) return found;
     return nullptr;
 }
 
@@ -462,6 +499,9 @@ std::vector<std::string> ofxOceanodeTimelineManager::allCanvases() const {
             canvases.push_back(macro->getContainer()->getCanvasID());
             walk(*macro->getContainer());
         }
+        // A MacroMixer's graphs: the Macros inside them have canvases, the
+        // graph host itself has no timeline of its own.
+        for(const auto& guest : from.getTimelineGuests()) walk(*guest);
     };
     walk(*container);
     // A macro's canvas after the one it is in.

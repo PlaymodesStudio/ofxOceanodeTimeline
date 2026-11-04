@@ -495,6 +495,19 @@ from a macro node) opens another Timeline window, docked with the first one,
 showing that timeline with its own zoom and scroll; it can show any other
 timeline from its own menu. Windows are saved with the preset.
 
+**Inside a MacroMixer.** A MacroMixer loads each source preset as a Macro in
+a graph of its own; the graph is a guest of the mixer's canvas (its canvas id
+nests under it, `MacroMixer/7 / Macro 1`), and the timeline walks into it as
+into any macro. A preset folder loaded as a Macro has no `sequence.json`: its
+`timeline.json` is read instead, so the preset's root timelines become the
+source Macro's, and the Macros inside it load theirs as usual. A free one
+set to **Play on load** starts when its graph starts (at activation, or as
+a morph into it begins); one linked to the global transport follows the
+global transport of the preset hosting the mixer. They stop with their
+graph. When a macro's timelines are reloaded into a running canvas (a Macro
+loading another preset, a morph in place), what the previous ones played
+stops and rewinds first.
+
 ## Duplicating lanes
 
 Open a clip editor, right-click a lane's left properties pad and choose
