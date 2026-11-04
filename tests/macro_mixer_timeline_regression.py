@@ -7,7 +7,9 @@ activates it and drives the graph the mixer reads; a morph in place loads the
 destination's timeline into the running graph as the morph begins, and a
 control that timeline drives follows it rather than the control morph; a
 timeline linked to the global transport follows the host's; the timelines go
-with their graph.
+with their graph. A source's timeline is one of its windows: ticked, it opens
+as a window of the host's Timeline named after the source and never saved;
+its close button, the end of a transition and Clear Playback close it.
 """
 import attachment_regression as native
 
@@ -127,6 +129,28 @@ int main(int argc, char** argv) {
     for(int i = 0; i < 10; ++i) frame(0.1);
     check(probe.level.get() > early + 0.15f, "The ramp advances with the timeline's own clock");
 
+    // The source's timeline is one of its windows: closed until ticked, then
+    // a window of the host's Timeline named after the source, never saved.
+    const auto aID = runtime.importedMacro(a)->id();
+    std::string timelineKey;
+    for(const auto& window : runtime.sourceWindows(aID))
+        if(window.title.rfind("Timeline: ", 0) == 0) timelineKey = window.key;
+    check(timelineKey == "Timeline main", "The source lists its timeline as a window: " + timelineKey);
+    check(model.getTimelineWindows().empty(), "...closed until ticked");
+    check(runtime.setSourceWindow(aID, timelineKey, true), "Ticked");
+    frame(0.05);
+    const auto windows = model.getTimelineWindows();
+    check(windows.size() == 1 && ofxOceanodeTimelineManager::normalizedRef(windows.front().ref) == ref &&
+          windows.front().hostLabel == runtime.importedMacro(a)->name(),
+          "A window of the host's Timeline shows the source's timeline, labelled after the source");
+    check(!model.toJson().contains("windows"), "...and is never saved with the host preset");
+    // Closed with its own button (outside the mixer's draw): unticked, not reopened.
+    if(!windows.empty()) model.closeTimelineWindow(windows.front().id);
+    frame(0.05); frame(0.05);
+    check(model.getTimelineWindows().empty() && runtime.openWindows(aID).count(timelineKey) == 0, "Closing it unticks it");
+    runtime.setSourceWindow(aID, timelineKey, true); frame(0.05);
+    check(model.getTimelineWindows().size() == 1, "Ticked again, it opens again");
+
     // A morph in place: the destination's timeline replaces the origin's in
     // the running canvas and starts; what it drives follows it, not the
     // control morph from the ramp's value to the saved -1.
@@ -136,10 +160,12 @@ int main(int argc, char** argv) {
     for(int i = 0; i < 5; ++i) frame(0.1);
     check(near(probe.level.get(), 0.75f), "The destination's timeline holds Level at 0.75 during the morph: " + ofToString(probe.level.get()));
     check(model.transportFor(ref) != nullptr && model.transportFor(ref)->getState().isPlaying, "...playing from its start");
+    check(model.getTimelineWindows().size() == 1, "The window a ticked stays open during the morph in place");
     runtime.finish(); frame(0.05);
     check(!runtime.transitioning() && runtime.currentID() == runtime.importedMacro(b)->id(), "Completed into b");
     for(int i = 0; i < 3; ++i) frame(0.1);
     check(near(probe.level.get(), 0.75f), "After completion b's timeline still drives Level");
+    check(model.getTimelineWindows().empty(), "Completed into b, which never ticked it: the window closed");
 
     // Linked to the global transport: it follows the host's.
     runtime.request(g, 0, 0); frame(0.05); frame(0.05);
@@ -156,15 +182,21 @@ int main(int argc, char** argv) {
     check(transport->getState().isPlaying && transport->getState().beatPosition > 0.5, "The host transport plays");
     check(near(probeOf(global).level.get(), 0.6f), "g's timeline drives Level along the host transport: " + ofToString(probeOf(global).level.get()));
     transport->stop();
+    const auto gID = runtime.importedMacro(g)->id();
+    runtime.setSourceWindow(gID, "Timeline main", true); frame(0.05);
+    check(model.getTimelineWindows().size() == 1, "g's timeline window opens while g plays");
 
     // Clear Playback: the graph goes, and its timeline with it.
     runtime.clear(); frame(0.05);
     check(!model.timelineExists(gref) && model.transportFor(gref) == nullptr, "The timeline went with its graph");
+    check(model.getTimelineWindows().empty(), "Clear Playback closed the window the mixer opened");
+    check(runtime.openWindows(gID).count("Timeline main") == 1, "...and kept g's choice for its next activation");
     for(const auto& listed : model.allCanvases()) check(listed.rfind("MacroMixer/", 0) != 0, "No mixer canvas is listed any more: " + listed);
 
     if(failures > 0) return 1;
     std::cout << "MacroMixer timelines passed: nested canvas, timeline.json as the source Macro's timeline, play on load at activation, "
-                 "destination timeline on a morph in place, global-linked timeline on the host transport, gone with the graph.\n";
+                 "destination timeline on a morph in place, global-linked timeline on the host transport, gone with the graph, "
+                 "timeline windows ticked per source (labelled, unsaved, closed by their button, by completion and by Clear Playback).\n";
     return 0;
 }
 '''

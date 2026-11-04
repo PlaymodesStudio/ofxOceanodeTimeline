@@ -506,7 +506,11 @@ a morph into it begins); one linked to the global transport follows the
 global transport of the preset hosting the mixer. They stop with their
 graph. When a macro's timelines are reloaded into a running canvas (a Macro
 loading another preset, a morph in place), what the previous ones played
-stops and rewinds first.
+stops and rewinds first. A MacroMixer opens a window on a source's timeline when
+the source's **Windows** list ticks it: titled after the source ("Timeline:
+Timeline 1 (2--BLOOBS_Symetric)"), keyed on that name so its docking is found
+again, and never saved in the preset's `timeline.json` (the mixer opens it
+again).
 
 ## Duplicating lanes
 

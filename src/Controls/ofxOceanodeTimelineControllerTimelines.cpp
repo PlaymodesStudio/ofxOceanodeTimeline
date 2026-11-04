@@ -760,7 +760,12 @@ void ofxOceanodeTimelineController::drawTimelineWindows() {
     for(const auto& window : windows) {
         auto& editor = windowEditors[window.id];
         if(editor == nullptr) editor = std::make_unique<ofxOceanodeTimelineController>(container, window.id);
-        const std::string title = "Timeline: " + timeline.timelineName(window.ref) + "###timelineWindow" + std::to_string(window.id);
+        // A host's window (a MacroMixer source's) is named after it and keeps
+        // one id across activations, whatever its canvas is called this time.
+        const std::string title = window.hostLabel.empty()
+            ? "Timeline: " + timeline.timelineName(window.ref) + "###timelineWindow" + std::to_string(window.id)
+            : "Timeline: " + timeline.timelineName(window.ref) + " (" + window.hostLabel + ")###timelineWindow_" +
+              window.hostLabel + "_" + (window.ref.timeline.empty() ? std::string("main") : window.ref.timeline);
         bool open = true;
         if(dock != 0) ImGui::SetNextWindowDockID(dock, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(900.0f, 420.0f), ImGuiCond_FirstUseEver);

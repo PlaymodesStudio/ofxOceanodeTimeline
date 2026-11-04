@@ -611,10 +611,12 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             json["timelines"].push_back(std::move(timelineJson));
         }
     }
-    if(!timelineWindows.empty()) {
+    // A host's windows (a MacroMixer's) are its own, opened again by it.
+    if(std::any_of(timelineWindows.begin(), timelineWindows.end(), [](const auto& window) { return window.hostLabel.empty(); })) {
         json["windows"] = ofJson::array();
         for(const auto& window : timelineWindows)
-            json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline}});
+            if(window.hostLabel.empty())
+                json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline}});
     }
     return json;
 }

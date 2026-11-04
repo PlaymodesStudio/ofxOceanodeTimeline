@@ -1425,10 +1425,15 @@ public:
     bool heldPlayheadBeat(const TimelineRef& ref, double& beat);
     // Timeline windows besides the main one: which timeline each shows.
     // Saved with the timeline; the editor opens and closes them.
-    struct TimelineWindow { int id = 0; TimelineRef ref; };
+    // A host's window (a MacroMixer's, on a source graph's timeline) carries
+    // its host label: titled "(label)" after it, its ImGui id keyed on it
+    // (so docking finds it again across activations), never saved.
+    struct TimelineWindow { int id = 0; TimelineRef ref; std::string hostLabel; };
     const std::vector<TimelineWindow>& getTimelineWindows() const { return timelineWindows; }
     int openTimelineWindow(const TimelineRef& ref);
     void closeTimelineWindow(int id);
+    // Opens (once) or closes every window on this timeline, for a host.
+    void setHostedTimelineWindow(const TimelineRef& ref, bool open, const std::string& hostLabel);
     void setTimelineWindowRef(int id, const TimelineRef& ref);
     // A timeline's play settings (nullptr: unknown timeline).
     const ofxOceanodeTimelinePlaySettings* playSettings(const TimelineRef& ref);

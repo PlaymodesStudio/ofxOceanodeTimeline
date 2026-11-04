@@ -980,6 +980,18 @@ void ofxOceanodeTimelineManager::closeTimelineWindow(int id) {
                                          [&](const auto& window) { return window.id == id; }), timelineWindows.end());
 }
 
+void ofxOceanodeTimelineManager::setHostedTimelineWindow(const TimelineRef& given, bool open, const std::string& hostLabel) {
+    const auto ref = normalizedRef(given);
+    const auto shows = [&](const TimelineWindow& window) { return normalizedRef(window.ref) == ref; };
+    if(!open) {
+        timelineWindows.erase(std::remove_if(timelineWindows.begin(), timelineWindows.end(), shows), timelineWindows.end());
+        return;
+    }
+    for(auto& window : timelineWindows) if(shows(window)) { window.hostLabel = hostLabel; return; }
+    const int id = openTimelineWindow(ref);
+    for(auto& window : timelineWindows) if(window.id == id) window.hostLabel = hostLabel;
+}
+
 void ofxOceanodeTimelineManager::setTimelineWindowRef(int id, const TimelineRef& ref) {
     for(auto& window : timelineWindows) if(window.id == id) window.ref = normalizedRef(ref);
 }

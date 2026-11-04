@@ -5,6 +5,7 @@
 #include "lfoTrack.h"
 #include "timelineTransport.h"
 #include "imgui.h"
+#include <algorithm>
 #include <stdexcept>
 
 namespace {
@@ -46,6 +47,23 @@ public:
     }
     void loadMacroPreset(ofxOceanodeContainer& macroContainer, const std::string& folder) override {
         manager.loadMacroSequence(macroContainer, folder);
+    }
+    std::vector<CanvasTimeline> canvasTimelines(const ofxOceanodeContainer& canvas) override {
+        std::vector<CanvasTimeline> result;
+        const auto& windows = manager.getTimelineWindows();
+        for(const auto& listed : manager.timelinesOfCanvas(canvas.getCanvasID())) {
+            const auto ref = ofxOceanodeTimelineManager::normalizedRef(listed);
+            if(!manager.timelineExists(ref)) continue;
+            const bool open = std::any_of(windows.begin(), windows.end(), [&](const auto& window) {
+                return ofxOceanodeTimelineManager::normalizedRef(window.ref) == ref;
+            });
+            result.push_back({ref.canvas, ref.timeline, manager.timelineName(ref), open});
+        }
+        return result;
+    }
+    void setTimelineWindowOpen(const std::string& canvas, const std::string& timeline, bool open,
+                               const std::string& label) override {
+        manager.setHostedTimelineWindow({canvas, timeline}, open, label);
     }
     bool saveMacroPreset(const ofxOceanodeContainer& macroContainer, const std::string& folder) const override {
         return manager.saveMacroSequence(macroContainer, folder);
