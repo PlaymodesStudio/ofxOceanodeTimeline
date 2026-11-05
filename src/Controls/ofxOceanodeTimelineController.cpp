@@ -2063,25 +2063,26 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SetTooltip("Redo timeline action (Shift+Cmd/Ctrl+Z)");
     groupSeparator();
     {
-        // The global transport's loop, or the shown timeline's own on its own transport.
-        bool loopEnabled = own ? ownPlay->loopEnabled : timeline.isLoopEnabled();
-        const bool localLoopAvailable = own || !externalClock;
+        // The shown timeline's own loop, whatever its clock source (ownPlay
+        // is its settings whichever transport it plays on). Linked to the
+        // global transport, it wraps that transport's position in the loop
+        // itself: the global transport runs on, unlooped, for everything
+        // else following it.
+        const bool localLoopAvailable = ownPlay != nullptr;
+        bool loopEnabled = localLoopAvailable && ownPlay->loopEnabled;
         auto setLoop = [&](bool enabled, double start, double end) {
-            if(!own) {
-                if(enabled != timeline.isLoopEnabled()) timeline.setLoopEnabled(enabled);
-                timeline.setLoopRange(start, end);
-                return;
-            }
+            if(ownPlay == nullptr) return;
             auto settings = *ownPlay;
             settings.loopEnabled = enabled;
             settings.loopStartBeat = start;
             settings.loopEndBeat = end;
             timeline.setPlaySettings(shownRef, settings);
         };
-        double loopStart = own ? ownPlay->loopStartBeat : timeline.getLoopStartBeat();
-        double loopEnd = own ? ownPlay->loopEndBeat : timeline.getLoopEndBeat();
-        const char* loopTip = localLoopAvailable ? (loopEnabled ? "Loop on" : "Loop off")
-            : "Local loop unavailable while following an external clock";
+        double loopStart = localLoopAvailable ? ownPlay->loopStartBeat : 0.0;
+        double loopEnd = localLoopAvailable ? ownPlay->loopEndBeat : 4.0;
+        const char* loopTip = !localLoopAvailable ? "No timeline shown"
+            : loopEnabled ? "Loop on (this timeline's own; the global transport itself never loops)"
+                          : "Loop off (this timeline's own; the global transport itself never loops)";
         if(iconButton("##tbLoop", ToolIcon::Loop, loopTip,
                       loopEnabled && localLoopAvailable,
                       IM_COL32(120, 135, 240, 255), localLoopAvailable))

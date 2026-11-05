@@ -86,7 +86,8 @@ ImU32 timelineAccent(ofxOceanodeTimelineManager& timeline, const TimelineRef& re
 }
 const char* clockSourceExplanation(ClockSource source) {
     switch(source) {
-        case ClockSource::Global: return "Linked to the global transport: it plays, stops and seeks with it, at the global tempo.";
+        case ClockSource::Global: return "Linked to the global transport: it plays, stops and seeks with it, at the global tempo,\n"
+                                         "looping on its own (the global transport itself never loops).";
         case ClockSource::Free: return "Free: its own transport on the shared clock, played, stopped and seeked by itself, at its own tempo.";
         case ClockSource::Dependent: return "Dependent: placed as clips in another timeline, it plays where they place it, at that\n"
                                             "timeline's tempo. Play previews it alone (never the timeline placing it).";
@@ -411,8 +412,8 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
     auto timelineRow = [&](const TimelineRef& ref) {
         const ClockSource source = timeline.clockSourceOf(ref);
         const bool free = source == ClockSource::Free;
-        // Linked to the global transport: its tempo, loop and meter are the
-        // global ones, on the manager.
+        // Linked to the global transport: its tempo and meter are the
+        // global ones, on the manager (its loop is its own).
         const bool global = source == ClockSource::Global;
         const auto* play = timeline.playSettings(ref);
         auto transport = timeline.transportFor(ref);
@@ -618,7 +619,8 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         else
             ImGui::SetTooltip("On: free, on its own transport. The toolbar plays, stops and seeks it at its own\n"
                               "tempo and loop, alongside the global transport; nodes can follow it as a Time Source.\n"
-                              "Off: linked to the global transport (its position, play state, tempo and loop).");
+                              "Off: linked to the global transport (its position, play state and tempo); the loop\n"
+                              "stays the timeline's own (the global transport itself never loops).");
     }
     ImGui::SameLine(0.0f, 8.0f);
     ImGui::AlignTextToFramePadding();
@@ -664,14 +666,15 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
                               "at its stretched tempo. One timeline of the macro at most. Off: they follow the\n"
                               "timeline around the macro.");
     };
-    // Linked to the global transport: its tempo, loop and meter are the global ones, in the toolbar.
-    if(!shownOwnsTransport(timeline)) {
-        ImGui::TextDisabled("Its tempo, loop and meter are the global transport's (in the toolbar).");
-        drawFollowClips();
-        ImGui::EndPopup();
-        return;
-    }
+    // Linked to the global transport: its tempo and meter are the global
+    // ones, in the toolbar; its loop is its own, like every timeline's.
+    const bool ownTransport = shownOwnsTransport(timeline);
+    if(!ownTransport) ImGui::TextDisabled("Its tempo and meter are the global transport's (in the toolbar).");
     if(ImGui::Checkbox("Loop", &settings.loopEnabled)) changed = true;
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip(ownTransport ? "This timeline's own loop, on its own transport."
+                                       : "This timeline's own loop: it wraps the global transport's position in it.\n"
+                                         "The global transport itself runs on, unlooped, for everything else following it.");
     ImGui::SameLine(0.0f, 8.0f);
     ImGui::BeginDisabled(!settings.loopEnabled);
     ImGui::SetNextItemWidth(60.0f);
@@ -685,6 +688,7 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
     ImGui::SameLine(0.0f, 4.0f);
     ImGui::TextDisabled("beats");
     ImGui::EndDisabled();
+    if(ownTransport) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Meter");
     ImGui::SameLine(0.0f, 8.0f);
@@ -712,6 +716,7 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
         if(ImGui::Combo("##quantize", &settings.quantize, kQuantizeLabels, 3)) changed = true;
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("When its Play and Stop take effect on its own transport.");
     }
+    } // ownTransport: meter and quantize
     if(changed) timeline.setPlaySettings(ref, settings);
     drawFollowClips();
     ImGui::EndPopup();
@@ -891,12 +896,8 @@ bool ofxOceanodeTimelineController::shownOwnsTransport(const ofxOceanodeTimeline
     return transport != nullptr && transport->isDerived();
 }
 
+// The shown timeline's own loop, whatever its clock source (none shown: off).
 bool ofxOceanodeTimelineController::shownLoop(const ofxOceanodeTimelineManager& timeline, double& startBeat, double& endBeat) const {
-    if(!shownOwnsTransport(timeline)) {
-        startBeat = timeline.getLoopStartBeat();
-        endBeat = timeline.getLoopEndBeat();
-        return timeline.isLoopEnabled();
-    }
     const auto& play = scope(timeline).play;
     startBeat = play.loopStartBeat;
     endBeat = play.loopEndBeat;
@@ -905,11 +906,6 @@ bool ofxOceanodeTimelineController::shownLoop(const ofxOceanodeTimelineManager& 
 
 // Sets the range and turns the loop on.
 void ofxOceanodeTimelineController::setShownLoop(ofxOceanodeTimelineManager& timeline, double startBeat, double endBeat) {
-    if(!shownOwnsTransport(timeline)) {
-        if(!timeline.isLoopEnabled()) timeline.setLoopEnabled(true);
-        timeline.setLoopRange(startBeat, endBeat);
-        return;
-    }
     const auto* current = timeline.playSettings(scopeRef());
     if(current == nullptr) return;
     auto settings = *current;
@@ -946,9 +942,11 @@ ofxOceanodeTimelineTempoLane ofxOceanodeTimelineController::shownBpmLaneTarget(o
         lane.maximum = timeline.getBpmMaximum();
         lane.interpolation = timeline.getBpmInterpolation();
         lane.manualBpm = container->getRootTransport() != nullptr ? container->getRootTransport()->getState().bpm : 120.0f;
-        lane.loopEnabled = timeline.isLoopEnabled();
-        lane.loopStartBeat = timeline.getLoopStartBeat();
-        lane.loopEndBeat = timeline.getLoopEndBeat();
+        // The loop drawn over it: the shown timeline's own.
+        const auto& shownPlay = scope(timeline).play;
+        lane.loopEnabled = shownPlay.loopEnabled;
+        lane.loopStartBeat = shownPlay.loopStartBeat;
+        lane.loopEndBeat = shownPlay.loopEndBeat;
         lane.beatsPerBar = timeline.getBeatsPerBar();
         auto* manager = &timeline;
         auto host = container;

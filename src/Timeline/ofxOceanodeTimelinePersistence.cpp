@@ -410,11 +410,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     for(const auto& tension : bpmCurveTensions)
         json["tempo"]["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
     json["playOnPresetLoad"] = playOnPresetLoad;
-    json["loop"] = {
-        {"enabled", loopEnabled},
-        {"startBeat", loopStartBeat},
-        {"endBeat", loopEndBeat}
-    };
+    // (The loop is each timeline's own, saved in its "play".)
     json["markers"] = ofJson::array();
     for(const auto& marker : markers)
         json["markers"].push_back({{"id", marker.id}, {"name", marker.name}, {"beat", marker.beat}});
@@ -738,11 +734,6 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         }
         bpmCurveTensions.resize(bpmAutomationPoints.empty() ? 0 : bpmAutomationPoints.size() - 1);
     }
-    if(json.contains("loop") && json["loop"].is_object()) {
-        const auto& loop = json["loop"];
-        loopEnabled = loop.value("enabled", false);
-        setLoopRange(loop.value("startBeat", 0.0), loop.value("endBeat", 4.0));
-    }
     if(json.contains("markers") && json["markers"].is_array()) {
         for(const auto& markerJson : json["markers"]) {
             if(!markerJson.is_object()) continue;
@@ -775,6 +766,20 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
 
     // The root canvas's timelines.
     canvasFromJson(rootTimelines, json);
+    // Before version 16 the loop at the top level was the global
+    // transport's, shared by every timeline linked to it: now each
+    // timeline's own. The root canvas's timelines linked to the global
+    // transport take the file's, where they had none of their own.
+    if(fileVersion < 16 && json.contains("loop") && json["loop"].is_object()) {
+        const auto& loop = json["loop"];
+        for(auto& timeline : rootTimelines.timelines) {
+            auto& play = timeline->play;
+            if(play.free || play.loopEnabled) continue;
+            play.loopEnabled = loop.value("enabled", false);
+            play.loopStartBeat = std::max(0.0, loop.value("startBeat", 0.0));
+            play.loopEndBeat = std::max(play.loopStartBeat + 1.0 / 24.0, loop.value("endBeat", 4.0));
+        }
+    }
     // Older files kept whose clips a macro's nodes followed, and which
     // timelines played free, apart from the timelines: now in their settings
     // (a macro's apply as its timelines load).

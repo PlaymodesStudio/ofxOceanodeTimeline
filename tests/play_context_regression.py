@@ -77,7 +77,7 @@ int main() {
             model.setClipChance(t, c, 0.5f);
             clips.push_back(c);
         }
-        model.setLoopEnabled(true); model.setLoopRange(0, 4);
+        model.setLoop(true, 0, 4);
         owner.transport->seekToBeat(3.8); owner.transport->play();
         model.update();
         std::string rolls;

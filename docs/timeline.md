@@ -394,8 +394,13 @@ offers the same **Add to Timeline** items as the parameter in its node.
 **Clock source.** The preset's global transport belongs to no timeline. The
 scope bar also holds the shown timeline's player: the **Free** checkbox and
 what it plays on. Off (the default), the timeline is **linked to the global
-transport**: it plays, stops and seeks with it, at the global tempo, loop and
-meter, like any other timeline linked to it. On, it is
+transport**: it plays, stops and seeks with it, at the global tempo and
+meter, like any other timeline linked to it. Its loop is its own, like every
+timeline's: the global transport itself never loops (the Global menu's
+transport time runs on past any loop end), the timeline wraps that
+transport's position in its loop, so several timelines linked to the global
+transport can each loop over a range of their own while the rest of the
+preset follows the transport straight on. On, it is
 **free**: its own transport on the shared clock, played, stopped and seeked
 by itself at its own tempo and loop, while the global transport plays or is
 stopped. A macro's own timeline can also be switched from the macro node's
@@ -431,8 +436,9 @@ the timeline placing it.
 - **Meter**: the global time signature for a timeline linked to the global
   transport, else the timeline's own (edited in the player's **...** popup
   too).
-- **Loop**: the global transport's loop, or the timeline's own (free,
-  dependent). The ruler edits the same one.
+- **Loop**: the timeline's own, whatever its clock source (linked to the
+  global transport, it wraps that transport's position in it; the transport
+  itself runs on). The ruler edits the same one.
 - **BPM Lane**: shows the BPM lane under the ruler: the global tempo's for a
   timeline linked to the global transport, the timeline's own when it is
   free (none when dependent). Its **Enable** box turns the lane on; off, the

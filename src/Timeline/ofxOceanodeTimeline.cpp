@@ -4394,23 +4394,13 @@ const ofxOceanodeTimelineMarker* ofxOceanodeTimelineManager::getMarker(const std
     return nullptr;
 }
 
-void ofxOceanodeTimelineManager::syncLoopToTransport() {
-    if(container == nullptr || engineSharesRoot) return; // the global loop is the root's default timeline's to set
-    const auto transport = playTransport();
-    if(transport == nullptr) return;
-    // An external clock owns position and looping. Preserve the timeline's
-    // local setting so it can resume when sync is released, but do not apply
-    // it while the external source is in control.
-    transport->setLoop(!transport->hasExternalClock() && loopEnabled,
-                       loopStartBeat, loopEndBeat);
-}
-
+// The loop reaches the transport side on the next pass (evaluateAutomation
+// hands a derived transport its loop, and wraps the root's position itself).
 void ofxOceanodeTimelineManager::setLoopEnabled(bool enabled) {
     if(loopEnabled == enabled) return;
     loopEnabled = enabled;
     hasEvaluatedTransportBeat = false;
     invalidateSchedule();
-    syncLoopToTransport();
 }
 
 void ofxOceanodeTimelineManager::setLoopRange(double startBeat, double endBeat) {
@@ -4420,7 +4410,6 @@ void ofxOceanodeTimelineManager::setLoopRange(double startBeat, double endBeat) 
     hasEvaluatedTransportBeat = false;
     // Events past the old boundary belong to a loop that no longer exists.
     invalidateSchedule();
-    syncLoopToTransport();
 }
 
 void ofxOceanodeTimelineManager::update() {
@@ -4634,16 +4623,16 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     const auto ownerTransportPtr = playTransport();
     const bool externalClock = (!isEngine() || engineSharesRoot) && ownerTransportPtr != nullptr && ownerTransportPtr->hasExternalClock();
 
-    // The transport owns the loop (it wraps exactly at the loop end, keeping
-    // the overshoot). Hand it the range; an external clock owns looping itself.
-    // Each timeline sets its own transport's loop and meter; an engine on
-    // the global transport reads them (the root's default timeline sets them).
+    // A transport of the timeline's own (derived) owns its loop: it wraps
+    // exactly at the loop end, keeping the overshoot. The root transport is
+    // never looped: it runs on, and a manager playing on it (an engine
+    // linked to the global transport) wraps the position into its own loop
+    // itself (playState), so each such timeline loops on its own, under an
+    // external clock too. The meter is the root's default timeline's to set.
     if(auto ownerTransport = playTransport()) {
-        if(!engineSharesRoot) {
-            ownerTransport->setLoop(!externalClock && loopEnabled, loopStartBeat, loopEndBeat);
-            ownerTransport->setBeatsPerBar(getBeatsPerBar());
-        }
-        transport = ownerTransport->getState();
+        if(ownerTransport->isDerived()) ownerTransport->setLoop(loopEnabled, loopStartBeat, loopEndBeat);
+        if(!engineSharesRoot) ownerTransport->setBeatsPerBar(getBeatsPerBar());
+        transport = playState();
     }
 
     // A stopped state-capture curve must still be editable from the node GUI.
@@ -5086,7 +5075,6 @@ void ofxOceanodeTimelineManager::clear() {
     loopEnabled = false;
     loopStartBeat = 0.0;
     loopEndBeat = 4.0;
-    syncLoopToTransport();
     hasEvaluatedTransportBeat = false;
     lastEvaluatedTransportBeat = 0.0;
     timeSignatureNumerator = 4;
@@ -5104,7 +5092,8 @@ void ofxOceanodeTimelineManager::retimeForBpmChange(float oldBpm, float newBpm) 
     const double scale = static_cast<double>(newBpm) / static_cast<double>(oldBpm);
     if(!std::isfinite(scale) || scale <= 0.0 || std::abs(scale - 1.0) <= kEpsilon) return;
 
-    // These values live directly in global timeline-beat space.
+    // These values live directly in global timeline-beat space (the loop:
+    // the one this manager plays with; each timeline's own is retimed below).
     for(auto& marker : markers) marker.beat *= scale;
     for(auto& point : bpmAutomationPoints) point.beat *= scale;
     loopStartBeat *= scale;
@@ -5114,6 +5103,8 @@ void ofxOceanodeTimelineManager::retimeForBpmChange(float oldBpm, float newBpm) 
     // transport (a free timeline keeps its own tempo; a dependent one its
     // host's beats). An engine's copy: the one it plays.
     auto retime = [&](ofxOceanodeTimelineSequence& sequence) {
+        sequence.play.loopStartBeat *= scale;
+        sequence.play.loopEndBeat = std::max(sequence.play.loopStartBeat + 1.0 / 24.0, sequence.play.loopEndBeat * scale);
         for(auto& track : sequence.tracks) {
             for(auto& point : track.waveVolumePoints) point.beat *= scale;
             for(auto& clip : track.clips) {
@@ -5137,17 +5128,24 @@ void ofxOceanodeTimelineManager::retimeForBpmChange(float oldBpm, float newBpm) 
     hasEvaluatedTransportBeat = false;
     invalidateEvaluationIndexes();
     invalidateSchedule();
-    syncLoopToTransport();
 }
 
 void ofxOceanodeTimelineManager::setTimeSignature(int numerator, int denominator) {
     const double previousBeatsPerBar = getBeatsPerBar();
     timeSignatureNumerator = std::max(1, numerator);
     timeSignatureDenominator = std::max(1, denominator);
-    if(!loopEnabled && std::abs(loopStartBeat) <= kEpsilon &&
-       std::abs(loopEndBeat - previousBeatsPerBar) <= kEpsilon) {
-        loopEndBeat = getBeatsPerBar();
-    }
+    // A loop never switched on, still one bar long, follows the new meter:
+    // the one this manager plays with, and each timeline's own on the
+    // timelines in this meter (linked to the global transport).
+    auto followBar = [&](bool enabled, double startBeat, double& endBeat) {
+        if(!enabled && std::abs(startBeat) <= kEpsilon && std::abs(endBeat - previousBeatsPerBar) <= kEpsilon)
+            endBeat = getBeatsPerBar();
+    };
+    followBar(loopEnabled, loopStartBeat, loopEndBeat);
+    if(!isEngine() && container != nullptr)
+        for(const auto& ref : allTimelines())
+            if(auto* sequence = timelineFor(ref); sequence != nullptr && followsGlobalTransport(*sequence))
+                followBar(sequence->play.loopEnabled, sequence->play.loopStartBeat, sequence->play.loopEndBeat);
 }
 
 

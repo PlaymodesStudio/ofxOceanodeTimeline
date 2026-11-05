@@ -72,7 +72,7 @@ int main() {
     assert(!copy.empty());
     model.groupClips({{track, clip}, {track, copy}});
     model.addMarker(2.0, "Entry");
-    model.setLoopRange(1.0, 7.0); model.setLoopEnabled(true);
+    model.setLoop(true, 1.0, 7.0);
     model.getBpmAutomationPoints() = {{0.0, 100.0f}, {4.0, 150.0f}};
     model.setBpmAutomationEnabled(true);
     model.endTimelineEdit();

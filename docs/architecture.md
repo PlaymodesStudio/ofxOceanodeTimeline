@@ -281,9 +281,12 @@ read into the settings (`legacyFreeTimelines`, `legacyClipFollowTimelines`,
 applied as each macro's timelines load).
 
 **The global transport is owned by no timeline.** Its tempo, BPM lane,
-loop, meter and markers are the manager's own fields (the preset's, saved at
+meter and markers are the manager's own fields (the preset's, saved at
 the top level of `timeline.json`). A timeline follows it unless it plays
-free or is placed in another.
+free or is placed in another. It is never looped: the loop is each
+timeline's own (`play.loopEnabled`, `loopStartBeat`, `loopEndBeat`, whatever
+its clock source; files before version 16 kept the global one at the top
+level, read into the root canvas's linked timelines).
 
 **Clock sources** (`clockSourceOf`). A timeline placed as clips by any
 timeline (`placedTimelines`, placed to first host, refreshed each update pass
@@ -300,9 +303,13 @@ histories. Every existing timeline has a **player** (`Player`,
 and applies an absolute-path copy of the timeline (`playedSequence`,
 `makeAbsolute`, rebuilt when `sequenceSignature` changes) on that
 transport. Global: the transport is the root transport itself
-(`engineSharesRoot`): the engine reads the global tempo, tempo lane, loop
-and meter (adopted from the manager each frame, so lookahead follows the
-global map) and never sets them. Free: a transport derived from the root's
+(`engineSharesRoot`): the engine reads the global tempo, tempo lane and
+meter (adopted from the manager each frame, so lookahead follows the
+global map) and never sets them; the loop is the timeline's own, and the
+root transport is never given one: the engine wraps the root's position
+into its loop itself (`loopedState`, through `playState`: the pass as
+`loopCount`, so wraps, lookahead past the loop end and the playhead shown
+work as on a looping transport while the global transport runs on). Free: a transport derived from the root's
 clock (`ofxOceanodeTransport::makeDerived`) with the timeline's own tempo,
 loop and meter (`adoptPlaySettings`). Dependent: a derived transport too, at
 its host's tempo now (`hostBpmFor`, through the host's transport) with its
@@ -389,7 +396,7 @@ timeline shown: transport buttons (the global transport's, or its own with
 quantize and, when free, Play on load), the metronome, position, tempo (the
 global BPM, its own BPM / clock ratio / lane, or its host's greyed out),
 meter (the global one for a timeline linked to the global transport, else
-its own), loop (the global transport's, or its own), and the **BPM Lane**
+its own), loop (always the timeline's own), and the **BPM Lane**
 toggle (the global lane for a Global timeline, the timeline's own for a free
 one, none for a dependent one), all edited through
 `ofxOceanodeTimelineBpmEditor` on an `ofxOceanodeTimelineTempoLane` target.

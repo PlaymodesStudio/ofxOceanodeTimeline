@@ -242,10 +242,18 @@ int main(int, char**) {
     // Loop start inside the clip: on across the wrap.
     // (clip 8..16, loop 12..20: after the tail it is off, then the
     // pre-roll before the loop end reaches the clip at the loop start)
-    model.setLoopRange(12.0, 20.0); model.setLoopEnabled(true);
+    // The loop is the timeline's own (its engine wraps the global position in it).
+    auto setLoop = [&](bool enabled, double startBeat, double endBeat) {
+        auto settings = *model.playSettings(model.getEditTarget());
+        settings.loopEnabled = enabled;
+        settings.loopStartBeat = startBeat;
+        settings.loopEndBeat = endBeat;
+        model.setPlaySettings(model.getEditTarget(), settings);
+    };
+    setLoop(true, 12.0, 20.0);
     at(18.5);  check(!active.get(), "Looping: off after the tail");
     at(19.9);  check(active.get(), "On again before the wrap, the loop start being inside the clip");
-    model.setLoopEnabled(false);
+    setLoop(false, 12.0, 20.0);
     model.getTrack(mt)->macroGate = false;
     at(2.0);  check(active.get(), "Ungated: switched back on");
 

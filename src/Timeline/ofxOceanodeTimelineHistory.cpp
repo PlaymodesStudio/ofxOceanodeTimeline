@@ -96,16 +96,13 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     bpmMinimum = tempo["minimum"];
     bpmMaximum = tempo["maximum"];
     bpmInterpolation = tempo["interpolation"].get<std::string>();
-    loopEnabled = data["loop"]["enabled"];
-    loopStartBeat = data["loop"]["startBeat"];
-    loopEndBeat = data["loop"]["endBeat"];
+    // (The loop is each timeline's own, in its play settings: its history's.)
     schedulingEnabled = data["scheduling"]["enabled"];
     schedulingLookaheadMs = data["scheduling"]["lookaheadMs"];
     schedulingLookaheadAdaptive = data["scheduling"].value("adaptive", true);
     setTimeSignature(data["timeSignature"]["numerator"], data["timeSignature"]["denominator"]);
     masterGridBeats = data.value("masterGridBeats", 0.25);
     tempoSecondsCacheValid = false;
-    syncLoopToTransport();
     invalidateEvaluationIndexes();
     invalidateSchedule();
 }

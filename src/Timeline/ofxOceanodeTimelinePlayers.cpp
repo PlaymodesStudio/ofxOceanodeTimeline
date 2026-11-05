@@ -51,7 +51,28 @@ std::shared_ptr<ofxOceanodeTransport> ofxOceanodeTimelineManager::playTransport(
 
 ofxOceanodeTransportState ofxOceanodeTimelineManager::playState() const {
     const auto transport = playTransport();
-    return transport != nullptr ? transport->getState() : ofxOceanodeTransportState{};
+    if(transport == nullptr) return ofxOceanodeTransportState{};
+    // A derived transport loops itself; the root one never loops.
+    return transport->isDerived() ? transport->getState() : loopedState(transport->getState());
+}
+
+ofxOceanodeTransportState ofxOceanodeTimelineManager::loopedState(ofxOceanodeTransportState state) const {
+    state.loopEnabled = loopEnabled;
+    state.loopStartBeat = loopStartBeat;
+    state.loopEndBeat = loopEndBeat;
+    state.loopCount = 0;
+    if(!state.loopActive() || state.beatPosition < loopStartBeat) return state;
+    // Past the loop start, the position wraps in the loop: the pass it is
+    // in counts as a loop wrap (clip starts roll again, the scheduler looks
+    // past the end into the next pass), a seek that changes it as a jump.
+    const double length = loopEndBeat - loopStartBeat;
+    const double passes = std::floor((state.beatPosition - loopStartBeat) / length);
+    state.loopCount = static_cast<uint64_t>(std::max(0.0, passes));
+    state.beatPosition = loopStartBeat + (state.beatPosition - loopStartBeat - passes * length);
+    if(state.beatPosition >= loopEndBeat) state.beatPosition = loopStartBeat; // rounding at the end
+    // Seconds of play follow the beat, as a transport's do on a wrap.
+    state.seconds = beatToSeconds(state.beatPosition, state.bpm);
+    return state;
 }
 
 void ofxOceanodeTimelineManager::adoptPlaySettings(const ofxOceanodeTimelinePlaySettings& settings) {
@@ -217,8 +238,8 @@ std::string ofxOceanodeTimelineManager::duplicateTimeline(const TimelineRef& ref
     duplicate->play.name = play.name;
     duplicate->play.nodesFollowClips = false; // one per canvas: the source keeps it
     if(global) {
-        // Linked to the global transport: its tempo, loop and meter are the
-        // global ones, on the manager.
+        // Linked to the global transport: its tempo and meter are the
+        // global ones, on the manager (its loop is its own: copied).
         auto& own = duplicate->play;
         const auto root = container != nullptr ? container->getRootTransport() : nullptr;
         own.bpm = root != nullptr ? root->getState().bpm : 120.0f;
@@ -228,9 +249,6 @@ std::string ofxOceanodeTimelineManager::duplicateTimeline(const TimelineRef& ref
         own.bpmInterpolation = bpmInterpolation;
         own.bpmPoints = bpmAutomationPoints;
         own.bpmTensions = bpmCurveTensions;
-        own.loopEnabled = loopEnabled;
-        own.loopStartBeat = loopStartBeat;
-        own.loopEndBeat = loopEndBeat;
         own.timeSignatureNumerator = timeSignatureNumerator;
         own.timeSignatureDenominator = timeSignatureDenominator;
     }
@@ -335,7 +353,8 @@ void ofxOceanodeTimelineManager::setFree(const TimelineRef& given, bool free) {
     auto* sequence = timelineFor(ref);
     if(sequence == nullptr || sequence->play.free == free) return;
     if(free && followsGlobalTransport(*sequence)) {
-        // Off the global transport: it starts from the global tempo, loop and meter.
+        // Off the global transport: it starts from the global tempo and
+        // meter (its loop was its own already).
         auto& play = sequence->play;
         const auto root = container != nullptr ? container->getRootTransport() : nullptr;
         play.bpm = root != nullptr ? root->getState().bpm : 120.0f;
@@ -345,9 +364,6 @@ void ofxOceanodeTimelineManager::setFree(const TimelineRef& given, bool free) {
         play.bpmInterpolation = bpmInterpolation;
         play.bpmPoints = bpmAutomationPoints;
         play.bpmTensions = bpmCurveTensions;
-        play.loopEnabled = loopEnabled;
-        play.loopStartBeat = loopStartBeat;
-        play.loopEndBeat = loopEndBeat;
         play.timeSignatureNumerator = timeSignatureNumerator;
         play.timeSignatureDenominator = timeSignatureDenominator;
     }
@@ -617,7 +633,9 @@ void ofxOceanodeTimelineManager::updatePlayers() {
         switch(player->source) {
             case ClockSource::Global: {
                 // The global transport's tempo (and tempo lane, to look ahead
-                // along it), loop and meter, read, never set.
+                // along it) and meter, read, never set; its own loop (the
+                // engine wraps the global position in it: the transport
+                // itself never loops).
                 auto settings = sequence->play;
                 settings.bpmAutomationEnabled = bpmAutomationEnabled;
                 settings.bpmMinimum = bpmMinimum;
@@ -627,9 +645,6 @@ void ofxOceanodeTimelineManager::updatePlayers() {
                 settings.bpmTensions = bpmCurveTensions;
                 settings.followClockTempo = false;
                 settings.bpm = root->getState().bpm;
-                settings.loopEnabled = loopEnabled;
-                settings.loopStartBeat = loopStartBeat;
-                settings.loopEndBeat = loopEndBeat;
                 settings.timeSignatureNumerator = timeSignatureNumerator;
                 settings.timeSignatureDenominator = timeSignatureDenominator;
                 engine.adoptPlaySettings(settings);
@@ -895,7 +910,9 @@ template<typename Fn>
 void ofxOceanodeTimelineManager::forEachPlayingManager(Fn&& fn) {
     for(auto& player : players) {
         if(player->engine == nullptr || !player->ranLastFrame) continue;
-        fn(*player->engine, player->transport->getState());
+        // The state as the engine plays it: the global position wrapped in
+        // the timeline's loop.
+        fn(*player->engine, player->engine->playState());
     }
 }
 
@@ -986,7 +1003,10 @@ bool ofxOceanodeTimelineManager::timelinePlayheadBeat(const TimelineRef& given, 
         if(!previewing && (placedPlayheadBeat(ref, beat) || heldPlayheadBeat(ref, beat))) return true;
     }
     if(transport != nullptr) {
-        beat = transport->getState().beatPosition;
+        // Where its engine plays: the global transport's position wrapped
+        // in the timeline's own loop (its own transport's as it is).
+        const auto* engine = engineFor(ref);
+        beat = engine != nullptr ? engine->playState().beatPosition : transport->getState().beatPosition;
         return true;
     }
     return false;

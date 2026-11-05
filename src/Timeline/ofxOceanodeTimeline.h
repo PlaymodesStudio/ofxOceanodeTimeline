@@ -1015,14 +1015,17 @@ struct ofxOceanodeTimelineResolver {
 
 // How a timeline plays: its name, clock source (free, or linked to the
 // global transport), tempo (a fixed BPM, a ratio of the clock's, or a BPM
-// lane: used while it plays free), loop, meter and launch quantize. The
-// root canvas's default timeline, while linked to the global transport, keeps
-// its tempo lane, loop and meter on the manager (they are the global ones).
+// lane: used while it plays free), loop, meter and launch quantize. A
+// timeline linked to the global transport takes its tempo lane and meter
+// from the manager (they are the global ones); its loop is its own, like
+// every timeline's: the global transport never loops, the timeline wraps
+// that transport's position in its loop itself.
 struct ofxOceanodeTimelinePlaySettings {
     std::string name;                // empty: named after its canvas
     // Free: its own transport and tempo. Off: linked to the global transport
-    // (its position, play state, tempo and loop). Neither applies while the
-    // timeline is placed as clips in another: it then depends on that one.
+    // (its position, play state and tempo; the loop stays the timeline's
+    // own). Neither applies while the timeline is placed as clips in
+    // another: it then depends on that one.
     bool free = false;
     float bpm = 120.0f;
     bool followClockTempo = false;   // tempo = the clock's x tempoRatio
@@ -1956,6 +1959,11 @@ public:
     // The inverse: the beat reached `seconds` after beat 0.
     double secondsToBeat(double seconds, float fallbackBpm) const;
 
+    // The loop this manager plays with: an engine's is its timeline's own
+    // (adopted from its play settings each pass); the primary plays nothing
+    // and keeps none. A transport of the timeline's own (derived) wraps in
+    // it itself; the root transport is never looped: a manager playing on
+    // it wraps the position into the loop itself (loopedState).
     bool isLoopEnabled() const { return loopEnabled; }
     bool didLoopWrapThisFrame() const { return loopWrappedThisFrame; }
     // ---- Markers ----
@@ -2079,7 +2087,10 @@ public:
     static ofxOceanodeTimelineAutomationMode modeFromString(const std::string& mode);
 
 private:
-    static constexpr int kPresetVersion = 15;
+    // 16: the loop is each timeline's own (the top-level "loop", the global
+    // transport's until then, is read into the root canvas's timelines
+    // linked to it).
+    static constexpr int kPresetVersion = 16;
     // The global transport's settings for the global history: typed copies
     // of what the JSON would reload lossily, and the JSON a step compares.
     struct TimelineState {
@@ -2276,7 +2287,8 @@ private:
     ofxOceanodeTimelineManager* engineFor(const TimelineRef& ref) const;
     ofxOceanodeTimelineManager* enginePlaying(const ofxOceanodeTimelineSequence& sequence) const;
     // Whether a timeline, as kept here, follows the global transport (its
-    // tempo, loop and meter): not free, and not placed in another timeline.
+    // position, tempo and meter; its loop is its own): not free, and not
+    // placed in another timeline.
     bool followsGlobalTransport(const ofxOceanodeTimelineSequence& sequence) const;
     // Explicit live overrides (piano key previews...) by timeline, kept here
     // so an engine gets them back when its copy is rebuilt. The engine
@@ -2329,6 +2341,8 @@ private:
     uint64_t scheduleHorizonUs = 0;
     // The transport this manager plays (its engine transport, else the root's).
     std::shared_ptr<ofxOceanodeTransport> playTransport() const;
+    // Its state as played: the root's wrapped into this manager's loop
+    // (loopedState); a derived transport's as it is (it loops itself).
     ofxOceanodeTransportState playState() const;
     // Copies a timeline's play settings into this engine's tempo, loop and meter.
     void adoptPlaySettings(const ofxOceanodeTimelinePlaySettings& settings);
@@ -2656,10 +2670,12 @@ private:
     // The content offset at which a clip played backwards over mirrored
     // content plays exactly what it played forwards at `offset`.
     double reversedContentOffset(const ofxOceanodeTimelineClip& clip, double offset) const;
-    // Keep the transport-side range in lockstep with edits made by the UI.
-    // Waiting for the next automation pass leaves a frame in which the icon
-    // says loop is on but the playhead can cross the old end point.
-    void syncLoopToTransport();
+    // The root transport's state as this manager plays it: its position
+    // wrapped into this manager's loop (the loop's pass as loopCount), the
+    // loop in the state. The root transport itself never loops, so every
+    // timeline linked to it loops on its own while it runs on. Identity
+    // while the loop is off or the position is before it.
+    ofxOceanodeTransportState loopedState(ofxOceanodeTransportState state) const;
     // Points every piano-roll lane that uses any of affectedBindingIds at the group's roles.
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);

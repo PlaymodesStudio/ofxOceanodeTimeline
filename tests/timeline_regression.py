@@ -56,6 +56,15 @@ struct TestTimeline : ofxOceanodeTimelineManager {
     explicit TestTimeline(ofxOceanodeContainer* owner = nullptr) : ofxOceanodeTimelineManager(owner) {
         setEditTarget(addTimeline("", "Timeline 1"));
     }
+    // The edited timeline's loop (every timeline's own; linked to the global
+    // transport, its engine wraps that transport's position in it).
+    void setLoop(bool enabled, double startBeat, double endBeat) {
+        auto settings = *playSettings(getEditTarget());
+        settings.loopEnabled = enabled;
+        settings.loopStartBeat = startBeat;
+        settings.loopEndBeat = endBeat;
+        setPlaySettings(getEditTarget(), settings);
+    }
     ofJson toJson() const {
         auto json = ofxOceanodeTimelineManager::toJson();
         if(json.contains("timelines") && !json["timelines"].empty()) {
@@ -419,10 +428,15 @@ int main() {
     assert(timeline.addBindingToLane(addTrack, addClip, addLane, addBinding));
     assert(timeline.setClipStep(addTrack, addClip, addLane, 0.0, "2", 2.0));
     owner.transport->seekToBeat(0.5); timeline.update(); near(value.get(), 66.0);
-    timeline.setLoopRange(0.0, 2.0); timeline.setLoopEnabled(true);
+    // The loop is the timeline's own: the global transport runs on past
+    // its end, the timeline wraps that position in its loop.
+    timeline.setLoop(true, 0.0, 2.0);
     owner.transport->seekToBeat(1.9); owner.transport->play();
     owner.transport->advanceFrameStep(0.2); timeline.update();
-    near(owner.transport->getState().beatPosition, 0.3); near(value.get(), 66.0);
+    near(owner.transport->getState().beatPosition, 2.3);
+    double playedBeat = 0.0;
+    assert(timeline.timelinePlayheadBeat(timeline.getEditTarget(), playedBeat));
+    near(playedBeat, 0.3); near(value.get(), 66.0);
     owner.transport->pause();
 
     // Capture manually edited states, then interpolate them after seeking.
