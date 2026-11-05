@@ -1235,6 +1235,11 @@ public:
     // The timeline a timeline track of `host` plays (nullptr: gone).
     ofxOceanodeTimelineSequence* placedTimeline(const ofxOceanodeTimelineSequence& host,
                                                 const ofxOceanodeTimelineTrack& track);
+    // The timelines a timeline track's clips play: the one it places, then
+    // (a macro placed as a whole) the timelines of that macro no track
+    // places, carried with it. Empty when the placed one is gone.
+    std::vector<ofxOceanodeTimelineSequence*> carriedTimelines(const ofxOceanodeTimelineSequence& host,
+                                                               const ofxOceanodeTimelineTrack& track);
     // A track of `host` whose clips play the timeline `placed`: one of the
     // same canvas or of a canvas inside it, never one that (through its own
     // timeline tracks) plays host. Its id, empty when refused.
@@ -2149,6 +2154,10 @@ private:
         // mirrorLength (one pass of it).
         bool reversed = false;
         double mirrorLength = 0.0;
+        // A timeline no track places, of a macro placed from outside: the
+        // macro is placed as a whole, so the clips placing this other
+        // timeline of it (its id) carry it too. Empty: placed by its own tracks.
+        std::string inheritsFrom;
     };
     std::vector<PlayedMacro> playedMacros;
     // A macro timeline the main timeline reaches: through the macro track
@@ -2160,6 +2169,7 @@ private:
         const ofxOceanodeTimelineSequence* sequence = nullptr;
         int parent = -1;
         size_t trackIndex = 0;
+        std::string inheritsFrom; // as PlayedMacro has it
     };
     std::vector<MacroSource> collectMacroSources() const;
     // The timeline of a macro that encapsulation moves tracks into: its
@@ -2336,6 +2346,10 @@ private:
     // placing it (its host), refreshed each update pass and after edits.
     mutable std::map<TimelineRef, TimelineRef> placedTimelines;
     mutable bool placedTimelinesValid = false;
+    // A macro placed from outside is placed as a whole: its timelines no
+    // track places follow the clips placing one of its timelines. Each with
+    // that placed timeline (they are in placedTimelines too, with its host).
+    mutable std::map<TimelineRef, TimelineRef> inheritedPlacements;
     void refreshPlacedTimelines() const;
     // Every manager playing placements now (this one, then each player's
     // engine), with the state it plays at.

@@ -639,7 +639,12 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 // mirrorLength - content + z there).
                 const auto* played = playedMacroAt(track, clip.reversed);
                 if(played == nullptr) continue;
-                const double mirrorShift = clip.reversed ? played->mirrorLength - content : 0.0;
+                // The clip places the track's timeline and, a macro placed as
+                // a whole, the timelines of that macro no track places.
+                std::vector<const PlayedMacro*> carried{played};
+                for(const auto& other : playedMacros)
+                    if(&other != played && other.reversed == played->reversed && other.canvas == played->canvas &&
+                       other.inheritsFrom == played->timeline) carried.push_back(&other);
                 const double windowStart = std::max(from, start), windowEnd = std::min(to, end);
                 const int64_t firstCycle = clip.repeatContent
                     ? static_cast<int64_t>(std::floor((windowStart - start) / cycle + 1e-9)) : 0;
@@ -658,23 +663,30 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                         if(segmentTo <= segmentFrom + kEpsilon) continue;
                         if(atBeat ? (from < segmentFrom - kEpsilon || from >= segmentTo - kEpsilon)
                                   : (segmentTo < from - kEpsilon || segmentFrom > to + kEpsilon)) continue;
-                        PlayedSequence placement;
-                        placement.sequence = played->sequence.get();
-                        placement.map = outer.map.then({segments[s][0] - mirrorShift * stretch, stretch});
-                        placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
-                        placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
-                        placement.resolver = resolverFor(*placement.sequence);
-                        placement.placedBy = &track;
-                        placement.placedClip = &clip;
-                        // Its own rolls per copy (macro track and clip), new
-                        // ones each repeat, as each loop pass rolls anew.
-                        uint64_t key = outer.instanceKey * 0x9e3779b97f4a7c15ULL;
-                        key ^= std::hash<std::string>{}(track.id) + 0x632be59bd9b4e019ULL + (key << 6) + (key >> 2);
-                        key ^= std::hash<std::string>{}(clip.id) + 0x8cb92ba72f3d8dd7ULL + (key << 6) + (key >> 2);
-                        placement.instanceKey = key == 0 ? 1 : key;
-                        placement.passMix = outer.passMix * 0xbf58476d1ce4e5b9ULL ^
-                                            (static_cast<uint64_t>(repeat) + 1) * 0xd6e8feb86659fd93ULL;
-                        result.push_back(placement);
+                        for(const auto* target : carried) {
+                            // A reversed clip reads each mirrored copy from
+                            // the end of this clip's content.
+                            const double mirrorShift = clip.reversed ? target->mirrorLength - content : 0.0;
+                            PlayedSequence placement;
+                            placement.sequence = target->sequence.get();
+                            placement.map = outer.map.then({segments[s][0] - mirrorShift * stretch, stretch});
+                            placement.windowFrom = std::max(outer.windowFrom, outer.map.toTimeline(segmentFrom));
+                            placement.windowTo = std::min(outer.windowTo, outer.map.toTimeline(segmentTo));
+                            placement.resolver = resolverFor(*placement.sequence);
+                            placement.placedBy = &track;
+                            placement.placedClip = &clip;
+                            // Its own rolls per copy (macro track and clip), new
+                            // ones each repeat, as each loop pass rolls anew.
+                            uint64_t key = outer.instanceKey * 0x9e3779b97f4a7c15ULL;
+                            key ^= std::hash<std::string>{}(track.id) + 0x632be59bd9b4e019ULL + (key << 6) + (key >> 2);
+                            key ^= std::hash<std::string>{}(clip.id) + 0x8cb92ba72f3d8dd7ULL + (key << 6) + (key >> 2);
+                            if(!target->inheritsFrom.empty()) // a carried timeline: rolls of its own
+                                key ^= std::hash<std::string>{}(target->timeline) + 0x3c6ef372fe94f82bULL + (key << 6) + (key >> 2);
+                            placement.instanceKey = key == 0 ? 1 : key;
+                            placement.passMix = outer.passMix * 0xbf58476d1ce4e5b9ULL ^
+                                                (static_cast<uint64_t>(repeat) + 1) * 0xd6e8feb86659fd93ULL;
+                            result.push_back(placement);
+                        }
                     }
                 }
             }
@@ -839,6 +851,7 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         played.macroContainer = source.macroContainer;
         played.canvas = source.canvas;
         played.timeline = source.timeline;
+        played.inheritsFrom = source.inheritsFrom;
         played.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*source.sequence);
         played.sequence->base = nullptr; // its paths are absolute now
         makeAbsolute(*played.sequence, source.canvas);
@@ -851,6 +864,7 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         mirrored.macroContainer = played.macroContainer;
         mirrored.canvas = played.canvas;
         mirrored.timeline = played.timeline;
+        mirrored.inheritsFrom = played.inheritsFrom;
         mirrored.outerLatencyMs = played.outerLatencyMs;
         mirrored.reversed = true;
         mirrored.mirrorLength = macroTimelineLength(*source.sequence);

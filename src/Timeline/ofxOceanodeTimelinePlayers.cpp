@@ -262,8 +262,30 @@ ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::normalizedRe
     return ref;
 }
 
+namespace {
+// Within one canvas's timelines, whether `from` plays `target` through its
+// same-canvas timeline tracks (the only way one timeline of a macro reaches
+// another: tracks into the macros inside it never come back up).
+bool reachesWithinCanvas(const ofxOceanodeTimelineCanvas& list, const std::string& from, const std::string& target) {
+    std::vector<std::string> pending{from};
+    std::set<std::string> seen;
+    while(!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if(id == target) return true;
+        if(!seen.insert(id).second) continue;
+        const auto* sequence = list.find(id);
+        if(sequence == nullptr) continue;
+        for(const auto& track : sequence->tracks)
+            if(track.isMacroTrack() && track.macroCanvas == ".") pending.push_back(track.macroTimeline);
+    }
+    return false;
+}
+}
+
 void ofxOceanodeTimelineManager::refreshPlacedTimelines() const {
     placedTimelines.clear();
+    inheritedPlacements.clear();
     placedTimelinesValid = true;
     // Every timeline track of every timeline: the timeline it places, and
     // (the first time) which timeline places it.
@@ -280,6 +302,25 @@ void ofxOceanodeTimelineManager::refreshPlacedTimelines() const {
     for(const auto& entry : macroSequences) {
         const std::string canvas = entry.address->getCanvasID();
         for(const auto& timeline : entry.timelines->timelines) scan(*timeline, canvas, timeline->timelineId);
+    }
+    // A macro placed from outside is placed as a whole: its timelines no
+    // track places follow the clips placing the first of its timelines a
+    // timeline outside it places (not one that, through its own timeline
+    // tracks, plays that timeline: it would place itself).
+    for(const auto& entry : macroSequences) {
+        const std::string canvas = entry.address->getCanvasID();
+        for(const auto& placed : entry.timelines->timelines) {
+            const TimelineRef placedRef{canvas, placed->timelineId};
+            const auto host = placedTimelines.find(placedRef);
+            if(host == placedTimelines.end() || host->second.canvas == canvas) continue;
+            for(const auto& timeline : entry.timelines->timelines) {
+                const TimelineRef ref{canvas, timeline->timelineId};
+                if(ref == placedRef || placedTimelines.count(ref) > 0) continue;
+                if(reachesWithinCanvas(*entry.timelines, ref.timeline, placedRef.timeline)) continue;
+                placedTimelines.emplace(ref, host->second);
+                inheritedPlacements.emplace(ref, placedRef);
+            }
+        }
     }
 }
 
@@ -866,6 +907,23 @@ std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager:
             sources.push_back({canvasContainerFound, canvas, track.macroTimeline, placed, parent, trackIndex});
             keys.push_back(key);
             if(sources.size() >= kMaximumSources) break;
+            // The rest of a macro placed from outside: its timelines no track
+            // places follow this one's clips (refreshPlacedTimelines).
+            if(track.macroCanvas == ".") continue;
+            if(!owner->placedTimelinesValid) owner->refreshPlacedTimelines();
+            const TimelineRef placedRef{canvasContainerFound->getCanvasID(), track.macroTimeline};
+            for(const auto& [ref, from] : owner->inheritedPlacements) {
+                if(from != placedRef) continue;
+                const std::string siblingKey = keyOf(canvas, ref.timeline);
+                if(std::find(keys.begin(), keys.end(), siblingKey) != keys.end()) continue;
+                const auto* sibling = find(canvasContainerFound, ref.timeline);
+                if(sibling == nullptr) continue;
+                MacroSource source{canvasContainerFound, canvas, ref.timeline, sibling, parent, trackIndex};
+                source.inheritsFrom = track.macroTimeline;
+                sources.push_back(source);
+                keys.push_back(siblingKey);
+                if(sources.size() >= kMaximumSources) break;
+            }
         }
     }
     return sources;
@@ -881,6 +939,25 @@ ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::placedTimeline(const of
     const std::string canvas = track.macroCanvas == "." ? hostRef.canvas
         : rootCanvas(hostRef.canvas) ? track.macroCanvas : hostRef.canvas + " / " + track.macroCanvas;
     return timelineFor({canvas, track.macroTimeline});
+}
+
+std::vector<ofxOceanodeTimelineSequence*> ofxOceanodeTimelineManager::carriedTimelines(
+        const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track) {
+    std::vector<ofxOceanodeTimelineSequence*> result;
+    auto* placed = placedTimeline(host, track);
+    if(placed == nullptr) return result;
+    result.push_back(placed);
+    TimelineRef placedRef;
+    if(track.macroCanvas == "." || !refOf(*placed, placedRef)) return result;
+    placedRef = normalizedRef(placedRef);
+    if(!placedTimelinesValid) refreshPlacedTimelines();
+    const auto* list = findCanvasTimelines(placedRef.canvas);
+    if(list == nullptr) return result;
+    for(const auto& timeline : list->timelines) {
+        const auto found = inheritedPlacements.find({placedRef.canvas, timeline->timelineId});
+        if(found != inheritedPlacements.end() && found->second == placedRef) result.push_back(timeline.get());
+    }
+    return result;
 }
 
 bool ofxOceanodeTimelineManager::timelineReaches(const TimelineRef& from, const TimelineRef& target) {
@@ -1014,7 +1091,14 @@ bool ofxOceanodeTimelineManager::heldPlayheadBeat(const TimelineRef& given, doub
                         const double end = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
                         if(end > at + 1e-9 || end <= latestEnd) continue;
                         const auto* played = manager.playedMacroAt(track, clip.reversed);
-                        if(played == nullptr || played->canvas != ref.canvas || played->timeline != ref.timeline) continue;
+                        if(played == nullptr || played->canvas != ref.canvas) continue;
+                        // The clip places it, or carries it with the placed
+                        // timeline of its macro (placed as a whole).
+                        if(played->timeline != ref.timeline) {
+                            const auto* carried = manager.playedMacroAt(ref.canvas, ref.timeline, clip.reversed);
+                            if(carried == nullptr || carried->inheritsFrom != played->timeline) continue;
+                            played = carried;
+                        }
                         // Its last beat as ofxOceanodeTimelineClipTime plays
                         // it: a whole repeat ends at the content's end, not
                         // back at its start.
