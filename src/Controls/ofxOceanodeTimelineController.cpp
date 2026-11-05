@@ -1372,8 +1372,10 @@ void ofxOceanodeTimelineController::drawBeforeWindows() {
     }
     if(secondary() || container == nullptr) return;
     auto& timeline = container->getTimelineManager();
-    // A window asked for (new, or to bring forward): focused once it has drawn.
-    if(pendingWindowFocusFrames > 0) {
+    // A window asked for (new, or to bring forward): focused once it has
+    // drawn. Not while a dialog is open (a request's, such as Add to
+    // Timeline: focusing a window closes the popups): once it is done.
+    if(pendingWindowFocusFrames > 0 && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
         if(ImGui::FindWindowByName(pendingWindowFocus.c_str())) {
             ImGui::SetWindowFocus(pendingWindowFocus.c_str());
             pendingWindowFocusFrames = 0;
