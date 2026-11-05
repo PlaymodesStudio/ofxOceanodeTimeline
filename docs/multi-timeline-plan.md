@@ -3,6 +3,12 @@
 Status: phases 1 to 6 implemented (core and SuperCollider on
 `megabranch26_A`, the timeline addon on `main`). Written 2026-10-31. See "Implementation notes" at the end for what was
 built differently from the plan below.
+
+Superseded in part on 2026-11-04 (branch `equal-timelines`): the "root
+player" and the main timeline this plan keeps are gone. Every canvas owns a
+plain list of timelines, none default, and every timeline is played by an
+engine; the primary manager plays nothing. See "Several timelines and their
+clock sources" in `architecture.md` for the current design.
 Touches `ofxOceanode` (core transport) and `ofxOceanodeTimeline`, and is checked
 against `ofxOceanodeSuperCollider` (the timestamping backend and its box synths).
 

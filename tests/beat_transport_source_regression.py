@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
     transport->setDriverMode(TransportDriverMode::FrameStep);
     ofxOceanodeContainer root(registry, types, transport); root.setCanvasID("Canvas");
     auto& timeline = ofxOceanodeTimeline::attach(root);
+    timeline.setEditTarget(timeline.addTimeline("", "Timeline 1"));
     timeline.setSchedulingEnabled(false);
     auto& node = root.createNode(std::make_unique<beatTransport>(), 1);
     auto& beats = static_cast<beatTransport&>(node.getNodeModel());

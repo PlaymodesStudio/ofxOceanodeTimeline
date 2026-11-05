@@ -45,7 +45,7 @@ int main() {
     int failures = 0;
     auto run = [&](float offsetMs, double lookaheadMs, const char* what) {
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(lookaheadMs);
         Instrument plain(owner, model, "Plain"), shifted(owner, model, "Shifted");
         model.setTrackLatencyOffset(shifted.track, offsetMs);
@@ -84,11 +84,11 @@ int main() {
     run(-200.0f, 350, "-200 ms beyond a 350 ms window");
     {
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         const auto track = model.createTrack("Saved");
         assert(model.setTrackLatencyOffset(track, -12.5f));
         assert(!model.setTrackLatencyOffset(track, -12.5f));
-        ofxOceanodeTimelineManager copy(&owner);
+        TestTimeline copy(&owner);
         copy.fromJson(model.toJson());
         if(copy.getTracks().empty() || copy.getTracks().front().latencyOffsetMs != -12.5f) {
             std::cerr << "Latency offset not saved/loaded\n"; ++failures;
@@ -99,7 +99,7 @@ int main() {
         }
         auto json = model.toJson();
         json["tracks"][0]["latencyOffsetMs"] = -9999.0f;
-        ofxOceanodeTimelineManager clamped(&owner);
+        TestTimeline clamped(&owner);
         clamped.fromJson(json);
         if(clamped.getTracks().front().latencyOffsetMs != -kMaxTrackLatencyOffsetMs) {
             std::cerr << "Loaded latency offset not clamped\n"; ++failures;

@@ -641,7 +641,8 @@ void ofxOceanodeTimelineController::importDroppedAudio(ofxOceanodeTimelineManage
     if(pendingAudioDrops.empty()) return;
     auto drops = std::move(pendingAudioDrops);
     pendingAudioDrops.clear();
-    timeline.beginTimelineEdit();
+    if(shownSequence == nullptr) return; // no timeline shown: nowhere to drop
+    timeline.beginTimelineEdit(*shownSequence);
     for(const auto& drop : drops) {
         for(const auto& path : drop.files) {
             auto trackId = drop.trackId;
@@ -658,8 +659,8 @@ void ofxOceanodeTimelineController::importDroppedAudio(ofxOceanodeTimelineManage
             selectedClips.insert({trackId, clip.id});
         }
     }
-    if(timeline.endTimelineEdit()) {
-        undoOrder.push_back(&timeline.getMainSequence());
+    if(shownSequence != nullptr && timeline.endTimelineEdit(*shownSequence)) {
+        undoOrder.push_back(shownSequence);
         redoOrder.clear();
     }
 }
@@ -1108,8 +1109,9 @@ void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManag
        ImGui::IsAnyItemActive() || ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
        ImGui::IsKeyPressed(ImGuiKey_Backspace, false) || ImGui::IsKeyPressed(ImGuiKey_S, false) ||
        ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
-        timeline.beginTimelineEdit();
-        // A macro timeline open in the editor, or unfolded in it, keeps its own history too.
+        // The global transport's settings, and each timeline open in the
+        // editor or unfolded in it (each keeps its own history).
+        timeline.beginGlobalEdit();
         for(auto* sequence : historySequences(timeline)) timeline.beginTimelineEdit(*sequence);
     }
 }
@@ -1118,10 +1120,10 @@ std::vector<ofxOceanodeTimelineSequence*> ofxOceanodeTimelineController::history
     ofxOceanodeTimelineManager& timeline) const {
     std::vector<ofxOceanodeTimelineSequence*> sequences;
     auto add = [&](ofxOceanodeTimelineSequence* sequence) {
-        if(sequence == nullptr || sequence == &timeline.getMainSequence() || !timeline.isLiveSequence(*sequence)) return;
+        if(sequence == nullptr || !timeline.isLiveSequence(*sequence)) return;
         if(std::find(sequences.begin(), sequences.end(), sequence) == sequences.end()) sequences.push_back(sequence);
     };
-    if(!scopes.empty()) add(scopes.back().sequence);
+    add(shownSequence);
     add(editorRowScope.sequence);
     for(auto* sequence : unfoldedSequences) add(sequence);
     return sequences;
@@ -1136,24 +1138,31 @@ void ofxOceanodeTimelineController::finishHistoryGesture(ofxOceanodeTimelineMana
             redoOrder.clear();
             if(undoOrder.size() > 400) undoOrder.erase(undoOrder.begin());
         };
-        if(timeline.endTimelineEdit()) recorded(timeline.getMainSequence());
+        // (nullptr in the order: the global transport's settings.)
+        if(timeline.endGlobalEdit()) { undoOrder.push_back(nullptr); redoOrder.clear(); }
         for(auto* sequence : historySequences(timeline))
             if(timeline.endTimelineEdit(*sequence)) recorded(*sequence);
     }
 }
 
 void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& timeline, bool redo) {
-    // Undo steps the timeline edited last: the one the editor shows, or a
-    // macro timeline unfolded in it (each keeps its own history). Without a
-    // record, the one the editor shows.
+    // Undo steps what was edited last: a timeline (the one the editor
+    // shows, or one unfolded in it: each keeps its own history) or the
+    // global transport's settings (nullptr in the order). Without a record,
+    // the timeline shown, else the global settings.
     auto& from = redo ? redoOrder : undoOrder;
     auto& to = redo ? undoOrder : redoOrder;
-    while(!from.empty() && !timeline.isLiveSequence(*from.back())) from.pop_back();
-    auto& target = from.empty() ? scope(timeline) : *from.back();
-    const bool restored = redo ? timeline.redoTimelineEdit(target) : timeline.undoTimelineEdit(target);
+    while(!from.empty() && from.back() != nullptr && !timeline.isLiveSequence(*from.back())) from.pop_back();
+    ofxOceanodeTimelineSequence* target = from.empty() ? shownSequence : from.back();
+    auto step = [&](ofxOceanodeTimelineSequence* sequence) {
+        if(sequence == nullptr) return redo ? timeline.redoGlobalEdit() : timeline.undoGlobalEdit();
+        return redo ? timeline.redoTimelineEdit(*sequence) : timeline.undoTimelineEdit(*sequence);
+    };
+    bool restored = step(target);
+    if(!restored && from.empty() && target != nullptr) { target = nullptr; restored = step(nullptr); }
     if(!from.empty()) {
         from.pop_back();
-        if(restored) to.push_back(&target);
+        if(restored) to.push_back(target);
     }
     if(!restored) return;
     // Every editor may retain indices into the content that was replaced.
@@ -1216,23 +1225,27 @@ void ofxOceanodeTimelineController::openInnerClipEditor(const RowScope& at, cons
 
 void ofxOceanodeTimelineController::enterMacroScope(ofxOceanodeTimelineManager& timeline,
                                                     ofxOceanodeContainer& macroContainer) {
-    auto* sequence = timeline.getMacroSequence(macroContainer);
-    if(sequence == nullptr) return;
-    // Already open: go back to it rather than stacking it again.
-    for(size_t depth = 0; depth < scopes.size(); ++depth)
-        if(scopes[depth].sequence == sequence) { leaveScopesTo(depth + 1); return; }
-    // The breadcrumb follows the macro nesting: a macro inside the open one
-    // stacks on it; any other replaces the stack.
-    const std::string canvas = macroContainer.getCanvasID();
-    while(!scopes.empty() && canvas.rfind(scopes.back().container->getCanvasID() + " / ", 0) != 0) scopes.pop_back();
-    scopes.push_back({sequence, &macroContainer, timeline.getMacroSequenceLabel(macroContainer),
-                      timeline.refForCanvas(macroContainer)});
-    resetEditorForScope();
+    showCanvas(timeline, timeline.canvasIdOf(macroContainer));
+}
+
+void ofxOceanodeTimelineController::showCanvas(ofxOceanodeTimelineManager& timeline, const std::string& canvas) {
+    const auto refs = timeline.timelinesOfCanvas(canvas);
+    if(!refs.empty()) { enterTimelineScope(timeline, refs.front()); return; }
+    if(timeline.canvasContainer(canvas) == nullptr) return;
+    setShown(timeline, {canvas, std::string()}, nullptr); // its empty state
 }
 
 void ofxOceanodeTimelineController::dropDeadScopes(ofxOceanodeTimelineManager& timeline) {
-    for(size_t depth = 0; depth < scopes.size(); ++depth)
-        if(!timeline.isLiveSequence(*scopes[depth].sequence)) { leaveScopesTo(depth); break; }
+    // The shown timeline, gone: its canvas (its first timeline, or none);
+    // a macro of the breadcrumb, gone: the canvas above it.
+    for(size_t depth = 0; depth < scopes.size(); ++depth) {
+        auto* container = scopes[depth].container;
+        if(container != nullptr && timeline.canvasContainer(container->getCanvasID()) == container) continue;
+        leaveScopesTo(depth);
+        break;
+    }
+    if(shownSequence != nullptr && !timeline.isLiveSequence(*shownSequence)) showCanvas(timeline, shownRef.canvas);
+    else if(shownSequence == nullptr && !shownRef.timeline.empty()) showCanvas(timeline, shownRef.canvas);
     if(editorRowScope.sequence != nullptr && !timeline.isLiveSequence(*editorRowScope.sequence)) {
         editorRowScope = {};
         if(innerEditorOpen()) editorState.clipEditorOpen = false;
@@ -1241,7 +1254,13 @@ void ofxOceanodeTimelineController::dropDeadScopes(ofxOceanodeTimelineManager& t
 
 void ofxOceanodeTimelineController::leaveScopesTo(size_t depth) {
     if(depth >= scopes.size()) return;
+    // The canvas at that depth of the breadcrumb (the main canvas at 0).
+    const std::string canvas = depth == 0 ? std::string() : scopes[depth - 1].container->getCanvasID();
     scopes.resize(depth);
+    shownRef = {canvas, std::string()};
+    shownSequence = nullptr;
+    pendingCanvasToShow = canvas;
+    pendingCanvasShowRequested = true;
     resetEditorForScope();
 }
 
@@ -1384,7 +1403,15 @@ void ofxOceanodeTimelineController::draw() {
         pendingScopeRequested = false;
         enterTimelineScope(timeline, pendingScope);
     }
+    if(pendingCanvasShowRequested) {
+        // Back along the breadcrumb: that canvas's first timeline, or its empty state.
+        pendingCanvasShowRequested = false;
+        showCanvas(timeline, pendingCanvasToShow);
+    }
     dropDeadScopes(timeline);
+    // Nothing shown yet (a new window, a load): the canvas's first timeline
+    // once it has one.
+    if(shownSequence == nullptr && !timeline.timelinesOfCanvas(shownRef.canvas).empty()) showCanvas(timeline, shownRef.canvas);
     if(secondary()) {
         // A further window shows the timeline its entry names (again when
         // the entry changed under it: a preset load), and keeps the entry on
@@ -1627,9 +1654,9 @@ void ofxOceanodeTimelineController::draw() {
     const auto ownTransport = shownTransport != nullptr && shownTransport->isDerived() ? shownTransport : nullptr;
     const ofxOceanodeTimelinePlaySettings* ownPlay = timeline.playSettings(shownRef);
     const bool own = ownTransport != nullptr && ownPlay != nullptr;
-    // The global timeline (the root canvas's default, linked to the global
-    // transport) keeps its meter on the manager; every other has its own.
-    const bool ownMeter = ownPlay != nullptr && (own || inMacroScope());
+    // A timeline linked to the global transport follows its meter too; one
+    // on a transport of its own has its own.
+    const bool ownMeter = own;
     const auto ownState = own ? ownTransport->getState() : ofxOceanodeTransportState();
     // A dependent timeline's host, for the captions.
     ofxOceanodeTimelineManager::TimelineRef hostRef;
@@ -1998,13 +2025,13 @@ void ofxOceanodeTimelineController::draw() {
 
     // ---- Row 2: history | loop | grid | view | output timing | tracks ----
     // A macro timeline (open or unfolded) keeps its own history.
-    ImGui::BeginDisabled(!timeline.canUndoTimelineEdit() && undoOrder.empty());
+    ImGui::BeginDisabled(!timeline.canUndoGlobalEdit() && !timeline.canUndoTimelineEdit(scope(timeline)) && undoOrder.empty());
     if(ImGui::Button("Undo##timeline")) restoreHistory(timeline, false);
     ImGui::EndDisabled();
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Undo timeline action (Cmd/Ctrl+Z)");
     ImGui::SameLine();
-    ImGui::BeginDisabled(!timeline.canRedoTimelineEdit() && redoOrder.empty());
+    ImGui::BeginDisabled(!timeline.canRedoGlobalEdit() && !timeline.canRedoTimelineEdit(scope(timeline)) && redoOrder.empty());
     if(ImGui::Button("Redo##timeline")) restoreHistory(timeline, true);
     ImGui::EndDisabled();
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -3087,7 +3114,8 @@ void ofxOceanodeTimelineController::draw() {
                 const std::string name = timeline.timelineName(placedRef);
                 if(name != track.name) placedName = name;
             }
-            const ImU32 placedColor = track.macroTimeline.empty() ? IM_COL32(190, 140, 230, 210) : IM_COL32(90, 190, 175, 210);
+            // A macro's timeline in purple, one of this canvas in teal.
+            const ImU32 placedColor = track.macroCanvas != "." ? IM_COL32(190, 140, 230, 210) : IM_COL32(90, 190, 175, 210);
             const float nameWidth = ImGui::CalcTextSize(track.name.c_str()).x;
             dl->AddText(ImVec2(headerMin.x + folderIndent + 22 + nameWidth + 8, headerTextY), placedColor, ("> " + placedName).c_str());
         }
@@ -3171,7 +3199,7 @@ void ofxOceanodeTimelineController::draw() {
             timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
         ImGui::SameLine();
         // Shows the solo playback uses, which a Toggle lane may be driving.
-        const bool soloed = inMacroScope() ? track.solo : timeline.isTrackSoloed(track); // playback state is the main timeline's
+        const bool soloed = track.solo; // (a Toggle lane driving it is the engine's playback state)
         if(playbackToggle("trackSolo" + track.id, "S", soloed, "Solo track (multiple solos allowed)"))
             timeline.setTrackSolo(scope(timeline), track.id, !soloed);
         if(track.latencyOffsetMs != 0.0f) {
@@ -3290,7 +3318,7 @@ void ofxOceanodeTimelineController::draw() {
                            binding.valueType == typeid(std::vector<int>).name() ||
                            binding.valueType == typeid(std::vector<bool>).name();
                 });
-                if(ImGui::MenuItem("Capture state as curve points", nullptr, false, canCaptureState && !inMacroScope())) {
+                if(ImGui::MenuItem("Capture state as curve points", nullptr, false, canCaptureState)) {
                     timeline.captureStateAsCurvePoints(scope(timeline), track.id, std::string(), transportState.beatPosition);
                     ImGui::CloseCurrentPopup();
                 }
@@ -3437,7 +3465,7 @@ void ofxOceanodeTimelineController::draw() {
                 const bool clipSelected = selectedClips.count({track.id, clip.id}) > 0;
                 auto lift = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * (clipSelected ? 0.45f : 0.0f)); };
                 // A clip its chance roll left out of this pass reads as half muted.
-                const bool rolledOut = transportPlaying && !inMacroScope() && timeline.isClipChanceSilenced(clip);
+                const bool rolledOut = transportPlaying && !shownOwnsTransport(timeline) && timeline.isClipChanceSilenced(clip);
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
                                             clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
@@ -4637,7 +4665,7 @@ void ofxOceanodeTimelineController::draw() {
                         binding.valueType == typeid(std::vector<float>).name() ||
                         binding.valueType == typeid(std::vector<int>).name() ||
                         binding.valueType == typeid(std::vector<bool>).name();
-                    if(ImGui::MenuItem("Capture state as curve points", nullptr, false, canCaptureState && !inMacroScope())) {
+                    if(ImGui::MenuItem("Capture state as curve points", nullptr, false, canCaptureState)) {
                         timeline.captureStateAsCurvePoints(scope(timeline), track.id, binding.id, transportState.beatPosition);
                         ImGui::CloseCurrentPopup();
                     }
@@ -5842,7 +5870,11 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         finishHistoryGesture(timeline);
     beginHistoryGesture(timeline);
 
-    for(const auto& request : timeline.consumePendingParameterLanes()) {
+    for(const auto& lane : timeline.consumePendingParameterLanes()) {
+        // On the timeline the request names: shown first when another is.
+        if(!lane.ref.timeline.empty() && !(ofxOceanodeTimelineManager::normalizedRef(scopeRef()) == lane.ref))
+            enterTimelineScope(timeline, lane.ref);
+        const std::pair<std::string, std::string> request{lane.trackId, lane.bindingId};
         const auto* track = timeline.getTrack(scope(timeline), request.first);
         const auto* binding = timeline.getBinding(scope(timeline), request.first, request.second);
         if(track == nullptr || track->isWaveTrack || binding == nullptr) continue;
@@ -5912,7 +5944,10 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
 
     std::string requestedRename;
     bool isNewTrack = false;
-    if(timeline.consumePendingTrackRename(requestedRename, &isNewTrack)) {
+    ofxOceanodeTimelineManager::TimelineRef renameRef;
+    if(timeline.consumePendingTrackRename(requestedRename, &isNewTrack, &renameRef)) {
+        if(!renameRef.timeline.empty() && !(ofxOceanodeTimelineManager::normalizedRef(scopeRef()) == renameRef))
+            enterTimelineScope(timeline, renameRef);
         pendingTrackId = requestedRename;
         if(const auto* track = timeline.getTrack(scope(timeline), pendingTrackId)) {
             std::strncpy(pendingTrackName, track->name.c_str(), sizeof(pendingTrackName) - 1);
@@ -5941,8 +5976,12 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
     drawParameterClipPopup(timeline);
 
     // "Add to Timeline as Piano Roll..." from a parameter's right-click menu.
-    if(auto* noteSource = timeline.consumePendingNoteGroupSetup())
+    ofxOceanodeTimelineManager::TimelineRef noteRef;
+    if(auto* noteSource = timeline.consumePendingNoteGroupSetup(&noteRef)) {
+        if(!noteRef.timeline.empty() && !(ofxOceanodeTimelineManager::normalizedRef(scopeRef()) == noteRef))
+            enterTimelineScope(timeline, noteRef);
         openNoteGroupSetup(timeline, noteSource, std::string(), std::string());
+    }
     if(requestNoteSetupPopup) {
         ImGui::OpenPopup("Piano Roll##noteGroupSetup");
         requestNoteSetupPopup = false;
@@ -6076,8 +6115,9 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     // right-click for the menu.
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     std::string hoveredMarkerId;
+    // Markers are the global transport's: shown on a timeline following it.
     for(const auto& marker : timeline.getMarkers()) {
-        if(inMacroScope()) break;
+        if(shownOwnsTransport(timeline)) break;
         const float x = laneMin.x + beatToPixels(timeline, marker.beat, bpm);
         if(x < zoneLeft - 200.0f || x > max.x) continue;
         const ImVec2 textSize = ImGui::CalcTextSize(marker.name.c_str());
@@ -6097,7 +6137,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     const double rawMouseBeat = ofClamp(
         pixelsToBeat(timeline, mouse.x - laneMin.x, bpm, endBeat), 0.0, endBeat);
     const double mouseBeat = snapBeat(rawMouseBeat);
-    if(hovered && !inMacroScope() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    if(hovered && !shownOwnsTransport(timeline) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         markerMenuId = hoveredMarkerId;
         markerMenuBeat = mouseBeat;
         ImGui::OpenPopup("##rulerMarkerMenu");

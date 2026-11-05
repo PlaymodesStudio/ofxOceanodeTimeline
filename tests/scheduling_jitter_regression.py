@@ -21,7 +21,7 @@ int main() {
     ofxOceanodeParameter<float> parameter;
     parameter.bindParameter(value);
     owner.targets[parameter.getEscapedName()] = &parameter;
-    ofxOceanodeTimelineManager manager(&owner);
+    TestTimeline manager(&owner);
     manager.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
     const auto track = manager.createTrack("Gate");
     const auto binding = manager.addBinding(track, parameter);

@@ -19,7 +19,7 @@ int main() {
     level.bindParameter(levelValue); cutoff.bindParameter(cutoffValue); gate.bindParameter(gateValue);
     steps.bindParameter(stepValue); other.bindParameter(otherValue);
     for(auto* p : {&level,&cutoff,&gate,&steps,&other}) owner.targets[p->getEscapedName()] = p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     const auto t = model.createTrack("Merge");
     const auto lb = model.addBinding(t, level), cb = model.addBinding(t, cutoff), gb = model.addBinding(t, gate);
     const auto sb = model.addBinding(t, steps), ob = model.addBinding(t, other);

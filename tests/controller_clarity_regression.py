@@ -77,6 +77,14 @@ int main() {
     auto owner=std::make_shared<ofxOceanodeContainer>(registry,types);
     owner->setCanvasID("Canvas");
     auto& model=ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
+    // A macro's timeline (its first), made on first use as the macro's own one was.
+    auto macroTimelineOf = [&](ofxOceanodeContainer& canvas) -> ofxOceanodeTimelineSequence* {
+        auto* list = model.getMacroTimelines(canvas);
+        if(list == nullptr) return nullptr;
+        if(list->timelines.empty()) model.createTimeline(canvas.getCanvasID(), model.getMacroSequenceLabel(canvas));
+        return list->timelines.empty() ? nullptr : list->timelines.front().get();
+    };
     auto& node=owner->createNode(std::make_unique<ClarityProbe>(),1);
     auto bind=[&](const std::string& track,const char* name) {
         return model.addBinding(track,static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get(name)));
@@ -835,21 +843,21 @@ int main() {
     assert(std::abs(imported.durationBeats-owner->getTransportState().bpm/60.0)<1e-6);
     assert(model.undoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips);
     assert(model.redoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips+1);
-    const auto trackCount=model.getTracks().size();
+    const auto trackCount=model.editSequence().tracks.size();
     auto normalRow=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
         [&](const auto& row){return row.trackId==t;});
     assert(normalRow!=ui.clipDropRows.end());
     const float normalY=(normalRow->top+normalRow->bottom)*0.5f;
     dropAt(dx,normalY,samplePath.string()); frame();
-    assert(model.getTracks().size()==trackCount+1);
-    assert(model.getTracks().back().isWaveTrack && model.getTracks().back().clips.size()==1);
-    assert(model.undoTimelineEdit()); assert(model.getTracks().size()==trackCount);
+    assert(model.editSequence().tracks.size()==trackCount+1);
+    assert(model.editSequence().tracks.back().isWaveTrack && model.editSequence().tracks.back().clips.size()==1);
+    assert(model.undoTimelineEdit()); assert(model.editSequence().tracks.size()==trackCount);
     // Unsupported files, unreadable WAVs, and drops outside the canvas leave
     // no empty tracks or placeholder clips behind.
     dropAt(dx,normalY,"/tmp/not-audio.txt"); frame();
     dropAt(dx,normalY,"/tmp/missing-timeline-drop.wav"); frame();
     dropAt(ui.fileDropBounds.x-40,normalY,samplePath.string()); frame();
-    assert(model.getTracks().size()==trackCount);
+    assert(model.editSequence().tracks.size()==trackCount);
     assert(model.getTrack(wt)->clips.size()==originalClips+1);
     // A secondary platform viewport supplies desktop coordinates directly;
     // it never emits the main OF window's fileDragEvent.
@@ -858,7 +866,7 @@ int main() {
     ui.queueAudioDrop({samplePath.string()},dx,normalY);
     assert(ui.pendingAudioDrops.size()==1);
     frame();
-    assert(model.getTracks().size()==trackCount+1);
+    assert(model.editSequence().tracks.size()==trackCount+1);
     assert(model.undoTimelineEdit());
     // Hover feedback uses the file's duration and the same snap/zoom mapping
     // as the import, while leaving the model and undo history untouched.
@@ -907,7 +915,7 @@ int main() {
     const ImVec2 duplicatePoint(trackMenu->Pos.x+50,trackMenu->Pos.y+trackMenu->Size.y-
         ImGui::GetStyle().WindowPadding.y-ImGui::GetTextLineHeight()*0.5f-ImGui::GetTextLineHeightWithSpacing());
     frame(1250,duplicatePoint,false);frame(1250,duplicatePoint,true);frame(1250,duplicatePoint,false);
-    assert(model.getTracks().size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
+    assert(model.editSequence().tracks.size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
     const auto duplicatedTrack=*ui.selectedTracks.begin();assert(duplicatedTrack!=t);
     assert(model.getTrack(duplicatedTrack)->clips.size()==model.getTrack(t)->clips.size());
     assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);frame();
@@ -1010,7 +1018,7 @@ int main() {
         auto& filter=static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Cutoff"));
         const std::string filterPath=owner->getTimelineParameterPath(filter);
         const auto tracksBefore=model.toJson()["tracks"];
-        const auto trackCount=model.getTracks().size();
+        const auto trackCount=model.editSequence().tracks.size();
         {
             // The parameter's own menu, Add to Timeline hovered: every timeline
             // with New Track... and its tracks under it (a screenshot only).
@@ -1043,8 +1051,8 @@ int main() {
         io.AddInputCharactersUTF8("Filter"); frame();
         std::strcpy(ui.parameterClipName,"Sweep");
         assert(confirmModal("Create Track and Clip") && !popupOpen());
-        assert(model.getTracks().size()==trackCount+1);
-        const auto& made=model.getTracks().back();
+        assert(model.editSequence().tracks.size()==trackCount+1);
+        const auto& made=model.editSequence().tracks.back();
         assert(made.name=="Filter" && made.bindings.size()==1 && made.bindings[0].parameterPath==filterPath);
         assert(made.clips.size()==1 && made.clips[0].name=="Sweep" && made.clips[0].lanes.size()==1);
         assert(made.clips[0].lanes[0].type==ofxOceanodeTimelineLaneType::Curve);
@@ -1250,7 +1258,7 @@ int main() {
     // Drag it above the first row: back at the top level, first.
     for(int i=0;i<25;++i) frame();
     dragHeader(dt,ImVec2(ui.fileDropBounds.x-150,ui.trackHeaderRows.front().minY+2.0f));
-    assert(model.getTrack(dt)->parentId.empty() && model.getTracks().front().id==dt);
+    assert(model.getTrack(dt)->parentId.empty() && model.editSequence().tracks.front().id==dt);
     // Never into itself: a folder dropped on its own row stays where it was.
     folderRow=headerRow(folder);
     dragHeader(folder,ImVec2(ui.fileDropBounds.x-150,(folderRow->minY+folderRow->maxY)*0.5f+20.0f));
@@ -1305,7 +1313,7 @@ int main() {
         auto inside=static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
         auto& innerProbe=inside->createNode(std::make_unique<ClarityProbe>(),1);
         auto& innerCutoff=static_cast<ofxOceanodeAbstractParameter&>(innerProbe.getParameters().get("Cutoff"));
-        auto* pattern=model.getMacroSequence(*inside);
+        auto* pattern=macroTimelineOf(*inside);
         assert(pattern && pattern->tracks.empty() && pattern->base==inside.get());
         const auto mainBefore=model.toJson()["tracks"];
         const auto pt=model.createTrack(*pattern,"Pattern");
@@ -1319,7 +1327,7 @@ int main() {
         {
             // "Add to Timeline" into the macro's own timeline: its sequence
             // gets the track (shown in the editor), the main one stays as it was.
-            model.requestParameterClip({model.refForCanvas(*inside),"","Synth_1/Cutoff"}); frame(); frame();
+            model.requestParameterClip({model.refForCanvas(*inside,pattern->timelineId),"","Synth_1/Cutoff"}); frame(); frame();
             assert(popupOpen() && confirmModal("Create Track and Clip"));
             assert(pattern->tracks.size()==2 && pattern->tracks[1].bindings.size()==1);
             assert(pattern->tracks[1].bindings[0].parameterPath=="Synth_1/Cutoff" && pattern->tracks[1].clips.size()==1);
@@ -1361,16 +1369,18 @@ int main() {
         std::filesystem::remove(folder/"sequence.json");
         assert(inside->savePreset(folder.string()) && std::filesystem::exists(folder/"sequence.json"));
         model.loadMacroSequence(*inside,folder.string());
-        auto* reloaded=model.getMacroSequence(*inside);
+        auto* reloaded=macroTimelineOf(*inside);
         assert(reloaded && reloaded->tracks.size()==1 && reloaded->tracks[0].clips.size()==1);
         assert(std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
         assert(inside->loadPreset(folder.string()));
-        reloaded=model.getMacroSequence(*inside);
+        reloaded=macroTimelineOf(*inside);
         assert(reloaded && reloaded->tracks.size()==1 && std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
-        frame(); frame(); // the old scope's sequence was replaced: back to the main timeline
-        assert(!ui.inMacroScope());
-        // An emptied timeline leaves no file behind.
+        frame(); frame(); // the old scope's sequence was replaced: the macro's reloaded timeline is shown
+        assert(ui.inMacroScope() && &ui.scope(model)==reloaded);
+        // A timeline with no tracks is still a timeline: the file stays; a removed one leaves no file behind.
         model.removeTrack(*reloaded,reloaded->tracks[0].id);
+        assert(model.saveMacroSequence(*inside,folder.string()) && std::filesystem::exists(folder/"sequence.json"));
+        assert(model.removeTimeline({inside->getCanvasID(),reloaded->timelineId}));
         assert(model.saveMacroSequence(*inside,folder.string()) && !std::filesystem::exists(folder/"sequence.json"));
         std::filesystem::remove_all(folder);
 
@@ -1379,14 +1389,14 @@ int main() {
         ui.leaveScopesTo(0); frame(); assert(!ui.inMacroScope());
         {
             // A macro track on the main timeline: its clips play the macro's timeline.
-            const auto mt=model.createMacroTrack(*inside);
+            const auto mt=model.createTimelineTrack(model.editSequence(),ofxOceanodeTimelineManager::TimelineRef{inside->getCanvasID(),macroTimelineOf(*inside)->timelineId});
             assert(!mt.empty() && model.getTrack(mt)->macroCanvas==inside->getCanvasID());
             const auto mc=model.createMacroClip(mt,0.0);
             assert(!mc.empty() && model.getClip(mt,mc)->contentDurationBeats>=model.getBeatsPerBar());
             assert(model.createLane(mt,mc,"x",ofxOceanodeTimelineLaneType::Curve).empty()); // no lanes in a macro clip
             {
                 // Content in the macro's timeline, previewed inside the macro clip.
-                auto* pattern=model.getMacroSequence(*inside);
+                auto* pattern=macroTimelineOf(*inside);
                 const auto ct=model.createTrack(*pattern,"Sweep");
                 const auto cb=model.addBinding(*pattern,ct,innerCutoff);
                 const auto cc=model.createClip(*pattern,ct,"Sweep",0,4);
@@ -1415,7 +1425,7 @@ int main() {
             const ImVec2 at((mrect->x1+mrect->x2)*0.5f,(mrect->y1+mrect->y2)*0.5f);
             frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(1250,at,true); frame(1250,at,false);
             frame(); frame();
-            assert(ui.inMacroScope() && &ui.scope(model)==model.getMacroSequence(*inside)); // double-click opens it
+            assert(ui.inMacroScope() && &ui.scope(model)==macroTimelineOf(*inside)); // double-click opens it
             {
                 // The main playhead shows where the macro clip has the macro's timeline.
                 double macroBeat=-1;
@@ -1428,7 +1438,7 @@ int main() {
             {
                 // Unfolded: the macro's tracks as rows under the macro track, their
                 // clips where the macro clip plays them (here at half speed), edited there.
-                auto* pattern=model.getMacroSequence(*inside); // read back from the macro's folder above
+                auto* pattern=macroTimelineOf(*inside); // read back from the macro's folder above
                 const auto pt=model.createTrack(*pattern,"Phrase");
                 const auto pb=model.addBinding(*pattern,pt,innerCutoff);
                 const auto pc=model.createClip(*pattern,pt,"Phrase",2,4);

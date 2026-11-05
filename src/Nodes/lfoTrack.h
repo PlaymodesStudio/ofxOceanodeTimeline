@@ -14,6 +14,7 @@
 #define lfoTrack_h
 
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeTimeline.h"
 
 class lfoTrack : public ofxOceanodeNodeModel {
 public:
@@ -26,8 +27,12 @@ public:
     void presetRecallAfterSettingParameters(ofJson &json) override;
 
 private:
+    using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
+    void refreshTimelineList();
     void refreshTrackList();
 
+    ofParameter<int> timelineSelector;
+    std::shared_ptr<ofxOceanodeParameter<int>> timelineSelectorParam;
     ofParameter<int> trackSelector;
     std::shared_ptr<ofxOceanodeParameter<int>> trackSelectorParam;
     ofParameter<float> valueOut;
@@ -36,8 +41,12 @@ private:
     ofParameter<void> resetOut;
     ofParameter<bool> activeOut;
 
-    // The track is remembered by id (names can change, and the timeline loads
-    // after node presets); the dropdown index is derived from it every frame.
+    // The timeline is remembered by reference and the track by id (names
+    // can change, and the timeline loads after node presets); the dropdown
+    // indices are derived from them every frame.
+    TimelineRef selectedRef;
+    std::vector<TimelineRef> timelineRefs; // index 0 = none
+    std::vector<std::string> timelineNames;
     std::string selectedTrackId;
     std::vector<std::string> trackIds;   // index 0 = none
     std::vector<std::string> trackNames;

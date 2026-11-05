@@ -12,7 +12,7 @@ int main(){
     ofParameter<float> a("Original",0,0,1),b("Other node",0,0,1),d("Macro / Nested",0,-10,10);
     ofxOceanodeParameter<float> pa,pb,pd;pa.bindParameter(a);pb.bindParameter(b);pd.bindParameter(d);
     for(auto* p:{&pa,&pb,&pd})owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     const auto t=model.createTrack("Track"),bound=model.addBinding(t,pa),c=model.createClip(t,"Clip",0,4);
     const auto l=model.createLane(t,c,"Curve",ofxOceanodeTimelineLaneType::Curve);
     model.addBindingToLane(t,c,l,bound);

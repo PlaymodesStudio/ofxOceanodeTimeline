@@ -11,7 +11,7 @@ int main() {
     ofxOceanodeParameter<float> a,b;
     a.bindParameter(av); b.bindParameter(bv);
     for(auto* p : {&a,&b}) owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     auto soloed=[&](const std::string& id){ return model.isTrackSoloed(*model.getTrack(id)); };
     const auto t=model.createTrack("Soloed"), other=model.createTrack("Other");
     const auto ab=model.addBinding(t,a), bb=model.addBinding(other,b);

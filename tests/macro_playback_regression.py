@@ -35,6 +35,14 @@ int main(int, char**) {
     auto types = std::make_shared<ofxOceanodeTypesRegistry>();
     auto owner = std::make_shared<ofxOceanodeContainer>(registry, types); owner->setCanvasID("Canvas");
     auto& model = ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
+    // A macro's timeline (its first), made on first use as the macro's own one was.
+    auto macroTimelineOf = [&](ofxOceanodeContainer& canvas) -> ofxOceanodeTimelineSequence* {
+        auto* list = model.getMacroTimelines(canvas);
+        if(list == nullptr) return nullptr;
+        if(list->timelines.empty()) model.createTimeline(canvas.getCanvasID(), model.getMacroSequenceLabel(canvas));
+        return list->timelines.empty() ? nullptr : list->timelines.front().get();
+    };
     model.setSchedulingEnabled(false);
     auto& macroNode = owner->createNode(std::make_unique<ofxOceanodeNodeMacro>(), 1);
     auto inside = static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
@@ -44,7 +52,7 @@ int main(int, char**) {
     auto& other = static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Other"));
 
     // The macro's timeline: Level ramps 0 -> 1 over 4 beats; Other holds 2.
-    auto* pattern = model.getMacroSequence(*inside);
+    auto* pattern = macroTimelineOf(*inside);
     const auto pt = model.createTrack(*pattern, "Ramp");
     const auto pb = model.addBinding(*pattern, pt, level);
     const auto pc = model.createClip(*pattern, pt, "Phrase", 0, 4);
@@ -64,7 +72,7 @@ int main(int, char**) {
     auto expectedLevel = [](double value) { return static_cast<float>(value); };
 
     // Main timeline: a macro clip at beat 8, two repeats of its 4 beats.
-    const auto mt = model.createMacroTrack(*inside);
+    const auto mt = model.createTimelineTrack(model.editSequence(), ofxOceanodeTimelineManager::TimelineRef{inside->getCanvasID(), pattern->timelineId});
     const auto mc = model.createMacroClip(mt, 8.0, 8.0);
     check(!mc.empty() && std::abs(model.getClip(mt, mc)->contentDurationBeats - 4.0) < 1e-9, "Macro clip content is the macro timeline's 4 beats");
     owner->getTransport()->play();
@@ -170,7 +178,7 @@ int main(int, char**) {
     auto innerInside = static_cast<ofxOceanodeNodeMacro&>(innerNode.getNodeModel()).getContainer();
     auto& innerProbeNode = innerInside->createNode(std::make_unique<Probe>(), 1);
     auto& innerProbe = static_cast<Probe&>(innerProbeNode.getNodeModel());
-    auto* innerPattern = model.getMacroSequence(*innerInside);
+    auto* innerPattern = macroTimelineOf(*innerInside);
     const auto it = model.createTrack(*innerPattern, "Inner");
     const auto ib = model.addBinding(*innerPattern, it, static_cast<ofxOceanodeAbstractParameter&>(innerProbeNode.getParameters().get("Level")));
     const auto ic = model.createClip(*innerPattern, it, "Ramp", 0, 4);
@@ -179,7 +187,7 @@ int main(int, char**) {
     model.getLane(*innerPattern, it, ic, il)->curveInterpolation = "Linear";
     model.getLane(*innerPattern, it, ic, il)->curvePoints = {{0, 0.0f}, {4, 1.0f}};
     model.getLane(*innerPattern, it, ic, il)->curveTensions = {{}};
-    const auto imt = model.createMacroTrack(*pattern, *innerInside);
+    const auto imt = model.createTimelineTrack(*pattern, ofxOceanodeTimelineManager::TimelineRef{innerInside->getCanvasID(), innerPattern->timelineId});
     check(!imt.empty() && model.getTrack(*pattern, imt)->macroCanvas == innerInside->getCanvasID().substr(inside->getCanvasID().size() + 3),
           "Inner macro track's canvas is relative to the outer macro");
     const auto imc = model.createMacroClip(*pattern, imt, 1.0, 2.0);
@@ -270,7 +278,7 @@ int main(int, char**) {
         auto& ref = static_cast<Probe&>(refNode.getNodeModel());
         const auto rt = model.createTrack("Reference");
         const auto rb = model.addBinding(rt, static_cast<ofxOceanodeAbstractParameter&>(refNode.getParameters().get("Trig")));
-        stepPair(model.getMainSequence(), rt, rb, 40.0);
+        stepPair(model.editSequence(), rt, rb, 40.0);
         const auto tt = model.createTrack(*pattern, "Trig");
         const auto tb = model.addBinding(*pattern, tt, static_cast<ofxOceanodeAbstractParameter&>(probeNode.getParameters().get("Trig")));
         stepPair(*pattern, tt, tb, 0.0);

@@ -18,7 +18,7 @@ int main(){
     ofxOceanodeParameter<float> pitch,gate,velocity;
     pitch.bindParameter(pv);gate.bindParameter(gv);velocity.bindParameter(vv);
     for(auto* p:{&pitch,&gate,&velocity})owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     auto track=model.createTrack("Instrument");
     auto pb=model.addBinding(track,pitch),gb=model.addBinding(track,gate),vb=model.addBinding(track,velocity);

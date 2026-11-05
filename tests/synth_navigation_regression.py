@@ -55,6 +55,7 @@ int main() {
     auto types=std::make_shared<ofxOceanodeTypesRegistry>();
     auto owner=std::make_shared<ofxOceanodeContainer>(registry,types); owner->setCanvasID("Canvas");
     auto& model=ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
     auto& first=owner->createNode(std::make_unique<NavigationSynth>(),1);
     auto& second=owner->createNode(std::make_unique<NavigationSynth>(),2);
     auto& synth=static_cast<NavigationSynth&>(first.getNodeModel());

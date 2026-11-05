@@ -272,19 +272,27 @@ It is saved with the timeline as `scheduling.adaptive`.
 
 ```cpp
 auto& timeline = oceanode.getTimelineManager();
-std::string trackId = timeline.createTrack("Additive Automation");
+// A canvas has any number of timelines and none to begin with: make one
+// (on the main canvas here), then edit it through its sequence.
+const auto ref = timeline.addTimeline("", "Additive");
+auto& sequence = *timeline.timelineFor(ref);
+std::string trackId = timeline.createTrack(sequence, "Additive Automation");
 
 auto& parameter = static_cast<ofxOceanodeAbstractParameter&>(
     node.getParameters().get("Pitch"));
-std::string bindingId = timeline.addBinding(trackId, parameter);
-std::string clipId = timeline.createClip(trackId, "Phrase", 0.0, 8.0);
+std::string bindingId = timeline.addBinding(sequence, trackId, parameter);
+std::string clipId = timeline.createClip(sequence, trackId, "Phrase", 0.0, 8.0);
 std::string laneId = timeline.createLane(
-    trackId, clipId, "Pitch", ofxOceanodeTimelineLaneType::Step);
-timeline.addBindingToLane(trackId, clipId, laneId, bindingId);
-timeline.setClipStep(trackId, clipId, laneId, 0.0, "60", 1.0);
-timeline.setClipStep(trackId, clipId, laneId, 1.0, "64", 0.5);
-timeline.setClipStep(trackId, clipId, laneId, 1.5, "67", 2.5);
+    sequence, trackId, clipId, "Pitch", ofxOceanodeTimelineLaneType::Step);
+timeline.addBindingToLane(sequence, trackId, clipId, laneId, bindingId);
+timeline.setClipStep(sequence, trackId, clipId, laneId, 0.0, "60", 1.0);
+timeline.setClipStep(sequence, trackId, clipId, laneId, 1.0, "64", 0.5);
+timeline.setClipStep(sequence, trackId, clipId, laneId, 1.5, "67", 2.5);
 ```
+
+Code that keeps one timeline can set it as the edit target once
+(`timeline.setEditTarget(ref)`) and use the id-only overloads
+(`createTrack(name)`, `addBinding(trackId, parameter)`...) as before.
 
 One track can contain several clips, and one clip can contain Step, Curve, Number and
 Piano Roll lanes. Ordinary lanes sharing a binding combine using its automation
@@ -318,12 +326,16 @@ has focus.
 Like canvas history, timeline history is limited to 100 actions and 64 MB, and a
 new edit clears redo. Clearing or loading a timeline resets history. Unrecorded
 external edits invalidate older history rather than overwriting newer data.
-For programmatic edits, wrap related mutations in `beginTimelineEdit()` and
-`endTimelineEdit()`, then use `undoTimelineEdit()` / `redoTimelineEdit()`.
+For programmatic edits, wrap related mutations in `beginTimelineEdit(sequence)`
+and `endTimelineEdit(sequence)`, then use `undoTimelineEdit(sequence)` /
+`redoTimelineEdit(sequence)` (the id-only forms act on the edit target and
+the global settings together).
 
-A macro's timeline keeps its own history. Undo steps whichever timeline was
+Every timeline keeps its own history, and the global transport's settings
+(markers, tempo lane, loop, meter) keep theirs. Undo steps whatever was
 edited last, so an edit made in an unfolded macro track (see below) is undone
-from the timeline it is unfolded in as well.
+from the timeline it is unfolded in as well. A timeline's clock source is
+not undone.
 
 ## Unfolding a macro track
 
@@ -366,16 +378,20 @@ canvas, purple for a macro's own, or its own **Color**), the path to it
 (**Macro 1 > ...**, each step a way back), the timelines navigator (every
 timeline under its canvas, with its clock source, tempo, meter and where its
 tempo comes from; pick one to show it), and the **...** menu: new, duplicate,
-rename, colour, delete (a canvas's default timeline is emptied; its further
-timelines stay), place another timeline here, or open this one **in a new
-window**. A track that places a timeline shows the placed timeline's name
+rename, colour, delete (the timeline goes with its tracks; the window then
+shows the canvas's next timeline, or how to make one), place another
+timeline here, or open this one **in a new window**. A macro's timelines
+are listed with the macro's node menu too (**Edit Timeline** and the rest:
+one item when it has one timeline, a submenu when several, **New
+Timeline...** when none). A track that places a timeline shows the placed timeline's name
 after its own, in that kind's colour. A custom GUI widget's right-click menu
 offers the same **Add to Timeline** items as the parameter in its node.
 
-**Clock source.** The scope bar also holds the shown timeline's player: the
-**Free** checkbox and what it plays on. Off (the default), the timeline is
-**linked to the global transport**: it plays, stops and seeks with it, at the
-global tempo and loop, like any other timeline linked to it. On, it is
+**Clock source.** The preset's global transport belongs to no timeline. The
+scope bar also holds the shown timeline's player: the **Free** checkbox and
+what it plays on. Off (the default), the timeline is **linked to the global
+transport**: it plays, stops and seeks with it, at the global tempo, loop and
+meter, like any other timeline linked to it. On, it is
 **free**: its own transport on the shared clock, played, stopped and seeked
 by itself at its own tempo and loop, while the global transport plays or is
 stopped. A macro's own timeline can also be switched from the macro node's
@@ -408,8 +424,9 @@ the timeline placing it.
   Clock**: it follows tempo changes) or its BPM lane (**Lane**); a dependent
   timeline's host tempo, greyed out (**DEP**). BPM fields apply when you
   press Enter; **Tap** taps it.
-- **Meter**: the global time signature for the main canvas's default
-  timeline while linked to the global transport, else the timeline's own.
+- **Meter**: the global time signature for a timeline linked to the global
+  transport, else the timeline's own (edited in the player's **...** popup
+  too).
 - **Loop**: the global transport's loop, or the timeline's own (free,
   dependent). The ruler edits the same one.
 - **BPM Lane**: shows the BPM lane under the ruler: the global tempo's for a
@@ -425,8 +442,9 @@ is Auto follow it. Its Wave tracks play too (a dependent timeline's only
 while it previews).
 
 **Placing a timeline as clips.** A macro node's **Add to Timeline as Macro
-Track** asks which timeline it goes on (the main canvas's, or one of a macro
-around it) when there is more than one. **Add a timeline track...** (in the
+Track** asks which of the macro's timelines to place (when it has several)
+and which timeline it goes on (the main canvas's, or one of a macro around
+it). **Add a timeline track...** (in the
 same **...** menu) adds a track to the timeline shown whose clips play another
 timeline, exactly like a macro track: move, repeat, stretch, offset and
 reverse the clips. Any timeline of the same canvas, or of a canvas inside it,
@@ -444,18 +462,18 @@ wherever it plays, so overlapping instances on one parameter resolve like any
 two timelines do (below).
 
 **Nodes inside a placed macro.** Normally nodes inside a macro (Time Source
-Auto) follow the timeline around it. With **Nodes inside follow its clips** in
-the macro node's menu, they follow the clip playing it instead: its beat,
+Auto) follow the timeline around it. With **Nodes inside follow its clips**
+(in the macro node's menu, per timeline, and in the timeline's player
+popup), they follow the clips playing that timeline instead: its beat,
 restarting with each clip and repeat, at the clip's stretched tempo, and
-stopped where no clip plays it. A Phasor inside a fill macro then restarts with
-each fill. The choice is saved with the macro's own timeline.
+stopped where no clip plays it. A Phasor inside a fill macro then restarts
+with each fill. One timeline of a macro at most; the choice is saved with
+the timeline.
 
-**Who wins on a parameter.** Free timelines and the other timelines linked
-to the global transport are evaluated before the main canvas's default
-timeline, inner canvases first, so where two drive the same parameter at the
-same moment the outer one's value lands. A parameter that default timeline
-drives is left to its scheduler: another timeline sends it at frame rate
-instead.
+**Who wins on a parameter.** Timelines are evaluated inner canvases first,
+so where two drive the same parameter at the same moment the outer one's
+value lands. The timeline whose value lands last sends the parameter
+through its scheduler; the others send it at frame rate.
 
 **What a timeline can drive.** A timeline drives what is inside its canvas:
 its own nodes and those of the macros in it, never a parameter of a canvas
@@ -471,9 +489,10 @@ own timeline when that plays free), **Clock** (always running at the global
 tempo), or any timeline by name, this canvas's first: the global transport
 for one linked to it, its own transport otherwise (a dependent timeline's
 preview). The choice is saved by id, so renaming a timeline keeps it; a
-deleted one shows *(missing)* and the node holds stopped. **Global
-transport** in that list always follows the global transport, wherever the
-node is. **Beat Transport** has the same choice on the node itself, its
+deleted one shows *(missing)* and the node holds stopped (a node saved
+before timelines had ids of their own still follows its canvas's first
+timeline). **Global transport** in that list always follows the global
+transport, wherever the node is. **Beat Transport** has the same choice on the node itself, its
 **Transport** dropdown: **Global Transport** (the default), then every
 timeline that has a transport, this canvas's first (a dependent timeline's
 is its preview). It reads that transport's beat, tempo, play state, meter and
@@ -487,8 +506,9 @@ first asks which timeline (those of the parameter's canvas and of every canvas
 around it), then which track; with only one timeline it goes straight to the
 tracks. Its **New Timeline** submenu takes a name and creates a timeline with
 the parameter on its first track, on the parameter's canvas or one around it,
-and shows it (a canvas with no timeline yet gets its own). **Remove from
-Timeline** finds the parameter in all of them.
+and shows it (a canvas with no timeline offers only that). **Remove from
+Timeline** finds the parameter in all of them. The **LFO Track** node picks
+a timeline, then one of its tracks.
 
 **Windows.** **Open in a new window** (or **Open its timeline in a new window**
 from a macro node) opens another Timeline window, docked with the first one,

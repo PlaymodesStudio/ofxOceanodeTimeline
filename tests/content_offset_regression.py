@@ -38,7 +38,7 @@ int main() {
     ofxOceanodeParameter<float> gate, level;
     gate.bindParameter(gateValue); level.bindParameter(levelValue);
     for(auto* p : {&gate, &level}) owner.targets[p->getEscapedName()] = p;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     const auto t = model.createTrack("Gates");
     const auto b = model.addBinding(t, gate);

@@ -21,7 +21,7 @@ int main() {
     ofxOceanodeParameter<float> drum; drum.bindParameter(drumValue);
     owner.targets[level.getEscapedName()] = &level;
     owner.targets[drum.getEscapedName()] = &drum;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     auto frame = [&](double seconds) {
         owner.transport->advanceFrameStep(seconds);
@@ -105,7 +105,7 @@ int main() {
     assert(!drumsTransport->getState().isPlaying);
     near(drumsTransport->getState().beatPosition, 0.0);
     near(drumValue, 0.5f);
-    model.playTimeline({"", ""});
+    model.playTimeline(model.getEditTarget());
     for(int i = 0; i < 5; ++i) frame(0.1);
     assert(owner.transport->getState().isPlaying && !drumsTransport->getState().isPlaying);
     model.seekTimeline(drums, 3.0);
@@ -130,7 +130,7 @@ int main() {
     assert(!json.contains("players") && json["timelines"][0]["play"].value("free", false));
     assert(json["play"].contains("tempo") && json["play"].contains("loop")); // the root default's, whole
     ofxOceanodeContainer other;
-    ofxOceanodeTimelineManager restored(&other);
+    TestTimeline restored(&other);
     restored.fromJson(json);
     assert(restored.timelinesOfCanvas("").size() == 2);
     assert(restored.isFree(drums) && restored.clockSourceOf(drums) == ClockSource::Free);
@@ -139,13 +139,13 @@ int main() {
         auto legacy = json;
         legacy["timelines"][0]["play"].erase("free");
         legacy["players"] = ofJson::array({{{"canvas", ""}, {"timeline", id}}});
-        ofxOceanodeTimelineManager fromLegacy(&other);
+        TestTimeline fromLegacy(&other);
         fromLegacy.fromJson(legacy);
         assert(fromLegacy.isFree(drums));
-        // A canvas's default timeline can go too: emptied, the canvas keeps the rest.
-        assert(fromLegacy.timelineExists({}) && !fromLegacy.getTracks().empty());
-        assert(fromLegacy.removeTimeline({}));
-        assert(!fromLegacy.timelineExists({}) && fromLegacy.getTracks().empty());
+        // Any timeline can go: removed, the canvas keeps the rest.
+        assert(fromLegacy.timelineExists({"", "tl_1"}) && !fromLegacy.getTracks().empty());
+        assert(fromLegacy.removeTimeline({"", "tl_1"}));
+        assert(!fromLegacy.timelineExists({"", "tl_1"}) && fromLegacy.findTimeline({"", "tl_1"}) == nullptr);
         assert(fromLegacy.timelinesOfCanvas("").size() == 1 && fromLegacy.allTimelines().size() == 1);
     }
     assert(restored.timelineName(drums) == "Drums");
@@ -176,7 +176,7 @@ int main() {
         assert(model.savePreset(folder.string()));
         ofxOceanodeContainer loadedOwner;
         loadedOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
-        ofxOceanodeTimelineManager loaded(&loadedOwner);
+        TestTimeline loaded(&loadedOwner);
         loaded.setSchedulingEnabled(false);
         assert(loaded.loadPreset(folder.string()));
         assert(loaded.playSettings(drums)->playOnLoad && !loaded.playSettings({"", still})->playOnLoad);
@@ -222,7 +222,8 @@ int main() {
     assert(model.transportFor(drums) == owner.transport);
     assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == owner.transport);
 
-    // ---- The root canvas's default timeline is a timeline like any other ----
+    // ---- The root canvas's first timeline is a timeline like any other ----
+    const auto mainRef = model.getEditTarget();
     {
         // Free, it leaves the global transport: an engine plays it on its own.
         const auto second = model.createClip(mainTrack, "Main clip 2", 2, 2);
@@ -231,23 +232,23 @@ int main() {
         model.setClipNumber(mainTrack, second, secondLane, 0, 0.75f);
         owner.transport->stop(); owner.transport->latchFrameState();
         frame(0.1); near(levelValue, 0.25f);
-        auto mainSettings = *model.playSettings({});
+        auto mainSettings = *model.playSettings(mainRef);
         mainSettings.quantize = 0;
-        model.setPlaySettings({}, mainSettings);
-        model.setFree({}, true);
-        assert(model.clockSourceOf({}) == ClockSource::Free);
+        model.setPlaySettings(mainRef, mainSettings);
+        model.setFree(mainRef, true);
+        assert(model.clockSourceOf(mainRef) == ClockSource::Free);
         frame(0.1);
-        auto mainTransport = model.transportFor({});
+        auto mainTransport = model.transportFor(mainRef);
         assert(mainTransport != nullptr && mainTransport != owner.transport && mainTransport->isDerived());
-        near(model.playSettings({})->bpm, owner.transport->getState().bpm); // it started from the global tempo
-        model.seekTimeline({}, 3.0);
+        near(model.playSettings(mainRef)->bpm, owner.transport->getState().bpm); // it started from the global tempo
+        model.seekTimeline(mainRef, 3.0);
         frame(0.1);
         near(levelValue, 0.75f);
         near(owner.transport->getState().beatPosition, 0.0); // the global transport did not move
         // Linked again: the global transport's position.
-        model.setFree({}, false);
+        model.setFree(mainRef, false);
         frame(0.1);
-        assert(model.transportFor({}) == owner.transport);
+        assert(model.transportFor(mainRef) == owner.transport);
         near(levelValue, 0.25f);
         assert(model.removeClip(mainTrack, second));
     }
@@ -255,12 +256,40 @@ int main() {
     {
         ofxOceanodeContainer blank;
         ofxOceanodeTimelineManager none(&blank);
-        assert(!none.timelineExists({}) && none.allTimelines().empty() && none.timelinesOfCanvas("").empty());
+        assert(!none.timelineExists({"", "tl_1"}) && none.allTimelines().empty() && none.timelinesOfCanvas("").empty());
         const auto first = none.addTimeline("", "First");
-        assert(first.canvas.empty() && first.timeline.empty() && none.timelineExists(first));
+        assert(first.canvas.empty() && first.timeline == "tl_1" && none.timelineExists(first));
         assert(none.timelineName(first) == "First" && none.allTimelines().size() == 1);
         const auto next = none.addTimeline("", "Second");
-        assert(!next.timeline.empty() && none.allTimelines().size() == 2);
+        assert(next.timeline == "tl_2" && none.allTimelines().size() == 2);
+        // A removed timeline's id is never given to another.
+        assert(none.removeTimeline(next) && none.addTimeline("", "Third").timeline == "tl_3");
+        // The name a new one gets, and its own when it has one.
+        assert(none.suggestTimelineName("") == "Timeline 4" && none.timelineName({"", "tl_3"}) == "Third");
+        {
+            // A document written before version 15: its top-level timeline becomes "tl_1",
+            // empty references to it name it, a track placing a macro's then-default one too.
+            ofJson old = none.toJson();
+            old["version"] = 14;
+            old["tracks"] = ofJson::array({{{"id", "timeline_track_9"}, {"name", "Old"},
+                                           {"macroCanvas", "Macro 1"}, {"macroGate", false}}});
+            old["play"] = {{"name", "Main"}, {"created", true}};
+            old.erase("timelines");
+            old["windows"] = ofJson::array({{{"id", 1}, {"canvas", ""}, {"timeline", ""}}});
+            old["players"] = ofJson::array({{{"canvas", ""}, {"timeline", ""}}});
+            old["clipFollow"] = ofJson::array({"Macro 1"});
+            ofxOceanodeTimelineManager upgraded(&blank);
+            upgraded.fromJson(old);
+            assert(upgraded.timelinesOfCanvas("").size() == 1 && upgraded.timelineExists({"", "tl_1"}));
+            assert(upgraded.timelineName({"", "tl_1"}) == "Main" && upgraded.isFree({"", "tl_1"}));
+            const auto* track = upgraded.getTrack(*upgraded.findTimeline({"", "tl_1"}), "timeline_track_9");
+            assert(track != nullptr && track->macroTimeline == "tl_1");
+            assert(upgraded.getTimelineWindows().size() == 1 && upgraded.getTimelineWindows().front().ref.timeline == "tl_1");
+            ofJson empty = {{"version", 14}, {"tracks", ofJson::array()}};
+            ofxOceanodeTimelineManager nothing(&blank);
+            nothing.fromJson(empty);
+            assert(nothing.allTimelines().empty()); // a default timeline never used was none
+        }
     }
     // ---- A timeline placed in another as a clip, stretched ----
     {
@@ -271,7 +300,7 @@ int main() {
         ofxOceanodeParameter<float> hit; hit.bindParameter(hitValue);
         nest.targets[fill.getEscapedName()] = &fill;
         nest.targets[hit.getEscapedName()] = &hit;
-        ofxOceanodeTimelineManager nested(&nest);
+        TestTimeline nested(&nest);
         nested.setSchedulingEnabled(false);
         const auto fillsId = nested.createTimeline("", "Fills");
         const ofxOceanodeTimelineManager::TimelineRef fills{"", fillsId};
@@ -287,7 +316,7 @@ int main() {
         nested.addBindingToLane(*fillSequence, ft, fh, fhl, fb);
         nested.setClipNumber(*fillSequence, ft, fh, fhl, 0, 0.7f);
         // On the main timeline at beat 4, at half speed (2 beats per beat of Fills).
-        auto& mainTimeline = nested.getMainSequence();
+        auto& mainTimeline = nested.editSequence();
         const auto placing = nested.createTimelineTrack(mainTimeline, fills);
         assert(!placing.empty());
         assert(nested.getTrack(mainTimeline, placing)->macroCanvas == ".");
@@ -298,9 +327,9 @@ int main() {
         clip->contentStretch = 2.0;
         clip->repeatContent = true;
         // Neither may play itself, directly or through the other.
-        assert(nested.createTimelineTrack(*fillSequence, {"", ""}).empty());
+        assert(nested.createTimelineTrack(*fillSequence, nested.getEditTarget()).empty());
         assert(nested.createTimelineTrack(*fillSequence, fills).empty());
-        assert(nested.timelineReaches({"", ""}, fills));
+        assert(nested.timelineReaches(nested.getEditTarget(), fills));
         nest.transport->seekToBeat(5.0); // Fills beat 0.5
         nest.transport->play();
         nest.transport->latchFrameState();
@@ -442,9 +471,9 @@ int main() {
         // Saved with which timeline the track plays.
         const auto saved = nested.toJson();
         ofxOceanodeContainer reloadedOwner;
-        ofxOceanodeTimelineManager reloaded(&reloadedOwner);
+        TestTimeline reloaded(&reloadedOwner);
         reloaded.fromJson(saved);
-        const auto* reloadedTrack = reloaded.getTrack(reloaded.getMainSequence(), placing);
+        const auto* reloadedTrack = reloaded.getTrack(reloaded.editSequence(), placing);
         assert(reloadedTrack != nullptr && reloadedTrack->macroCanvas == "." && reloadedTrack->macroTimeline == fillsId);
     }
 
@@ -456,7 +485,7 @@ int main() {
         ofParameter<float> gateValue("Gate", 0, 0, 1);
         ofxOceanodeParameter<float> gate; gate.bindParameter(gateValue);
         clocked.targets[gate.getEscapedName()] = &gate;
-        ofxOceanodeTimelineManager scheduled(&clocked);
+        TestTimeline scheduled(&clocked);
         scheduled.setSchedulingLookaheadAdaptive(false); // the 120 ms window
         std::vector<ofxOceanodeScheduledParameterEvent> events;
         ofxOceanodeScheduling::registerParameterTarget(&gate, &scheduled, [&](const auto& event) {

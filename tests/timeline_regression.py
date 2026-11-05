@@ -47,6 +47,48 @@ public:
 };
 '''
 
+FIXTURE = r'''
+// The fixture's manager: one timeline on the root canvas, the edit target
+// of the id-only overloads (as the main timeline was), named "Timeline 1".
+// toJson mirrors that timeline's content at the top level too, as older
+// files kept it, for the assertions written against them.
+struct TestTimeline : ofxOceanodeTimelineManager {
+    explicit TestTimeline(ofxOceanodeContainer* owner = nullptr) : ofxOceanodeTimelineManager(owner) {
+        setEditTarget(addTimeline("", "Timeline 1"));
+    }
+    ofJson toJson() const {
+        auto json = ofxOceanodeTimelineManager::toJson();
+        if(json.contains("timelines") && !json["timelines"].empty()) {
+            json["tracks"] = json["timelines"][0]["tracks"];
+            json["clipGroups"] = json["timelines"][0]["clipGroups"];
+            json["play"] = json["timelines"][0]["play"];
+        } else {
+            json["tracks"] = ofJson::array();
+            json["clipGroups"] = ofJson::array();
+        }
+        return json;
+    }
+    void fromJson(const ofJson& json) {
+        ofxOceanodeTimelineManager::fromJson(json);
+        const auto refs = timelinesOfCanvas("");
+        setEditTarget(refs.empty() ? TimelineRef{} : refs.front());
+    }
+    void clear() {
+        ofxOceanodeTimelineManager::clear();
+        setEditTarget(addTimeline("", "Timeline 1"));
+    }
+    const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return editSequence().tracks; }
+};
+'''
+
+
+def inject_fixture(cases):
+    # The TestTimeline fixture, after the last include of the test's sources.
+    at = cases.rfind('#include')
+    at = cases.index('\n', at) + 1
+    return cases[:at] + FIXTURE + cases[at:]
+
+
 CASES = r'''
 #include "Managers/ofxOceanodeContainer.h"
 #include "Timeline/ofxOceanodeTimeline.h"
@@ -70,7 +112,7 @@ int main() {
     // Duplicate all editable lane types in place, retaining their entire
     // serialized content/settings but giving each an independent identity.
     {
-        ofxOceanodeTimelineManager copies;
+        TestTimeline copies;
         const auto t = copies.createTrack("Copies");
         for(auto type : {ofxOceanodeTimelineLaneType::Step, ofxOceanodeTimelineLaneType::Curve,
                         ofxOceanodeTimelineLaneType::PianoRoll, ofxOceanodeTimelineLaneType::Number,
@@ -120,7 +162,7 @@ int main() {
         pitch.bindParameter(pitches); gate.bindParameter(gates); velocity.bindParameter(velocities);
         for(auto* parameter : {&pitch, &gate, &velocity})
             partsOwner.targets[parameter->getEscapedName()] = parameter;
-        ofxOceanodeTimelineManager parts(&partsOwner);
+        TestTimeline parts(&partsOwner);
         parts.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         const auto t = parts.createTrack("Parts");
         const auto pb = parts.addBinding(t, pitch), gb = parts.addBinding(t, gate), vb = parts.addBinding(t, velocity);
@@ -234,7 +276,7 @@ int main() {
     // mapping. Cover the inverse beyond its initial search bound as well as
     // an automated tempo map, where a fixed pixels-per-beat formula fails.
     {
-        ofxOceanodeTimelineManager model(nullptr);
+        TestTimeline model(nullptr);
         model.getViewState().pixelsPerSecond = 80.0f;
         ofxOceanodeTimelineEditorView view(model, 120.0f, 4.0, true, 0.25);
         near(view.beatToPixels(2.0), 80.0);
@@ -267,7 +309,7 @@ int main() {
         ofParameter<float> output("Number", 0.0f, -100.0f, 100.0f);
         ofxOceanodeParameter<float> target; target.bindParameter(output);
         numberOwner.targets[target.getEscapedName()] = &target;
-        ofxOceanodeTimelineManager numbers(&numberOwner);
+        TestTimeline numbers(&numberOwner);
         numbers.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         const auto t = numbers.createTrack("Numbers");
         const auto b = numbers.addBinding(t, target);
@@ -320,7 +362,7 @@ int main() {
         target.setDropdownOptions({"Off", "Slow", "Fast", "Strobe"});
         dropdownOwner.targets[target.getEscapedName()] = &target;
         assert(ofxOceanodeTimelineDropdownOptions(target).size() == 4);
-        ofxOceanodeTimelineManager dropdowns(&dropdownOwner);
+        TestTimeline dropdowns(&dropdownOwner);
         const auto t = dropdowns.createTrack("Modes");
         const auto b = dropdowns.addBinding(t, target);
         assert(dropdowns.getBinding(t, b)->laneType == ofxOceanodeTimelineLaneType::Dropdown);
@@ -357,7 +399,7 @@ int main() {
     ofxOceanodeParameter<float> parameter;
     parameter.bindParameter(value);
     owner.targets[parameter.getEscapedName()] = &parameter;
-    ofxOceanodeTimelineManager timeline(&owner);
+    TestTimeline timeline(&owner);
     const auto track = timeline.createTrack("Notes");
     const auto binding = timeline.addBinding(track, parameter);
     const auto clip = timeline.createClip(track, "Phrase", 0.0, 2.0);
@@ -412,7 +454,7 @@ int main() {
 
     // Save/load preserves clip data, groups, bindings, captures and editor state.
     const auto saved = timeline.toJson();
-    ofxOceanodeTimelineManager restored(&owner); restored.fromJson(saved);
+    TestTimeline restored(&owner); restored.fromJson(saved);
     assert(restored.getTracks().size() == timeline.getTracks().size());
     assert(restored.getClipGroups().size() == 1 && restored.getMarkers().size() == 1);
     assert(restored.getTrack(track)->bindings.front().parameterPath == parameter.getEscapedName());
@@ -463,34 +505,15 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             '#include "Timeline/ofxOceanodeTimeline.h"\n'
             'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
-            # Timelines by reference: only the root canvas exists here.
+            # Canvases: only the root exists here, and no macro has timelines.
             'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
             'bool ofxOceanodeTimelineManager::macrosActive(Player&) const { return true; }\n'
             'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
-            '{ return canvas.empty() ? container : nullptr; }\n'
-            'ofxOceanodeTimelineManager::TimelineRef ofxOceanodeTimelineManager::refForCanvas('
-            'const ofxOceanodeContainer&, const std::string& timeline) const { return {std::string(), timeline}; }\n'
-            'ofxOceanodeTimelineSequence* ofxOceanodeTimelineManager::timelineFor(const TimelineRef& ref) {\n'
-            '    if(!ref.canvas.empty()) return nullptr;\n'
-            '    if(ref.timeline.empty()) return &mainSequence;\n'
-            '    for(auto& timeline : mainSequence.timelines) if(timeline->timelineId == ref.timeline) return timeline.get();\n'
-            '    return nullptr;\n}\n'
-            'bool ofxOceanodeTimelineManager::refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const {\n'
-            '    if(&sequence == &mainSequence) { ref = {}; return true; }\n'
-            '    for(const auto& timeline : mainSequence.timelines)\n'
-            '        if(timeline.get() == &sequence) { ref = {std::string(), timeline->timelineId}; return true; }\n'
-            '    return false;\n}\n'
-            'std::string ofxOceanodeTimelineManager::timelineName(const TimelineRef& ref) {\n'
-            '    auto* sequence = timelineFor(ref);\n'
-            '    if(sequence != nullptr && !sequence->play.name.empty()) return sequence->play.name;\n'
-            '    return ref.timeline.empty() ? std::string("Timeline 1") : ref.timeline;\n}\n'
-            'std::vector<ofxOceanodeTimelineManager::TimelineRef> ofxOceanodeTimelineManager::allTimelines() {\n'
-            '    std::vector<TimelineRef> refs;\n'
-            '    if(timelineExists({})) refs.push_back({});\n'
-            '    for(const auto& timeline : mainSequence.timelines) refs.push_back({std::string(), timeline->timelineId});\n'
-            '    return refs;\n}\n')
+            '{ return canvas.empty() || canvas == "Canvas" || canvas == "0" ? container : nullptr; }\n'
+            'ofxOceanodeTimelineCanvas* ofxOceanodeTimelineManager::getMacroTimelines(ofxOceanodeContainer&) { return nullptr; }\n'
+            'std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContainer&) const { return std::string(); }\n')
         cpp = folder / "regression.cpp"
-        cpp.write_text(cases + "\n" + parameter_source[destructor_start:destructor_end])
+        cpp.write_text(inject_fixture(cases) + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
         # The container adapter omits NodeModel RTTI; keep the other UB checks.
         command = [os.environ.get("CXX", "clang++"), "-std=c++17", "-O0", "-g", "-w",

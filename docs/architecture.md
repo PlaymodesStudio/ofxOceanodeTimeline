@@ -10,12 +10,12 @@ An LFO is a self-contained clip with its own control lanes.
 | Component | Owns |
 | --- | --- |
 | `Timeline/ofxOceanodeTimeline.*` | Serializable tracks, clips and lanes; editing operations; the per-frame engine (update, apply, overrides), tempo, markers and loop |
-| `Timeline/ofxOceanodeTimelineSequence.cpp` | `ofxOceanodeTimelineSequence`: one timeline's tracks, clip groups and id counters, with lookups and new ids. The manager keeps the main timeline in `mainSequence`; each editing operation also has an overload taking the Sequence to edit (undo, playback and per-frame caches follow the main timeline only) |
-| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls. Both walks (and the Wave pass) visit `playedSequences()`, each sequence in its own beats through its `ofxOceanodeTimelineTimeMap`: the main timeline through the identity map, then each macro clip repeat's placement of a macro timeline (see Macro timelines below) |
+| `Timeline/ofxOceanodeTimelineSequence.cpp` | `ofxOceanodeTimelineSequence`: one timeline's tracks, clip groups and id counters, with lookups and new ids. Every canvas keeps its timelines in an `ofxOceanodeTimelineCanvas` (the root's `rootTimelines`, a macro's `macroSequences` entry); each editing operation takes the Sequence to edit (an id-only overload acts on an engine's copy, or on the edit target set with `setEditTarget`) |
+| `Timeline/ofxOceanodeTimelineEvaluation.cpp` | Value at a beat (`collectActiveValues`), change beats, piano voicing and mutation, evaluation indexes, play context rolls. Both walks (and the Wave pass) run in an engine and visit `playedSequences()`, each sequence in its own beats through its `ofxOceanodeTimelineTimeMap`: the played timeline through the identity map, then each macro clip repeat's placement of a macro timeline (see Macro timelines below) |
 | `Timeline/ofxOceanodeTimelineScheduler.cpp` | Sample-accurate scheduling ahead of the playhead, corrections and latency offsets |
-| `Timeline/ofxOceanodeTimelinePlayers.cpp` | Timelines by reference (`TimelineRef`: canvas id and timeline id), a canvas's further timelines, timeline tracks (`createTimelineTrack`, `placedTimeline`, cycle checks), `collectMacroSources`, each timeline's clock source, player and engine, time-source registration, timeline windows (see Several timelines below) |
-| `Timeline/ofxOceanodeTimelinePersistence.cpp` | `timeline.json`, clip files and presets |
-| `Timeline/ofxOceanodeTimelineHistory.cpp` | Undo history of timeline edits |
+| `Timeline/ofxOceanodeTimelinePlayers.cpp` | Timelines by reference (`TimelineRef`: canvas id and timeline id), every canvas's timelines (make, remove, duplicate, look up), timeline tracks (`createTimelineTrack`, `placedTimeline`, cycle checks), `collectMacroSources`, each timeline's clock source, player and engine, time-source registration, timeline windows (see Several timelines below) |
+| `Timeline/ofxOceanodeTimelinePersistence.cpp` | `timeline.json`, `sequence.json`, clip files and presets, and the upgrade of documents written before version 15 |
+| `Timeline/ofxOceanodeTimelineHistory.cpp` | Undo: one history per timeline, and the global transport's settings apart |
 | `Timeline/ofxOceanodeTimelineInternal.h` | Helpers shared by those files (`ofxOceanodeTimelineDetail`); not part of the API |
 | `Controls/ofxOceanodeTimelineController.*` | Window layout, arrangement gestures, clip editor shell, dialogs and deferred structural edits |
 | `Editors/ofxOceanodeTimelineClipEditorState.h` | Shell focus, open clip IDs, folding and row layout |
@@ -80,32 +80,35 @@ folder as one row with a summary of its contents, hides what is inside a
 folded folder, and applies header drags and the Arrange menu through
 deferred `moveTrack` requests after the track loop.
 
-Macro timelines: every macro can own a sequence
-(`ofxOceanodeTimelineMacroSequences.cpp`). It is created on first use, its
-binding paths are relative to the macro's container, and it is saved as
-`sequence.json` in the macro's own folder (its preset folder, or its library
-definition, through the core's `loadMacroPreset`/`saveMacroPreset` hooks).
-Copies of a library macro share one sequence; entries follow the macro's
-container through a `weak_ptr`, so a deleted macro's sequence goes with it.
+Macro timelines: every macro canvas can own any number of timelines
+(`ofxOceanodeTimelineMacroSequences.cpp`), none of them special. The
+macro's entry (an `ofxOceanodeTimelineCanvas`) is made empty on first use,
+its timelines' binding paths are relative to the macro's container, and
+they are saved as `sequence.json` in the macro's own folder (its preset
+folder, or its library definition, through the core's
+`loadMacroPreset`/`saveMacroPreset` hooks). Copies of a library macro share
+one list; entries follow the macro's container through a `weak_ptr`, so a
+deleted macro's timelines go with it.
 
-A macro track (`macroCanvas`, the macro's canvas relative to its sequence)
-has macro clips that place the macro's timeline: start, length, repeat,
-tempo (stretch) and content offset as on any clip; the placed timeline
-depends on the host (see Several timelines below). To play them, the
-evaluation index rebuild copies every macro timeline the main timeline
-reaches (`playedMacros`, also through macros inside macros) and makes the
-copies' paths and canvases absolute, so bindings, the apply pass, the
-scheduler and the inspector treat them like main-timeline bindings.
-`playedSequences()` gives each macro clip repeat a placement: a time map,
-a window of main-timeline beats (split where the content offset wraps) and
-its own instance key, with the repeat mixed into the pass so each repeat
-rolls anew. The value walk evaluates one placement per macro timeline per
-beat, and combines the copies' bindings before the main timeline's, so the
-main timeline layers on top with its bindings' modes. Mute, solo and
-latency are read within each track's own sequence (`sequenceOf`); the
-macro tracks' latencies add up around a copy, and a copy's offset wins on a
-path the main timeline also drives. Wave tracks play on the main timeline
-only.
+A macro track (`macroCanvas`, the macro's canvas relative to its sequence,
+and `macroTimeline`, which of its timelines) has macro clips that place that
+timeline: start, length, repeat, tempo (stretch) and content offset as on
+any clip; the placed timeline depends on the host (see Several timelines
+below). To play them, the engine's evaluation index rebuild copies every
+macro timeline the played timeline reaches (`playedMacros`, also through
+macros inside macros) and makes the copies' paths and canvases absolute, so
+bindings, the apply pass, the scheduler and the inspector treat them like
+the played timeline's bindings. `playedSequences()` gives each macro clip
+repeat a placement: a time map, a window of the played timeline's beats
+(split where the content offset wraps) and its own instance key, with the
+repeat mixed into the pass so each repeat rolls anew. The value walk
+evaluates one placement per macro timeline per beat, and combines the
+copies' bindings before the played timeline's, so the host layers on top
+with its bindings' modes. Mute, solo and latency are read within each
+track's own sequence (`sequenceOf`); the macro tracks' latencies add up
+around a copy, and a copy's offset wins on a path the host also drives.
+Wave tracks play on any timeline: each engine keys its voices apart
+(`waveKeyPrefix`, the timeline's time source id).
 
 Inside played macro timelines, gate, toggle and step bindings write their
 rest value wherever no clip of theirs plays (`restWhenInactiveCache`, part
@@ -125,25 +128,29 @@ Encapsulation: when the selected nodes are automated, the core's canvas
 asks whether their tracks stay on the timeline or move into the new macro.
 Either way every timeline's paths follow (`retargetAllParameterPaths`,
 relative within macro timelines). Moving (`encapsulateParameters`) takes the
-tracks driving only the encapsulated nodes out of the canvas's timeline
-(main at the root, else that macro's), rewrites their paths relative to the
-new macro, and puts a macro track with one clip in their place. The core
-keeps the extension's record with the canvas undo step;
-`replayParameterMove` brings the tracks back on undo and moves them again on
-redo (skipping tracks a restored macro already has). Extraction is recorded
-the same way, paths only.
+tracks driving only the encapsulated nodes out of every timeline of the
+canvas, rewrites their paths relative to the new macro, puts them into the
+macro's first timeline (`encapsulationTarget`: made for it, named after the
+macro, when it has none), and leaves a macro track with one clip in each
+source timeline's place. The core keeps the extension's record (one move
+per source timeline) with the canvas undo step; `replayParameterMove`
+brings the tracks back on undo (removing a timeline the move made, once
+empty) and moves them again on redo (skipping tracks a restored macro
+already has). Extraction is recorded the same way, paths only.
 
-The controller edits one sequence at a time, its scope: the root canvas's
-default timeline (`scopes` empty), or any other (opened with "Edit Timeline"
-in the macro node menu or from the timelines navigator, shown on the scope
-bar with the path back). Every model call from the controller and lane editors passes the
-scope's sequence (`scope(timeline)`; editors get it in their context). The
-toolbar drives the timeline shown: its transport (`transportFor`), loop and
-tempo (`shownLoop`, `shownBpmLaneTarget`), as its clock source says (below).
-Markers belong to the root canvas's default timeline; undo steps the
-scope's own history. With no timeline on the shown canvas yet
-(`timelineExists` false), the window shows how to make one
-(`drawEmptyState`).
+The controller edits one timeline at a time, the one shown (`shownRef`,
+`shownSequence`; `{canvas, ""}` while the canvas shown has none): any
+timeline of any canvas, opened from the macro node menu, the timelines
+navigator or a canvas's New Timeline, shown on the scope bar with the macro
+breadcrumb back (`scopes`, the macro canvases from the root down). Every
+model call from the controller and lane editors passes the shown sequence
+(`scope(timeline)`; editors get it in their context). The toolbar drives
+the timeline shown: its transport (`transportFor`), loop, tempo and meter
+(`shownLoop`, `shownBpmLaneTarget`), as its clock source says (below).
+Markers are the global transport's, shown on a timeline following it; undo
+steps the shown timeline's own history, or the global settings'. With no
+timeline on the shown canvas, the window shows how to make one
+(`drawEmptyState`); once the canvas has one, it is shown.
 
 An unfolded macro track (`macroUnfolded`, saved with the track) draws its
 macro's tracks as rows under it (`drawUnfoldedRows` in the controller). Each
@@ -226,31 +233,30 @@ pool contribution with their contributing source lane IDs.
 ## Several timelines and their clock sources
 
 A timeline is named by a `TimelineRef`: its canvas (the canvas id the core
-reports, "" for the root) and its id within that canvas ("" for the canvas's
-default timeline: `mainSequence` at the root, the macro's sequence inside it).
-A default sequence keeps its canvas's further timelines in
-`ofxOceanodeTimelineSequence::timelines` (each with its `timelineId`), so they
-are shared, pruned and saved with it: the root's in `timeline.json`
-(`"timelines"`), a macro's in its `sequence.json`. Undo snapshots of a
-sequence (`sequenceToJson(sequence, false)`) leave them out.
-`timelineFor(ref)`, `refOf(sequence)` and `canvasContainer(canvas)` translate
-(`canvasContainer` finds a canvas with a timeline through the macro sequence
-entries before walking the graph). A further timeline's id comes from the
-canvas's saved `nextTimelineNumber`, so a deleted timeline's id is never given
-to a new one: tracks, windows and time sources that still name it stay
-unbound. An undo step of the main timeline leaves the canvas's further
-timelines and the windows as they are (`timelineEditData` drops them;
-`restoreTimelineState` keeps them), and each further timeline keeps a
-history of its own.
+reports, "" for the root) and its id within that canvas (`tl_N`; an empty
+id names no timeline). Each canvas keeps its timelines in an
+`ofxOceanodeTimelineCanvas` (`timelines`, `nextTimelineNumber`, `base`): the
+root's `rootTimelines`, a macro's `macroSequences` entry (shared by copies of
+a library macro), saved as `"timelines"` in `timeline.json` and in the
+macro's `sequence.json`. `canvasTimelines(canvas)` finds a canvas's list
+(making a macro's entry on first use), `timelineFor(ref)` / `findTimeline`,
+`refOf(sequence)` and `canvasContainer(canvas)` translate (`canvasContainer`
+finds a canvas with timelines through the entries before walking the
+graph). A timeline's id comes from the canvas's saved `nextTimelineNumber`,
+so a removed timeline's id is never given to a new one: tracks, windows and
+time sources that still name it stay unbound.
 
-**No timeline exists until it is made.** A canvas's default timeline (the
-root's included) is there (`timelineExists`) once it was made on purpose
-(`play.created`, set by `addTimeline`) or has tracks; a new project or macro
-has none. `addTimeline` makes a canvas's default timeline first, then further
-ones. Deleting a default timeline (`removeTimeline` with an empty id) empties
-it (tracks, groups, settings) and keeps the canvas's further timelines.
-There is no main timeline: the root canvas's default one is a timeline like
-any other (named "Timeline 1" until renamed).
+**There is no main or default timeline.** A canvas has any number of
+timelines, none special, and a new project or macro has none
+(`timelineExists` is a lookup). `addTimeline` makes one (named, or
+"Timeline N"); `removeTimeline` removes it with its tracks (clips placing it
+elsewhere then play nothing). Documents written before version 15 kept a
+canvas's default timeline at their top level: `upgradeTimelineDocument`
+makes it `tl_1` (when it was made on purpose, used, free or set up), names it
+in the saved windows, players, clip-follow entries and macro tracks that
+referred to it by an empty id, and `updateTimeSources` registers
+`root#default` / `<canvas>#default` as hidden aliases of a canvas's `tl_1`,
+so nodes saved before keep following it.
 
 Timeline tracks generalize macro tracks: `macroCanvas` is the placed
 timeline's canvas relative to the host's (`"."` for the host's own canvas) and
@@ -266,43 +272,61 @@ beat through the clip's stretch (there is no per-clip "own tempo").
 
 Each timeline has `ofxOceanodeTimelinePlaySettings` (`play`): name, clock
 source (`free`), tempo (fixed, ratio of the clock, or a BPM lane), loop,
-meter, launch quantize, play on load, colour, and (a macro's own) whether
-nodes inside follow its clips. The whole struct is saved as the timeline's
-`"play"` (`playSettingsToJson`); older files kept the free set (`"players"`)
-and the clip-following macros (`"clipFollow"`) apart and are read into the
-settings (`legacyFreeTimelines`, applied as each macro's sequence loads).
+meter, launch quantize, play on load, colour, and (a macro's) whether nodes
+inside follow its clips (`nodesFollowClips`, one timeline of a canvas at
+most: `setNodesFollowClips` clears the others). The whole struct is saved as
+the timeline's `"play"` (`playSettingsToJson`); older files kept the free set
+(`"players"`) and the clip-following macros (`"clipFollow"`) apart and are
+read into the settings (`legacyFreeTimelines`, `legacyClipFollowTimelines`,
+applied as each macro's timelines load).
+
+**The global transport is owned by no timeline.** Its tempo, BPM lane,
+loop, meter and markers are the manager's own fields (the preset's, saved at
+the top level of `timeline.json`). A timeline follows it unless it plays
+free or is placed in another.
 
 **Clock sources** (`clockSourceOf`). A timeline placed as clips by any
 timeline (`placedTimelines`, placed to first host, refreshed each update pass
 and after edits through `invalidateEvaluationIndexes`) is **Dependent**,
 whatever its setting. Otherwise it is **Free** (`play.free`) or **Global**
-(the default). The root canvas's default timeline, while Global, is played by
-the manager itself on the root transport as before (`mainPlayedByPrimary`);
-free or dependent, the manager's own walks skip it (`evaluatedSequences`,
-`playedSequences`, `collectMacroSources` return nothing) and an engine plays
-it like any other timeline.
+(the default). `followsGlobalTransport(sequence)` says which.
 
-Every other existing timeline has a **player** (`Player`, `updatePlayers`): a
-transport and an **engine**, a second `ofxOceanodeTimelineManager` with
-`primary` set that evaluates, schedules and applies an absolute-path copy of
-the timeline (`makeAbsolute`, rebuilt when `sequenceSignature` changes) on
-that transport. Global: the transport is the root transport itself
-(`engineSharesRoot`): the engine reads the global tempo, tempo lane and loop
-(adopted from the manager each frame, so lookahead follows the global map)
-and never sets them; its meter is its own. Free: a transport derived from the
-root's clock (`ofxOceanodeTransport::makeDerived`) with the timeline's own
-tempo, loop and meter (`adoptPlaySettings`). Dependent: a derived transport
-too, at its host's tempo now (`hostBpmFor`, through the host's transport) with
-its own loop and meter; it is the timeline's **preview**, run only while it
+**The primary plays nothing itself.** Its `evaluatedSequences()`,
+`playedSequences()` and `collectMacroSources()` return nothing; it keeps
+the timelines, the global transport's settings, the players and the undo
+histories. Every existing timeline has a **player** (`Player`,
+`updatePlayers`): a transport and an **engine**, a second
+`ofxOceanodeTimelineManager` with `primary` set that evaluates, schedules
+and applies an absolute-path copy of the timeline (`playedSequence`,
+`makeAbsolute`, rebuilt when `sequenceSignature` changes) on that
+transport. Global: the transport is the root transport itself
+(`engineSharesRoot`): the engine reads the global tempo, tempo lane, loop
+and meter (adopted from the manager each frame, so lookahead follows the
+global map) and never sets them. Free: a transport derived from the root's
+clock (`ofxOceanodeTransport::makeDerived`) with the timeline's own tempo,
+loop and meter (`adoptPlaySettings`). Dependent: a derived transport too, at
+its host's tempo now (`hostBpmFor`, through the host's transport) with its
+own loop and meter; it is the timeline's **preview**, run only while it
 plays or has a pending action (and once more after it stops), so an idle
 dependent timeline costs nothing per frame (its transport still takes its
 host's tempo). A preview is heard over the timelines placing it: the
-primary's `applyAutomation` applies the previewing engines' values last. Engines read their primary's macro
-sequences (`sequenceEntries`), run inner canvases first and before the main
-timeline, so the outer value lands last; a path the main timeline binds is
-left out of an engine's scheduling (`pathDrivenElsewhere`). A macro's default
-timeline playing free sets its container's transport override, so nodes
-inside follow it; it lets go when it stops being free.
+primary's `applyAutomation` applies the previewing engines' values last.
+Engines read their primary's macro entries (`sequenceEntries`) and run
+inner canvases first, so the outer value lands last; on a path several
+timelines drive, the engine whose value lands last schedules it and the
+others leave it to the frame path (`lastDriverForPath`,
+`pathDrivenElsewhere`). A macro canvas's timeline playing free sets its
+container's transport override, so nodes inside follow it; it lets go when
+it stops being free. Engines share the primary's chance-roll salt, so what
+the arrangement shows as rolled out is what plays.
+
+Runtime state keyed by track and binding ids lives in the engine: live
+overrides and piano key previews (`setLiveOverride(sequence, ...)`,
+`setPianoKeyPreview(sequence, ...)` reach the engine playing the timeline
+through `enginePlaying`; the primary keeps the explicit overrides in
+`liveOverrides` and `reapplyTransients` puts them back after a copy
+rebuild), state capture (`dropStateCaptureOverride`, `noteStateCaptured`),
+driven solos and Wave voices (`releaseWaveClipIfNeeded`, prefixed).
 
 `transportFor(ref)` is the root transport for a Global timeline, a player's
 own otherwise (nullptr until its player runs). `playTimeline`, `stopTimeline`
@@ -323,39 +347,51 @@ precomposition's playhead follows the composition playing it; otherwise its
 transport's beat. Playing a dependent timeline previews it alone and never
 plays its host.
 
-Macros whose own timeline has `nodesFollowClips` get a driven transport
-(`ofxOceanodeTransport::setDrivenState`) as their canvas override:
-`updateClipTransports`, at the end of the primary's `evaluateAutomation`,
-sets it to the first placement of the macro's copy at the playhead of a
-playing timeline (beat, host tempo over the map's ratio, restart when the
-placement changes), the main timeline's or an engine's.
+Macros one of whose timelines has `nodesFollowClips` (`clipFollowTimeline`)
+get a driven transport (`ofxOceanodeTransport::setDrivenState`) as their
+canvas override: `updateClipTransports`, at the end of the primary's
+`evaluateAutomation`, sets it to the first placement of that timeline's copy
+at the playhead of a playing engine (beat, host tempo over the map's ratio,
+restart when the placement changes).
 
-`updateTimeSources` registers every existing timeline with the root transport
-as a time source (`timeSourceId(ref)`: `canvas#timeline`, `root#default` for
-the root canvas's default): the root transport itself for a Global one, the
-player's transport otherwise.
+`updateTimeSources` registers every timeline with the root transport as a
+time source (`timeSourceId(ref)`: `canvas#timeline`, `root#tl_1` for the
+root canvas's first): the root transport itself for a Global one, the
+player's transport otherwise; a canvas's `tl_1` is registered a second time
+as `canvas#default`, hidden, for nodes saved before version 15.
+
+The **undo histories** are the primary's: one per timeline
+(`sequenceHistories`, typed snapshots of its tracks, groups, settings and
+counters: `captureSequence`, `restoreSequence`; the clock source is not
+undone) and the global settings' (`TimelineState`: markers, tempo lane,
+loop, meter, timebase, scheduling; `beginGlobalEdit`...). The controller
+records which was edited last (`undoOrder`, `nullptr` for the global
+settings). The id-only `beginTimelineEdit()` family covers the edit target
+and the global settings in one gesture.
 
 The **metronome** (`setMetronomeEnabled(on, ref)`) follows one timeline's
 transport, whatever its clock source, in that timeline's meter
 (`metronomeRef`); it moves with the timeline's transport when its clock
 source changes and goes with the timeline.
 
-The controller shows any timeline (`enterTimelineScope`; `EditorScope::ref`).
-`drawScopeBar` (`ofxOceanodeTimelineControllerTimelines.cpp`) draws the scope
-bar at the top of the window: a badge with the shown timeline's name, tinting
-the bar (teal for the root canvas's timelines, purple for a macro's own, teal
-for a macro's further ones, or the timeline's own colour), the path of scopes
-back, the timelines navigator (every timeline under its canvas with its clock
-source, tempo, meter and where its tempo comes from) and the actions menu,
-then the player: the **Free** checkbox (disabled, "Dependent on <host>",
-while placed) and the settings popup (loop range, meter, quantize). The
-toolbar below drives the timeline shown: transport buttons (the global
-transport's, or its own with quantize and, when free, Play on load), the
-metronome, position, tempo (the global BPM, its own BPM / clock ratio / lane,
-or its host's greyed out), meter (the global one for the root's default
-timeline while Global, else its own), loop (the global transport's, or its
-own), and the **BPM Lane** toggle (the global lane for a Global timeline, the
-timeline's own for a free one, none for a dependent one), all edited through
+The controller shows any timeline (`enterTimelineScope`, `showCanvas`;
+`shownRef`). `drawScopeBar` (`ofxOceanodeTimelineControllerTimelines.cpp`)
+draws the scope bar at the top of the window: a badge with the shown
+timeline's name, tinting the bar (teal for the root canvas's timelines,
+purple for a macro's, or the timeline's own colour), the macro breadcrumb
+back, the timelines navigator (every timeline under its canvas with its
+clock source, tempo, meter and where its tempo comes from) and the actions
+menu, then the player: the **Free** checkbox (disabled, "Dependent on
+<host>", while placed) and the settings popup (loop range, meter and
+quantize for a timeline on its own transport; for a macro's timeline,
+whether nodes inside follow its clips). The toolbar below drives the
+timeline shown: transport buttons (the global transport's, or its own with
+quantize and, when free, Play on load), the metronome, position, tempo (the
+global BPM, its own BPM / clock ratio / lane, or its host's greyed out),
+meter (the global one for a timeline linked to the global transport, else
+its own), loop (the global transport's, or its own), and the **BPM Lane**
+toggle (the global lane for a Global timeline, the timeline's own for a free
+one, none for a dependent one), all edited through
 `ofxOceanodeTimelineBpmEditor` on an `ofxOceanodeTimelineTempoLane` target.
 BPM fields apply on Enter. Further windows (`getTimelineWindows`, saved as
 `"windows"`) are editors of their own (`windowId` > 0) the main controller

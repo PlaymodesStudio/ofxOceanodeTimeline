@@ -15,7 +15,7 @@ int main() {
     ofParameter<float> levelValue("Level", 0, 0, 1);
     ofxOceanodeParameter<float> level; level.bindParameter(levelValue);
     owner.targets[level.getEscapedName()] = &level;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
 
     // The main timeline: one track driving Level from a clip.

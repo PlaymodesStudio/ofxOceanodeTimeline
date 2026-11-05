@@ -14,7 +14,7 @@ int main() {
     {
         // Values reach their parameter exactly: no 6-digit rounding.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         ofParameter<float> position("Position", 0, 0, 4000000), fine("Fine", 0, 0, 1);
         ofParameter<std::vector<float>> levels("Levels", {0, 0}, {0}, {1});
         ofxOceanodeParameter<float> positionHandle, fineHandle;
@@ -56,7 +56,7 @@ int main() {
         // Notes written in place (as the editors do) are picked up on the
         // next update without an explicit invalidation.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         ofParameter<float> pv("Pitch", 48, 0, 127), gv("Gate", 0, 0, 1);
         ofxOceanodeParameter<float> pitch, gate;
@@ -86,7 +86,7 @@ int main() {
         // The tempo map's inverse agrees with it on every interpolation, and
         // the editor view converts through it.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setBpmAutomationEnabled(true);
         model.getBpmAutomationPoints() = {{2, 90}, {16, 150}, {32, 96}, {48, 132}, {48, 70}, {64, 120}};
         model.getBpmCurveTensions().assign(5, {0.3f, 2.5f});

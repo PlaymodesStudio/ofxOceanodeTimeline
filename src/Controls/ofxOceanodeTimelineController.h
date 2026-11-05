@@ -317,33 +317,49 @@ private:
     std::vector<TrackHeaderRow> trackHeaderRows;
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
-    // ---- Editor scope: which sequence the editor shows and edits ----
-    // Empty: the main timeline. Otherwise macro timelines, outermost first
-    // (the breadcrumb). Entering or leaving clears selections and the clip
-    // editor, whose ids belong to a sequence.
+    // ---- Editor scope: which timeline the editor shows and edits ----
+    // The timeline shown (shownRef, {canvas, ""} while the canvas shown has
+    // none) and the macro canvases from the root down to it, outermost
+    // first (the breadcrumb: `scopes`, empty on the main canvas). Showing
+    // another clears selections and the clip editor, whose ids belong to a
+    // timeline.
     struct EditorScope {
-        ofxOceanodeTimelineSequence* sequence = nullptr;
+        ofxOceanodeTimelineSequence* sequence = nullptr; // the shown one, on the last entry
         ofxOceanodeContainer* container = nullptr; // the macro's (pickers resolve inside it)
         std::string label;
-        ofxOceanodeTimelineManager::TimelineRef ref; // which timeline it is
+        ofxOceanodeTimelineManager::TimelineRef ref; // the shown timeline on the last entry; {canvas, ""} above it
     };
     std::vector<EditorScope> scopes;
+    ofxOceanodeTimelineManager::TimelineRef shownRef;
+    ofxOceanodeTimelineSequence* shownSequence = nullptr; // re-resolved each frame (dropDeadScopes)
+    // The timeline edited: the shown one (a scratch, never shown, while the
+    // canvas shown has none: the editor draws its empty state then).
     ofxOceanodeTimelineSequence& scope(ofxOceanodeTimelineManager& timeline) {
         if(rowScope != nullptr) return *rowScope->sequence;
-        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+        static ofxOceanodeTimelineSequence none;
+        return shownSequence != nullptr ? *shownSequence : none;
     }
     const ofxOceanodeTimelineSequence& scope(const ofxOceanodeTimelineManager& timeline) const {
         if(rowScope != nullptr) return *rowScope->sequence;
-        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+        static const ofxOceanodeTimelineSequence none;
+        return shownSequence != nullptr ? *shownSequence : none;
     }
+    // A macro's canvas is shown (its timeline, or its empty state).
     bool inMacroScope() const { return !scopes.empty(); }
+    // The canvas shown ("" the main canvas).
+    std::string shownCanvas() const { return shownRef.canvas; }
+    // A canvas: its first timeline, else its empty state.
+    void showCanvas(ofxOceanodeTimelineManager& timeline, const std::string& canvas);
     void enterMacroScope(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& macroContainer);
-    // Any timeline: a macro's (as above) or a canvas's further one.
+    // Any timeline of any canvas.
     void enterTimelineScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
-    // The timeline shown (the main one when no scope is open).
-    ofxOceanodeTimelineManager::TimelineRef scopeRef() const {
-        return scopes.empty() ? ofxOceanodeTimelineManager::TimelineRef{} : scopes.back().ref;
-    }
+    void setShown(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref,
+                  ofxOceanodeTimelineSequence* sequence);
+    // A canvas to show on the next draw (leaving a breadcrumb step needs the manager).
+    std::string pendingCanvasToShow;
+    bool pendingCanvasShowRequested = false;
+    // The timeline shown ({canvas, ""}: none on that canvas).
+    ofxOceanodeTimelineManager::TimelineRef scopeRef() const { return shownRef; }
     // ---- Timelines: the list, the shown one's player, further windows ----
     // The scope bar at the top of the window: which timeline is shown (its
     // name on a badge that opens the navigator, the actions menu) and, for
@@ -416,7 +432,7 @@ private:
     float newTimelineColor[3] = {};
     bool newTimelineColorEdited = false;
     bool requestNewTimelinePopup = false;
-    // Back to the scope at `depth` (0: the main timeline).
+    // Back to the canvas at `depth` of the breadcrumb (0: the main canvas).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
     // ---- Unfolded macro tracks: a macro's timeline edited in place ----

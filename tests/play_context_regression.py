@@ -57,7 +57,7 @@ int main() {
         ofParameter<float> value("Value", 0, 0, 1);
         ofxOceanodeParameter<float> target; target.bindParameter(value);
         owner.targets[target.getEscapedName()] = &target;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         std::vector<std::string> sent;
         if(scheduling)
             ofxOceanodeScheduling::registerParameterTarget(&target, &model,

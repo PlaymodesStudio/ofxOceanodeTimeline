@@ -28,7 +28,7 @@ int main() {
     ofxOceanodeParameter<float> gate, pitch;
     gate.bindParameter(gateValue); pitch.bindParameter(pitchValue);
     owner.targets[gate.getEscapedName()] = &gate; owner.targets[pitch.getEscapedName()] = &pitch;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
 
     auto build = [&](double start, double duration, double content, bool repeat, double offset, double stepPattern) {
         const auto t = model.createTrack("Reverse");

@@ -17,7 +17,7 @@ int main() {
     ofParameter<float> output("Value", 0.0f, 0.0f, 1.0f);
     ofxOceanodeParameter<float> target; target.bindParameter(output);
     owner.targets[target.getEscapedName()] = &target;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     assert(!model.undoTimelineEdit() && !model.redoTimelineEdit());
     model.beginTimelineEdit();
     const auto track = model.createTrack("Track");

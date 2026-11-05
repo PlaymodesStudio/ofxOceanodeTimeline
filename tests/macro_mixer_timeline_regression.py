@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
     transport->setDriverMode(TransportDriverMode::FrameStep);
     auto owner = std::make_shared<ofxOceanodeContainer>(registry, types, transport); owner->setCanvasID("Canvas");
     auto& model = ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
     model.setSchedulingEnabled(false);
     using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
     using ClockSource = ofxOceanodeTimelineManager::ClockSource;
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
     auto save = [&](const std::string& folder, bool free, bool playOnLoad, float held) {
         ofxOceanodeContainer c(registry, types, transport); c.setCanvasID("Canvas");
         auto& timeline = ofxOceanodeTimeline::attach(c);
+        timeline.setEditTarget(timeline.addTimeline("", "Timeline 1"));
         auto& out = c.createNode(std::make_unique<router<float>>("f", 0.f, -100.f, 100.f), 1).getNodeModel();
         out.getParameter<std::string>("Name") = "Value";
         auto& node = c.createNode(std::make_unique<Probe>(), 1);
@@ -82,10 +84,11 @@ int main(int argc, char** argv) {
             timeline.addBindingToLane(track, clip, lane, binding);
             timeline.setClipNumber(track, clip, lane, 0, held);
         }
-        auto settings = *timeline.playSettings({});
-        settings.playOnLoad = playOnLoad; settings.quantize = 0; settings.loopEnabled = false; settings.created = true;
-        timeline.setPlaySettings({}, settings);
-        timeline.setFree({}, free);
+        const auto main = timeline.getEditTarget();
+        auto settings = *timeline.playSettings(main);
+        settings.playOnLoad = playOnLoad; settings.quantize = 0; settings.loopEnabled = false;
+        timeline.setPlaySettings(main, settings);
+        timeline.setFree(main, free);
         assert(c.savePreset(folder));
         assert(fs::exists(folder + "/timeline.json"));
     };
@@ -114,7 +117,7 @@ int main(int argc, char** argv) {
     const std::string canvas = graph->container->getCanvasID();
     check(canvas.rfind("MacroMixer/", 0) == 0 && canvas.size() > 10 && canvas.substr(canvas.size() - 10) == " / Macro 1",
           "The graph's canvas nests under the mixer's: " + canvas);
-    const TimelineRef ref{canvas, std::string()};
+    const TimelineRef ref{canvas, "tl_1"};
     check(model.timelineExists(ref) && model.isFree(ref) && model.clockSourceOf(ref) == ClockSource::Free,
           "The preset's timeline.json became the source Macro's free timeline");
     frame(0.05);
@@ -135,7 +138,7 @@ int main(int argc, char** argv) {
     std::string timelineKey;
     for(const auto& window : runtime.sourceWindows(aID))
         if(window.title.rfind("Timeline: ", 0) == 0) timelineKey = window.key;
-    check(timelineKey == "Timeline main", "The source lists its timeline as a window: " + timelineKey);
+    check(timelineKey == "Timeline tl_1", "The source lists its timeline as a window: " + timelineKey);
     check(model.getTimelineWindows().empty(), "...closed until ticked");
     check(runtime.setSourceWindow(aID, timelineKey, true), "Ticked");
     frame(0.05);
@@ -172,7 +175,7 @@ int main(int argc, char** argv) {
     const auto* global = runtime.origin();
     check(global != nullptr && global != graph, "Source g runs in a graph of its own");
     if(global == nullptr) return 1;
-    const TimelineRef gref{global->container->getCanvasID(), std::string()};
+    const TimelineRef gref{global->container->getCanvasID(), "tl_1"};
     check(model.timelineExists(gref) && !model.isFree(gref) && model.clockSourceOf(gref) == ClockSource::Global,
           "g's timeline is linked to the global transport");
     check(model.transportFor(gref) == transport, "...the host's");
@@ -183,14 +186,14 @@ int main(int argc, char** argv) {
     check(near(probeOf(global).level.get(), 0.6f), "g's timeline drives Level along the host transport: " + ofToString(probeOf(global).level.get()));
     transport->stop();
     const auto gID = runtime.importedMacro(g)->id();
-    runtime.setSourceWindow(gID, "Timeline main", true); frame(0.05);
+    runtime.setSourceWindow(gID, "Timeline tl_1", true); frame(0.05);
     check(model.getTimelineWindows().size() == 1, "g's timeline window opens while g plays");
 
     // Clear Playback: the graph goes, and its timeline with it.
     runtime.clear(); frame(0.05);
     check(!model.timelineExists(gref) && model.transportFor(gref) == nullptr, "The timeline went with its graph");
     check(model.getTimelineWindows().empty(), "Clear Playback closed the window the mixer opened");
-    check(runtime.openWindows(gID).count("Timeline main") == 1, "...and kept g's choice for its next activation");
+    check(runtime.openWindows(gID).count("Timeline tl_1") == 1, "...and kept g's choice for its next activation");
     for(const auto& listed : model.allCanvases()) check(listed.rfind("MacroMixer/", 0) != 0, "No mixer canvas is listed any more: " + listed);
 
     if(failures > 0) return 1;

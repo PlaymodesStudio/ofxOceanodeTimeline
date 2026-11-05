@@ -83,7 +83,7 @@ int main() {
     unsigned char* pixels; int w, h;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
     ofxOceanodeContainer owner;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     const auto trackId = model.createTrack("Editors");
     ofxOceanodeTimelineLaneEditors editors;
     ofxOceanodeTimelineLfoEditor lfoEditor;
@@ -107,7 +107,7 @@ int main() {
         auto& lane = *model.getLane(trackId, clipId, laneId);
         const ofxOceanodeTimelineEditorView view(model, 120.0f, 8.0, true, 0.25);
         std::string focusedLane = focused ? laneId : "another-lane";
-        ofxOceanodeTimelineLaneEditorContext context{model, owner, model.getMainSequence(), track, clip, lane, view,
+        ofxOceanodeTimelineLaneEditorContext context{model, owner, model.editSequence(), track, clip, lane, view,
                                                     focusedLane, focused, {}};
         auto& editor = editors.forType(lane.type);
         if(properties) {
@@ -138,7 +138,7 @@ int main() {
         assert(dl->_ClipRectStack.Size == depth + 1);
         dl->PopClipRect();
         const auto before = model.toJson();
-        editor.drawPreview({model, owner, model.getMainSequence(), track, clip, &lane, view,
+        editor.drawPreview({model, owner, model.editSequence(), track, clip, &lane, view,
                             ImVec2(230, 400), ImVec2(870, 450), 230, 870, 0, 2});
         assert(dl->_ClipRectStack.Size == depth);
         assert(model.toJson() == before); // miniatures never mutate the project
@@ -503,8 +503,8 @@ int main() {
         auto& clip = *model.getClip(trackId, lfoClip);
         const ofxOceanodeTimelineEditorView view(model, 120.0f, 8.0, true, 0.25);
         shell.editorTrackId = trackId; shell.editorClipId = lfoClip;
-        lfoEditor.draw(model, model.getMainSequence(), owner, *model.getTrack(trackId), clip, view, shell, 1000, 1);
-        lfoEditor.drawPreview({model, owner, model.getMainSequence(), *model.getTrack(trackId), clip, nullptr, view,
+        lfoEditor.draw(model, model.editSequence(), owner, *model.getTrack(trackId), clip, view, shell, 1000, 1);
+        lfoEditor.drawPreview({model, owner, model.editSequence(), *model.getTrack(trackId), clip, nullptr, view,
                               ImVec2(230, 750), ImVec2(870, 800), 230, 870, 0, 2});
         assert(!lfoEditor.hasPointSelection(lfoClip));
         endFrame();
@@ -619,7 +619,7 @@ int main() {
     monitorFrame(310,214,false);
     monitor->pianoLiveEditSound=true;
     monitorFrame(400,256,true); close(monitorGate,1);
-    pianoEditor.updateMonitoring(model, model.getMainSequence(), ""); model.update(); close(monitorGate,0);
+    pianoEditor.updateMonitoring(model, model.editSequence(), ""); model.update(); close(monitorGate,0);
     monitorFrame(400,256,false);
     const auto monitorSaved=model.toJson(); model.fromJson(monitorSaved);
     assert(model.getLane(trackId,mc,ml)->pianoLiveEditSound);

@@ -39,7 +39,7 @@ int main() {
     std::mt19937 rng(1234);
     auto uniform = [&](double lo, double hi) { return std::uniform_real_distribution<double>(lo, hi)(rng); };
     ofxOceanodeContainer owner;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingLookaheadAdaptive(false);
     model.setSchedulingLookaheadMs(120);
     model.setBpmAutomationEnabled(true);

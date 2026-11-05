@@ -41,24 +41,31 @@ void ofxOceanodeTimelineManager::clearTimelineFlag(const ofxOceanodeTimelineTrac
 
 void ofxOceanodeTimelineManager::refreshTimelineFlag(const std::string& parameterPath) {
     if(container == nullptr) return;
-    const bool isActive = std::any_of(mainSequence.tracks.begin(), mainSequence.tracks.end(), [&](const auto& track) {
-        return std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& binding) {
-            return binding.parameterPath == parameterPath && !binding.bypass;
+    // Bound by any of the root canvas's timelines (their paths are from the
+    // root; a macro's timelines flag what they play from their engines).
+    auto binds = [&](const ofxOceanodeTimelineSequence& sequence) {
+        return std::any_of(sequence.tracks.begin(), sequence.tracks.end(), [&](const auto& track) {
+            return std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& binding) {
+                return binding.parameterPath == parameterPath && !binding.bypass;
+            });
         });
-    });
+    };
+    bool isActive = false;
+    for(const auto& timeline : rootTimelines.timelines) isActive = isActive || binds(*timeline);
     if(auto* parameter = container->findTimelineParameter(parameterPath))
         parameter->setTimelined(isActive);
 }
 
-// Timeline history follows the canvas's gesture transactions and history
-// limits, but owns only timeline data. Replaying it must not reload the patch
-// or rewind live parameter values and the transport.
+// The global history follows the canvas's gesture transactions and history
+// limits, but owns only the global transport's settings: markers, the tempo
+// lane, loop, meter, timebase, scheduling. Replaying it must not reload the
+// patch or rewind live parameter values and the transport. Each timeline
+// keeps a history of its own (below).
 ofJson ofxOceanodeTimelineManager::timelineEditData() const {
     auto state = toJson();
     state.erase("view");
-    // Not part of a main-timeline edit: the canvas's further timelines (each
-    // with its own history), which timelines play free, the windows and the
-    // clip-following macros stay as they are across undo.
+    // The timelines (each with its own history) and the windows stay as
+    // they are across a global undo.
     for(const char* key : {"timelines", "nextTimelineNumber", "windows"}) state.erase(key);
     return state;
 }
@@ -66,54 +73,19 @@ ofJson ofxOceanodeTimelineManager::timelineEditData() const {
 ofxOceanodeTimelineManager::TimelineState ofxOceanodeTimelineManager::captureTimelineEdit() const {
     TimelineState state;
     state.data = timelineEditData();
-    state.tracks = mainSequence.tracks;
-    state.groups = mainSequence.clipGroups;
     state.markers = markers;
     state.tempoPoints = bpmAutomationPoints;
     state.tempoTensions = bpmCurveTensions;
-    state.nextTrack = mainSequence.nextTrackNumber;
-    state.nextBinding = mainSequence.nextBindingNumber;
-    state.nextClip = mainSequence.nextClipNumber;
-    state.nextLane = mainSequence.nextLaneNumber;
-    state.nextGroup = mainSequence.nextGroupNumber;
-    // Include the typed copy and audio caches in the history budget.
     state.bytes = state.data.dump().size() * 2;
-    for(auto& track : state.tracks) {
-        for(auto& binding : track.bindings) {
-            binding.hasLiveOverride = false;
-            binding.liveOverrideValue.clear();
-        }
-        for(const auto& clip : track.clips)
-            state.bytes += clip.waveformPeaks.size() * sizeof(float);
-    }
     return state;
 }
 
 void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state) {
-    // Use in-memory data instead of the preset importer: that importer migrates
-    // and normalizes content and reopens audio files. History must restore exact
-    // editor data, including waveform caches for files no longer on disk.
-    const auto oldView = viewState;
-    // Kept across the restore (see timelineEditData).
-    const auto keptTimelines = mainSequence.timelines;
-    const auto keptPlay = mainSequence.play;
-    const auto keptNextTimeline = mainSequence.nextTimelineNumber;
-    const auto keptWindows = timelineWindows;
-    clear();
-    mainSequence.timelines = keptTimelines;
-    mainSequence.play = keptPlay;
-    mainSequence.nextTimelineNumber = keptNextTimeline;
-    timelineWindows = keptWindows;
-    mainSequence.tracks = state.tracks;
-    mainSequence.clipGroups = state.groups;
+    // In-memory data for what the JSON would round lossily; the timelines
+    // and the windows are not touched.
     markers = state.markers;
     bpmAutomationPoints = state.tempoPoints;
     bpmCurveTensions = state.tempoTensions;
-    mainSequence.nextTrackNumber = state.nextTrack;
-    mainSequence.nextBindingNumber = state.nextBinding;
-    mainSequence.nextClipNumber = state.nextClip;
-    mainSequence.nextLaneNumber = state.nextLane;
-    mainSequence.nextGroupNumber = state.nextGroup;
     const auto& data = state.data;
     timebase = data["timebase"] == "Time" ? ofxOceanodeTimelineTimebase::Time : ofxOceanodeTimelineTimebase::Beats;
     playOnPresetLoad = data["playOnPresetLoad"];
@@ -132,13 +104,61 @@ void ofxOceanodeTimelineManager::restoreTimelineState(const TimelineState& state
     schedulingLookaheadAdaptive = data["scheduling"].value("adaptive", true);
     setTimeSignature(data["timeSignature"]["numerator"], data["timeSignature"]["denominator"]);
     masterGridBeats = data.value("masterGridBeats", 0.25);
-    viewState = oldView;
+    tempoSecondsCacheValid = false;
     syncLoopToTransport();
-    for(const auto& track : mainSequence.tracks)
-        for(const auto& binding : track.bindings) refreshTimelineFlag(binding.parameterPath);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
 }
 
-void ofxOceanodeTimelineManager::beginTimelineEdit() {
+// ---- One timeline's history: typed snapshots of its content ----
+
+ofxOceanodeTimelineManager::SequenceSnapshot ofxOceanodeTimelineManager::captureSequence(const ofxOceanodeTimelineSequence& sequence) const {
+    SequenceSnapshot snapshot;
+    snapshot.data = sequenceContentToJson(sequence);
+    snapshot.tracks = sequence.tracks;
+    snapshot.groups = sequence.clipGroups;
+    snapshot.play = sequence.play;
+    snapshot.nextTrack = sequence.nextTrackNumber;
+    snapshot.nextBinding = sequence.nextBindingNumber;
+    snapshot.nextClip = sequence.nextClipNumber;
+    snapshot.nextLane = sequence.nextLaneNumber;
+    snapshot.nextGroup = sequence.nextGroupNumber;
+    // The typed copy and its audio caches count in the history budget.
+    snapshot.bytes = snapshot.data.dump().size() * 2;
+    for(auto& track : snapshot.tracks) {
+        for(auto& binding : track.bindings) {
+            binding.hasLiveOverride = false;
+            binding.liveOverrideValue.clear();
+        }
+        for(const auto& clip : track.clips) snapshot.bytes += clip.waveformPeaks.size() * sizeof(float);
+    }
+    return snapshot;
+}
+
+void ofxOceanodeTimelineManager::restoreSequence(ofxOceanodeTimelineSequence& sequence, const SequenceSnapshot& snapshot) {
+    // In-memory data instead of the codec: that migrates and normalizes
+    // content and reopens audio files. History restores exact editor data,
+    // including waveform caches for files no longer on disk.
+    invalidateSchedule(); // correct what was queued while the bindings still exist
+    for(const auto& track : sequence.tracks) clearTimelineFlag(track);
+    const bool free = sequence.play.free;
+    sequence.tracks = snapshot.tracks;
+    sequence.clipGroups = snapshot.groups;
+    sequence.play = snapshot.play;
+    sequence.play.free = free; // the clock source is not undone (its player would change hands)
+    sequence.nextTrackNumber = snapshot.nextTrack;
+    sequence.nextBindingNumber = snapshot.nextBinding;
+    sequence.nextClipNumber = snapshot.nextClip;
+    sequence.nextLaneNumber = snapshot.nextLane;
+    sequence.nextGroupNumber = snapshot.nextGroup;
+    invalidateEvaluationIndexes();
+    std::set<std::string> paths;
+    for(const auto& track : sequence.tracks)
+        for(const auto& binding : track.bindings) paths.insert(binding.parameterPath);
+    for(const auto& path : paths) refreshTimelineFlag(path);
+}
+
+void ofxOceanodeTimelineManager::beginGlobalEdit() {
     if(replayingTimelineEdit || pendingTimelineEdit) return;
     pendingTimelineEdit = std::make_unique<TimelineEdit>();
     pendingTimelineEdit->before = captureTimelineEdit();
@@ -149,7 +169,7 @@ void ofxOceanodeTimelineManager::beginTimelineEdit() {
     }
 }
 
-bool ofxOceanodeTimelineManager::endTimelineEdit() {
+bool ofxOceanodeTimelineManager::endGlobalEdit() {
     if(!pendingTimelineEdit) return false;
     auto edit = std::move(pendingTimelineEdit);
     edit->after = captureTimelineEdit();
@@ -185,10 +205,11 @@ void ofxOceanodeTimelineManager::clearTimelineHistory() {
     pendingTimelineEdit.reset();
     timelineUndo.clear();
     timelineRedo.clear();
+    sequenceHistories.clear();
 }
 
 bool ofxOceanodeTimelineManager::stepTimelineHistory(bool backwards) {
-    endTimelineEdit();
+    endGlobalEdit();
     auto& source = backwards ? timelineUndo : timelineRedo;
     auto& destination = backwards ? timelineRedo : timelineUndo;
     if(source.empty()) return false;
@@ -197,9 +218,10 @@ bool ofxOceanodeTimelineManager::stepTimelineHistory(bool backwards) {
         (container->getTransport() == nullptr || container->getTransport()->hasExternalClock() ||
          std::abs(container->getTransportState().bpm - (backwards ? edit.afterBpm : edit.beforeBpm)) > 0.0001f);
     if(tempoMismatch || timelineEditData() != (backwards ? edit.after.data : edit.before.data)) {
-        // An unrecorded edit (e.g. parameter removal from the canvas) must
-        // never be overwritten by restoring an older timeline wholesale.
-        clearTimelineHistory();
+        // An unrecorded change must never be overwritten by an older state.
+        pendingTimelineEdit.reset();
+        timelineUndo.clear();
+        timelineRedo.clear();
         return false;
     }
     const auto& target = backwards ? edit.before : edit.after;
@@ -214,7 +236,9 @@ bool ofxOceanodeTimelineManager::stepTimelineHistory(bool backwards) {
         replayingTimelineEdit = false;
     } catch(...) {
         replayingTimelineEdit = false;
-        clearTimelineHistory();
+        pendingTimelineEdit.reset();
+        timelineUndo.clear();
+        timelineRedo.clear();
         throw;
     }
     destination.push_back(std::move(source.back()));
@@ -222,55 +246,112 @@ bool ofxOceanodeTimelineManager::stepTimelineHistory(bool backwards) {
     return true;
 }
 
-bool ofxOceanodeTimelineManager::undoTimelineEdit() { return stepTimelineHistory(true); }
-bool ofxOceanodeTimelineManager::redoTimelineEdit() { return stepTimelineHistory(false); }
+bool ofxOceanodeTimelineManager::undoGlobalEdit() { return stepTimelineHistory(true); }
+bool ofxOceanodeTimelineManager::redoGlobalEdit() { return stepTimelineHistory(false); }
 
-// A macro sequence's history: JSON snapshots of the sequence alone, one entry
-// per gesture that changed it.
+// ---- The edit target's history, with the global one ----
+
+ofxOceanodeTimelineSequence& ofxOceanodeTimelineManager::editSequence() {
+    if(isEngine()) return playedSequence;
+    auto* sequence = timelineFor(editTarget);
+    return sequence != nullptr ? *sequence : playedSequence;
+}
+
+const ofxOceanodeTimelineSequence& ofxOceanodeTimelineManager::editSequence() const {
+    if(isEngine()) return playedSequence;
+    const auto* sequence = findTimeline(editTarget);
+    return sequence != nullptr ? *sequence : playedSequence;
+}
+
+void ofxOceanodeTimelineManager::beginTimelineEdit() {
+    beginGlobalEdit();
+    beginTimelineEdit(editSequence());
+}
+
+bool ofxOceanodeTimelineManager::endTimelineEdit() {
+    const bool global = endGlobalEdit();
+    return endTimelineEdit(editSequence()) || global;
+}
+
+bool ofxOceanodeTimelineManager::canUndoTimelineEdit() const { return canUndoTimelineEdit(editSequence()) || canUndoGlobalEdit(); }
+bool ofxOceanodeTimelineManager::canRedoTimelineEdit() const { return canRedoTimelineEdit(editSequence()) || canRedoGlobalEdit(); }
+
+bool ofxOceanodeTimelineManager::undoTimelineEdit() {
+    // One gesture may have recorded both: the timeline's step first.
+    const bool sequence = undoTimelineEdit(editSequence());
+    const bool global = undoGlobalEdit();
+    return sequence || global;
+}
+
+bool ofxOceanodeTimelineManager::redoTimelineEdit() {
+    const bool global = redoGlobalEdit();
+    const bool sequence = redoTimelineEdit(editSequence());
+    return sequence || global;
+}
+
+// A timeline's history: snapshots of the timeline alone, one entry per
+// gesture that changed it.
 void ofxOceanodeTimelineManager::beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
-    if(isMainSequence(sequence)) { beginTimelineEdit(); return; }
+    if(replayingTimelineEdit) return;
     auto& history = sequenceHistories[&sequence];
-    if(!history.pending) history.pending = std::make_unique<ofJson>(sequenceToJson(sequence, false));
+    if(!history.pending) history.pending = std::make_unique<SequenceSnapshot>(captureSequence(sequence));
 }
 
 bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
-    if(isMainSequence(sequence)) return endTimelineEdit();
     const auto found = sequenceHistories.find(&sequence);
     if(found == sequenceHistories.end() || !found->second.pending) return false;
     auto& history = found->second;
     auto before = std::move(*history.pending);
     history.pending.reset();
-    auto after = sequenceToJson(sequence, false);
-    if(before == after) return false;
+    auto after = captureSequence(sequence);
+    if(before.data == after.data) return false;
     history.redo.clear();
     history.undo.emplace_back(std::move(before), std::move(after));
-    while(history.undo.size() > 100) history.undo.pop_front();
+    // The entries and their typed copies within a budget.
+    constexpr size_t maxEntries = 100;
+    constexpr size_t maxBytes = 64 * 1024 * 1024;
+    size_t bytes = 0;
+    for(const auto& step : history.undo) bytes += step.first.bytes + step.second.bytes;
+    while(history.undo.size() > maxEntries || (bytes > maxBytes && history.undo.size() > 1)) {
+        bytes -= history.undo.front().first.bytes + history.undo.front().second.bytes;
+        history.undo.pop_front();
+    }
     return true;
 }
 
+bool ofxOceanodeTimelineManager::canUndoTimelineEdit(const ofxOceanodeTimelineSequence& sequence) const {
+    const auto found = sequenceHistories.find(&sequence);
+    return found != sequenceHistories.end() && !found->second.undo.empty();
+}
+
+bool ofxOceanodeTimelineManager::canRedoTimelineEdit(const ofxOceanodeTimelineSequence& sequence) const {
+    const auto found = sequenceHistories.find(&sequence);
+    return found != sequenceHistories.end() && !found->second.redo.empty();
+}
+
 bool ofxOceanodeTimelineManager::undoTimelineEdit(ofxOceanodeTimelineSequence& sequence) {
-    if(isMainSequence(sequence)) return undoTimelineEdit();
     endTimelineEdit(sequence);
     auto& history = sequenceHistories[&sequence];
     if(history.undo.empty()) return false;
     // An unrecorded change since must not be overwritten by an older snapshot.
-    if(sequenceToJson(sequence, false) != history.undo.back().second) { history.undo.clear(); history.redo.clear(); return false; }
-    sequenceFromJson(sequence, history.undo.back().first);
+    if(sequenceContentToJson(sequence) != history.undo.back().second.data) { history.undo.clear(); history.redo.clear(); return false; }
+    replayingTimelineEdit = true;
+    restoreSequence(sequence, history.undo.back().first);
+    replayingTimelineEdit = false;
     history.redo.push_back(std::move(history.undo.back()));
     history.undo.pop_back();
-    invalidateEvaluationIndexes();
     return true;
 }
 
 bool ofxOceanodeTimelineManager::redoTimelineEdit(ofxOceanodeTimelineSequence& sequence) {
-    if(isMainSequence(sequence)) return redoTimelineEdit();
     endTimelineEdit(sequence);
     auto& history = sequenceHistories[&sequence];
     if(history.redo.empty()) return false;
-    if(sequenceToJson(sequence, false) != history.redo.back().first) { history.undo.clear(); history.redo.clear(); return false; }
-    sequenceFromJson(sequence, history.redo.back().second);
+    if(sequenceContentToJson(sequence) != history.redo.back().first.data) { history.undo.clear(); history.redo.clear(); return false; }
+    replayingTimelineEdit = true;
+    restoreSequence(sequence, history.redo.back().second);
+    replayingTimelineEdit = false;
     history.undo.push_back(std::move(history.redo.back()));
     history.redo.pop_back();
-    invalidateEvaluationIndexes();
     return true;
 }

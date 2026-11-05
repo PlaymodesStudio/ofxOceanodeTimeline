@@ -11,7 +11,7 @@ int main() {
     ofxOceanodeParameter<float> pitch,gate,control;
     pitch.bindParameter(pv); gate.bindParameter(gv); control.bindParameter(cv);
     for(auto* p : {&pitch,&gate,&control}) owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     const auto t=model.createTrack("Notes"), other=model.createTrack("Other");
     const auto pb=model.addBinding(t,pitch), gb=model.addBinding(t,gate);
     const auto ng=model.createNoteGroup(t,"Notes",pb,gb,"");

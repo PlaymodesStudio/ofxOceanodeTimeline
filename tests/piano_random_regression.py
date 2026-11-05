@@ -12,7 +12,7 @@ int main() {
     pitch.bindParameter(pitches); gate.bindParameter(gates);
     owner.targets[pitch.getEscapedName()] = &pitch;
     owner.targets[gate.getEscapedName()] = &gate;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     const auto t = model.createTrack("Instrument");
     const auto pb = model.addBinding(t, pitch), gb = model.addBinding(t, gate);

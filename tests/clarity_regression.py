@@ -18,7 +18,7 @@ int main() {
     ofParameter<float> value("Output", 0.1f, 0.0f, 1.0f);
     ofxOceanodeParameter<float> target; target.bindParameter(value);
     owner.targets[target.getEscapedName()] = &target;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     auto t = model.createTrack("Main");
     auto b = model.addBinding(t, target, ofxOceanodeTimelineAutomationMode::Add);
     auto c = model.createClip(t, "Phrase", 0, 4);
@@ -103,7 +103,7 @@ int main() {
         pitchTarget.bindParameter(pitches); gateTarget.bindParameter(gates);
         owner.targets[pitchTarget.getEscapedName()] = &pitchTarget;
         owner.targets[gateTarget.getEscapedName()] = &gateTarget;
-        ofxOceanodeTimelineManager pianoModel(&owner);
+        TestTimeline pianoModel(&owner);
         auto pt = pianoModel.createTrack("Instrument");
         auto pb = pianoModel.addBinding(pt, pitchTarget), gb = pianoModel.addBinding(pt, gateTarget);
         auto pc = pianoModel.createClip(pt, "Parts", 0, 4);

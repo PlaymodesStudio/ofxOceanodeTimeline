@@ -21,7 +21,6 @@ using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
 
 namespace {
 bool rootCanvas(const std::string& canvas) { return canvas.empty() || canvas == "Canvas" || canvas == "0"; }
-bool isMain(const TimelineRef& ref) { return rootCanvas(ref.canvas) && ref.timeline.empty(); }
 bool sameRef(TimelineRef a, TimelineRef b) {
     if(rootCanvas(a.canvas)) a.canvas.clear();
     if(rootCanvas(b.canvas)) b.canvas.clear();
@@ -33,40 +32,49 @@ const char* kQuantizeLabels[] = {"Now", "Next beat", "Next bar"};
 ofxOceanodeTimelineController::ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> container, int window)
 : ofxOceanodeBaseController("Timeline " + std::to_string(window)), container(std::move(container)), windowId(window) {}
 
-void ofxOceanodeTimelineController::enterTimelineScope(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
-    if(isMain(ref)) { leaveScopesTo(0); return; }
+void ofxOceanodeTimelineController::enterTimelineScope(ofxOceanodeTimelineManager& timeline, const TimelineRef& given) {
+    const auto ref = ofxOceanodeTimelineManager::normalizedRef(given);
+    if(ref.timeline.empty()) { showCanvas(timeline, ref.canvas); return; }
     auto* sequence = timeline.timelineFor(ref);
-    auto* canvas = timeline.canvasContainer(ref.canvas);
-    if(sequence == nullptr || canvas == nullptr) return;
-    // Already shown.
-    if(!scopes.empty() && sameRef(scopes.back().ref, ref)) return;
-    // A canvas's further timeline replaces the stack (a macro's: on top of
-    // the macro's own timeline).
-    if(!scopes.empty() && !scopes.back().ref.timeline.empty()) leaveScopesTo(scopes.size() - 1);
-    if(rootCanvas(ref.canvas)) leaveScopesTo(0);
-    else enterMacroScope(timeline, *canvas);
-    if(ref.timeline.empty()) return;
-    scopes.push_back({sequence, canvas, timeline.timelineName(ref), ref});
+    if(sequence == nullptr || timeline.canvasContainer(ref.canvas) == nullptr) return;
+    if(sequence == shownSequence && shownRef == ref) return; // already shown
+    setShown(timeline, ref, sequence);
+}
+
+void ofxOceanodeTimelineController::setShown(ofxOceanodeTimelineManager& timeline, const TimelineRef& given,
+                                             ofxOceanodeTimelineSequence* sequence) {
+    const auto ref = ofxOceanodeTimelineManager::normalizedRef(given);
+    shownRef = ref;
+    shownSequence = sequence;
+    // The breadcrumb: the macro canvases from the root down to the one shown.
+    scopes.clear();
+    for(size_t at = 0; !ref.canvas.empty();) {
+        const size_t next = ref.canvas.find(" / ", at);
+        const bool last = next == std::string::npos;
+        const std::string prefix = ref.canvas.substr(0, next);
+        if(auto* macro = timeline.canvasContainer(prefix))
+            scopes.push_back({last ? sequence : nullptr, macro, timeline.getMacroSequenceLabel(*macro),
+                              last ? ref : TimelineRef{prefix, std::string()}});
+        if(last) break;
+        at = next + 3;
+    }
     resetEditorForScope();
 }
 
 // ---- The scope bar: which timeline this window shows ----
-// One row at the top of the window, tinted by the kind of timeline shown:
-// its name on a badge that opens the navigator (every timeline as a tree),
-// its actions, then its player (its clock source). The toolbar below drives
-// the timeline shown: its own transport, or the global one it is linked to.
+// One row at the top of the window, tinted by the kind of canvas the
+// timeline shown belongs to: its name on a badge that opens the navigator
+// (every timeline as a tree), its actions, then its player (its clock
+// source). The toolbar below drives the timeline shown: its own transport,
+// or the global one it is linked to.
 namespace {
 using ClockSource = ofxOceanodeTimelineManager::ClockSource;
-enum class ScopeKind { Root, Macro, Further };
-ScopeKind scopeKindOf(const TimelineRef& ref) {
-    if(rootCanvas(ref.canvas)) return ScopeKind::Root;
-    return ref.timeline.empty() ? ScopeKind::Macro : ScopeKind::Further;
-}
+enum class ScopeKind { Root, Macro };
+ScopeKind scopeKindOf(const TimelineRef& ref) { return rootCanvas(ref.canvas) ? ScopeKind::Root : ScopeKind::Macro; }
 ImU32 scopeColor(ScopeKind kind) {
     switch(kind) {
         case ScopeKind::Root: return IM_COL32(50, 165, 150, 255);
         case ScopeKind::Macro: return IM_COL32(160, 100, 210, 255);
-        case ScopeKind::Further: return IM_COL32(50, 165, 150, 255);
     }
     return IM_COL32(120, 120, 120, 255);
 }
@@ -88,8 +96,7 @@ std::string scopeExplanation(ScopeKind kind, ClockSource source) {
     std::string what;
     switch(kind) {
         case ScopeKind::Root: what = "A timeline of the main canvas."; break;
-        case ScopeKind::Macro: what = "This macro's own timeline, saved with the macro."; break;
-        case ScopeKind::Further: what = "A further timeline of this macro, saved with the macro."; break;
+        case ScopeKind::Macro: what = "A timeline of this macro, saved with the macro."; break;
     }
     return what + "\n" + clockSourceExplanation(source);
 }
@@ -227,25 +234,14 @@ void ofxOceanodeTimelineController::suggestNewTimelineDefaults(ofxOceanodeTimeli
     if(newTimelineOwners.empty()) return;
     const std::string& canvas = newTimelineOwners[newTimelineOwner];
     std::string name;
-    ImU32 color = scopeColor(ScopeKind::Further);
+    ImU32 color = scopeColor(canvas.empty() ? ScopeKind::Root : ScopeKind::Macro);
     if(newTimelineRequest.duplicate) {
         const auto& source = newTimelineRequest.duplicateOf;
         name = timeline.timelineName(source) + " copy";
         ofColor sourceColor;
         if(timeline.customTimelineColor(source, sourceColor)) color = IM_COL32(sourceColor.r, sourceColor.g, sourceColor.b, 255);
-    } else if(!timeline.timelineExists({canvas, std::string()})) {
-        // A canvas with no timeline yet: this one becomes its own.
-        auto* macro = canvas.empty() ? nullptr : timeline.canvasContainer(canvas);
-        name = macro != nullptr ? timeline.getMacroSequenceLabel(*macro) : canvas.empty() ? "Timeline 1" : canvas;
-        color = scopeColor(canvas.empty() ? ScopeKind::Root : ScopeKind::Macro);
     } else {
-        // What createTimeline would call it (findTimeline: nothing made yet).
-        const auto* base = timeline.findTimeline({canvas, std::string()});
-        uint64_t number = base != nullptr ? std::max<uint64_t>(base->nextTimelineNumber, 2) : 2;
-        if(base != nullptr)
-            while(std::any_of(base->timelines.begin(), base->timelines.end(), [&](const auto& other) {
-                return other->timelineId == "tl_" + std::to_string(number); })) ++number;
-        name = "Timeline " + std::to_string(number);
+        name = timeline.suggestTimelineName(canvas); // what createTimeline would call it
     }
     if(!newTimelineNameEdited) std::snprintf(newTimelineName, sizeof(newTimelineName), "%s", name.c_str());
     if(!newTimelineColorEdited) {
@@ -305,8 +301,6 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
                                     : "The canvas it belongs to: the main canvas or a macro's.\n"
                                       "A timeline drives what is inside its canvas.");
     const std::string& canvas = newTimelineOwners[newTimelineOwner];
-    if(!duplicate && !canvas.empty() && !timeline.timelineExists({canvas, std::string()}))
-        ImGui::TextDisabled("It becomes this macro's own timeline (it has none yet).");
     const bool named = newTimelineName[0] != '\0';
     const bool ownerThere = timeline.canvasContainer(canvas) != nullptr;
     if(!ownerThere) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.4f, 1.0f), "That canvas is gone.");
@@ -324,7 +318,7 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
         } else {
             made = timeline.addTimeline(canvas, newTimelineName);
         }
-        if(!made.canvas.empty() || !made.timeline.empty()) { // {}: not made
+        if(!made.timeline.empty()) { // {}: not made (the canvas is gone)
             if(newTimelineColorEdited) {
                 if(const auto* play = timeline.playSettings(made)) {
                     auto settings = *play;
@@ -373,7 +367,7 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
     // the one around it: the macros between them too, so the nesting is
     // the canvases' own.
     const auto refs = timeline.allTimelines();
-    std::map<std::string, std::vector<TimelineRef>> timelinesOf; // in allTimelines' order: the default first
+    std::map<std::string, std::vector<TimelineRef>> timelinesOf; // in allTimelines' order
     std::map<std::string, std::vector<std::string>> childrenOf;
     std::set<std::string> known{std::string()};
     for(const auto& ref : refs) {
@@ -409,10 +403,9 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
     auto timelineRow = [&](const TimelineRef& ref) {
         const ClockSource source = timeline.clockSourceOf(ref);
         const bool free = source == ClockSource::Free;
-        // The global timeline (the main canvas's default, linked to the
-        // global transport) keeps its tempo and meter on the manager.
+        // Linked to the global transport: its tempo, loop and meter are the
+        // global ones, on the manager.
         const bool global = source == ClockSource::Global;
-        const bool globalDefault = global && isMain(ref);
         const auto* play = timeline.playSettings(ref);
         auto transport = timeline.transportFor(ref);
         const bool isPlaying = transport != nullptr && transport->getState().isPlaying;
@@ -462,7 +455,7 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
         ImGui::TextColored(transport != nullptr ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : dim, "%.1f", bpm);
 
         ImGui::TableSetColumnIndex(3);
-        if(globalDefault) ImGui::Text("%d/%d", timeline.getTimeSignatureNumerator(), timeline.getTimeSignatureDenominator());
+        if(global) ImGui::Text("%d/%d", timeline.getTimeSignatureNumerator(), timeline.getTimeSignatureDenominator());
         else if(play != nullptr) ImGui::Text("%d/%d", play->timeSignatureNumerator, play->timeSignatureDenominator);
 
         // Where its tempo comes from.
@@ -545,7 +538,7 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             std::snprintf(timelineNameBuffer, sizeof(timelineNameBuffer), "%s", timeline.timelineName(shown).c_str());
             requestTimelineRename = true;
         }
-        // The scope bar's colour for it (the main timeline's too).
+        // The scope bar's colour for it.
         if(ImGui::BeginMenu("Color")) {
             const ImVec4 current = ImGui::ColorConvertU32ToFloat4(timelineAccent(timeline, shown));
             float rgb[3] = {current.x, current.y, current.z};
@@ -560,12 +553,11 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
         }
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, timeline.timelineExists(shown))) {
             const auto removed = shown;
-            if(!shown.timeline.empty() && !scopes.empty()) leaveScopesTo(scopes.size() - 1);
-            else resetEditorForScope();
             timeline.removeTimeline(removed);
+            showCanvas(timeline, canvas); // the canvas's next timeline, or its empty state
         }
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Deletes its tracks and settings. Clips placing it elsewhere are left empty.");
+            ImGui::SetTooltip("Deletes it with its tracks. Clips placing it elsewhere then play nothing.");
         ImGui::Separator();
         // Timelines of this canvas or of canvases inside it, never one that plays this one.
         if(ImGui::BeginMenu("Add a timeline track...", timeline.timelineExists(shown))) {
@@ -652,9 +644,22 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
     bool changed = false;
     ImGui::TextDisabled("%s", timeline.timelineName(ref).c_str());
     ImGui::Separator();
-    // The global timeline's loop and meter are the global ones, in the toolbar.
-    if(!shownOwnsTransport(timeline) && isMain(ref)) {
-        ImGui::TextDisabled("Its loop and meter are the global transport's (in the toolbar).");
+    // A macro's timeline that does not play on its own: whether the nodes
+    // inside the macro follow the clips playing it.
+    auto drawFollowClips = [&]() {
+        if(rootCanvas(ref.canvas) || timeline.clockSourceOf(ref) == ClockSource::Free) return;
+        bool follows = timeline.nodesFollowClips(ref);
+        if(ImGui::Checkbox("Nodes inside follow its clips", &follows)) timeline.setNodesFollowClips(ref, follows);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Nodes inside the macro set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
+                              "the macro clip playing this timeline: its beat, restarting with each clip and repeat,\n"
+                              "at its stretched tempo. One timeline of the macro at most. Off: they follow the\n"
+                              "timeline around the macro.");
+    };
+    // Linked to the global transport: its tempo, loop and meter are the global ones, in the toolbar.
+    if(!shownOwnsTransport(timeline)) {
+        ImGui::TextDisabled("Its tempo, loop and meter are the global transport's (in the toolbar).");
+        drawFollowClips();
         ImGui::EndPopup();
         return;
     }
@@ -700,6 +705,7 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("When its Play and Stop take effect on its own transport.");
     }
     if(changed) timeline.setPlaySettings(ref, settings);
+    drawFollowClips();
     ImGui::EndPopup();
 }
 
@@ -765,7 +771,7 @@ void ofxOceanodeTimelineController::drawTimelineWindows() {
         const std::string title = window.hostLabel.empty()
             ? "Timeline: " + timeline.timelineName(window.ref) + "###timelineWindow" + std::to_string(window.id)
             : "Timeline: " + timeline.timelineName(window.ref) + " (" + window.hostLabel + ")###timelineWindow_" +
-              window.hostLabel + "_" + (window.ref.timeline.empty() ? std::string("main") : window.ref.timeline);
+              window.hostLabel + "_" + window.ref.timeline;
         bool open = true;
         if(dock != 0) ImGui::SetNextWindowDockID(dock, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(900.0f, 420.0f), ImGuiCond_FirstUseEver);
@@ -904,9 +910,9 @@ void ofxOceanodeTimelineController::drawEmptyState(ofxOceanodeTimelineManager& t
     const std::string canvas = rootCanvas(shown.canvas) ? std::string() : shown.canvas;
     ImGui::Dummy(ImVec2(0.0f, 24.0f));
     ImGui::Indent(24.0f);
-    ImGui::TextUnformatted(canvas.empty() ? "No timeline on the main canvas yet." : "No timeline on this macro's canvas yet.");
-    ImGui::TextDisabled("Make one here, from a canvas's right-click menu (New Timeline), or from a parameter's\n"
-                        "right-click menu (Add to Timeline > New Timeline...). Nothing is made until you do.");
+    ImGui::TextUnformatted(canvas.empty() ? "No timeline on the main canvas." : "No timeline on this macro's canvas.");
+    ImGui::TextDisabled("Make one here, from the canvas's right-click menu (New Timeline), or from a parameter's\n"
+                        "right-click menu (Add to Timeline > New Timeline...). A canvas can have any number.");
     ImGui::Spacing();
     if(ImGui::Button("New timeline...")) {
         ofxOceanodeTimelineManager::NewTimelineRequest request;

@@ -17,7 +17,7 @@ int main() {
     ofxOceanodeParameter<float> steam, mix;
     steam.bindParameter(steamValue); mix.bindParameter(mixValue);
     for(auto* p : {&steam,&mix}) owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     auto soloed=[&](const std::string& id){ return model.isTrackSoloed(*model.getTrack(id)); };
     auto frame=[&](double beat){ owner.transport->seekToBeat(beat); model.update(); model.applyAutomation(); };
 

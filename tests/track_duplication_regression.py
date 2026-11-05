@@ -15,7 +15,7 @@ int main() {
     ofParameter<float> pitch("Pitch",60,0,127), gate("Gate",0,0,1);
     ofxOceanodeParameter<float> p,g; p.bindParameter(pitch);g.bindParameter(gate);
     owner.targets[p.getEscapedName()]=&p;owner.targets[g.getEscapedName()]=&g;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     const auto t=model.createTrack("Instrument"), next=model.createTrack("Next");
     const auto pb=model.addBinding(t,p),gb=model.addBinding(t,g);
     const auto group=model.createNoteGroup(t,"Notes",pb,gb,"");model.setNoteGroupVoices(t,group,3);

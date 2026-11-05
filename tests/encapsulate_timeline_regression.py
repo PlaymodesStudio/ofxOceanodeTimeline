@@ -37,6 +37,7 @@ int main(int, char**) {
     auto types = std::make_shared<ofxOceanodeTypesRegistry>();
     auto owner = std::make_shared<ofxOceanodeContainer>(registry, types); owner->setCanvasID("Canvas");
     auto& model = ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
     model.setSchedulingEnabled(false);
     auto& inNode = owner->createNode(std::make_unique<Probe>(), 1);
     auto& outNode = owner->createNode(std::make_unique<Probe>(), 2);
@@ -90,14 +91,15 @@ int main(int, char**) {
     macroNode = owner->encapsulateNodes({node}, "Moved", true);
     check(macroNode != nullptr, "Encapsulated with the move");
     macro = static_cast<ofxOceanodeNodeMacro*>(&macroNode->getNodeModel());
-    auto* macroSequence = model.getMacroSequence(*macro->getContainer());
+    auto* macroList = model.getMacroTimelines(*macro->getContainer());
+    auto* macroSequence = macroList != nullptr && !macroList->timelines.empty() ? macroList->timelines.front().get() : nullptr;
     check(model.getTrack(inside) == nullptr, "Moved: the track left the main timeline");
     check(macroSequence && macroSequence->tracks.size() == 1 && macroSequence->tracks[0].id == inside &&
           macroSequence->tracks[0].bindings[0].parameterPath == "Probe_1/Level", "...into the macro's timeline, relative to it");
     check(model.getTrack(both) != nullptr, "A track also driving a node outside stays");
     std::string macroTrack;
-    for(const auto& track : model.getTracks()) if(track.isMacroTrack()) macroTrack = track.id;
-    check(!macroTrack.empty() && model.getTracks().front().id == macroTrack, "A macro track takes its place");
+    for(const auto& track : model.editSequence().tracks) if(track.isMacroTrack()) macroTrack = track.id;
+    check(!macroTrack.empty() && model.editSequence().tracks.front().id == macroTrack, "A macro track takes its place");
     const auto* macroClip = macroTrack.empty() ? nullptr : &model.getTrack(macroTrack)->clips.at(0);
     check(macroClip && macroClip->startBeat == 0.0 && std::abs(macroClip->durationBeats - 8.0) < 1e-9, "...with one clip to the end of the moved clips");
     insideProbe()->level = 0.0f;
@@ -108,9 +110,10 @@ int main(int, char**) {
     check(owner->redoCanvasEdit(), "Redo the move");
     macro = nullptr;
     for(auto* n : owner->getAllModules()) if(auto* m = dynamic_cast<ofxOceanodeNodeMacro*>(&n->getNodeModel())) macro = m;
-    macroSequence = macro ? model.getMacroSequence(*macro->getContainer()) : nullptr;
+    macroList = macro ? model.getMacroTimelines(*macro->getContainer()) : nullptr;
+    macroSequence = macroList != nullptr && !macroList->timelines.empty() ? macroList->timelines.front().get() : nullptr;
     size_t macroTracks = 0;
-    for(const auto& track : model.getTracks()) macroTracks += track.isMacroTrack() ? 1 : 0;
+    for(const auto& track : model.editSequence().tracks) macroTracks += track.isMacroTrack() ? 1 : 0;
     check(model.getTrack(inside) == nullptr && macroTracks == 1 && macroSequence && macroSequence->tracks.size() == 1,
           "Redo: moved again, nothing doubled");
     insideProbe()->level = 0.0f;

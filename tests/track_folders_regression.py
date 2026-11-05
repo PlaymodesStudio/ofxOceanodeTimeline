@@ -15,7 +15,7 @@ int main() {
     ofxOceanodeParameter<float> a, b, c;
     a.bindParameter(av); b.bindParameter(bv); c.bindParameter(cv);
     for(auto* p : {&a,&b,&c}) owner.targets[p->getEscapedName()] = p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     auto order = [&]() {
         std::string out;
         for(const auto& track : model.getTracks()) out += (out.empty() ? "" : " ") + track.name;
@@ -47,7 +47,7 @@ int main() {
     const auto kit = model.createFolder("Kit", drums);
     assert(model.moveTrack(tc, kit, 0));
     assert(order() == "Drums A Kit C B");
-    assert(model.getMainSequence().depthOf(*model.getTrack(tc)) == 2);
+    assert(model.editSequence().depthOf(*model.getTrack(tc)) == 2);
     assert(!model.moveTrack(drums, kit, 0)); // never into itself
     assert(!model.moveTrack(drums, drums, 0));
     assert(!model.moveTrack(ta, tb, 0)); // only into folders
