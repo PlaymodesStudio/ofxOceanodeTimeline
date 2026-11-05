@@ -383,7 +383,7 @@ private:
     void drawTimelinesTree(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& shown);
     void drawTimelineRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
-    void drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    void drawPlayerSettings(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     // The main controller draws the timeline windows (before the core's windows).
     void drawTimelineWindows();

@@ -520,11 +520,26 @@ void ofxOceanodeTimelineController::drawTimelinesTree(ofxOceanodeTimelineManager
     if(picked) ImGui::CloseCurrentPopup();
 }
 
-// The shown timeline's actions, behind a "..." button.
+// The shown timeline's actions, behind a hamburger (three lines) button.
 void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManager& timeline) {
     const auto shown = scopeRef();
-    if(ImGui::Button("...##timelineActions")) ImGui::OpenPopup("##timelineActionsMenu");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, delete, place, open in a window");
+    // A square button, its icon drawn over it: three lines, in the text colour.
+    const float side = ImGui::GetFrameHeight();
+    if(ImGui::Button("##timelineActions", ImVec2(side, side))) ImGui::OpenPopup("##timelineActionsMenu");
+    {
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const float lineWidth = std::round(side * 0.5f);
+        const float left = std::round(min.x + (side - lineWidth) * 0.5f);
+        const float gap = std::round(side * 0.2f);
+        const float top = std::round(min.y + (side - 2.0f * gap) * 0.5f);
+        const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text);
+        auto* dl = ImGui::GetWindowDrawList();
+        for(int i = 0; i < 3; ++i) {
+            const float y = top + gap * i;
+            dl->AddLine(ImVec2(left, y), ImVec2(left + lineWidth, y), ink, 1.0f);
+        }
+    }
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, playback settings, delete, place, open in a window");
     if(ImGui::BeginPopup("##timelineActionsMenu")) {
         const std::string canvas = rootCanvas(shown.canvas) ? std::string() : shown.canvas;
         // Both through the New Timeline dialog (name, colour, owner), shown in this window.
@@ -560,6 +575,11 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
                 timeline.resetTimelineColor(shown);
             ImGui::EndMenu();
         }
+        if(ImGui::BeginMenu("Playback settings", timeline.timelineExists(shown))) {
+            drawPlayerSettings(timeline, shown);
+            ImGui::EndMenu();
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop range, time signature and quantize");
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, timeline.timelineExists(shown))) {
             const auto removed = shown;
             timeline.removeTimeline(removed); // its windows close with it
@@ -596,60 +616,70 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
     }
 }
 
-// The shown timeline's player, compact: its clock source (Free, else linked
-// to the global transport; Dependent while another timeline places it) and a
-// settings popup for the rest (loop range, meter, quantize). The toolbar
-// below drives it.
+// The shown timeline's clock source as one dropdown: Free or Global
+// transport, the user's choice; Dependent set by the app while another
+// timeline places it (as clips of a timeline track, or carried along with
+// its macro), shown locked until that placement goes. The toolbar below
+// drives it; the rest of its playback settings (loop range, meter,
+// quantize) are in the "..." menu.
 void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
     const auto* current = timeline.playSettings(ref);
     if(current == nullptr) return;
     const ClockSource source = timeline.clockSourceOf(ref);
     const bool dependent = source == ClockSource::Dependent;
-    bool free = source == ClockSource::Free;
+    const bool free = source == ClockSource::Free;
+    TimelineRef host;
+    const std::string hostName = dependent ? (timeline.placedBy(ref, host) ? timeline.timelineName(host) : std::string("another timeline"))
+                                           : std::string();
+    static const char* const kFreeLabel = "Free";
+    static const char* const kGlobalLabel = "Global transport";
+    static const char* const kDependentLabel = "Dependent";
+    const std::string preview = dependent ? "Dependent on " + hostName : std::string(free ? kFreeLabel : kGlobalLabel);
+    // Sized to its text: the widest option, or the host's name while dependent.
+    const float widest = std::max({ImGui::CalcTextSize(preview.c_str()).x, ImGui::CalcTextSize(kGlobalLabel).x,
+                                   ImGui::CalcTextSize(kDependentLabel).x});
+    ImGui::SetNextItemWidth(widest + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight());
     ImGui::BeginDisabled(dependent);
-    if(ImGui::Checkbox("Free##free", &free)) timeline.setFree(ref, free);
+    const bool open = ImGui::BeginCombo("##clockSource", preview.c_str());
+    if(open) {
+        if(ImGui::Selectable(kFreeLabel, free)) timeline.setFree(ref, true);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", clockSourceExplanation(ClockSource::Free));
+        if(ImGui::Selectable(kGlobalLabel, !free)) timeline.setFree(ref, false);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", clockSourceExplanation(ClockSource::Global));
+        // Never chosen here: the app sets it while another timeline places this one.
+        ImGui::Selectable(kDependentLabel, false, ImGuiSelectableFlags_Disabled);
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Set by the app, not chosen: a timeline placed in another one (as clips of a timeline\n"
+                              "track, or inside a macro placed as a whole) is dependent on it, and plays where its\n"
+                              "clips place it, at that timeline's tempo.");
+        ImGui::EndCombo();
+    }
     ImGui::EndDisabled();
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        TimelineRef host;
-        const std::string hostName = dependent && timeline.placedBy(ref, host) ? timeline.timelineName(host) : std::string();
+    if(!open && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         if(dependent)
             ImGui::SetTooltip("Dependent: placed as clips in %s, it plays where they place it, at that timeline's tempo.\n"
                               "The toolbar previews it alone. Remove the timeline track placing it to choose again.",
                               hostName.c_str());
         else
-            ImGui::SetTooltip("On: free, on its own transport. The toolbar plays, stops and seeks it at its own\n"
-                              "tempo and loop, alongside the global transport; nodes can follow it as a Time Source.\n"
-                              "Off: linked to the global transport (its position, play state and tempo); the loop\n"
-                              "stays the timeline's own (the global transport itself never loops).");
+            ImGui::SetTooltip("Free: its own transport. The toolbar plays, stops and seeks it at its own tempo and\n"
+                              "loop, alongside the global transport; nodes can follow it as a Time Source.\n"
+                              "Global transport: linked to it (its position, play state and tempo); the loop stays\n"
+                              "the timeline's own (the global transport itself never loops).\n"
+                              "Dependent is set by the app while another timeline places this one.");
     }
-    ImGui::SameLine(0.0f, 8.0f);
-    ImGui::AlignTextToFramePadding();
-    switch(source) {
-        case ClockSource::Global: ImGui::TextDisabled("Global transport"); break;
-        case ClockSource::Free: ImGui::TextDisabled("Own transport"); break;
-        case ClockSource::Dependent: {
-            TimelineRef host;
-            const std::string hostName = timeline.placedBy(ref, host) ? timeline.timelineName(host) : std::string("another timeline");
-            ImGui::TextDisabled("Dependent on %s", hostName.c_str());
-            break;
-        }
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", clockSourceExplanation(source));
     if(timeline.transportFor(ref) == nullptr) {
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("starting...");
     }
-    ImGui::SameLine(0.0f, 4.0f);
-    if(ImGui::Button("...##playerSettings")) ImGui::OpenPopup("##playerSettingsPopup");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loop range, time signature and quantize");
-    drawPlayerSettingsPopup(timeline, ref);
 }
 
-void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
-    if(!ImGui::BeginPopup("##playerSettingsPopup")) return;
+// The shown timeline's playback settings (loop range, meter, quantize,
+// whether nodes inside follow its clips), the body of the "..." menu's
+// Playback settings submenu.
+void ofxOceanodeTimelineController::drawPlayerSettings(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
     const auto* current = timeline.playSettings(ref);
-    if(current == nullptr) { ImGui::EndPopup(); return; }
+    if(current == nullptr) return;
     auto settings = *current;
     bool changed = false;
     ImGui::TextDisabled("%s", timeline.timelineName(ref).c_str());
@@ -719,7 +749,6 @@ void ofxOceanodeTimelineController::drawPlayerSettingsPopup(ofxOceanodeTimelineM
     } // ownTransport: meter and quantize
     if(changed) timeline.setPlaySettings(ref, settings);
     drawFollowClips();
-    ImGui::EndPopup();
 }
 
 void ofxOceanodeTimelineController::drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
