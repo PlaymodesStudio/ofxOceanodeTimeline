@@ -453,9 +453,12 @@ namespace {
 // Sets the parameter to an automation value. Returns false, without notifying
 // anyone, when it already holds that value: the comparison is on the typed
 // value, so nothing has to be formatted back to text to find that out.
+// The write is marked, so the parameter's listeners can tell a timeline value
+// from a GUI or preset one (a MacroMixer starts its transition on Target).
 bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
                           const std::string& value,
                           const std::string& valueType) {
+    ofxOceanodeAbstractParameter::AutomationWriteScope writing(parameter);
     auto setIfChanged = [](auto& target, auto&& next) {
         if(target.get() == next) return false;
         target.set(next);

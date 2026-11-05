@@ -1147,6 +1147,7 @@ public:
         std::string canvas;
         std::string timeline;
         bool operator==(const TimelineRef& other) const { return canvas == other.canvas && timeline == other.timeline; }
+        bool operator!=(const TimelineRef& other) const { return !(*this == other); }
         bool operator<(const TimelineRef& other) const {
             return canvas != other.canvas ? canvas < other.canvas : timeline < other.timeline;
         }

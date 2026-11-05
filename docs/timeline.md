@@ -545,7 +545,11 @@ stops and rewinds first. A MacroMixer opens a window on a source's timeline when
 the source's **Windows** list ticks it: titled after the source ("Timeline:
 Timeline 1 (2--BLOOBS_Symetric)"), keyed on that name so its docking is found
 again, and never saved in the preset's `timeline.json` (the mixer opens it
-again).
+again). A track bound to a MacroMixer's **Target** starts its transition when
+the value it writes changes, as a cable does: every automation value is written
+inside an `AutomationWriteScope`, so listeners can ask the parameter
+`isReceivingFromAutomation()`. Unchanged values are not written, so a held
+value does not restart the fade.
 
 ## Duplicating lanes
 
