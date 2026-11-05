@@ -130,12 +130,12 @@ int main(int argc, char** argv) {
     assert(root.getAutomationExtension()->savePreset(folder));
     timeline.clear(); assert(timeline.editSequence().tracks.empty());
     assert(root.getAutomationExtension()->loadPreset(folder));
-    assert(timeline.toJson()["tracks"] == saved["tracks"]);
+    assert(timeline.toJson()["timelines"] == saved["timelines"]);
     // Verify the actual container save/load phases also invoke the service.
     assert(root.savePreset(folder + "/core"));
     timeline.clear();
     assert(root.loadPreset(folder + "/core"));
-    assert(timeline.toJson()["tracks"] == saved["tracks"]);
+    assert(timeline.toJson()["timelines"] == saved["timelines"]);
     auto* restoredParameter = root.findTimelineParameter(timeline.getTrack(track)->bindings.front().parameterPath);
     root.update(); // Loaded bindings become active on the first evaluation.
     assert(restoredParameter && restoredParameter->isTimelined());

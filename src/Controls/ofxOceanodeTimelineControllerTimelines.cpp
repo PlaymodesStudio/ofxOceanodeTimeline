@@ -816,7 +816,8 @@ ofxOceanodeTimelineController& ofxOceanodeTimelineController::requestTaker(ofxOc
 }
 
 void ofxOceanodeTimelineController::drawTimelineWindows() {
-    if(secondary() || container == nullptr) return;
+    // Drawn as an editor itself (a harness): it is the one window.
+    if(secondary() || container == nullptr || drawnAsEditor()) return;
     auto& timeline = container->getTimelineManager();
     // A window whose timeline is gone (deleted with its macro, missing from
     // a loaded preset) closes; a host's is its host's to close.

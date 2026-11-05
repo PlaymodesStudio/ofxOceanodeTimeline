@@ -330,13 +330,36 @@ the arrangement shows as rolled out is what plays.
 Runtime state keyed by track and binding ids lives in the engine: live
 overrides and piano key previews (`setLiveOverride(sequence, ...)`,
 `setPianoKeyPreview(sequence, ...)` reach the engine playing the timeline
-through `enginePlaying`; the primary keeps the explicit overrides in
+through `syncedEnginePlaying`; the primary keeps the explicit overrides in
 `liveOverrides` and `reapplyTransients` puts them back after a copy
 rebuild), state capture (`dropStateCaptureOverride`, `noteStateCaptured`),
 driven solos and Wave voices (`releaseWaveClipIfNeeded`, prefixed).
 
-`transportFor(ref)` is the root transport for a Global timeline, a player's
-own otherwise (nullptr until its player runs). `playTimeline`, `stopTimeline`
+**The primary answers through its engines, on demand.** `updatePlayers`
+is two steps the primary can also take between frames: `syncPlayerList`
+(the players as they should be, made and dropped without running any) and
+`syncPlayer` (an engine's copy rebuilt when its source's signature
+changed, its play settings adopted). `syncedEngine(ref)` /
+`syncedEnginePlaying(sequence)` give an engine current with its timeline,
+making its player if it has none yet. So a playback question asked of the
+primary is the engine's answer: `inspectTarget` (the edit target's engine,
+else the engine driving the path; the sequence overload absolutizes the
+path for the timeline's engine), `isTrackSoloed` (the engine's driven
+solos), `isGatedMacroActive`; and a live change made through the primary
+reaches the engine at once: `refreshPlaybackEnablement` syncs every copy
+and refreshes every engine (a muted lane's gates close now), a lane set to
+drive its track's solo applies on the engine, the id-only live override
+and key preview overloads go to the edit target's engine, `setTrackSolo`
+drops the engine's driven solo, and `invalidateSchedule` on the primary
+reaches every engine's schedule (the copy rebuild itself leaves the
+schedule alone: the scheduler repairs a direct content change as before).
+The primary's `applyAutomation` applies every running engine again (the
+host calls it after the nodes ran). The content signature covers what the
+copy plays (mutes, hand solos, macro gate and snapshot, binding clamp,
+live overrides set on the source...); a driven solo is not content.
+
+`transportFor(ref)` is the root transport for a Global timeline (before its
+player exists too), a player's own otherwise (nullptr until its player runs). `playTimeline`, `stopTimeline`
 and `seekTimeline` act on it: a transport that is not derived (the global
 one) at once, a derived one timestamped (`playAt`, `stopAt`): quantized to
 the root's grid while it plays, else the clock's, and at least half the

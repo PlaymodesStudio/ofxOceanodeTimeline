@@ -54,7 +54,7 @@ int main(int, char**) {
     const auto both = model.createTrack("Both");
     model.addBinding(both, param(inNode));
     model.addBinding(both, param(outNode));
-    const auto before = model.toJson()["tracks"];
+    const auto before = model.toJson()["timelines"][0]["tracks"];
     check(owner->hasAutomatedParameters({&inNode}), "The node to encapsulate is automated");
 
     auto levelAt = [&](double beat) {
@@ -80,11 +80,11 @@ int main(int, char**) {
     levelAt(5.0);
     check(insideProbe() && std::abs(insideProbe()->level.get() - 0.75f) < 1e-4f, "Kept: it still plays");
     check(owner->undoCanvasEdit(), "Undo");
-    check(model.toJson()["tracks"] == before, "Undo: the bindings point at the node again");
+    check(model.toJson()["timelines"][0]["tracks"] == before, "Undo: the bindings point at the node again");
     check(owner->redoCanvasEdit(), "Redo");
     check(model.getTrack(inside)->bindings[0].parameterPath == canvas + "::Probe_1/Level", "Redo: inside again");
     check(owner->undoCanvasEdit(), "Undo again");
-    check(model.toJson()["tracks"] == before, "...and back");
+    check(model.toJson()["timelines"][0]["tracks"] == before, "...and back");
 
     // ---- Move into the macro.
     auto* node = owner->getParameterGroupNodesMap().at("Probe_1");
@@ -106,7 +106,7 @@ int main(int, char**) {
     levelAt(5.0);
     check(std::abs(insideProbe()->level.get() - 0.75f) < 1e-4f, "Moved: it plays the same");
     check(owner->undoCanvasEdit(), "Undo the move");
-    check(model.toJson()["tracks"] == before, "Undo: tracks back where they were, as they were");
+    check(model.toJson()["timelines"][0]["tracks"] == before, "Undo: tracks back where they were, as they were");
     check(owner->redoCanvasEdit(), "Redo the move");
     macro = nullptr;
     for(auto* n : owner->getAllModules()) if(auto* m = dynamic_cast<ofxOceanodeNodeMacro*>(&n->getNodeModel())) macro = m;
@@ -119,7 +119,7 @@ int main(int, char**) {
     insideProbe()->level = 0.0f;
     levelAt(5.0);
     check(std::abs(insideProbe()->level.get() - 0.75f) < 1e-4f, "Redo: it plays the same");
-    check(owner->undoCanvasEdit() && model.toJson()["tracks"] == before, "Undo once more");
+    check(owner->undoCanvasEdit() && model.toJson()["timelines"][0]["tracks"] == before, "Undo once more");
 
     // Nothing automated: no prompt needed.
     check(!owner->hasAutomatedParameters({}), "No nodes: nothing automated");

@@ -3658,8 +3658,15 @@ bool ofxOceanodeTimelineManager::setClipTiming(ofxOceanodeTimelineSequence& sequ
 }
 
 bool ofxOceanodeTimelineManager::isTrackSoloed(const ofxOceanodeTimelineTrack& track) const {
-    // Toggle lanes drive the solos of the timeline an engine plays only.
-    if(!isEngine() || playback.drivenSolo.empty() || &sequenceOf(track) != &playedSequence) return track.solo;
+    // Toggle lanes drive the solos of the timeline an engine plays only:
+    // the primary asks the engine playing the track's timeline.
+    if(!isEngine()) {
+        const auto* engine = enginePlaying(sequenceOf(track));
+        if(engine == nullptr || engine->playback.drivenSolo.empty()) return track.solo;
+        const auto it = engine->playback.drivenSolo.find(PlayKey{0, track.id});
+        return it == engine->playback.drivenSolo.end() ? track.solo : it->second;
+    }
+    if(playback.drivenSolo.empty() || &sequenceOf(track) != &playedSequence) return track.solo;
     const auto it = playback.drivenSolo.find(PlayKey{0, track.id});
     return it == playback.drivenSolo.end() ? track.solo : it->second;
 }
@@ -3800,8 +3807,10 @@ bool ofxOceanodeTimelineManager::setTrackSolo(ofxOceanodeTimelineSequence& seque
     auto* track = getTrack(sequence, trackId);
     if(track == nullptr) return false;
     // Setting it by hand replaces what a Toggle lane drove, until a lane
-    // drives it again.
-    const bool wasDriven = isEngine() && isPlayedSequence(sequence) && playback.drivenSolo.erase(PlayKey{0, trackId}) > 0;
+    // drives it again (on the engine playing the timeline).
+    bool wasDriven = false;
+    if(isEngine()) wasDriven = isPlayedSequence(sequence) && playback.drivenSolo.erase(PlayKey{0, trackId}) > 0;
+    else if(auto* engine = enginePlaying(sequence)) wasDriven = engine->playback.drivenSolo.erase(PlayKey{0, trackId}) > 0;
     if(track->solo == solo && !wasDriven) return false;
     track->solo = solo;
     refreshPlaybackEnablement();
@@ -3813,7 +3822,10 @@ bool ofxOceanodeTimelineManager::setLaneDrivesTrackSolo(ofxOceanodeTimelineSeque
     auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(lane == nullptr || lane->drivesTrackSolo == drives) return false;
     lane->drivesTrackSolo = drives;
-    if(drives && container != nullptr) applyLaneTrackSolos(container->getTransportState().beatPosition);
+    if(drives && container != nullptr) {
+        if(isEngine()) applyLaneTrackSolos(playState().beatPosition);
+        else if(auto* engine = syncedEnginePlaying(sequence)) engine->applyLaneTrackSolos(engine->playState().beatPosition);
+    }
     refreshPlaybackEnablement();
     return true;
 }
@@ -3917,8 +3929,19 @@ bool ofxOceanodeTimelineManager::setClipMuted(ofxOceanodeTimelineSequence& seque
 
 void ofxOceanodeTimelineManager::refreshPlaybackEnablement() {
     invalidateEvaluationIndexes();
+    if(!isEngine()) {
+        // Heard at once, as before the next pass: each engine's copy
+        // follows the change, and the engine releases what it no longer
+        // plays (a muted lane's gates...).
+        for(auto& player : players)
+            if(player->engine != nullptr) {
+                syncPlayer(*player);
+                player->engine->refreshPlaybackEnablement();
+            }
+        return;
+    }
     if(container != nullptr) {
-        const auto transport = container->getTransportState();
+        const auto transport = playState();
         collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, false, activeAutomationValues);
         updatePianoGateOwnership(transport.isPlaying);
     }
@@ -4415,7 +4438,9 @@ void ofxOceanodeTimelineManager::setLoopRange(double startBeat, double endBeat) 
 void ofxOceanodeTimelineManager::update() {
     beginParameterCache();
     evaluateAutomation();
-    applyAutomation();
+    // The primary's engines applied their values in their pass above; the
+    // host applies them again (applyAutomation) once the nodes ran.
+    if(isEngine()) applyAutomation();
     endParameterCache();
 }
 
@@ -4509,9 +4534,17 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
     // Called after the indexes are current: when the model changed since the
     // last adoption, else every few frames (an instrument node may appear).
     const uint64_t frame = ofGetFrameNum();
-    if(adoptedInstrumentsSignature == evaluationIndexesSignature && frame >= adoptedInstrumentsFrame &&
+    // What changed: an engine's indexes follow its copy; the primary's the
+    // scratch, so it watches the root canvas's timelines themselves.
+    uint64_t signature = evaluationIndexesSignature;
+    if(!isEngine()) {
+        ChangeHash hash;
+        for(const auto& timeline : rootTimelines.timelines) hash.word(sequenceSignature(*timeline));
+        signature = hash.result();
+    }
+    if(adoptedInstrumentsSignature == signature && frame >= adoptedInstrumentsFrame &&
        frame < adoptedInstrumentsFrame + 15) return;
-    adoptedInstrumentsSignature = evaluationIndexesSignature;
+    adoptedInstrumentsSignature = signature;
     adoptedInstrumentsFrame = frame;
     struct Adoption { std::string trackId, groupId; const KitRole* role; ofxOceanodeTimelineParameterBinding binding; };
     // An engine: the copy it plays. The primary: the root canvas's timelines
@@ -4883,13 +4916,19 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         if(stateCapturePathsCache.count(path) > 0)
             stateCaptureLastAppliedValues[path] = parameterValueForAutomation(*parameter);
     }
-    // A dependent timeline previewing (played by hand) is heard over the
+    // The primary applies through its engines (the host calls this again
+    // after the nodes ran, to assert the values over what they wrote). A
+    // dependent timeline previewing (played by hand) is heard over the
     // timelines placing it, playing or stopped at a clip of it: its values
     // land after theirs.
-    if(!isEngine())
+    if(!isEngine()) {
+        for(auto& player : players)
+            if(player->source != ClockSource::Dependent && player->ranLastFrame && player->engine != nullptr)
+                player->engine->applyAutomation();
         for(auto& player : players)
             if(player->source == ClockSource::Dependent && player->ranLastFrame && player->engine != nullptr)
                 player->engine->applyAutomation();
+    }
     // A gate released this frame whose binding is no longer active -- bypassed,
     // or gone with an undo or a load -- has nothing above to close it. Close it
     // once, at its own width, and leave it alone afterwards.
@@ -4906,6 +4945,13 @@ void ofxOceanodeTimelineManager::applyAutomation() {
 }
 
 void ofxOceanodeTimelineManager::setLiveOverride(const std::string& trackId, const std::string& bindingId, const std::string& value) {
+    if(!isEngine()) {
+        // Playback state: the engine playing the edit target's (noted here
+        // until it plays, so it comes up with the override).
+        if(auto* engine = syncedEngine(editTarget)) engine->setLiveOverride(trackId, bindingId, value);
+        else if(!editTarget.timeline.empty()) noteLiveOverride(editTarget, trackId, bindingId, value);
+        return;
+    }
     if(auto* binding = getBinding(trackId, bindingId)) {
         stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + bindingId);
         binding->hasLiveOverride = true;
@@ -4917,7 +4963,11 @@ void ofxOceanodeTimelineManager::setLiveOverride(const std::string& trackId, con
 
 void ofxOceanodeTimelineManager::setLiveOverride(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                  const std::string& bindingId, const std::string& value) {
-    if(auto* engine = enginePlaying(sequence)) engine->setLiveOverride(trackId, bindingId, value);
+    if(auto* engine = syncedEnginePlaying(sequence)) engine->setLiveOverride(trackId, bindingId, value);
+    else if(!isEngine()) {
+        TimelineRef ref;
+        if(refOf(sequence, ref)) noteLiveOverride(ref, trackId, bindingId, value);
+    }
 }
 
 void ofxOceanodeTimelineManager::clearLiveOverride(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
@@ -4932,7 +4982,7 @@ void ofxOceanodeTimelineManager::clearLiveOverride(const ofxOceanodeTimelineSequ
 
 void ofxOceanodeTimelineManager::setPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                     const std::string& clipId, const std::string& laneId, int pitch) {
-    if(auto* engine = enginePlaying(sequence)) engine->setPianoKeyPreview(trackId, clipId, laneId, pitch);
+    if(auto* engine = syncedEnginePlaying(sequence)) engine->setPianoKeyPreview(trackId, clipId, laneId, pitch);
 }
 
 void ofxOceanodeTimelineManager::clearPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
@@ -4960,6 +5010,11 @@ std::string ofxOceanodeTimelineManager::absolutePathOf(const ofxOceanodeTimeline
 
 void ofxOceanodeTimelineManager::setPianoKeyPreview(const std::string& trackId, const std::string& clipId,
                                                     const std::string& laneId, int pitch) {
+    if(!isEngine()) {
+        // Sounded by the engine playing the edit target.
+        if(auto* engine = syncedEngine(editTarget)) engine->setPianoKeyPreview(trackId, clipId, laneId, pitch);
+        return;
+    }
     const auto* track = getTrack(trackId);
     const auto* clip = getClip(trackId, clipId);
     const auto* lane = getLane(trackId, clipId, laneId);
@@ -5001,6 +5056,10 @@ void ofxOceanodeTimelineManager::setPianoKeyPreview(const std::string& trackId, 
 
 void ofxOceanodeTimelineManager::clearPianoKeyPreview(const std::string& trackId, const std::string& clipId,
                                                       const std::string& laneId) {
+    if(!isEngine()) {
+        if(auto* engine = engineFor(editTarget)) engine->clearPianoKeyPreview(trackId, clipId, laneId);
+        return;
+    }
     const auto* lane = getLane(trackId, clipId, laneId);
     if(lane == nullptr) return;
     if(!lane->pianoGateBindingId.empty()) clearLiveOverride(trackId, lane->pianoGateBindingId);
@@ -5008,7 +5067,12 @@ void ofxOceanodeTimelineManager::clearPianoKeyPreview(const std::string& trackId
 }
 
 void ofxOceanodeTimelineManager::clearLiveOverride(const std::string& trackId, const std::string& bindingId) {
-    if(isEngine()) primary->forgetLiveOverride(engineRef, trackId, bindingId);
+    if(!isEngine()) {
+        if(!editTarget.timeline.empty()) forgetLiveOverride(editTarget, trackId, bindingId);
+        if(auto* engine = engineFor(editTarget)) engine->clearLiveOverride(trackId, bindingId);
+        return;
+    }
+    primary->forgetLiveOverride(engineRef, trackId, bindingId);
     if(auto* binding = getBinding(trackId, bindingId)) {
         stateCaptureManualOverrideKeys.erase(trackId + "\x1f" + bindingId);
         binding->hasLiveOverride = false;

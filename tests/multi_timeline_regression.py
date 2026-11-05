@@ -74,12 +74,13 @@ int main() {
     owner.transport->seekToBeat(0.0); owner.transport->latchFrameState(); model.update();
     near(drumValue, 0.5f);
 
-    // Free: its own transport, at its own tempo, unquantized.
+    // Free: its own transport, at its own tempo, unquantized (set once it
+    // is free: freeing it starts it from the global tempo).
+    model.setFree(drums, true);
     auto settings = *model.playSettings(drums);
     settings.bpm = 60.0f;
     settings.quantize = 0;
     model.setPlaySettings(drums, settings);
-    model.setFree(drums, true);
     frame(0.1);
     auto drumsTransport = model.transportFor(drums);
     assert(drumsTransport != nullptr && drumsTransport != owner.transport && drumsTransport->isDerived());
@@ -126,8 +127,8 @@ int main() {
     // Saved: the timeline, its play settings and that it plays free (with
     // its own settings, no longer in a list of players).
     const auto json = model.toJson();
-    assert(json.contains("timelines") && json["timelines"].size() == 1);
-    assert(!json.contains("players") && json["timelines"][0]["play"].value("free", false));
+    assert(json.contains("timelines") && json["timelines"].size() == 2); // the fixture's "Timeline 1", then Drums
+    assert(!json.contains("players") && json["timelines"][1]["play"].value("free", false));
     assert(json["play"].contains("tempo") && json["play"].contains("loop")); // the root default's, whole
     ofxOceanodeContainer other;
     TestTimeline restored(&other);
@@ -137,7 +138,7 @@ int main() {
     {
         // An older file listed the free timelines apart: read into their settings.
         auto legacy = json;
-        legacy["timelines"][0]["play"].erase("free");
+        legacy["timelines"][1]["play"].erase("free");
         legacy["players"] = ofJson::array({{{"canvas", ""}, {"timeline", id}}});
         TestTimeline fromLegacy(&other);
         fromLegacy.fromJson(legacy);
@@ -350,7 +351,7 @@ int main() {
         // places it while the host plays.
         ofxOceanodeTimelineManager::TimelineRef host;
         assert(nested.clockSourceOf(fills) == ClockSource::Dependent);
-        assert(nested.placedBy(fills, host) && host.canvas.empty() && host.timeline.empty());
+        assert(nested.placedBy(fills, host) && host == nested.getEditTarget());
         nested.setFree(fills, true);
         assert(nested.isFree(fills) && nested.clockSourceOf(fills) == ClockSource::Dependent);
         auto fillSettings = *nested.playSettings(fills);
@@ -502,11 +503,11 @@ int main() {
         const auto clipLane = scheduled.createLane(*sequence, track, clip, "Gate", ofxOceanodeTimelineLaneType::Number);
         scheduled.addBindingToLane(*sequence, track, clip, clipLane, binding);
         scheduled.setClipNumber(*sequence, track, clip, clipLane, 0, 1.0f);
+        scheduled.setFree(hits, true); // (freed first: freeing starts from the global tempo)
         auto hitSettings = *scheduled.playSettings(hits);
         hitSettings.bpm = 60.0f;
         hitSettings.quantize = 0;
         scheduled.setPlaySettings(hits, hitSettings);
-        scheduled.setFree(hits, true);
         scheduled.update();
         auto hitsTransport = scheduled.transportFor(hits);
         assert(hitsTransport != nullptr);

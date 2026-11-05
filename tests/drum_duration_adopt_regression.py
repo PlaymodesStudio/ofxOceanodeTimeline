@@ -63,13 +63,13 @@ int main(int, char**) {
     { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 4.0f; lane->drumRows[1].steps = {h}; }
     { ofxOceanodeTimelineDrumStep h; h.velocity = 1.0f; h.duration = 2.0f; lane->drumRows[2].steps = {h}; }
     auto saved = model.toJson();
-    check(saved["tracks"][0]["noteGroups"][0]["duration"] == "", "Saved without a Duration role");
+    check(saved["timelines"][0]["tracks"][0]["noteGroups"][0]["duration"] == "", "Saved without a Duration role");
     // Files from before the flag existed have no "durationDecided" at all.
-    saved["tracks"][0]["noteGroups"][0].erase("durationDecided");
-    saved["tracks"][0]["noteGroups"][0].erase("filterDecided");
-    saved["tracks"][0]["noteGroups"][0].erase("filter");
-    saved["tracks"][0]["noteGroups"][0].erase("stutterDecided");
-    saved["tracks"][0]["noteGroups"][0].erase("stutter");
+    saved["timelines"][0]["tracks"][0]["noteGroups"][0].erase("durationDecided");
+    saved["timelines"][0]["tracks"][0]["noteGroups"][0].erase("filterDecided");
+    saved["timelines"][0]["tracks"][0]["noteGroups"][0].erase("filter");
+    saved["timelines"][0]["tracks"][0]["noteGroups"][0].erase("stutterDecided");
+    saved["timelines"][0]["tracks"][0]["noteGroups"][0].erase("stutter");
 
     // The node is updated: it now offers Duration. Load the old project.
     synth.offersDuration = true;
@@ -103,12 +103,12 @@ int main(int, char**) {
     // Idempotent: one binding, nothing changes on later frames.
     const auto adopted = model.toJson();
     model.update(); model.update();
-    check(model.toJson()["tracks"] == adopted["tracks"], "Adoption runs once");
+    check(model.toJson()["timelines"][0]["tracks"] == adopted["timelines"][0]["tracks"], "Adoption runs once");
     size_t durationBindings = 0;
     for(const auto& b : model.getTrack(t)->bindings) if(b.parameterPath == binding->parameterPath) ++durationBindings;
     check(durationBindings == 1, "One Duration binding");
     // Saved, it stays decided.
-    check(adopted["tracks"][0]["noteGroups"][0]["durationDecided"] == true, "Saved as decided");
+    check(adopted["timelines"][0]["tracks"][0]["noteGroups"][0]["durationDecided"] == true, "Saved as decided");
 
     // Undo keeps working across an adoption that happens mid-session.
     model.clear();

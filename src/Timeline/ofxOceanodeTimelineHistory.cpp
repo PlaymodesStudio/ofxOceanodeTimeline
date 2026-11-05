@@ -155,9 +155,18 @@ void ofxOceanodeTimelineManager::restoreSequence(ofxOceanodeTimelineSequence& se
     for(const auto& path : paths) refreshTimelineFlag(path);
 }
 
+uint64_t ofxOceanodeTimelineManager::openGesture() {
+    const bool anyPending = pendingTimelineEdit != nullptr ||
+        std::any_of(sequenceHistories.begin(), sequenceHistories.end(), [](const auto& entry) { return entry.second.pending != nullptr; });
+    if(!anyPending) currentGesture = ++gestureSerial;
+    return currentGesture;
+}
+
 void ofxOceanodeTimelineManager::beginGlobalEdit() {
     if(replayingTimelineEdit || pendingTimelineEdit) return;
+    const uint64_t gesture = openGesture();
     pendingTimelineEdit = std::make_unique<TimelineEdit>();
+    pendingTimelineEdit->gesture = gesture;
     pendingTimelineEdit->before = captureTimelineEdit();
     if(container != nullptr && container->getTransport() != nullptr &&
        !container->getTransport()->hasExternalClock() && !bpmAutomationEnabled) {
@@ -274,24 +283,42 @@ bool ofxOceanodeTimelineManager::canUndoTimelineEdit() const { return canUndoTim
 bool ofxOceanodeTimelineManager::canRedoTimelineEdit() const { return canRedoTimelineEdit(editSequence()) || canRedoGlobalEdit(); }
 
 bool ofxOceanodeTimelineManager::undoTimelineEdit() {
-    // One gesture may have recorded both: the timeline's step first.
-    const bool sequence = undoTimelineEdit(editSequence());
-    const bool global = undoGlobalEdit();
-    return sequence || global;
+    endTimelineEdit(); // an open gesture is a step
+    // The latest gesture: its step in each history it changed (the
+    // timeline's first; one refused, for an unrecorded change since,
+    // refuses the gesture).
+    const auto& history = sequenceHistories[&editSequence()];
+    const uint64_t sequence = history.undo.empty() ? 0 : history.undo.back().second.gesture;
+    const uint64_t global = timelineUndo.empty() ? 0 : timelineUndo.back().gesture;
+    if(sequence == 0 && global == 0) return false;
+    if(sequence >= global && !undoTimelineEdit(editSequence())) return false;
+    if(global >= sequence && !undoGlobalEdit()) return false;
+    return true;
 }
 
 bool ofxOceanodeTimelineManager::redoTimelineEdit() {
-    const bool global = redoGlobalEdit();
-    const bool sequence = redoTimelineEdit(editSequence());
-    return sequence || global;
+    endTimelineEdit();
+    // The next gesture forward (the earliest undone): the global step first, as recorded.
+    const auto& history = sequenceHistories[&editSequence()];
+    constexpr uint64_t none = ~0ULL;
+    const uint64_t sequence = history.redo.empty() ? none : history.redo.back().second.gesture;
+    const uint64_t global = timelineRedo.empty() ? none : timelineRedo.back().gesture;
+    if(sequence == none && global == none) return false;
+    if(global <= sequence && !redoGlobalEdit()) return false;
+    if(sequence <= global && !redoTimelineEdit(editSequence())) return false;
+    return true;
 }
 
 // A timeline's history: snapshots of the timeline alone, one entry per
 // gesture that changed it.
 void ofxOceanodeTimelineManager::beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
     if(replayingTimelineEdit) return;
+    const uint64_t gesture = openGesture();
     auto& history = sequenceHistories[&sequence];
-    if(!history.pending) history.pending = std::make_unique<SequenceSnapshot>(captureSequence(sequence));
+    if(!history.pending) {
+        history.pending = std::make_unique<SequenceSnapshot>(captureSequence(sequence));
+        history.pending->gesture = gesture;
+    }
 }
 
 bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequence& sequence) {
@@ -302,6 +329,7 @@ bool ofxOceanodeTimelineManager::endTimelineEdit(const ofxOceanodeTimelineSequen
     history.pending.reset();
     auto after = captureSequence(sequence);
     if(before.data == after.data) return false;
+    after.gesture = before.gesture;
     history.redo.clear();
     history.undo.emplace_back(std::move(before), std::move(after));
     // The entries and their typed copies within a budget.

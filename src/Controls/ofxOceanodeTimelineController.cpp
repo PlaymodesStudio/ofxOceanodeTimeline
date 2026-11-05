@@ -6283,7 +6283,7 @@ void ofxOceanodeTimelineController::drawTargetInspector(ofxOceanodeTimelineManag
         }
         if(!inspectedTargetPath.empty()) {
             const auto transport = container->getTransportState();
-            const auto explanation = timeline.inspectTarget(inspectedTargetPath, transport.beatPosition, transport.isPlaying);
+            const auto explanation = timeline.inspectTarget(scope(timeline), inspectedTargetPath, transport.beatPosition, transport.isPlaying);
             ImGui::Text("At beat %.3f", transport.beatPosition);
             ImGui::SameLine();
             if(ImGui::SmallButton("Show in Canvas"))

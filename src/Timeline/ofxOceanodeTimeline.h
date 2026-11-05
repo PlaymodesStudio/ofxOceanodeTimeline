@@ -1825,7 +1825,13 @@ public:
     bool resizeClipEnd(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                        double durationBeats, ofxOceanodeTimelineEndEdit operation);
     // Does not write parameters, schedule events, or change source content.
+    // On the primary: answered by the engine playing the edit target (made
+    // and brought up to date if need be), else by the engine driving the
+    // path; the sequence overload by the engine playing that timeline (its
+    // paths as the sequence keeps them, relative to its canvas).
     ofxOceanodeTimelineTargetInspection inspectTarget(const std::string& parameterPath,
+                                                     double beat, bool isPlaying) const;
+    ofxOceanodeTimelineTargetInspection inspectTarget(const ofxOceanodeTimelineSequence& sequence, const std::string& parameterPath,
                                                      double beat, bool isPlaying) const;
     // A copy of the clip with its content laid out from where it starts
     // playing (contentOffsetBeats baked into the lanes): it sounds the same,
@@ -1923,7 +1929,7 @@ public:
     bool ungroupClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     const ofxOceanodeTimelineClipGroup* getGroupForClip(const std::string& trackId, const std::string& clipId) const;
     const ofxOceanodeTimelineClipGroup* getGroupForClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) const;
-    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return playedSequence.clipGroups; }
+    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return editSequence().clipGroups; }
 
     ofxOceanodeTimelineViewState& getViewState() { return viewState; }
     const ofxOceanodeTimelineViewState& getViewState() const { return viewState; }
@@ -2105,6 +2111,7 @@ private:
         float beforeBpm = 0.0f, afterBpm = 0.0f;
         bool manualTempo = false;
         size_t bytes = 0;
+        uint64_t gesture = 0; // the gesture that recorded it (see openGesture)
     };
     std::unique_ptr<TimelineEdit> pendingTimelineEdit;
     // One timeline's state for its history: typed copies (waveform caches
@@ -2116,6 +2123,7 @@ private:
         ofxOceanodeTimelinePlaySettings play;
         uint64_t nextTrack = 1, nextBinding = 1, nextClip = 1, nextLane = 1, nextGroup = 1;
         size_t bytes = 0;
+        uint64_t gesture = 0; // on an entry's snapshots: the gesture that recorded it
     };
     SequenceSnapshot captureSequence(const ofxOceanodeTimelineSequence& sequence) const;
     void restoreSequence(ofxOceanodeTimelineSequence& sequence, const SequenceSnapshot& snapshot);
@@ -2200,6 +2208,11 @@ private:
     mutable std::map<const ofxOceanodeTimelineSequence*, SequenceHistory> sequenceHistories;
     ofxOceanodeContainer* pendingMacroScope = nullptr;
     std::deque<TimelineEdit> timelineUndo, timelineRedo;
+    // One gesture spans every history begun while it is open (the global
+    // one, each timeline's): its entries carry its number, so the id-only
+    // undo and redo step the latest gesture, in every history it changed.
+    uint64_t gestureSerial = 0, currentGesture = 0;
+    uint64_t openGesture();
 
     // ---- Players ----
     // Every existing timeline plays through an engine: a manager of its own
@@ -2286,6 +2299,17 @@ private:
     // one playing a sequence as kept here (an engine: itself, for its copy).
     ofxOceanodeTimelineManager* engineFor(const TimelineRef& ref) const;
     ofxOceanodeTimelineManager* enginePlaying(const ofxOceanodeTimelineSequence& sequence) const;
+    // The players as they should be, one per timeline, made and dropped
+    // without running any; an engine's copy brought up to date with its
+    // source (rebuilt when the content changed) and the settings it plays
+    // with. updatePlayers does both each pass; the primary also does them
+    // on demand, to answer a playback question or pass a live change on.
+    void syncPlayerList();
+    void syncPlayer(Player& player);
+    // The engine playing a timeline, current with it (its player made if
+    // the timeline has none yet); nullptr on an engine, or for no timeline.
+    ofxOceanodeTimelineManager* syncedEngine(const TimelineRef& ref);
+    ofxOceanodeTimelineManager* syncedEnginePlaying(const ofxOceanodeTimelineSequence& sequence);
     // Whether a timeline, as kept here, follows the global transport (its
     // position, tempo and meter; its loop is its own): not free, and not
     // placed in another timeline.

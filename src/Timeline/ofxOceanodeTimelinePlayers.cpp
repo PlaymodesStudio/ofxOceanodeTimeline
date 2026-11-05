@@ -376,8 +376,14 @@ ofxOceanodeTimelineManager::Player* ofxOceanodeTimelineManager::playerFor(const 
 }
 
 std::shared_ptr<ofxOceanodeTransport> ofxOceanodeTimelineManager::transportFor(const TimelineRef& given) const {
-    // Its player's (none until the first update pass after it was made).
-    if(auto* player = playerFor(normalizedRef(given))) return player->transport;
+    // Its player's; before its player exists (the first update pass after
+    // it was made), a timeline linked to the global transport is on that
+    // transport already.
+    const auto ref = normalizedRef(given);
+    if(auto* player = playerFor(ref)) return player->transport;
+    if(!isEngine() && container != nullptr)
+        if(const auto* sequence = findTimeline(ref); sequence != nullptr && followsGlobalTransport(*sequence))
+            return container->getRootTransport();
     return nullptr;
 }
 
@@ -516,7 +522,7 @@ void ofxOceanodeTimelineManager::destroyPlayer(Player& player) {
     }
 }
 
-void ofxOceanodeTimelineManager::updatePlayers() {
+void ofxOceanodeTimelineManager::syncPlayerList() {
     if(isEngine() || container == nullptr) return;
     auto root = container->getRootTransport();
     if(root == nullptr) return;
@@ -571,6 +577,90 @@ void ofxOceanodeTimelineManager::updatePlayers() {
                 if(entry.address == canvas) player->canvas = entry.container;
         players.push_back(std::move(player));
     }
+}
+
+void ofxOceanodeTimelineManager::syncPlayer(Player& player) {
+    auto* sequence = timelineFor(player.ref);
+    if(sequence == nullptr || player.engine == nullptr || container == nullptr) return;
+    auto& engine = *player.engine;
+    // The copy follows its source: rebuilt when its content changed. Its
+    // schedule stays: an edit through the setters invalidates it on the
+    // engine too (invalidateSchedule), and the scheduler repairs a direct
+    // change to the content as it always did.
+    const uint64_t signature = sequenceSignature(*sequence);
+    engine.waveAudioProvider = waveAudioProvider; // Wave tracks play on it too, keyed apart
+    if(player.sourceSequence != sequence || player.sourceSignature != signature) {
+        engine.releaseWaveClips(engine.playedSequence, sequence);
+        engine.playedSequence = *sequence;
+        engine.playedSequence.base = nullptr;
+        makeAbsolute(engine.playedSequence, rootCanvas(player.ref.canvas) ? std::string() : player.ref.canvas);
+        engine.invalidateEvaluationIndexes();
+        player.sourceSequence = sequence;
+        player.sourceSignature = signature;
+        reapplyTransients(player);
+    }
+    switch(player.source) {
+        case ClockSource::Global: {
+            // The global transport's tempo (and tempo lane, to look ahead
+            // along it) and meter, read, never set; its own loop (the
+            // engine wraps the global position in it: the transport
+            // itself never loops).
+            auto settings = sequence->play;
+            settings.bpmAutomationEnabled = bpmAutomationEnabled;
+            settings.bpmMinimum = bpmMinimum;
+            settings.bpmMaximum = bpmMaximum;
+            settings.bpmInterpolation = bpmInterpolation;
+            settings.bpmPoints = bpmAutomationPoints;
+            settings.bpmTensions = bpmCurveTensions;
+            settings.followClockTempo = false;
+            const auto root = container->getRootTransport();
+            settings.bpm = root != nullptr ? root->getState().bpm : 120.0f;
+            settings.timeSignatureNumerator = timeSignatureNumerator;
+            settings.timeSignatureDenominator = timeSignatureDenominator;
+            engine.adoptPlaySettings(settings);
+            break;
+        }
+        case ClockSource::Free:
+            engine.adoptPlaySettings(sequence->play);
+            break;
+        case ClockSource::Dependent: {
+            // Its host's tempo now; its own loop and meter.
+            auto settings = sequence->play;
+            settings.bpmAutomationEnabled = false;
+            settings.followClockTempo = false;
+            settings.bpm = hostBpmFor(player.ref);
+            engine.adoptPlaySettings(settings);
+            break;
+        }
+    }
+    // The toolbar's timestamping settings apply to every engine, live.
+    engine.setSchedulingEnabled(schedulingEnabled);
+    engine.setSchedulingLookaheadMs(schedulingLookaheadMs);
+    engine.schedulingLookaheadAdaptive = schedulingLookaheadAdaptive;
+    engine.retriggerGapBeats = retriggerGapBeats;
+}
+
+ofxOceanodeTimelineManager* ofxOceanodeTimelineManager::syncedEngine(const TimelineRef& given) {
+    if(isEngine()) return nullptr;
+    const auto ref = normalizedRef(given);
+    if(ref.timeline.empty() || findTimeline(ref) == nullptr) return nullptr;
+    auto* player = playerFor(ref);
+    if(player == nullptr) { syncPlayerList(); player = playerFor(ref); }
+    if(player == nullptr || player->engine == nullptr) return nullptr;
+    syncPlayer(*player);
+    return player->engine.get();
+}
+
+ofxOceanodeTimelineManager* ofxOceanodeTimelineManager::syncedEnginePlaying(const ofxOceanodeTimelineSequence& sequence) {
+    if(isEngine()) return enginePlaying(sequence);
+    TimelineRef ref;
+    return refOf(sequence, ref) ? syncedEngine(ref) : nullptr;
+}
+
+void ofxOceanodeTimelineManager::updatePlayers() {
+    if(isEngine() || container == nullptr) return;
+    if(container->getRootTransport() == nullptr) return;
+    syncPlayerList();
     updatePlayOnLoad();
     if(players.empty()) return;
     // Inner canvases first: an outer timeline's value lands last.
@@ -583,7 +673,6 @@ void ofxOceanodeTimelineManager::updatePlayers() {
     for(auto& player : players) {
         auto* sequence = timelineFor(player->ref);
         if(sequence == nullptr) continue;
-        auto& engine = *player->engine;
         // A macro canvas's timeline playing free is what its canvas plays
         // to: claim the canvas once nothing else (a clip-following transport,
         // another free timeline of it) holds it; let it go when it is no
@@ -616,58 +705,7 @@ void ofxOceanodeTimelineManager::updatePlayers() {
                 continue;
             }
         } else player->ranLastFrame = true;
-        // The copy follows its source: rebuilt when its content changed.
-        const uint64_t signature = sequenceSignature(*sequence);
-        engine.waveAudioProvider = waveAudioProvider; // Wave tracks play on it too, keyed apart
-        if(player->sourceSequence != sequence || player->sourceSignature != signature) {
-            engine.releaseWaveClips(engine.playedSequence, sequence);
-            engine.playedSequence = *sequence;
-            engine.playedSequence.base = nullptr;
-            makeAbsolute(engine.playedSequence, rootCanvas(player->ref.canvas) ? std::string() : player->ref.canvas);
-            engine.invalidateEvaluationIndexes();
-            engine.invalidateSchedule();
-            player->sourceSequence = sequence;
-            player->sourceSignature = signature;
-            reapplyTransients(*player);
-        }
-        switch(player->source) {
-            case ClockSource::Global: {
-                // The global transport's tempo (and tempo lane, to look ahead
-                // along it) and meter, read, never set; its own loop (the
-                // engine wraps the global position in it: the transport
-                // itself never loops).
-                auto settings = sequence->play;
-                settings.bpmAutomationEnabled = bpmAutomationEnabled;
-                settings.bpmMinimum = bpmMinimum;
-                settings.bpmMaximum = bpmMaximum;
-                settings.bpmInterpolation = bpmInterpolation;
-                settings.bpmPoints = bpmAutomationPoints;
-                settings.bpmTensions = bpmCurveTensions;
-                settings.followClockTempo = false;
-                settings.bpm = root->getState().bpm;
-                settings.timeSignatureNumerator = timeSignatureNumerator;
-                settings.timeSignatureDenominator = timeSignatureDenominator;
-                engine.adoptPlaySettings(settings);
-                break;
-            }
-            case ClockSource::Free:
-                engine.adoptPlaySettings(sequence->play);
-                break;
-            case ClockSource::Dependent: {
-                // Its host's tempo now; its own loop and meter.
-                auto settings = sequence->play;
-                settings.bpmAutomationEnabled = false;
-                settings.followClockTempo = false;
-                settings.bpm = hostBpmFor(player->ref);
-                engine.adoptPlaySettings(settings);
-                break;
-            }
-        }
-        // The toolbar's timestamping settings apply to every engine, live.
-        engine.setSchedulingEnabled(schedulingEnabled);
-        engine.setSchedulingLookaheadMs(schedulingLookaheadMs);
-        engine.schedulingLookaheadAdaptive = schedulingLookaheadAdaptive;
-        engine.retriggerGapBeats = retriggerGapBeats;
+        syncPlayer(*player);
         running.push_back(player.get());
     }
     // On a path several timelines drive, the value that lands last is the
@@ -755,6 +793,10 @@ void ofxOceanodeTimelineManager::updateTimeSources() {
         info.label = timelineName(ref);
         info.group = group;
         info.selectable = transport != nullptr;
+        // Linked to the global transport, it is that transport's position:
+        // not listed (nodes follow the global transport itself), still found
+        // by its id.
+        info.hidden = transport != nullptr && !transport->isDerived();
         if(!info.selectable) info.note = "Not playing yet.";
         else if(clockSourceOf(ref) == ClockSource::Dependent)
             info.note = "Placed in another timeline: this follows its own transport, which previews it alone.";
@@ -908,8 +950,15 @@ std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& track
 
 template<typename Fn>
 void ofxOceanodeTimelineManager::forEachPlayingManager(Fn&& fn) {
+    // Asked between passes too (a playhead before the first update): the
+    // players there should be, each engine with a copy of its timeline. A
+    // timeline on a transport runs whenever it exists; a dependent one's
+    // preview only while it plays.
+    if(!isEngine()) syncPlayerList();
     for(auto& player : players) {
-        if(player->engine == nullptr || !player->ranLastFrame) continue;
+        if(player->engine == nullptr) continue;
+        if(player->source == ClockSource::Dependent && !player->ranLastFrame) continue;
+        if(!isEngine()) syncPlayer(*player); // current with its timeline (edits since the last pass)
         // The state as the engine plays it: the global position wrapped in
         // the timeline's loop.
         fn(*player->engine, player->engine->playState());

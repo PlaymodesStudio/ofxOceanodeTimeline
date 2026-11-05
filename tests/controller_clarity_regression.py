@@ -127,7 +127,7 @@ int main() {
     {
         // The main timeline's colour: its kind's (black) by default, its own
         // once set (the scope bar tinted with it), saved with the timeline.
-        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        const auto mainRef=model.getEditTarget();
         ofColor color;
         assert(!model.customTimelineColor(mainRef,color));
         model.setTimelineColor(mainRef,ofColor(200,40,90)); frame();
@@ -346,7 +346,7 @@ int main() {
     model.getViewState()=originalView; ui.zoomAnchorUntil=0; frame();
     // Open the real import modal, remap saved targets, and confirm using the
     // mouse. Import stays deferred until confirmation and remains undoable.
-    const auto beforeImport=model.toJson()["tracks"];
+    const auto beforeImport=model.toJson()["timelines"][0]["tracks"];
     const auto originalCount=model.getTrack(t)->clips.size();
     ui.clipImportDocument=model.exportClip(t,c);
     ui.clipFileTrackId=t; ui.clipImportBeat=20;
@@ -354,7 +354,7 @@ int main() {
         {gate,model.getBinding(t,gate)->parameterPath},{cutoff,model.getBinding(t,cutoff)->parameterPath}};
     ui.requestClipImportPopup=true;
     frame(); frame(1250,ImVec2(-100,-100),false,"import-clip");
-    assert(model.toJson()["tracks"]==beforeImport);
+    assert(model.toJson()["timelines"][0]["tracks"]==beforeImport);
     auto* importWindow=ImGui::FindWindowByName("Load reusable clip"); assert(importWindow && importWindow->Active);
     const ImVec2 confirm(importWindow->Pos.x+ImGui::GetStyle().WindowPadding.x+25,
         importWindow->Pos.y+importWindow->Size.y-ImGui::GetStyle().WindowPadding.y-ImGui::GetFrameHeight()*0.5f);
@@ -367,16 +367,16 @@ int main() {
     assert(model.redoTimelineEdit()); assert(model.getTrack(t)->clips.size()==originalCount+1);
     model.removeClip(t,importedId);
     ui.editorState.clipEditorOpen=false; frame();
-    assert(model.toJson()["tracks"]==beforeImport);
+    assert(model.toJson()["timelines"][0]["tracks"]==beforeImport);
     ui.clipImportDocument=model.exportClip(t,c); ui.clipImportTargetPaths.clear();
     ui.requestClipImportPopup=true; frame();
     io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
-    assert(ImGui::GetCurrentContext()->OpenPopupStack.empty() && model.toJson()["tracks"]==beforeImport);
+    assert(ImGui::GetCurrentContext()->OpenPopupStack.empty() && model.toJson()["timelines"][0]["tracks"]==beforeImport);
     ui.editorState.editorTrackId=t; ui.editorState.editorClipId=c;
     ui.editorState.editorLaneId=curve; ui.editorState.clipEditorOpen=true;
-    const auto before=model.toJson()["tracks"];
+    const auto before=model.toJson()["timelines"][0]["tracks"];
     frame(); frame(1250,ImVec2(-100,-100),false,"clip-editor");
-    assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && model.toJson()["tracks"]==before);
+    assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && model.toJson()["timelines"][0]["tracks"]==before);
     auto selectTab=[&](const char* name) {
         for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i) {
             auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i);
@@ -387,10 +387,10 @@ int main() {
     };
     selectTab("Lane");
     frame(); frame(1250,ImVec2(-100,-100),false,"content-properties");
-    assert(model.toJson()["tracks"]==before);
+    assert(model.toJson()["timelines"][0]["tracks"]==before);
     selectTab("Clip");
     frame(); frame(1250,ImVec2(-100,-100),false,"clip-properties");
-    assert(model.toJson()["tracks"]==before);
+    assert(model.toJson()["timelines"][0]["tracks"]==before);
     {
         // Mutation: MUT strip handles, outlines and the Mutate tab.
         auto* melody=model.getLane(t,c,piano);
@@ -607,7 +607,7 @@ int main() {
             selectTab("New Clip"); frame(); frame(1250,ImVec2(-100,-100),false,"track-plus-new-clip");
             assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Clip"));
             const auto editorBefore=ui.editorState;
-            const auto plusTracks=model.toJson()["tracks"];
+            const auto plusTracks=model.toJson()["timelines"][0]["tracks"];
             const auto clipsBefore=model.getTrack(t)->clips.size();
             std::strcpy(ui.pendingClipName,"From plus");
             auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
@@ -623,7 +623,7 @@ int main() {
             assert(model.getTrack(t)->clips.size()==clipsBefore+1);
             const auto* made=model.getClip(t,ui.editorState.editorClipId);
             assert(made && made->name=="From plus" && ui.editorState.clipEditorOpen);
-            assert(model.undoTimelineEdit() && model.toJson()["tracks"]==plusTracks);
+            assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==plusTracks);
             ui.editorState=editorBefore; frame();
             click(plus());
             assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Lane"));   // New Lane again on reopening
@@ -666,7 +666,7 @@ int main() {
     ui.editorState.clipEditorOpen=false;
     ui.targetInspectorOpen=true; ui.inspectedTargetPath=model.getBinding(t,cutoff)->parameterPath;
     frame(); frame(1250,ImVec2(-100,-100),false,"inspector");
-    assert(model.toJson()["tracks"]==before);
+    assert(model.toJson()["timelines"][0]["tracks"]==before);
     ui.targetInspectorOpen=false;
     // Exercise real mouse gestures with the explicit tool, checking shared
     // source mapping rather than merely calling the model API.
@@ -904,7 +904,7 @@ int main() {
     // Duplicate track through its real context menu, with the mutation deferred
     // until after track drawing. Its new row is selected and the edit is undoable.
     frame();
-    const auto trackBefore=model.toJson()["tracks"];
+    const auto trackBefore=model.toJson()["timelines"][0]["tracks"];
     const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==t;});
     assert(row!=ui.clipDropRows.end());
     const ImVec2 pad(ui.fileDropBounds.x-120,(row->top+row->bottom)*0.5f);
@@ -918,13 +918,13 @@ int main() {
     assert(model.editSequence().tracks.size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
     const auto duplicatedTrack=*ui.selectedTracks.begin();assert(duplicatedTrack!=t);
     assert(model.getTrack(duplicatedTrack)->clips.size()==model.getTrack(t)->clips.size());
-    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);frame();
+    assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==trackBefore);frame();
     model.beginTimelineEdit();ui.breakClipLanesRequest={t,c};frame();
     assert(!model.getClip(t,c) && ui.selectedTracks.size()==3);
     for(const auto& id:ui.selectedTracks) {
         const auto* track=model.getTrack(id);assert(track && track->clips.size()==1 && track->clips[0].lanes.size()==1);
     }
-    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);
+    assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==trackBefore);
     // Reproduce the reported restriction: bind to a second node parameter
     // that has never been published to this track or any other track.
     auto& otherNode=owner->createNode(std::make_unique<ClarityProbe>(),2);
@@ -949,7 +949,7 @@ int main() {
     frame(1250,ImVec2(-100,-100),false,"patch-targets");
     assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
     auto* targetPopup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;assert(targetPopup);
-    const auto beforeTargets=model.toJson()["tracks"];
+    const auto beforeTargets=model.toJson()["timelines"][0]["tracks"];
     const ImVec2 targetItem(targetPopup->Pos.x+40,targetPopup->Pos.y+targetPopup->WindowPadding.y+
         ImGui::GetFrameHeight()+ImGui::GetStyle().ItemSpacing.y+
         pathIndex*ImGui::GetTextLineHeightWithSpacing()+ImGui::GetTextLineHeight()*0.5f);
@@ -960,7 +960,7 @@ int main() {
     assert(!newBinding.empty());
     const auto& routed=model.getLane(t,c,curve)->bindingIds;
     assert(std::find(routed.begin(),routed.end(),newBinding)!=routed.end());
-    assert(model.undoTimelineEdit() && model.toJson()["tracks"]==beforeTargets);
+    assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==beforeTargets);
 
     // Parameter menus add a lane to the selected clip, reusing a binding
     // if it already exists on the track, and focus the visible lane editor.
@@ -1014,10 +1014,10 @@ int main() {
     };
     {
         const auto editorBefore=ui.editorState; const auto selectionBefore=ui.selectedClips;
-        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        const auto mainRef=model.getEditTarget();
         auto& filter=static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Cutoff"));
         const std::string filterPath=owner->getTimelineParameterPath(filter);
-        const auto tracksBefore=model.toJson()["tracks"];
+        const auto tracksBefore=model.toJson()["timelines"][0]["tracks"];
         const auto trackCount=model.editSequence().tracks.size();
         {
             // The parameter's own menu, Add to Timeline hovered: every timeline
@@ -1058,7 +1058,7 @@ int main() {
         assert(made.clips[0].lanes[0].type==ofxOceanodeTimelineLaneType::Curve);
         assert(made.clips[0].lanes[0].bindingIds==std::vector<std::string>{made.bindings[0].id});
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==made.id && ui.editorState.editorClipId==made.clips[0].id);
-        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBefore);
+        assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==tracksBefore);
         // A track that already has the parameter: a new clip on its row.
         const std::string pitchPath=owner->getTimelineParameterPath(addedParameter);
         const auto clipsBefore=model.getTrack(t)->clips.size(), bindingsBefore=model.getTrack(t)->bindings.size();
@@ -1075,7 +1075,7 @@ int main() {
         // one), on a row made for the parameter; undone at once.
         ui.selectedClips={{t,c}};
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
-        const auto tracksBeforeLane=model.toJson()["tracks"];
+        const auto tracksBeforeLane=model.toJson()["timelines"][0]["tracks"];
         model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Lane}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-lane");
         assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterClipType==1);
         assert(confirmModal("Create Lane") && !popupOpen());
@@ -1086,7 +1086,7 @@ int main() {
         assert(!filterBinding.empty() && newLane.bindingIds==std::vector<std::string>{filterBinding});
         assert(newLane.name=="Cutoff" && newLane.type==ofxOceanodeTimelineLaneType::Curve);
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && ui.editorState.editorLaneId==newLane.id);
-        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
+        assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==tracksBeforeLane);
         // New Target: an existing lane (the one being edited, in the selected
         // clip) drives it too, on a row made for it; a lane it already drives
         // cannot take it again.
@@ -1108,7 +1108,7 @@ int main() {
         confirmModal("Add Target");   // disabled: already a target
         assert(popupOpen() && model.toJson()==targetedJson);
         io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
-        assert(!popupOpen() && model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
+        assert(!popupOpen() && model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==tracksBeforeLane);
         // Cancel makes nothing.
         const auto beforeCancel=model.toJson();
         model.requestParameterClip({mainRef,"",filterPath}); frame(); frame();
@@ -1315,7 +1315,7 @@ int main() {
         auto& innerCutoff=static_cast<ofxOceanodeAbstractParameter&>(innerProbe.getParameters().get("Cutoff"));
         auto* pattern=macroTimelineOf(*inside);
         assert(pattern && pattern->tracks.empty() && pattern->base==inside.get());
-        const auto mainBefore=model.toJson()["tracks"];
+        const auto mainBefore=model.toJson()["timelines"][0]["tracks"];
         const auto pt=model.createTrack(*pattern,"Pattern");
         const auto pb=model.addBinding(*pattern,pt,innerCutoff);
         assert(!pb.empty() && pattern->tracks[0].bindings[0].parameterPath=="Synth_1/Cutoff"); // relative to the macro
@@ -1323,7 +1323,7 @@ int main() {
         const auto pc=model.createClip(*pattern,pt,"Phrase",0,4);
         const auto pl=model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
         model.addBindingToLane(*pattern,pt,pc,pl,pb);
-        assert(model.toJson()["tracks"]==mainBefore); // the main timeline is untouched
+        assert(model.toJson()["timelines"][0]["tracks"]==mainBefore); // the main timeline is untouched
         {
             // "Add to Timeline" into the macro's own timeline: its sequence
             // gets the track (shown in the editor), the main one stays as it was.
@@ -1331,7 +1331,7 @@ int main() {
             assert(popupOpen() && confirmModal("Create Track and Clip"));
             assert(pattern->tracks.size()==2 && pattern->tracks[1].bindings.size()==1);
             assert(pattern->tracks[1].bindings[0].parameterPath=="Synth_1/Cutoff" && pattern->tracks[1].clips.size()==1);
-            assert(model.toJson()["tracks"]==mainBefore && &ui.scope(model)==pattern);
+            assert(model.toJson()["timelines"][0]["tracks"]==mainBefore && &ui.scope(model)==pattern);
             model.removeTrack(*pattern,pattern->tracks[1].id);
             ui.leaveScopesTo(0); for(int i=0;i<25;++i) frame();
         }
@@ -1352,13 +1352,13 @@ int main() {
         for(int i=1;i<=6;++i) frame(1250,ImVec2(from.x+beatPixels*2*i/6.0f,from.y),true);
         frame(1250,ImVec2(from.x+beatPixels*2,from.y),false); frame();
         assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-2.0)<1e-6);
-        assert(model.toJson()["tracks"]==mainBefore);
+        assert(model.toJson()["timelines"][0]["tracks"]==mainBefore);
         assert(ui.inMacroScope());
         ui.restoreHistory(model,false);
         assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat)<1e-6);
         ui.restoreHistory(model,true);
         assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-2.0)<1e-6);
-        assert(model.toJson()["tracks"]==mainBefore);
+        assert(model.toJson()["timelines"][0]["tracks"]==mainBefore);
 
         // Saved with the macro, read back from its folder.
         const auto folder=std::filesystem::temp_directory_path()/"oceanode-macro-sequence";
@@ -1450,7 +1450,7 @@ int main() {
                 auto* phrase=model.getClip(*pattern,pt,pc);
                 assert(std::abs(phrase->startBeat-2.0)<1e-6 && pattern->tracks[phraseRow].id==pt && phraseRow==2);
                 model.getTrack(mt)->macroUnfolded=true;
-                const auto mainTracks=model.toJson()["tracks"];
+                const auto mainTracks=model.toJson()["timelines"][0]["tracks"];
                 for(int i=0;i<4;++i) frame();
                 frame(1250,ImVec2(-100,-100),false,"macro-unfolded");
                 assert(std::find(ui.unfoldedSequences.begin(),ui.unfoldedSequences.end(),pattern)!=ui.unfoldedSequences.end());
@@ -1467,7 +1467,7 @@ int main() {
                 for(int i=1;i<=6;++i) frame(1250,ImVec2(grab.x+(xAt(9.0)-xAt(7.0))*i/6.0f,grab.y),true);
                 frame(1250,ImVec2(xAt(9.0),grab.y),false); frame();
                 assert(std::abs(model.getClip(*pattern,pt,pc)->startBeat-3.0)<1e-6);
-                assert(model.toJson()["tracks"]==mainTracks); // only the macro's timeline changed
+                assert(model.toJson()["timelines"][0]["tracks"]==mainTracks); // only the macro's timeline changed
                 // Undo steps the timeline edited last, from the main timeline.
                 assert(!ui.inMacroScope());
                 ui.restoreHistory(model,false);

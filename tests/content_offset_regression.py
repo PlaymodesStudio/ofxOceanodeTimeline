@@ -60,10 +60,12 @@ int main() {
     near(gateAt(0.5), 0); near(gateAt(3.5), 1); near(gateAt(7.5), 1); near(gateAt(4.5), 0);
 
     // ---- change beats across the wrap -------------------------------------
-    // The scheduler walks only scheduled paths: mark this one as such.
-    model.fastRetriggerPaths.insert(gate.getEscapedName());
+    // The scheduler walks only scheduled paths: mark this one as such, on
+    // the engine playing the timeline (the scheduler is an engine's).
+    auto& engine = *model.engineFor(model.getEditTarget());
+    engine.fastRetriggerPaths.insert(gate.getEscapedName());
     std::vector<double> beats;
-    model.collectChangeBeats(model.playContextFor(owner.getTransportState()), 0.0, 8.0, true, beats);
+    engine.collectChangeBeats(engine.playContextFor(owner.getTransportState()), 0.0, 8.0, true, beats);
     auto has = [&](double beat) {
         return std::any_of(beats.begin(), beats.end(), [&](double b) { return std::abs(b - beat) < 1e-6; });
     };

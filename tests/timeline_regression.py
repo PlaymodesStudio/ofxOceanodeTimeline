@@ -67,6 +67,7 @@ struct TestTimeline : ofxOceanodeTimelineManager {
     }
     ofJson toJson() const {
         auto json = ofxOceanodeTimelineManager::toJson();
+        json.erase("windows"); // a load opens one: not content
         if(json.contains("timelines") && !json["timelines"].empty()) {
             json["tracks"] = json["timelines"][0]["tracks"];
             json["clipGroups"] = json["timelines"][0]["clipGroups"];
@@ -77,7 +78,12 @@ struct TestTimeline : ofxOceanodeTimelineManager {
         }
         return json;
     }
-    void fromJson(const ofJson& json) {
+    void fromJson(const ofJson& given) {
+        // What a test changed in the mirror is what loads.
+        auto json = given;
+        if(json.contains("timelines") && json["timelines"].is_array() && !json["timelines"].empty())
+            for(const char* key : {"tracks", "clipGroups", "play"})
+                if(json.contains(key)) json["timelines"][0][key] = json[key];
         ofxOceanodeTimelineManager::fromJson(json);
         const auto refs = timelinesOfCanvas("");
         setEditTarget(refs.empty() ? TimelineRef{} : refs.front());

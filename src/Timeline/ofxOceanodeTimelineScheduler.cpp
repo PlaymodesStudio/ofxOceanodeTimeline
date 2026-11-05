@@ -63,6 +63,13 @@ void ofxOceanodeTimelineManager::setSchedulingLookaheadMs(double milliseconds) {
 }
 
 void ofxOceanodeTimelineManager::invalidateSchedule() {
+    // The primary schedules nothing: an edit it is told of, between
+    // passes, reaches every engine's schedule (each corrects what it
+    // queued). Its own pass (parameterCacheActive) invalidates for itself
+    // only: the engines follow the transport themselves.
+    if(!isEngine() && !parameterCacheActive)
+        for(auto& player : players)
+            if(player->engine != nullptr) player->engine->invalidateSchedule();
     // Corrected by the next runScheduler(), not here: an editor or a seek
     // calls this between frames, when the position the correction has to
     // agree with is not known yet.

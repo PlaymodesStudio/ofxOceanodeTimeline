@@ -699,9 +699,12 @@ bool ofxOceanodeTimelineManager::macroPlayheadBeat(const ofxOceanodeContainer& m
 bool ofxOceanodeTimelineManager::isGatedMacroActive(const ofxOceanodeAbstractParameter& parameter) {
     if(parameter.getName() != "Active") return false;
     if(!isEngine()) {
-        // Gated by any timeline playing: ask its engine.
-        for(const auto& player : players)
-            if(player->engine != nullptr && player->engine->isGatedMacroActive(parameter)) return true;
+        // Gated by any timeline playing: ask its engine, current with the timeline.
+        for(const auto& player : players) {
+            if(player->engine == nullptr) continue;
+            syncPlayer(*player);
+            if(player->engine->isGatedMacroActive(parameter)) return true;
+        }
         return false;
     }
     ensureEvaluationIndexes();
@@ -2068,10 +2071,29 @@ bool ofxOceanodeTimelineManager::computeParameterValue(
 }
 
 ofxOceanodeTimelineTargetInspection ofxOceanodeTimelineManager::inspectTarget(
+        const ofxOceanodeTimelineSequence& sequence, const std::string& path, double beat, bool isPlaying) const {
+    if(auto* engine = const_cast<ofxOceanodeTimelineManager*>(this)->syncedEnginePlaying(sequence))
+        return engine->inspectTarget(absolutePathOf(sequence, path), beat, isPlaying);
+    return inspectTarget(path, beat, isPlaying);
+}
+
+ofxOceanodeTimelineTargetInspection ofxOceanodeTimelineManager::inspectTarget(
         const std::string& path, double beat, bool isPlaying) const {
     ofxOceanodeTimelineTargetInspection result;
     result.parameterPath = path;
     if(container == nullptr) { result.missingTarget = true; return result; }
+    if(!isEngine()) {
+        // Playback is an engine's: the one playing the edit target (current
+        // with it, made if need be), else the one whose value lands on the
+        // path. Nothing plays here otherwise: the path is not written.
+        auto* self = const_cast<ofxOceanodeTimelineManager*>(this);
+        ofxOceanodeTimelineManager* engine = editTarget.timeline.empty() ? nullptr : self->syncedEngine(editTarget);
+        if(engine == nullptr) {
+            const auto found = lastDriverForPath.find(path);
+            if(found != lastDriverForPath.end()) engine = const_cast<ofxOceanodeTimelineManager*>(found->second);
+        }
+        if(engine != nullptr) return engine->inspectTarget(path, beat, isPlaying);
+    }
     // UI edits can change public model objects between updates. Rebuild only
     // derived indexes, never parameter ranges or the scheduler's state.
     const_cast<ofxOceanodeTimelineManager*>(this)->ensureEvaluationIndexes();
@@ -2217,12 +2239,24 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
     }
     hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
     for(const auto& track : sequence.tracks) {
-        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted); hash.add(isTrackSoloed(track));
+        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted);
+        // (A solo a Toggle lane drives is an engine's playback state, not
+        // the content the primary hands it.)
+        hash.add(isEngine() ? isTrackSoloed(track) : track.solo);
         hash.add(track.isFolder); hash.add(track.parentId);
+        hash.add(track.macroGate); hash.add(track.macroPreRollMs); hash.add(track.macroTailMs);
+        hash.add(track.waveVolume); hash.add(track.waveVolumeAutomationEnabled); hash.add(track.waveVolumeInterpolation);
+        hash.add(track.waveVolumePoints.size());
+        for(const auto& point : track.waveVolumePoints) { hash.add(point.beat); hash.add(point.value); }
+        for(const auto& tension : track.waveVolumeTensions) { hash.add(tension.inflection); hash.add(tension.steepness); }
         hash.add(track.bindings.data()); hash.add(track.bindings.size());
         for(const auto& binding : track.bindings) {
             hash.add(binding.id); hash.add(binding.parameterPath); hash.add(binding.valueType);
-            hash.add(binding.mode); hash.add(binding.bypass); // (a live override is playback state, not content)
+            hash.add(binding.mode); hash.add(binding.bypass);
+            hash.add(binding.defaultValue); hash.add(binding.clampToParameterRange); hash.add(binding.valueScale);
+            // A live override is playback state (an engine's, on its copy); one
+            // set on the source itself still reaches the copy.
+            hash.add(binding.hasLiveOverride); hash.add(binding.liveOverrideValue);
         }
         hash.add(track.noteGroups.size());
         for(const auto& group : track.noteGroups) {
@@ -2233,8 +2267,11 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         for(const auto& clip : track.clips) {
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
-            hash.add(clip.reversed);
+            hash.add(clip.reversed); hash.add(clip.macroSnapshot);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
+            hash.add(clip.lfoOutputMin); hash.add(clip.lfoOutputMax);
+            hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
+            hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
                 hash.word(lanePlaybackSignature(lane));
