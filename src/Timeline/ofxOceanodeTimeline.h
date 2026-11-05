@@ -1628,8 +1628,11 @@ public:
     // gate (see ofxOceanodeTimelineChordInstrument). False for any other lane.
     bool chordLaneInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
                              ofxOceanodeTimelineInstrument* instrument = nullptr) const;
-    // The same for a note group's roles.
+    // The same for a note group's roles (the id overload: a track of the
+    // edit target's).
     bool noteGroupInstrument(const std::string& trackId, const std::string& groupId,
+                             int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
+    bool noteGroupInstrument(const ofxOceanodeTimelineTrack& track, const std::string& groupId,
                              int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
     // "Add to Timeline as Piano Roll..." from a parameter's right-click menu:
     // queued here, shown by the timeline controller (like track renames).
@@ -1649,7 +1652,11 @@ public:
     const ofxOceanodeTimelineParameterBinding* getBinding(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId) const;
     // The node a piano lane's pitch binding drives (nullptr when it has none):
     // what Global Pitch makes of the lane's notes depends on that node's ticks.
+    // The sequence overload: the lane as that timeline keeps it (its paths
+    // relative to its canvas).
     ofxOceanodeNodeModel* pianoPitchNode(const std::string& trackId, const ofxOceanodeTimelineLane& lane) const;
+    ofxOceanodeNodeModel* pianoPitchNode(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                         const ofxOceanodeTimelineLane& lane) const;
 
     std::string createClip(const std::string& trackId,
                            const std::string& requestedName = "Clip",
@@ -1823,9 +1830,13 @@ public:
     bool setClipChance(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, float chance);
     // The notes a piano lane plays in one repeat of the current clip start,
     // mutations applied (indexed like its pianoNotes). False when it has no
-    // mutating notes. For the editor's preview of the playing repeat.
+    // mutating notes. For the editor's preview of the playing repeat. On the
+    // primary: answered by the engine playing the timeline (the edit
+    // target's, or the sequence's), whose rolls are the ones heard.
     bool pianoRepeatNotes(const std::string& trackId, const std::string& clipId, const std::string& laneId,
                           int64_t repeat, std::vector<ofxOceanodeTimelinePianoNote>& out) const;
+    bool pianoRepeatNotes(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                          const std::string& laneId, int64_t repeat, std::vector<ofxOceanodeTimelinePianoNote>& out) const;
     bool resizeClipEnd(const std::string& trackId, const std::string& clipId,
                        double durationBeats, ofxOceanodeTimelineEndEdit operation);
     bool resizeClipEnd(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
@@ -2321,6 +2332,9 @@ private:
     // the timeline has none yet); nullptr on an engine, or for no timeline.
     ofxOceanodeTimelineManager* syncedEngine(const TimelineRef& ref);
     ofxOceanodeTimelineManager* syncedEnginePlaying(const ofxOceanodeTimelineSequence& sequence);
+    // pianoRepeatNotes rolled here, from a sequence as kept here.
+    bool pianoRepeatNotesIn(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                            const std::string& laneId, int64_t repeat, std::vector<ofxOceanodeTimelinePianoNote>& out) const;
     // Whether a timeline, as kept here, follows the global transport (its
     // position, tempo and meter; its loop is its own): not free, and not
     // placed in another timeline.

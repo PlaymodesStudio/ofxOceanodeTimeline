@@ -4193,9 +4193,14 @@ ofxOceanodeTimelineParameterBinding* ofxOceanodeTimelineManager::getBinding(ofxO
 }
 
 ofxOceanodeNodeModel* ofxOceanodeTimelineManager::pianoPitchNode(const std::string& trackId, const ofxOceanodeTimelineLane& lane) const {
+    return pianoPitchNode(editSequence(), trackId, lane);
+}
+
+ofxOceanodeNodeModel* ofxOceanodeTimelineManager::pianoPitchNode(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                                 const ofxOceanodeTimelineLane& lane) const {
     if(lane.pianoPitchBindingId.empty()) return nullptr;
-    const auto* binding = getBinding(trackId, lane.pianoPitchBindingId);
-    auto* parameter = binding == nullptr ? nullptr : findParameterCached(binding->parameterPath);
+    const auto* binding = getBinding(sequence, trackId, lane.pianoPitchBindingId);
+    auto* parameter = binding == nullptr ? nullptr : findParameterCached(absolutePathOf(sequence, binding->parameterPath));
     return parameter == nullptr ? nullptr : parameter->getNodeModel();
 }
 

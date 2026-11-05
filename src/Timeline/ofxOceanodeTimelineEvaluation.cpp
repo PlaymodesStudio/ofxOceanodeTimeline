@@ -1297,13 +1297,33 @@ const ofxOceanodeTimelineManager::PianoRepeatPlayback& ofxOceanodeTimelineManage
     return cached.emplace(key, std::move(out)).first->second;
 }
 
+bool ofxOceanodeTimelineManager::pianoRepeatNotes(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                  const std::string& clipId, const std::string& laneId, int64_t repeat,
+                                                  std::vector<ofxOceanodeTimelinePianoNote>& out) const {
+    // The engine playing that timeline rolls what is heard (its transport's
+    // generation and pass, its drift chain): the preview asks it.
+    if(auto* engine = const_cast<ofxOceanodeTimelineManager*>(this)->syncedEnginePlaying(sequence))
+        return engine->pianoRepeatNotes(trackId, clipId, laneId, repeat, out);
+    return pianoRepeatNotesIn(sequence, trackId, clipId, laneId, repeat, out);
+}
+
 bool ofxOceanodeTimelineManager::pianoRepeatNotes(const std::string& trackId, const std::string& clipId,
                                                   const std::string& laneId, int64_t repeat,
                                                   std::vector<ofxOceanodeTimelinePianoNote>& out) const {
-    const auto* track = getTrack(trackId);
-    const auto* clip = getClip(trackId, clipId);
-    const auto* lane = getLane(trackId, clipId, laneId);
-    if(track == nullptr || clip == nullptr || lane == nullptr || !pianoLaneMutates(*lane)) return false;
+    if(!isEngine() && !editTarget.timeline.empty()) {
+        // Playback is an engine's: the one playing the edit target, current with it.
+        auto* self = const_cast<ofxOceanodeTimelineManager*>(this);
+        if(auto* engine = self->syncedEngine(editTarget)) return engine->pianoRepeatNotes(trackId, clipId, laneId, repeat, out);
+    }
+    return pianoRepeatNotesIn(editSequence(), trackId, clipId, laneId, repeat, out);
+}
+
+bool ofxOceanodeTimelineManager::pianoRepeatNotesIn(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                    const std::string& clipId, const std::string& laneId, int64_t repeat,
+                                                    std::vector<ofxOceanodeTimelinePianoNote>& out) const {
+    const auto* clip = getClip(sequence, trackId, clipId);
+    const auto* lane = getLane(sequence, trackId, clipId, laneId);
+    if(clip == nullptr || lane == nullptr || !pianoLaneMutates(*lane)) return false;
     const double sourceLength = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     out = repeatNotes(playContext, *lane, repeat, sourceLength);
     return true;
@@ -1394,14 +1414,20 @@ bool ofxOceanodeTimelineManager::noteGroupInstrument(const std::string& trackId,
     voices = 0;
     kit = false;
     const auto* track = getTrack(trackId);
-    if(track == nullptr) return false;
-    const auto it = std::find_if(track->noteGroups.begin(), track->noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
-    if(it == track->noteGroups.end()) return false;
+    return track != nullptr && noteGroupInstrument(*track, groupId, voices, kit, names);
+}
+
+bool ofxOceanodeTimelineManager::noteGroupInstrument(const ofxOceanodeTimelineTrack& track, const std::string& groupId,
+                                                     int& voices, bool& kit, std::vector<std::string>* names) const {
+    voices = 0;
+    kit = false;
+    const auto it = std::find_if(track.noteGroups.begin(), track.noteGroups.end(), [&](const auto& g) { return g.id == groupId; });
+    if(it == track.noteGroups.end()) return false;
     ofxOceanodeTimelineLane probe;
     probe.pianoGateBindingId = it->gateBindingId;
     probe.pianoPitchBindingId = it->pitchBindingId;
     std::vector<std::string> found;
-    const bool result = drumGridInstrument(*track, probe, voices, found, &kit);
+    const bool result = drumGridInstrument(track, probe, voices, found, &kit);
     if(names != nullptr) *names = std::move(found);
     return result;
 }

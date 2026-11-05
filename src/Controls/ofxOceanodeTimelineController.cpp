@@ -4449,7 +4449,7 @@ void ofxOceanodeTimelineController::draw() {
                             // A kit gets a Drum Grid first; the piano roll stays available.
                             int kitVoices = 0;
                             bool kit = false;
-                            timeline.noteGroupInstrument(track.id, group.id, kitVoices, kit);
+                            timeline.noteGroupInstrument(track, group.id, kitVoices, kit);
                             if(kit && ImGui::MenuItem("New drum grid clip here")) {
                                 deferredGroupId = group.id;
                                 deferredGroupAction = DeferredGroupAction::NewClip;

@@ -300,6 +300,40 @@ int main() {
     // Deleting a group sends its notes back to A.
     ofxOceanodeTimelineRemoveMutationGroup(*model.getLane(t, c, l), 1);
     assert(model.getLane(t, c, l)->mutationGroups.empty() && model.getLane(t, c, l)->pianoNotes[1].mutationGroup == 0);
+    // The editor previews a timeline that is not the edit target through its
+    // sequence: answered by the engine playing it (the id lookups, which go
+    // through the edit target, do not know its clips).
+    {
+        ofParameter<float> padPitches("PadPitch", 72, 0, 127), padGates("PadGate", 0, 0, 1);
+        ofxOceanodeParameter<float> padPitch, padGate;
+        padPitch.bindParameter(padPitches); padGate.bindParameter(padGates);
+        owner.targets[padPitch.getEscapedName()] = &padPitch;
+        owner.targets[padGate.getEscapedName()] = &padGate;
+        const auto padsRef = model.addTimeline("", "Pads");
+        auto* pads = model.timelineFor(padsRef);
+        assert(pads != nullptr && model.getEditTarget() != padsRef);
+        const auto t2 = model.createTrack(*pads, "Pads");
+        const auto pb2 = model.addBinding(*pads, t2, padPitch), gb2 = model.addBinding(*pads, t2, padGate);
+        const auto group2 = model.createNoteGroup(*pads, t2, "Notes", pb2, gb2, "");
+        std::string l2;
+        const auto c2 = model.createNoteGroupClip(*pads, t2, group2, "Phrase", 0, 4, &l2);
+        auto* padLane = model.getLane(*pads, t2, c2, l2);
+        padLane->pianoNotes = {{0, 3, 60, 0.8f, 1, 1.0f}};
+        padLane->mutation.pitchRange = 12;
+        padLane->mutation.scaleMask = 1 << 4;   // onto E: 52 or 64
+        std::set<int> previewed;
+        for(int i = 0; i < 30; ++i) {
+            playAt(0.5);
+            assert(!model.pianoRepeatNotes(t2, c2, l2, 0, preview));
+            assert(model.pianoRepeatNotes(*pads, t2, c2, l2, 0, preview) && preview.size() == 1);
+            assert(preview[0].pitch == 52 || preview[0].pitch == 64);
+            // The preview is this start's roll, the one heard.
+            near(padGates, 1);
+            assert(std::lround(padPitches.get()) == preview[0].pitch);
+            previewed.insert(preview[0].pitch);
+        }
+        assert(previewed.size() == 2);
+    }
     std::cout << "Piano mutation groups passed: own keys, follow A, fallback, persistence, delete.\n";
     std::cout << "Piano mutation passed: amount, pitch scale, re-rolls per start, offset, inactive rules, preview and persistence.\n";
 }

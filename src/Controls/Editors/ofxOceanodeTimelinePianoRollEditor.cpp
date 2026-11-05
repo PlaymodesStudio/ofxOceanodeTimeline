@@ -500,7 +500,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // clip stores and sends its notes unchanged and the instrument applies
     // Global Pitch once. A moved note leaves a ghost at its stored pitch, and
     // editing acts on the stored notes; clicking either one picks the note.
-    ofxOceanodeNodeModel* soundingNode = timeline.pianoPitchNode(track.id, *lane);
+    ofxOceanodeNodeModel* soundingNode = timeline.pianoPitchNode(sequence, track.id, *lane);
     auto sounding = [soundingNode](int pitch) -> int {
         if(soundingNode == nullptr) return pitch;
         return std::clamp((int)std::round(ofxOceanodeGlobalPitch::apply(soundingNode, (float)pitch, 0, false)), 0, 127);
@@ -792,14 +792,22 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                             mutationGroupColor(group, lit ? 255 : groupFocus ? 80 : cycle == 0 ? 220 : 120), 2.0f, 0, lit ? 2.5f : 1.5f);
         }
     }
-    // While playing, the repeat under the playhead shows where its mutated
-    // notes actually play (outlines; the written notes stay editable).
+    // While the shown timeline plays on its own transport (the global one,
+    // or a free timeline's), the repeat under the playhead shows where its
+    // mutated notes actually play (outlines; the written notes stay
+    // editable). A dependent timeline driven by its host rolls in the host's
+    // engine, as a copy of its own: no preview there.
     std::vector<ofxOceanodeTimelinePianoNote> playedNotes;
     const double playhead = canvas.beatPosition;
-    if(context.container.getTransportState().isPlaying &&
-       playhead >= clip->startBeat && playhead < clip->startBeat + clip->durationBeats) {
+    auto shownPlaying = [&]() {
+        ofxOceanodeTimelineManager::TimelineRef ref;
+        if(!timeline.refOf(sequence, ref)) return false;
+        const auto transport = timeline.transportFor(ref);
+        return transport != nullptr && transport->getState().isPlaying;
+    };
+    if(playhead >= clip->startBeat && playhead < clip->startBeat + clip->durationBeats && shownPlaying()) {
         const int64_t repeat = cycleIndex(*clip, playhead);
-        if(timeline.pianoRepeatNotes(track.id, clip->id, lane->id, repeat, playedNotes)) {
+        if(timeline.pianoRepeatNotes(sequence, track.id, clip->id, lane->id, repeat, playedNotes)) {
             for(size_t n = 0; n < playedNotes.size() && n < lane->pianoNotes.size(); ++n) {
                 const auto& played = playedNotes[n];
                 const auto& written = lane->pianoNotes[n];
