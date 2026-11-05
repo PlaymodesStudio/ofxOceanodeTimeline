@@ -312,7 +312,7 @@ lanes.
 
 ## Undo and redo
 
-With the Timeline window focused, **Cmd/Ctrl+Z** undoes an action and
+With a timeline window focused, **Cmd/Ctrl+Z** undoes an action and
 **Shift+Cmd/Ctrl+Z** redoes it. The toolbar also has **Undo** and **Redo** buttons.
 Text fields keep their normal text undo while editing.
 
@@ -367,20 +367,24 @@ targets, note groups) still happens in the macro's timeline itself, opened by
 
 ## Several timelines, each with its clock source
 
-There is no main timeline. Every canvas (the main one and every macro's) can
-own any number of timelines, and none exists until you make one: **New
-Timeline** in a canvas's right-click menu, **Add to Timeline > New
-Timeline...** in a parameter's right-click menu, or **New timeline...** in
-the Timeline window's **...** menu (the window says so while the shown canvas
-has none). The scope bar at the top of the Timeline window says which
-timeline is shown: a badge with its name (teal for a timeline of the main
-canvas, purple for a macro's own, or its own **Color**), the path to it
-(**Macro 1 > ...**, each step a way back), the timelines navigator (every
-timeline under its canvas, with its clock source, tempo, meter and where its
-tempo comes from; pick one to show it), and the **...** menu: new, duplicate,
-rename, colour, delete (the timeline goes with its tracks; the window then
-shows the canvas's next timeline, or how to make one), place another
-timeline here, or open this one **in a new window**. A macro's timelines
+There is no main timeline, and no fixed Timeline window: every timeline
+lives in a window of its own, opened when the timeline is made and listed in
+the **Window** menu under **Timelines** (ticked while it has a window; untick
+to close its windows, the timeline stays). Every canvas (the main one and
+every macro's) can own any number of timelines, and none exists until you
+make one: **New Timeline** in a canvas's right-click menu, **Add to Timeline
+> New Timeline...** in a parameter's right-click menu, or **New timeline...**
+in a timeline window's **...** menu. The new one opens in a new window,
+brought forward (in the asking window itself while that shows a canvas with
+no timeline). The scope bar at the top of each window says which timeline it
+shows: a badge with its name (teal for a timeline of the main canvas, purple
+for a macro's own, or its own **Color**), the path to it (**Macro 1 > ...**,
+each step a way back), the timelines navigator (every timeline under its
+canvas, with its clock source, tempo, meter and where its tempo comes from;
+pick one to show it in this window), and the **...** menu: new, duplicate,
+rename, colour, delete (the timeline goes with its tracks, and its windows
+close), place another timeline here, or open this one **in a new window**
+(a second view of it). A macro's timelines
 are listed with the macro's node menu too (**Edit Timeline** and the rest:
 one item when it has one timeline, a submenu when several, **New
 Timeline...** when none). A track that places a timeline shows the placed timeline's name
@@ -510,10 +514,15 @@ and shows it (a canvas with no timeline offers only that). **Remove from
 Timeline** finds the parameter in all of them. The **LFO Track** node picks
 a timeline, then one of its tracks.
 
-**Windows.** **Open in a new window** (or **Open its timeline in a new window**
-from a macro node) opens another Timeline window, docked with the first one,
-showing that timeline with its own zoom and scroll; it can show any other
-timeline from its own menu. Windows are saved with the preset.
+**Windows.** Each timeline opens in a window of its own, docked with the
+timeline windows already there, with its own zoom and scroll (saved with the
+window). **Open in a new window** (or **Open its timeline in a new window**
+from a macro node) opens one more on that timeline; **Edit Timeline** on a
+macro node and **Add to Timeline** bring the window showing the timeline
+forward, or open one. A window can show any other timeline from its own
+menu. Windows are saved with the preset; a preset saved without any (an
+older one, or every window closed) opens one on the main canvas's first
+timeline, and the **Window** menu's **Timelines** list opens the rest.
 
 **Inside a MacroMixer.** A MacroMixer loads each source preset as a Macro in
 a graph of its own; the graph is a guest of the mixer's canvas (its canvas id

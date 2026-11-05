@@ -6,6 +6,7 @@
 
 #include "Managers/ofxOceanodeContainer.h"
 #include "ofxOceanodeShared.h"
+#include "ofxOceanodeMenu.h"
 #include "ofxOceanodeColors.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -334,8 +335,15 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
                     const auto track = timeline.createTrack(*sequence, parameter->getName());
                     timeline.addBinding(*sequence, track, *parameter);
                 }
-            if(newTimelineRequest.window != 0) timeline.setTimelineWindowRef(newTimelineRequest.window, made);
-            else timeline.requestTimelineScope(made);
+            // In a window of its own, brought forward: the one it was asked
+            // from while that shows no timeline (a canvas's empty state), else a new one.
+            const auto* asking = timeline.findTimelineWindow(newTimelineRequest.window);
+            int shownIn = 0;
+            if(asking != nullptr && asking->ref.timeline.empty()) {
+                timeline.setTimelineWindowRef(newTimelineRequest.window, made);
+                shownIn = newTimelineRequest.window;
+            } else shownIn = timeline.openTimelineWindow(made);
+            focusTimelineWindow(timeline, shownIn);
         }
         newTimelineRequest = {};
         ImGui::CloseCurrentPopup();
@@ -553,11 +561,11 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
         }
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, timeline.timelineExists(shown))) {
             const auto removed = shown;
-            timeline.removeTimeline(removed);
-            showCanvas(timeline, canvas); // the canvas's next timeline, or its empty state
+            timeline.removeTimeline(removed); // its windows close with it
+            showCanvas(timeline, canvas); // until then: the canvas's next timeline, or its empty state
         }
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Deletes it with its tracks. Clips placing it elsewhere then play nothing.");
+            ImGui::SetTooltip("Deletes it with its tracks and closes its windows. Clips placing it elsewhere then play nothing.");
         ImGui::Separator();
         // Timelines of this canvas or of canvases inside it, never one that plays this one.
         if(ImGui::BeginMenu("Add a timeline track...", timeline.timelineExists(shown))) {
@@ -752,37 +760,123 @@ void ofxOceanodeTimelineController::drawTempoPointsPopup(ofxOceanodeTimelineMana
     ImGui::EndPopup();
 }
 
+// A host's window (a MacroMixer source's) is named after it and keeps one
+// id across activations, whatever its canvas is called this time.
+std::string ofxOceanodeTimelineController::timelineWindowTitle(const ofxOceanodeTimelineManager& timeline,
+                                                               const ofxOceanodeTimelineManager::TimelineWindow& window) const {
+    const std::string name = window.ref.timeline.empty() ? std::string("no timeline") : timeline.timelineName(window.ref);
+    return window.hostLabel.empty()
+        ? "Timeline: " + name + "###timelineWindow" + std::to_string(window.id)
+        : "Timeline: " + name + " (" + window.hostLabel + ")###timelineWindow_" + window.hostLabel + "_" + window.ref.timeline;
+}
+
+void ofxOceanodeTimelineController::focusTimelineWindow(ofxOceanodeTimelineManager& timeline, int id) {
+    const auto* window = timeline.findTimelineWindow(id);
+    if(window == nullptr) return;
+    pendingWindowFocus = timelineWindowTitle(timeline, *window);
+    pendingWindowFocusFrames = 10;
+}
+
+int ofxOceanodeTimelineController::showTimelineInWindow(ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
+    const auto* showing = timeline.windowShowing(ref);
+    const int id = showing != nullptr ? showing->id : timeline.openTimelineWindow(ref);
+    focusTimelineWindow(timeline, id);
+    return id;
+}
+
+ofxOceanodeTimelineController& ofxOceanodeTimelineController::requestTaker(ofxOceanodeTimelineManager& timeline) {
+    TimelineRef wanted;
+    if(timeline.peekEditorRequest(wanted)) {
+        const auto& windows = timeline.getTimelineWindows();
+        if(drawnAsEditor()) requestTakerWindow = 0;
+        else if(!wanted.timeline.empty()) requestTakerWindow = showTimelineInWindow(timeline, wanted);
+        else if(timeline.findTimelineWindow(requestTakerWindow) == nullptr) {
+            // No timeline named: the window picked last, else the first one
+            // (a host's only when there is no other), else the root canvas's
+            // first timeline in a new window.
+            requestTakerWindow = 0;
+            for(const auto& window : windows) if(window.hostLabel.empty()) { requestTakerWindow = window.id; break; }
+            if(requestTakerWindow == 0 && !windows.empty()) requestTakerWindow = windows.front().id;
+            if(requestTakerWindow == 0) {
+                const auto roots = timeline.timelinesOfCanvas(std::string());
+                if(!roots.empty()) requestTakerWindow = showTimelineInWindow(timeline, roots.front());
+            }
+        }
+    }
+    if(requestTakerWindow != 0 && timeline.findTimelineWindow(requestTakerWindow) == nullptr) requestTakerWindow = 0;
+    if(requestTakerWindow == 0) return *this;
+    auto& editor = windowEditors[requestTakerWindow];
+    if(editor == nullptr) editor = std::make_unique<ofxOceanodeTimelineController>(container, requestTakerWindow);
+    return *editor;
+}
+
 void ofxOceanodeTimelineController::drawTimelineWindows() {
     if(secondary() || container == nullptr) return;
     auto& timeline = container->getTimelineManager();
+    // A window whose timeline is gone (deleted with its macro, missing from
+    // a loaded preset) closes; a host's is its host's to close.
+    for(const auto& window : std::vector<ofxOceanodeTimelineManager::TimelineWindow>(timeline.getTimelineWindows()))
+        if(window.hostLabel.empty() && !window.ref.timeline.empty() && !timeline.timelineExists(window.ref))
+            timeline.closeTimelineWindow(window.id);
     const auto windows = timeline.getTimelineWindows(); // closing one edits the list
     for(auto it = windowEditors.begin(); it != windowEditors.end();) {
         const bool listed = std::any_of(windows.begin(), windows.end(), [&](const auto& window) { return window.id == it->first; });
         it = listed ? std::next(it) : windowEditors.erase(it);
     }
-    // Docked with the main Timeline window the first time.
+    // A new window docks with the timeline windows already there, else
+    // where the controllers go.
     ImGuiID dock = 0;
-    if(auto* main = ImGui::FindWindowByName(getControllerName().c_str())) dock = main->DockId;
+    for(const auto& window : windows) {
+        const auto* drawn = ImGui::FindWindowByName(timelineWindowTitle(timeline, window).c_str());
+        if(drawn != nullptr && drawn->DockId != 0) { dock = drawn->DockId; break; }
+    }
+    if(dock == 0) dock = ofxOceanodeShared::getLeftNodeID();
     for(const auto& window : windows) {
         auto& editor = windowEditors[window.id];
         if(editor == nullptr) editor = std::make_unique<ofxOceanodeTimelineController>(container, window.id);
-        // A host's window (a MacroMixer source's) is named after it and keeps
-        // one id across activations, whatever its canvas is called this time.
-        const std::string title = window.hostLabel.empty()
-            ? "Timeline: " + timeline.timelineName(window.ref) + "###timelineWindow" + std::to_string(window.id)
-            : "Timeline: " + timeline.timelineName(window.ref) + " (" + window.hostLabel + ")###timelineWindow_" +
-              window.hostLabel + "_" + window.ref.timeline;
+        const std::string title = timelineWindowTitle(timeline, window);
         bool open = true;
         if(dock != 0) ImGui::SetNextWindowDockID(dock, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(900.0f, 420.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
-            // Its own zoom and scroll: what the editors read while it draws.
-            std::swap(timeline.getViewState(), editor->ownViewState);
+            // Its own zoom and scroll (saved with it): what the editors read
+            // while it draws. Found again by id afterwards: drawing may open
+            // or close windows, which moves the list's entries.
+            if(auto* entry = timeline.findTimelineWindow(window.id)) std::swap(timeline.getViewState(), entry->view);
             editor->draw();
-            std::swap(timeline.getViewState(), editor->ownViewState);
+            if(auto* entry = timeline.findTimelineWindow(window.id)) std::swap(timeline.getViewState(), entry->view);
         }
         ImGui::End();
         if(!open) timeline.closeTimelineWindow(window.id);
+    }
+}
+
+void ofxOceanodeTimelineController::drawPopups() {
+    if(secondary() || container == nullptr) return;
+    // Every new timeline: the canvas, parameter and timelines menus.
+    drawNewTimelinePopup(container->getTimelineManager());
+}
+
+void ofxOceanodeTimelineController::drawWindowMenuItems() {
+    if(secondary() || container == nullptr) return;
+    auto& timeline = container->getTimelineManager();
+    ofxOceanodeMenu::section("Timelines");
+    const auto refs = timeline.allTimelines();
+    if(refs.empty()) {
+        ImGui::TextDisabled("No timeline yet (New Timeline, in a canvas's right-click menu).");
+        return;
+    }
+    for(const auto& ref : refs) {
+        const std::string label = (rootCanvas(ref.canvas) ? std::string() : ref.canvas + " > ") + timeline.timelineName(ref) +
+                                  "##timelineWindow" + ofxOceanodeTimelineManager::timeSourceId(ref);
+        const bool open = timeline.windowShowing(ref) != nullptr;
+        if(ImGui::MenuItem(label.c_str(), nullptr, open)) {
+            if(!open) showTimelineInWindow(timeline, ref);
+            else // its windows close (a host's, a MacroMixer's, stays its host's)
+                for(const auto& window : std::vector<ofxOceanodeTimelineManager::TimelineWindow>(timeline.getTimelineWindows()))
+                    if(window.hostLabel.empty() && sameRef(window.ref, ref)) timeline.closeTimelineWindow(window.id);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Ticked: shown in a window. Untick to close its windows; the timeline stays.");
     }
 }
 
@@ -912,7 +1006,8 @@ void ofxOceanodeTimelineController::drawEmptyState(ofxOceanodeTimelineManager& t
     ImGui::Indent(24.0f);
     ImGui::TextUnformatted(canvas.empty() ? "No timeline on the main canvas." : "No timeline on this macro's canvas.");
     ImGui::TextDisabled("Make one here, from the canvas's right-click menu (New Timeline), or from a parameter's\n"
-                        "right-click menu (Add to Timeline > New Timeline...). A canvas can have any number.");
+                        "right-click menu (Add to Timeline > New Timeline...). A canvas can have any number;\n"
+                        "each opens in a window of its own (the Window menu lists them).");
     ImGui::Spacing();
     if(ImGui::Button("New timeline...")) {
         ofxOceanodeTimelineManager::NewTimelineRequest request;

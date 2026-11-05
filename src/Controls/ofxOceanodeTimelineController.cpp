@@ -1370,9 +1370,32 @@ void ofxOceanodeTimelineController::drawBeforeWindows() {
         laneEditors.updateMonitoring(timeline, editorSequence(timeline),
                                      editorState.clipEditorOpen ? editorState.editorLaneId : "");
     }
-    if(secondary()) return;
-    drawPendingTrackPopup();
-    // Further Timeline windows, each an editor of its own.
+    if(secondary() || container == nullptr) return;
+    auto& timeline = container->getTimelineManager();
+    // A window asked for (new, or to bring forward): focused once it has drawn.
+    if(pendingWindowFocusFrames > 0) {
+        if(ImGui::FindWindowByName(pendingWindowFocus.c_str())) {
+            ImGui::SetWindowFocus(pendingWindowFocus.c_str());
+            pendingWindowFocusFrames = 0;
+        } else if(--pendingWindowFocusFrames == 0) pendingWindowFocus.clear();
+    }
+    // "Edit Timeline" from a macro's node menu, a timeline to show after
+    // "Add to Timeline": the window showing it comes forward, else one opens.
+    if(auto* macro = timeline.consumeMacroScopeRequest()) {
+        if(drawnAsEditor()) enterMacroScope(timeline, *macro);
+        else {
+            const std::string canvas = timeline.canvasIdOf(*macro);
+            const auto refs = timeline.timelinesOfCanvas(canvas);
+            showTimelineInWindow(timeline, refs.empty() ? ofxOceanodeTimelineManager::TimelineRef{canvas, std::string()} : refs.front());
+        }
+    }
+    ofxOceanodeTimelineManager::TimelineRef requested;
+    if(timeline.consumeTimelineScopeRequest(requested)) {
+        if(drawnAsEditor()) { pendingScope = requested; pendingScopeRequested = true; }
+        else showTimelineInWindow(timeline, requested);
+    }
+    requestTaker(timeline).drawPendingTrackPopup();
+    // The timeline windows, each an editor of its own.
     for(auto& [id, editor] : windowEditors) editor->drawBeforeWindows();
     drawTimelineWindows();
 }
@@ -1395,10 +1418,12 @@ void ofxOceanodeTimelineController::draw() {
        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) &&
        (historyIO.KeyCtrl || historyIO.KeySuper) && ImGui::IsKeyPressed(ImGuiKey_Z, false))
         restoreHistory(timeline, historyIO.KeyShift);
-    // "Edit Timeline" from a macro's node menu; scopes of deleted macros close.
-    if(!secondary())
-        if(auto* requested = timeline.consumeMacroScopeRequest()) enterMacroScope(timeline, *requested);
-    if(!secondary() && timeline.consumeTimelineScopeRequest(pendingScope)) pendingScopeRequested = true;
+    // A macro opened from a clip of this window (its first timeline, or its
+    // empty state); scopes of deleted macros close.
+    if(auto* macro = pendingMacroScopeContainer) {
+        pendingMacroScopeContainer = nullptr;
+        enterMacroScope(timeline, *macro);
+    }
     if(pendingScopeRequested) {
         pendingScopeRequested = false;
         enterTimelineScope(timeline, pendingScope);
@@ -2731,7 +2756,7 @@ void ofxOceanodeTimelineController::draw() {
                         ImGui::SetTooltip("A reversed macro clip plays this mirrored.\nEdit it where a macro clip plays it forward,\nor double-click to open %s's timeline.", macroLabel.c_str());
                         if(clicked) {
                             anyClipInteractionClaimedThisFrame = true;
-                            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) timeline.requestMacroScope(*macroContainer);
+                            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) requestMacroScope(*macroContainer);
                         }
                         break;
                     }
@@ -2841,7 +2866,7 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::MenuItem("Duplicate after")) innerMenuRequest = InnerMenuRequest::Duplicate;
                     if(ImGui::MenuItem("Delete clip")) innerMenuRequest = InnerMenuRequest::Delete;
                     contextMenuSection("Macro");
-                    if(ImGui::MenuItem(("Open " + macroLabel).c_str())) timeline.requestMacroScope(*macroContainer);
+                    if(ImGui::MenuItem(("Open " + macroLabel).c_str())) requestMacroScope(*macroContainer);
                 }
                 ImGui::EndPopup();
             }
@@ -5857,10 +5882,9 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
 }
 
 void ofxOceanodeTimelineController::drawPendingTrackPopup() {
-    // Deliberately independent of draw() and this controller's own window:
-    // see the declaration's comment in the header for why. This must work
-    // even on a frame where this controller's ImGui::Begin() is never
-    // called at all.
+    // Deliberately independent of draw() and this editor's window: see the
+    // declaration's comment in the header for why. This must work even on
+    // a frame where this editor's ImGui::Begin() is never called at all.
     if(container == nullptr) return;
     auto& timeline = container->getTimelineManager();
     // If the timeline was hidden last frame, commit actions performed by
@@ -5987,9 +6011,6 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         requestNoteSetupPopup = false;
     }
     drawNoteGroupSetupPopup(timeline);
-
-    // Every new timeline: the canvas, parameter and timelines menus.
-    drawNewTimelinePopup(timeline);
 }
 
 void ofxOceanodeTimelineController::jumpToBeat(double beat) {
@@ -6896,7 +6917,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
                                                       double clipStart, double clipDuration) {
     // A note group of an unfolded macro timeline is set up in that timeline.
     if(rowScope != nullptr) {
-        if(rowScope->container != nullptr) timeline.requestMacroScope(*rowScope->container);
+        if(rowScope->container != nullptr) requestMacroScope(*rowScope->container);
         return;
     }
     noteSetupCandidates.clear();

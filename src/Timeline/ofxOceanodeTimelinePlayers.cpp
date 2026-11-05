@@ -992,10 +992,24 @@ bool ofxOceanodeTimelineManager::timelinePlayheadBeat(const TimelineRef& given, 
     return false;
 }
 
+const ofxOceanodeTimelineManager::TimelineWindow* ofxOceanodeTimelineManager::windowShowing(const TimelineRef& given) const {
+    const auto ref = normalizedRef(given);
+    const TimelineWindow* found = nullptr;
+    for(const auto& window : timelineWindows) {
+        if(!(normalizedRef(window.ref) == ref)) continue;
+        if(found == nullptr || (!found->hostLabel.empty() && window.hostLabel.empty())) found = &window;
+    }
+    return found;
+}
+
 int ofxOceanodeTimelineManager::openTimelineWindow(const TimelineRef& ref) {
     int id = 1;
     for(const auto& window : timelineWindows) id = std::max(id, window.id + 1);
-    timelineWindows.push_back({id, normalizedRef(ref)});
+    TimelineWindow window;
+    window.id = id;
+    window.ref = normalizedRef(ref);
+    window.view = viewState; // the preset's zoom and scroll to start from
+    timelineWindows.push_back(window);
     return id;
 }
 

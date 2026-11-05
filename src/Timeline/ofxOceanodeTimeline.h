@@ -1358,6 +1358,16 @@ public:
         request = pendingParameterClip;
         return true;
     }
+    // Whether a request an editor handles (a parameter lane, a track rename,
+    // a parameter clip, a piano roll setup) waits, and which timeline it
+    // names ({}: none named): the controller picks the window to handle it.
+    bool peekEditorRequest(TimelineRef& ref) const {
+        if(!pendingParameterLanes.empty()) { ref = pendingParameterLanes.front().ref; return true; }
+        if(!pendingTrackRenameId.empty()) { ref = pendingTrackRenameRef; return true; }
+        if(parameterClipRequested) { ref = normalizedRef(pendingParameterClip.timeline); return true; }
+        if(pendingNoteGroupSetupParameter != nullptr) { ref = pendingNoteGroupSetupRef; return true; }
+        return false;
+    }
     // Every canvas a timeline can belong to: the root (""), then each
     // macro's, at any depth.
     std::vector<std::string> allCanvases() const;
@@ -1456,8 +1466,15 @@ public:
     // A host's window (a MacroMixer's, on a source graph's timeline) carries
     // its host label: titled "(label)" after it, its ImGui id keyed on it
     // (so docking finds it again across activations), never saved.
-    struct TimelineWindow { int id = 0; TimelineRef ref; std::string hostLabel; };
+    // Each window keeps its own zoom, scroll and column width (saved with it).
+    struct TimelineWindow { int id = 0; TimelineRef ref; std::string hostLabel; ofxOceanodeTimelineViewState view; };
     const std::vector<TimelineWindow>& getTimelineWindows() const { return timelineWindows; }
+    TimelineWindow* findTimelineWindow(int id) {
+        for(auto& window : timelineWindows) if(window.id == id) return &window;
+        return nullptr;
+    }
+    // A window on this timeline (one a host opened last); nullptr: none.
+    const TimelineWindow* windowShowing(const TimelineRef& ref) const;
     int openTimelineWindow(const TimelineRef& ref);
     void closeTimelineWindow(int id);
     // Opens (once) or closes every window on this timeline, for a host.

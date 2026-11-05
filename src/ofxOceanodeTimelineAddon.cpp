@@ -231,7 +231,7 @@ public:
 
     }
     // The canvas's right-click menu: a new timeline on that canvas (the
-    // main one, or a macro's at any depth), shown in the Timeline window.
+    // main one, or a macro's at any depth), opened in a window of its own.
     void drawCanvasMenu(ofxOceanodeContainer& canvas) override {
         const bool root = &canvas == host || &canvas == &host->getAutomationHost();
         const std::string canvasId = root ? std::string() : canvas.getCanvasID();
@@ -244,8 +244,8 @@ public:
             ImGui::CloseCurrentPopup();
         }
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", root ? "A new timeline, on the main canvas or a macro's, shown in the Timeline window."
-                                         : "A new timeline, on this macro's canvas or another, shown in the Timeline window.");
+            ImGui::SetTooltip("%s", root ? "A new timeline, on the main canvas or a macro's, in a window of its own."
+                                         : "A new timeline, on this macro's canvas or another, in a window of its own.");
     }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
         using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
@@ -308,7 +308,7 @@ public:
             auto always = [](const TimelineRef&) { return true; };
             auto never = [](const TimelineRef&) { return false; };
             perTimeline("Edit Timeline",
-                        "Open this macro's timeline in the timeline window.\nIt is saved with the macro (copies of a library macro share it).",
+                        "Open this macro's timeline in its window (a new one when none shows it).\nIt is saved with the macro (copies of a library macro share it).",
                         always, never, [&](const TimelineRef& ref) { manager.requestTimelineScope(ref); });
             {
                 // A track whose clips play one of this macro's timelines, with a

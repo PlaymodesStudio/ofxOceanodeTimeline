@@ -523,9 +523,11 @@ What was built, and where it differs from the plan above.
   playing free drives the same parameters twice; the outer one wins where both
   are active, and rest values of placed macro copies can override the free
   one's gates between its clips.
-- **Windows (phase 5).** Further windows are editor instances the main Timeline
-  controller hosts (no core change); each swaps in its own view state (zoom,
-  scroll) while it draws. File drops onto a further window are not handled.
+- **Windows (phase 5).** Every timeline lives in a window of its own: editor
+  instances the main Timeline controller hosts, which draws no window itself
+  (the core's `drawsOwnWindows` hook); each swaps in its own view state (zoom,
+  scroll, saved with the window) while it draws. A new timeline opens in a new
+  window; the Window menu lists every timeline, ticked while open.
 - **Note-group setup** works on the timeline shown in the editor.
 - **Phase 6.** Per clip (**Keep its own tempo**), not per timeline. Instead of
   non-linear time maps, an own-tempo segment becomes several linear

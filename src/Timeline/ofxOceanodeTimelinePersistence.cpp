@@ -48,6 +48,24 @@ constexpr float kDefaultTimelinePixelsPerSecond = 140.0f;
 constexpr float kMinTimelinePixelsPerSecond = 0.25f;
 constexpr float kMaxTimelinePixelsPerSecond = 600.0f;
 
+// A view (zoom, scroll, column width, row height) as the preset keeps it.
+ofJson viewToJson(const ofxOceanodeTimelineViewState& view) {
+    return {
+        {"pixelsPerSecond", view.pixelsPerSecond},
+        {"labelWidth", view.labelWidth},
+        {"trackHeight", view.trackHeight},
+        {"scrollX", view.scrollX}
+    };
+}
+void viewFromJson(const ofJson& json, ofxOceanodeTimelineViewState& view) {
+    if(!json.is_object()) return;
+    view.pixelsPerSecond = ofClamp(json.value("pixelsPerSecond", kDefaultTimelinePixelsPerSecond),
+                                   kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
+    view.scrollX = std::max(0.0f, json.value("scrollX", 0.0f));
+    view.labelWidth = ofClamp(json.value("labelWidth", 280.0f), 200.0f, 520.0f);
+    view.trackHeight = ofClamp(json.value("trackHeight", kMinTrackHeight), kMinTrackHeight, kMaxTrackHeight);
+}
+
 // Drum Grid lane data. Format 2: hits at beat positions. Files without a
 // format hold the first, index-based shape (steps x beatsPerStep), converted
 // on load so they play exactly as before.
@@ -376,12 +394,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     ofJson json;
     json["version"] = kPresetVersion;
     json["timebase"] = timebase == ofxOceanodeTimelineTimebase::Time ? "Time" : "Beats";
-    json["view"] = {
-        {"pixelsPerSecond", viewState.pixelsPerSecond},
-        {"labelWidth", viewState.labelWidth},
-        {"trackHeight", viewState.trackHeight},
-        {"scrollX", viewState.scrollX}
-    };
+    json["view"] = viewToJson(viewState);
     json["tempo"] = {
         {"enabled", bpmAutomationEnabled},
         {"collapsed", bpmLaneCollapsed},
@@ -426,7 +439,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         json["windows"] = ofJson::array();
         for(const auto& window : timelineWindows)
             if(window.hostLabel.empty())
-                json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline}});
+                json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline},
+                                           {"view", viewToJson(window.view)}});
     }
     return json;
 }
@@ -687,15 +701,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
     timebase = json.value("timebase", std::string("Beats")) == "Time"
         ? ofxOceanodeTimelineTimebase::Time
         : ofxOceanodeTimelineTimebase::Beats;
-    if(json.contains("view") && json["view"].is_object()) {
-        const auto& view = json["view"];
-        viewState.pixelsPerSecond = ofClamp(
-            view.value("pixelsPerSecond", kDefaultTimelinePixelsPerSecond),
-            kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
-        viewState.scrollX = std::max(0.0f, view.value("scrollX", 0.0f));
-        viewState.labelWidth = ofClamp(view.value("labelWidth", 280.0f), 200.0f, 520.0f);
-        viewState.trackHeight = ofClamp(view.value("trackHeight", kMinTrackHeight), kMinTrackHeight, kMaxTrackHeight);
-    }
+    if(json.contains("view")) viewFromJson(json["view"], viewState);
     playOnPresetLoad = json.value("playOnPresetLoad", false);
 
     if(json.contains("tempo") && json["tempo"].is_object()) {
@@ -780,10 +786,20 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 else legacyClipFollowTimelines.insert(ref);
             }
     if(json.contains("windows") && json["windows"].is_array())
-        for(const auto& window : json["windows"])
-            if(window.is_object())
-                timelineWindows.push_back({window.value("id", static_cast<int>(timelineWindows.size()) + 1),
-                                           normalizedRef({window.value("canvas", std::string()), window.value("timeline", std::string())})});
+        for(const auto& entry : json["windows"])
+            if(entry.is_object()) {
+                TimelineWindow window;
+                window.id = entry.value("id", static_cast<int>(timelineWindows.size()) + 1);
+                window.ref = normalizedRef({entry.value("canvas", std::string()), entry.value("timeline", std::string())});
+                window.view = viewState;
+                if(entry.contains("view")) viewFromJson(entry["view"], window.view);
+                timelineWindows.push_back(window);
+            }
+    // Every timeline lives in a window of its own; a preset saved with none
+    // (an older one, or every window closed) opens the root canvas's first
+    // timeline, so it is on screen after the load (the Window menu lists the rest).
+    if(timelineWindows.empty() && !rootTimelines.timelines.empty())
+        openTimelineWindow({std::string(), rootTimelines.timelines.front()->timelineId});
     if(json.contains("players") && json["players"].is_array())
         for(const auto& player : json["players"])
             if(player.is_object()) {

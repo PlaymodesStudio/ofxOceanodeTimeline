@@ -393,11 +393,22 @@ its own), loop (the global transport's, or its own), and the **BPM Lane**
 toggle (the global lane for a Global timeline, the timeline's own for a free
 one, none for a dependent one), all edited through
 `ofxOceanodeTimelineBpmEditor` on an `ofxOceanodeTimelineTempoLane` target.
-BPM fields apply on Enter. Further windows (`getTimelineWindows`, saved as
-`"windows"`) are editors of their own (`windowId` > 0) the main controller
-creates and draws from `drawBeforeWindows`; each swaps in its own
-`ofxOceanodeTimelineViewState` while it draws, so zoom and scroll are per
-window.
+BPM fields apply on Enter. There is no fixed Timeline window: every timeline
+is shown in a window of its own (`getTimelineWindows`, saved as `"windows"`,
+each with its view). The main controller (`windowId` 0) reports
+`drawsOwnWindows()` to the core, so the core draws no window named after it
+and the Window menu lists none; instead it creates and draws one editor per
+window (`windowId` > 0) from `drawBeforeWindows`, swapping each window's
+`ofxOceanodeTimelineViewState` in while it draws, so zoom and scroll are per
+window and saved with it. A new timeline (the New Timeline dialog, drawn from
+`drawPopups`) opens in a new window, brought forward; a request naming a
+timeline ("Add to Timeline", a track rename, a piano roll setup, "Edit
+Timeline" on a macro node) goes to the window showing it (`requestTaker`,
+`showTimelineInWindow`), opened when none does. Deleting a timeline closes
+its windows; a preset saved without windows opens one on the root canvas's
+first timeline; the Window menu's **Timelines** list (`drawWindowMenuItems`)
+opens and closes the rest. A harness that draws the main controller as an
+editor itself (`drawnAsEditor`) gets the requests on it.
 
 A timeline never drives anything above its canvas: binding paths are
 relative to the timeline's canvas (`resolverFor(sequence).pathOf` refuses a

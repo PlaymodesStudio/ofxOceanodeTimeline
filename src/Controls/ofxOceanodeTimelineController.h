@@ -8,6 +8,7 @@
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Timeline/ofxOceanodeTimeline.h"
+#include "imgui.h"
 #include <deque>
 #include <functional>
 #include <map>
@@ -35,20 +36,30 @@ public:
     // manager's window list gives it.
     ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> container, int windowId);
 
+    // The editor of one window: every timeline lives in a window of its own
+    // (see drawTimelineWindows). The main controller (windowId 0) draws no
+    // window of its own: it opens, draws and focuses the timeline windows,
+    // routes requests to them, and shows the dialogs. (A test harness may
+    // still draw it as an editor: it then handles requests itself.)
     void draw() override;
-    // Handles a track name/creation request queued by anything outside this
-    // controller (currently: a node parameter's right-click "Add to Timeline
-    // Track -> New Timeline Track"). Call this every frame from
-    // ofxOceanodeControls::draw() UNCONDITIONALLY -- not gated behind this
-    // controller's own window being visible/focused the way draw() is.
-    // Requesting a new track can happen while the Timeline window is closed
-    // or just isn't the active docked tab; if consuming the request were
-    // left inside draw() (as it used to be), it would silently wait until
-    // the user happened to bring that window/tab forward, and would then
-    // pop up anchored to wherever that window/tab's viewport is instead of
-    // the main canvas the user was actually looking at.
+    bool drawsOwnWindows() const override { return true; }
+    // Handles a request queued by anything outside this controller (a node
+    // parameter's right-click "Add to Timeline", a track rename, a piano
+    // roll setup), on the editor that shows the timeline it names. Called
+    // every frame from the main controller's drawBeforeWindows, on the
+    // editor it picks (requestTaker) -- never gated behind a window being
+    // visible or focused: the request would otherwise wait until its tab
+    // came forward, and its dialog would anchor to that window's viewport
+    // instead of the main canvas the user was looking at.
     void drawPendingTrackPopup();
     void drawBeforeWindows() override;
+    // The New Timeline dialog, from the persistent DockSpace.
+    void drawPopups() override;
+    // The Window menu's Timelines list: every timeline, ticked while open.
+    void drawWindowMenuItems() override;
+    // Shows a macro's canvas in this window (its first timeline, or its
+    // empty state) from the next frame: never mid-draw.
+    void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScopeContainer = &macroContainer; }
 
 private:
     void drawSynthNavigation(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
@@ -374,8 +385,25 @@ private:
     void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
-    // The main controller draws the further windows (before the core's windows).
+    // The main controller draws the timeline windows (before the core's windows).
     void drawTimelineWindows();
+    // The title of a window (its ImGui id after ###, stable across renames).
+    std::string timelineWindowTitle(const ofxOceanodeTimelineManager& timeline,
+                                    const ofxOceanodeTimelineManager::TimelineWindow& window) const;
+    // Brings a window forward once it has drawn (a new one draws unfocused first).
+    void focusTimelineWindow(ofxOceanodeTimelineManager& timeline, int id);
+    std::string pendingWindowFocus;
+    int pendingWindowFocusFrames = 0;
+    // The window showing that timeline, brought forward, else a new one on it. Its id.
+    int showTimelineInWindow(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    // The editor that handles the requests waiting (drawPendingTrackPopup):
+    // the one whose window shows the timeline a request names (opened if
+    // none does), else the last one picked, else the first window's; this
+    // controller itself while a harness draws it as an editor.
+    ofxOceanodeTimelineController& requestTaker(ofxOceanodeTimelineManager& timeline);
+    int requestTakerWindow = 0;
+    bool drawnAsEditor() const { return lastTimelineDrawFrame >= ImGui::GetFrameCount() - 1; }
+    ofxOceanodeContainer* pendingMacroScopeContainer = nullptr;
     // Seeks the timeline shown: its own transport (free, or a dependent
     // one's preview), else the global one it is linked to.
     void seekShownTimeline(ofxOceanodeTimelineManager& timeline, double beat);
@@ -397,7 +425,7 @@ private:
     void requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::TimelineRef pendingScope;
     bool pendingScopeRequested = false;
-    int windowId = 0; // 0: the main Timeline window
+    int windowId = 0; // 0: the main controller (no window of its own)
     bool secondary() const { return windowId != 0; }
     // Call before every BeginPopupModal: the modal opens on the main OS window,
     // centred, each time. Left to ImGui it reopens where imgui.ini last had it
@@ -410,8 +438,6 @@ private:
     bool windowScopeValid = false; // it could be shown (else its entry is left alone)
     // Scopes whose timeline is gone close (at the top of each draw).
     void dropDeadScopes(ofxOceanodeTimelineManager& timeline);
-    // A further window's zoom and scroll (the main window's are saved with the timeline).
-    ofxOceanodeTimelineViewState ownViewState;
     std::map<int, std::unique_ptr<ofxOceanodeTimelineController>> windowEditors;
     char timelineNameBuffer[128] = {};
     ofxOceanodeTimelineManager::TimelineRef timelineRenameRef;
