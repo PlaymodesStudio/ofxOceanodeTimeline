@@ -455,19 +455,27 @@ namespace {
 // value, so nothing has to be formatted back to text to find that out.
 // The write is marked, so the parameter's listeners can tell a timeline value
 // from a GUI or preset one (a MacroMixer starts its transition on Target).
+// continuous: a value lane (not notes or gates) wrote it, so the parameter's
+// automation filter may reshape a number or numeric vector first (a MacroMixer
+// morph blends a timeline that has just started into the running value).
 bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
                           const std::string& value,
-                          const std::string& valueType) {
+                          const std::string& valueType,
+                          bool continuous = false) {
     ofxOceanodeAbstractParameter::AutomationWriteScope writing(parameter);
     auto setIfChanged = [](auto& target, auto&& next) {
         if(target.get() == next) return false;
         target.set(next);
         return true;
     };
+    auto filtered = [&](auto next) {
+        using T = std::decay_t<decltype(next)>;
+        return continuous ? parameter.cast<T>().filterAutomationValue(next) : next;
+    };
     if(valueType == typeid(float).name())
-        return setIfChanged(parameter.cast<float>().getParameter(), static_cast<float>(automationText::parse(value)));
+        return setIfChanged(parameter.cast<float>().getParameter(), filtered(static_cast<float>(automationText::parse(value))));
     if(valueType == typeid(int).name())
-        return setIfChanged(parameter.cast<int>().getParameter(), static_cast<int>(automationText::parse(value)));
+        return setIfChanged(parameter.cast<int>().getParameter(), filtered(static_cast<int>(automationText::parse(value))));
     if(valueType == typeid(bool).name()) {
         const char* begin = value.data();
         const char* end = begin + value.size();
@@ -482,14 +490,14 @@ bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
         automationText::forEachToken(value, [&](const char* begin, const char* end) {
             result.push_back(static_cast<float>(automationText::parse(begin, end)));
         });
-        return setIfChanged(parameter.cast<std::vector<float>>().getParameter(), result);
+        return setIfChanged(parameter.cast<std::vector<float>>().getParameter(), filtered(std::move(result)));
     }
     if(valueType == typeid(std::vector<int>).name()) {
         std::vector<int> result;
         automationText::forEachToken(value, [&](const char* begin, const char* end) {
             result.push_back(static_cast<int>(automationText::parse(begin, end)));
         });
-        return setIfChanged(parameter.cast<std::vector<int>>().getParameter(), result);
+        return setIfChanged(parameter.cast<std::vector<int>>().getParameter(), filtered(std::move(result)));
     }
     if(valueType == typeid(std::vector<bool>).name()) {
         std::vector<bool> result;
@@ -4913,7 +4921,14 @@ void ofxOceanodeTimelineManager::applyAutomation() {
             // (Nothing is set, nor notified, when the value is already there.)
             ofxOceanodeScheduling::ScopedBackendSuppression suppression(
                 scheduledBackendPaths.count(path) > 0);
-            applyAutomationValue(*parameter, value, defaultBinding->valueType);
+            // A value lane's write may be reshaped (a MacroMixer morph blends
+            // it in); a scheduled path's never is, or the parameter and the
+            // backend, which already has the raw value, would disagree.
+            const auto lane = defaultBinding->laneType;
+            const bool continuous = scheduledBackendPaths.count(path) == 0 &&
+                (lane == ofxOceanodeTimelineLaneType::Curve || lane == ofxOceanodeTimelineLaneType::Number ||
+                 lane == ofxOceanodeTimelineLaneType::MultiValue || lane == ofxOceanodeTimelineLaneType::MultiSlider);
+            applyAutomationValue(*parameter, value, defaultBinding->valueType, continuous);
         }
         // Only state-capture curves compare against it (GUI edits while stopped).
         if(stateCapturePathsCache.count(path) > 0)
