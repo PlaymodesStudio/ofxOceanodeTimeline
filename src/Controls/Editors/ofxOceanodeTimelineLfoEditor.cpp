@@ -12,14 +12,12 @@ using namespace ofxOceanodeTimelineEditorUi;
 using namespace ofxOceanodeTimelineCurve;
 using namespace ofxOceanodeTimelineClipTime;
 
-bool ofxOceanodeTimelineLfoEditor::draw(
+void ofxOceanodeTimelineLfoEditor::draw(
     ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
     const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
     const ofxOceanodeTimelineEditorView& view,
     ofxOceanodeTimelineClipEditorState& editorState,
     float contentWidth, double beatPosition, ofxOceanodeTimelineEndEdit endEdit) {
-    bool renameRequested = false;
-
     const float timelineScrollX = timeline.getViewState().scrollX;
     // Laid out like drawLaneEditor's rows rather than as one fixed block: a
     // row per section, each reserving its own height from editorState.laneEditorHeights,
@@ -31,32 +29,14 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     constexpr float kDefaultResultHeight = 230.0f;
     constexpr float kDefaultLaneHeight = 120.0f;
 
-    ImGui::Dummy(ImVec2(contentWidth, 24.0f));
-    const ImVec2 headerMin = ImGui::GetItemRectMin();
-    const ImVec2 headerMax = ImGui::GetItemRectMax();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(ImVec2(headerMin.x + clipIndent, headerMin.y),
-                      ImVec2(headerMin.x + kLabelWidth, headerMax.y),
-                      mutedTrackColor(track.color, 0.28f, 0.46f));
-    dl->AddLine(ImVec2(headerMin.x + kLabelWidth - 1.0f, headerMin.y),
-                ImVec2(headerMin.x + kLabelWidth - 1.0f, headerMax.y),
-                IM_COL32(track.color.r, track.color.g, track.color.b, 210));
-    const bool editorFolded = editorState.foldedClipEditors.count(clip.id) > 0;
-    const auto header = drawClipEditorHeader(headerMin, headerMax, track, clip, editorFolded, "LFO", false);
-    if(header.toggleFold) {
-        if(editorFolded) editorState.foldedClipEditors.erase(clip.id); else editorState.foldedClipEditors.insert(clip.id);
-    }
-    if(header.rename) renameRequested = true;
-    if(header.close) editorState.clipEditorOpen = false;
-    finishAbsoluteLayout(ImVec2(headerMin.x, headerMax.y));
-    if(editorFolded) return renameRequested; // folded: only the header row is shown
-    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, sequence, track, clip, view, endEdit);
-    ImGui::TextWrapped("Control envelopes shape this oscillator. Only the LFO result drives the output target.");
-
     // Every row is a full-width block starting at the same x, so one origin
     // serves them all -- and it is kLabelWidth, the same gutter the clip rows
     // and every other lane editor use.
-    const float rowOriginX = headerMin.x;
+    const float rowOriginX = ImGui::GetCursorScreenPos().x;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, sequence, track, clip, view, endEdit);
+    ImGui::TextWrapped("Control envelopes shape this oscillator. Only the LFO result drives the output target.");
+
     const float graphOriginX = rowOriginX + kLabelWidth - timelineScrollX;
     const float graphWidth = std::max(40.0f, contentWidth - kLabelWidth);
     const float fallbackBpm = view.fallbackBpm;
@@ -111,10 +91,10 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                              mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
         if(auto* lane = timeline.getLane(sequence, track.id, clip.id, key)) drawLanePlayback(*lane);
-        if(ImGui::SmallButton((">##lfoExpand" + key).c_str())) editorState.collapsedLaneIds.erase(key);
+        if(foldButton(("##lfoExpand" + key).c_str(), false)) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
-        ImGui::Selectable((label + "##lfoHeaderCollapsed" + key).c_str(), focused,
-                          ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
+        laneNameSelectable(label + "##lfoHeaderCollapsed" + key, focused,
+                           ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
         const bool clicked = ImGui::IsItemClicked();
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         return clicked;
@@ -186,7 +166,7 @@ bool ofxOceanodeTimelineLfoEditor::draw(
                           ImVec2(kLabelWidth - 10.0f - clipIndent,
                                  std::max(1.0f, row.height - 8.0f - kLaneResizeHandleHeight)), false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        if(ImGui::SmallButton(("v##lfoCollapse" + key).c_str())) editorState.collapsedLaneIds.insert(key);
+        if(foldButton(("##lfoCollapse" + key).c_str(), true)) editorState.collapsedLaneIds.insert(key);
         ImGui::SameLine();
     };
 
@@ -267,8 +247,8 @@ bool ofxOceanodeTimelineLfoEditor::draw(
         anyLfoCanvasHovered = anyLfoCanvasHovered || row.canvasHovered;
         beginRowProperties(row, lane.id);
         drawLanePlayback(lane);
-        if(ImGui::Selectable((lane.name + "##lfoLaneHeader" + lane.id).c_str(), focused,
-                             ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
+        if(laneNameSelectable(lane.name + "##lfoLaneHeader" + lane.id, focused,
+                              ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
             editorState.editorLaneId = lane.id;
         }
         ImGui::TextDisabled("Control envelope / %.3g", current);
@@ -576,8 +556,6 @@ bool ofxOceanodeTimelineLfoEditor::draw(
     }
     // Drop a stale selection (clip closed/changed, point removed elsewhere).
     if(lfoSelectedClipId != clip.id) lfoSelectedPointIndex = -1;
-
-    return renameRequested;
 }
 
 void ofxOceanodeTimelineLfoEditor::drawPreview(const ofxOceanodeTimelineClipPreview& preview) const {
@@ -603,7 +581,7 @@ void ofxOceanodeTimelineLfoEditor::drawPreview(const ofxOceanodeTimelineClipPrev
         const float sx2 = min.x + beatOffset(sourceToTimelineBeat(clip, source2, 0));
         dl->AddLine(ImVec2(sx1, graphBottom - value1 * (graphBottom - graphTop)),
                     ImVec2(sx2, graphBottom - value2 * (graphBottom - graphTop)),
-                    IM_COL32(245, 245, 245, 200), 1.5f);
+                    previewInk(preview, 200), 1.5f);
     }
     dl->PopClipRect();
     return;

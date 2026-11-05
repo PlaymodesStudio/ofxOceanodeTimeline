@@ -45,7 +45,13 @@ struct ofxOceanodeTimelineClipPreview {
     ImVec2 min, max;
     float left, right;
     int firstVisibleCycle, lastVisibleCycle;
+    // What the content is drawn in: white, or the clip's own colour where
+    // the clip darkens its plot area.
+    ImU32 ink = IM_COL32(245, 245, 245, 255);
 };
+inline ImU32 previewInk(const ofxOceanodeTimelineClipPreview& preview, int alpha) {
+    return (preview.ink & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+}
 
 class ofxOceanodeTimelineLaneEditor {
 public:

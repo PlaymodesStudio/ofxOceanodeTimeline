@@ -2,6 +2,7 @@
 #include "ofxOceanodeTimelineLaneEditorUi.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeParameter.h"
+#include "ofxOceanodeNodeModel.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -19,6 +20,11 @@ void ofxOceanodeTimelineRegionEditor::drawProperties(ofxOceanodeTimelineLaneEdit
     auto* clip = &context.clip;
     auto* lane = &context.lane;
 
+    if(lane->type == ofxOceanodeTimelineLaneType::MultiGate && timeline.chordLaneInstrument(track, *lane)) {
+        drawDivision(*lane);
+        ImGui::TextDisabled("One row per chord: drag in a row\nto hold it, a block up / down to\nchange its chord. Right-click:\ndelete. One chord at a time.");
+        return;
+    }
     int rows = std::max(1, lane->multiRowCount);
     propertyLabel("Components");
     if(ImGui::DragInt("##Components", &rows, 0.1f, 1, 16))
@@ -55,6 +61,18 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const bool isValueRow = lane->type == ofxOceanodeTimelineLaneType::MultiValue;
+    // A Chords lane (a chord bank's gates): a row per chord, named and in the
+    // chord's colour, at least as many rows as the bank has chords.
+    ofxOceanodeTimelineInstrument chords;
+    const bool chordLane = !isValueRow && timeline.chordLaneInstrument(track, *lane, &chords);
+    const int chordCount = chordLane ? ofClamp(chords.voices, 0, 16) : 0;
+    if(chordCount > lane->multiRowCount) timeline.setLaneMultiRowCount(sequence, track.id, clip->id, lane->id, chordCount);
+    auto rowColor = [&](int r) {
+        return chordLane && r < chordCount && r < static_cast<int>(chords.rowColors.size()) ? chords.rowColors[r] : track.color;
+    };
+    auto chordName = [&](int r) {
+        return chordLane && r < chordCount && r < static_cast<int>(chords.rowNames.size()) ? chords.rowNames[r] : std::string();
+    };
     const int rowCount = std::max(1, lane->multiRowCount);
     if(isValueRow) {
         if(static_cast<int>(lane->multiValueRows.size()) != rowCount) lane->multiValueRows.resize(static_cast<size_t>(rowCount));
@@ -99,7 +117,12 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
     dl->PushClipRect(ImVec2(left, rowsTop), ImVec2(right, laneBottom), true);
     for(int r = 0; r < rowCount; ++r) {
         const float rTop = rowTopY(r), rBottom = rowBottomY(r);
-        dl->AddRectFilled(ImVec2(left, rTop), ImVec2(right, rBottom), IM_COL32(255, 255, 255, r % 2 ? 8 : 14));
+        if(chordLane) {
+            // a chord's row faintly in its colour; rows past the bank's chords dark
+            const ofColor c = rowColor(r);
+            dl->AddRectFilled(ImVec2(left, rTop), ImVec2(right, rBottom),
+                              r < chordCount ? IM_COL32(c.r, c.g, c.b, r % 2 ? 16 : 24) : IM_COL32(0, 0, 0, 60));
+        } else dl->AddRectFilled(ImVec2(left, rTop), ImVec2(right, rBottom), IM_COL32(255, 255, 255, r % 2 ? 8 : 14));
         for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
             if(isValueRow) {
                 for(const auto& region : lane->multiValueRows[r]) {
@@ -123,8 +146,15 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
                     const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, region.startBeat, cycle));
                     const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, region.end(), cycle));
                     if(x2 < left || x1 > right) continue;
+                    const ofColor c = rowColor(r);
                     dl->AddRectFilled(ImVec2(std::max(x1, left) + 1, rTop + 1), ImVec2(std::min(x2, right) - 1, rBottom - 1),
-                                      IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 225 : 115), 2);
+                                      IM_COL32(c.r, c.g, c.b, cycle == 0 ? 225 : 115), 2);
+                    // the chord's name on its block, where it fits
+                    const std::string name = chordName(r);
+                    if(!name.empty() && rBottom - rTop >= ImGui::GetTextLineHeight() &&
+                       std::min(x2, right) - std::max(x1, left) > ImGui::CalcTextSize(name.c_str()).x + 8.0f)
+                        dl->AddText(ImVec2(std::max(x1, left) + 4, rTop + std::max(0.0f, (rBottom - rTop - ImGui::GetTextLineHeight()) * 0.5f)),
+                                    IM_COL32(20, 20, 20, cycle == 0 ? 235 : 150), name.c_str());
                     if(showVelocity) {
                         const float velocity = ofClamp(region.velocity, 0.0f, 1.0f);
                         const ImVec2 sliderMin(std::max(x1, left) + 1, velocityTop);
@@ -143,6 +173,56 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
         }
     }
     dl->PopClipRect();
+    if(chordLane) {
+        // The header: each row's chord (number and name), the one playing lit.
+        const float headerLeft = canvas.zoneLeft - chordHeaderWidth() + 2.0f;
+        const float headerRight = canvas.zoneLeft - 3.0f;
+        int playing = -1;
+        if(canvas.beatPosition >= clip->startBeat && canvas.beatPosition < clip->startBeat + clip->durationBeats) {
+            const double at = timelineToSourceBeat(*clip, canvas.beatPosition);
+            for(int r = 0; r < rowCount && playing < 0; ++r)
+                for(const auto& region : lane->multiGateRows[r])
+                    if(at >= region.startBeat && at < region.end()) { playing = r; break; }
+        }
+        for(int r = 0; r < rowCount; ++r) {
+            const float rTop = rowTopY(r), rBottom = rowBottomY(r);
+            const ofColor c = rowColor(r);
+            const bool real = r < chordCount;
+            dl->AddRectFilled(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom),
+                              real ? IM_COL32(c.r, c.g, c.b, r == playing ? 255 : 150) : IM_COL32(40, 40, 40, 160), 2);
+            if(r == playing) dl->AddRect(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom), IM_COL32(255, 255, 255, 230), 2, 0, 1.5f);
+            if(rBottom - rTop >= ImGui::GetTextLineHeight() - 2.0f) {
+                std::string label = ofToString(r + 1) + "  " + (real ? chordName(r) : std::string("-"));
+                const bool locked = real && r < static_cast<int>(chords.rowLocked.size()) && chords.rowLocked[r];
+                if(locked) {
+                    // a locked chord (Generate keeps it): a small bar at the header's right
+                    dl->AddRectFilled(ImVec2(headerRight - 5.0f, rTop + 2.0f), ImVec2(headerRight - 2.0f, rBottom - 2.0f),
+                                      IM_COL32(20, 20, 20, 200), 1.0f);
+                }
+                while(label.size() > 1 && ImGui::CalcTextSize(label.c_str()).x > headerRight - headerLeft - 8.0f) label.pop_back();
+                dl->AddText(ImVec2(headerLeft + 4, rTop + std::max(0.0f, (rBottom - rTop - ImGui::GetTextLineHeight()) * 0.5f)),
+                            real ? IM_COL32(20, 20, 20, 240) : IM_COL32(150, 150, 150, 200), label.c_str());
+            }
+            const bool overHeader = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                    ImGui::IsMouseHoveringRect(ImVec2(headerLeft, rTop), ImVec2(headerRight, rBottom));
+            if(overHeader && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+                ImGui::SetTooltip(real ? "Chord %d: %s\nDrag in its row to hold it.\nRight-click: change this chord" : "Row %d: no chord in the bank\n(its blocks play nothing).",
+                                  r + 1, chordName(r).c_str());
+                if(real && chords.rowMenu && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    context.focusedLaneId = lane->id;
+                    chordMenuLaneId = lane->id;
+                    chordMenuRow = r;
+                    ImGui::OpenPopup(("##chordRowMenu" + lane->id).c_str());
+                }
+            }
+        }
+        if(chordMenuLaneId == lane->id && ImGui::BeginPopup(("##chordRowMenu" + lane->id).c_str())) {
+            // the node's own menu for that chord (it may change the chord, never the rows)
+            if(chordMenuRow >= 0 && chordMenuRow < chordCount && chords.rowMenu) chords.rowMenu(chordMenuRow);
+            else ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
     if(isFocused) {
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const double timelineBeat = beatAtOffset(mouse.x - timelineMin.x);
@@ -236,7 +316,18 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
            regionDragRow >= 0 && regionDragRow < regionRowCount) {
             const int regionCount = isValueRow ? static_cast<int>(lane->multiValueRows[regionDragRow].size())
                                                 : static_cast<int>(lane->multiGateRows[regionDragRow].size());
-            if(regionDragIndex >= 0 && regionDragIndex < regionCount) {
+            if(chordLane && regionDragMode == RegionDragMode::Move && hoveredRow >= 0 && hoveredRow != regionDragRow &&
+               regionDragIndex >= 0 && regionDragIndex < regionCount) {
+                // dragged up or down: the block plays another chord
+                auto& from = lane->multiGateRows[regionDragRow];
+                const auto region = from[regionDragIndex];
+                from.erase(from.begin() + regionDragIndex);
+                lane->multiGateRows[hoveredRow].push_back(region);
+                regionDragRow = hoveredRow;
+                regionDragIndex = static_cast<int>(lane->multiGateRows[hoveredRow].size()) - 1;
+            }
+            if(regionDragIndex >= 0 && regionDragIndex < static_cast<int>(isValueRow ? lane->multiValueRows[regionDragRow].size()
+                                                                                     : lane->multiGateRows[regionDragRow].size())) {
                 double newStart = regionDragOriginalStart;
                 double newDuration = regionDragOriginalDuration;
                 const double gridStep = std::max(1.0 / kPPQ, lane->beatsPerStep);
@@ -278,8 +369,12 @@ void ofxOceanodeTimelineRegionEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCo
             // A block drawn or moved over others joins them: one block, not
             // stacked copies (which also drew brighter where they overlap).
             if(regionDragMode != RegionDragMode::None && !isValueRow &&
-               regionDragRow >= 0 && regionDragRow < static_cast<int>(lane->multiGateRows.size()))
-                ofxOceanodeTimelineMergeOverlappingGates(lane->multiGateRows[regionDragRow]);
+               regionDragRow >= 0 && regionDragRow < static_cast<int>(lane->multiGateRows.size())) {
+                auto& row = lane->multiGateRows[regionDragRow];
+                if(chordLane && regionDragIndex >= 0 && regionDragIndex < static_cast<int>(row.size()))
+                    carveOtherRows(*lane, regionDragRow, row[regionDragIndex].startBeat, row[regionDragIndex].end());
+                ofxOceanodeTimelineMergeOverlappingGates(row);
+            }
             velocityDrag = false;
             regionDragMode = RegionDragMode::None;
             regionDragRow = -1;
@@ -317,6 +412,10 @@ void ofxOceanodeTimelineRegionEditor::drawPreview(const ofxOceanodeTimelineClipP
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const bool isValueRow = lane->type == ofxOceanodeTimelineLaneType::MultiValue;
+    // a Chords lane's blocks in their chords' colours
+    ofxOceanodeTimelineInstrument chords;
+    if(!isValueRow && preview.timeline.chordLaneInstrument(preview.track, *lane, &chords))
+        chords.rowColors.resize(std::min(chords.rowColors.size(), static_cast<size_t>(std::max(0, chords.voices))));
     const int rowCount = std::max(1, lane->multiRowCount);
     const int miniCycles = clip.repeatContent
         ? std::max(1, static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip)))) : 1;
@@ -330,13 +429,16 @@ void ofxOceanodeTimelineRegionEditor::drawPreview(const ofxOceanodeTimelineClipP
                 for(const auto& region : lane->multiValueRows[r]) {
                     const float x1 = min.x + beatOffset(sourceToTimelineBeat(clip, region.startBeat, cycle));
                     const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, region.end(), cycle));
-                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), IM_COL32(245, 245, 245, 170));
+                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), previewInk(preview, 170));
                 }
             } else if(!isValueRow && r < static_cast<int>(lane->multiGateRows.size())) {
+                const bool coloured = r < static_cast<int>(chords.rowColors.size());
+                const ImU32 ink = coloured ? IM_COL32(chords.rowColors[r].r, chords.rowColors[r].g, chords.rowColors[r].b, 210)
+                                           : previewInk(preview, 170);
                 for(const auto& region : lane->multiGateRows[r]) {
                     const float x1 = min.x + beatOffset(sourceToTimelineBeat(clip, region.startBeat, cycle));
                     const float x2 = min.x + beatOffset(sourceToTimelineBeat(clip, region.end(), cycle));
-                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), IM_COL32(245, 245, 245, 170));
+                    dl->AddRectFilled(ImVec2(x1, rTop), ImVec2(x2, rBottom), ink);
                 }
             }
         }
@@ -344,4 +446,31 @@ void ofxOceanodeTimelineRegionEditor::drawPreview(const ofxOceanodeTimelineClipP
     dl->PopClipRect();
     return;
 
+}
+
+float ofxOceanodeTimelineRegionEditor::chordHeaderWidth() {
+    return std::max(84.0f, ImGui::GetFontSize() * 7.0f);
+}
+
+void ofxOceanodeTimelineRegionEditor::carveOtherRows(ofxOceanodeTimelineLane& lane, int row, double start, double end) {
+    constexpr double kEpsilon = 1e-6;
+    for(int r = 0; r < static_cast<int>(lane.multiGateRows.size()); ++r) {
+        if(r == row) continue;
+        std::vector<ofxOceanodeTimelineGateRegion> kept;
+        for(const auto& region : lane.multiGateRows[r]) {
+            if(region.end() <= start + kEpsilon || region.startBeat >= end - kEpsilon) { kept.push_back(region); continue; }
+            if(region.startBeat < start - kEpsilon) {
+                auto before = region;
+                before.durationBeats = start - region.startBeat;
+                kept.push_back(before);
+            }
+            if(region.end() > end + kEpsilon) {
+                auto after = region;
+                after.startBeat = end;
+                after.durationBeats = region.end() - end;
+                kept.push_back(after);
+            }
+        }
+        lane.multiGateRows[r] = std::move(kept);
+    }
 }

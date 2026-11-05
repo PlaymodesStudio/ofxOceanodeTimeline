@@ -3,7 +3,10 @@
 #include "ofxOceanode.h"
 #include "ofxOceanodeTimelineController.h"
 #include "lfoTrack.h"
+#include "timelineTransport.h"
 #include "imgui.h"
+#include <algorithm>
+#include <functional>
 #include <stdexcept>
 
 namespace {
@@ -12,7 +15,6 @@ public:
     explicit TimelineExtension(ofxOceanodeContainer* owner) : host(owner), manager(owner) {}
     ofxOceanodeContainer* host;
     ofxOceanodeTimelineManager manager;
-    char newTimelineName[64] = "";
     void clear() override { manager.clear(); }
     void beginParameterCache() override { manager.beginParameterCache(); }
     void evaluateAutomation() override { manager.evaluateAutomation(); }
@@ -47,16 +49,28 @@ public:
     void loadMacroPreset(ofxOceanodeContainer& macroContainer, const std::string& folder) override {
         manager.loadMacroSequence(macroContainer, folder);
     }
+    std::vector<CanvasTimeline> canvasTimelines(const ofxOceanodeContainer& canvas) override {
+        std::vector<CanvasTimeline> result;
+        const auto& windows = manager.getTimelineWindows();
+        for(const auto& listed : manager.timelinesOfCanvas(canvas.getCanvasID())) {
+            const auto ref = ofxOceanodeTimelineManager::normalizedRef(listed);
+            if(!manager.timelineExists(ref)) continue;
+            const bool open = std::any_of(windows.begin(), windows.end(), [&](const auto& window) {
+                return ofxOceanodeTimelineManager::normalizedRef(window.ref) == ref;
+            });
+            result.push_back({ref.canvas, ref.timeline, manager.timelineName(ref), open});
+        }
+        return result;
+    }
+    void setTimelineWindowOpen(const std::string& canvas, const std::string& timeline, bool open,
+                               const std::string& label) override {
+        manager.setHostedTimelineWindow({canvas, timeline}, open, label);
+    }
     bool saveMacroPreset(const ofxOceanodeContainer& macroContainer, const std::string& folder) const override {
         return manager.saveMacroSequence(macroContainer, folder);
     }
     void removeParameterBindings(ofxOceanodeAbstractParameter& parameter) override {
-        const auto path = host->getTimelineParameterPath(parameter);
-        std::vector<std::pair<std::string, std::string>> bindings;
-        for(const auto& track : manager.getTracks())
-            for(const auto& binding : track.bindings)
-                if(binding.parameterPath == path) bindings.emplace_back(track.id, binding.id);
-        for(const auto& binding : bindings) manager.removeBinding(binding.first, binding.second);
+        manager.removeBindingsOf(parameter);
     }
     void drawParameterMenu(ofxOceanodeAbstractParameter& absParam) override {
         if(manager.isStepLaneCompatible(absParam)){
@@ -81,7 +95,11 @@ public:
                     auto* canvasContainer = timelineManager.canvasContainer(canvas);
                     if(canvasContainer == nullptr) continue;
                     eligibleCanvases.push_back({canvas, canvasContainer});
-                    for(const auto& ref : timelineManager.timelinesOfCanvas(canvas))
+                    // A canvas with no timeline is offered too: a New
+                    // Timeline entry that makes its first one.
+                    auto refs = timelineManager.timelinesOfCanvas(canvas);
+                    if(refs.empty()) refs.push_back(TimelineRef{canvas, std::string()});
+                    for(const auto& ref : refs)
                         eligible.push_back({ref, canvasContainer});
                 }
             }
@@ -90,89 +108,91 @@ public:
                 return canvas == host ? host->getTimelineParameterPath(absParam)
                                       : host->getTimelineParameterPath(absParam, *canvas);
             };
-            auto addTo = [&](const TimelineRef& ref, const std::string& trackId) {
-                auto* sequence = timelineManager.timelineFor(ref);
-                if(sequence == nullptr) return;
-                const bool isMain = sequence == &timelineManager.getMainSequence();
-                if(trackId.empty()) {
-                    const auto newTrack = isMain ? timelineManager.createTrack() : timelineManager.createTrack(*sequence, absParam.getName());
-                    if(!(isMain ? timelineManager.addBinding(newTrack, absParam) : timelineManager.addBinding(*sequence, newTrack, absParam)).empty() && isMain)
-                        timelineManager.requestTrackRename(newTrack, true); // named before it is used
-                } else if(isMain) {
-                    timelineManager.requestParameterLane(trackId, absParam);
-                } else {
-                    timelineManager.addBinding(*sequence, trackId, absParam);
-                }
-                if(!isMain) timelineManager.requestTimelineScope(ref);
+            // A new clip driving it on a track of that timeline (a new track
+            // when trackId is empty), a new lane in one of the track's clips,
+            // or one more target of a lane, set up in the editor's dialog.
+            using Kind = ofxOceanodeTimelineManager::ParameterClipRequest::Kind;
+            auto requestClip = [&](const TimelineRef& ref, ofxOceanodeContainer* canvas, const std::string& trackId,
+                                   Kind kind = Kind::Clip) {
+                timelineManager.requestParameterClip({ref, trackId, pathFor(canvas), kind});
             };
-            auto trackItems = [&](const TimelineRef& ref, ofxOceanodeContainer* canvas) {
-                auto* sequence = timelineManager.timelineFor(ref);
-                if(sequence == nullptr) return;
-                if(ImGui::Selectable(("New Timeline Track##new" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str())) addTo(ref, std::string());
-                const std::string path = pathFor(canvas);
-                bool first = true;
-                for(const auto& track : sequence->tracks) {
-                    if(track.isWaveTrack || track.isFolder || track.isMacroTrack()) continue;
-                    if(first) { ImGui::Separator(); first = false; }
-                    const bool bound = std::any_of(track.bindings.begin(), track.bindings.end(),
-                                                   [&](const auto& binding) { return binding.parameterPath == path; });
-                    if(ImGui::Selectable((track.name + "##track" + track.id).c_str(), bound)) addTo(ref, track.id);
-                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add a lane for this parameter to this track.");
-                }
-            };
-            auto timelineLabel = [&](const TimelineRef& ref) {
+            auto timelineHeading = [&](const TimelineRef& ref) {
                 const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
-                return (root ? std::string() : ref.canvas + " > ") + timelineManager.timelineName(ref) +
-                       "##add" + ofxOceanodeTimelineManager::timeSourceId(ref);
+                return (root ? std::string() : ref.canvas + " > ") + timelineManager.timelineName(ref);
             };
             // A new timeline (on the parameter's canvas or one around it), with
-            // the parameter on a first track, shown in the editor.
-            auto newTimelineItems = [&]() {
-                ImGui::SetNextItemWidth(180.0f);
-                ImGui::InputTextWithHint("##newTimelineName", "Name", newTimelineName, sizeof(newTimelineName));
-                for(const auto& [canvas, canvasContainer] : eligibleCanvases) {
-                    const bool root = canvas.empty();
-                    const std::string where = eligibleCanvases.size() == 1 ? std::string("Create")
-                        : root ? std::string("On the main canvas") : "In " + timelineManager.getMacroSequenceLabel(*canvasContainer);
-                    if(!ImGui::Selectable((where + "##newTimelineOn" + canvas).c_str())) continue;
-                    const auto ref = timelineManager.addTimeline(canvas, newTimelineName);
-                    if(auto* sequence = ref.canvas.empty() && ref.timeline.empty() ? nullptr : timelineManager.timelineFor(ref)) {
-                        const auto track = timelineManager.createTrack(*sequence, absParam.getName());
-                        timelineManager.addBinding(*sequence, track, absParam);
-                        timelineManager.requestTimelineScope(ref);
-                    }
-                    newTimelineName[0] = '\0';
-                }
+            // the parameter on a first track: named, coloured and placed in
+            // the New Timeline dialog, then shown in the editor.
+            auto requestNewTimeline = [&](const std::string& owner) {
+                ofxOceanodeTimelineManager::NewTimelineRequest request;
+                for(const auto& entry : eligibleCanvases) request.canvases.push_back(entry.first);
+                request.canvas = owner;
+                request.parameter = &absParam;
+                timelineManager.requestNewTimeline(request);
             };
             if(ImGui::BeginMenu("Add to Timeline")){
-                if(eligible.size() == 1) {
-                    trackItems(eligible.front().first, eligible.front().second); // one timeline: straight to its tracks
-                } else {
-                    for(const auto& [ref, canvas] : eligible) {
-                        if(ImGui::BeginMenu(timelineLabel(ref).c_str())) {
-                            trackItems(ref, canvas);
-                            ImGui::EndMenu();
+                // Every timeline it can join, each with its tracks under it
+                // (New Track... first), in one list.
+                for(const auto& [ref, canvas] : eligible) {
+                    ImGui::PushID(ofxOceanodeTimelineManager::timeSourceId(ref).c_str());
+                    if(!timelineManager.timelineExists(ref)) {
+                        // A macro with no timeline yet: its own is made in the New
+                        // Timeline dialog (name, colour, owner), this parameter on it.
+                        const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
+                        if(ImGui::Selectable(((root ? std::string("Main canvas") : ref.canvas) + " > New Timeline...").c_str()))
+                            requestNewTimeline(ref.canvas);
+                        if(ImGui::IsItemHovered())
+                            ImGui::SetTooltip(root ? "The main canvas has no timeline: make one,\nwith this parameter on its first track."
+                                                   : "This macro has no timeline: make one,\nwith this parameter on its first track.");
+                        ImGui::PopID();
+                        continue;
+                    }
+                    ImGui::TextDisabled("%s", timelineHeading(ref).c_str());
+                    ImGui::Indent();
+                    if(ImGui::Selectable("New Track...")) requestClip(ref, canvas, std::string());
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("A new track with a clip driving this parameter.");
+                    if(auto* sequence = timelineManager.findTimeline(ref)) {
+                        const std::string path = pathFor(canvas);
+                        for(const auto& track : sequence->tracks) {
+                            if(track.isWaveTrack || track.isFolder || track.isMacroTrack()) continue;
+                            const bool bound = std::any_of(track.bindings.begin(), track.bindings.end(),
+                                                           [&](const auto& binding) { return binding.parameterPath == path; });
+                            // A track already driving it reads as such.
+                            const std::string label = track.name + (bound ? "  (bound)" : "") + "##track" + track.id;
+                            if(ImGui::BeginMenu(label.c_str())) {
+                                const bool hasClip = std::any_of(track.clips.begin(), track.clips.end(),
+                                                                 [](const auto& clip) { return !clip.isLfo; });
+                                const bool hasLane = std::any_of(track.clips.begin(), track.clips.end(),
+                                                                 [](const auto& clip) { return !clip.isLfo && !clip.lanes.empty(); });
+                                if(ImGui::MenuItem("New Target...", nullptr, false, hasLane)) requestClip(ref, canvas, track.id, Kind::Target);
+                                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                    ImGui::SetTooltip(hasLane ? "Make an existing lane of this track drive this parameter too."
+                                                              : "This track has no lane to drive this parameter yet.");
+                                if(ImGui::MenuItem("New Lane...", nullptr, false, hasClip)) requestClip(ref, canvas, track.id, Kind::Lane);
+                                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                    ImGui::SetTooltip(hasClip ? "A new lane driving this parameter, in one of this track's clips."
+                                                              : "This track has no clip to add a lane to yet.");
+                                if(ImGui::MenuItem("New Clip...")) requestClip(ref, canvas, track.id);
+                                if(ImGui::IsItemHovered()) ImGui::SetTooltip("A new clip on this track driving this parameter.");
+                                ImGui::EndMenu();
+                            }
                         }
                     }
+                    ImGui::Unindent();
+                    ImGui::PopID();
                 }
                 ImGui::Separator();
-                if(ImGui::BeginMenu("New Timeline")) {
-                    newTimelineItems();
-                    ImGui::EndMenu();
-                }
+                if(ImGui::Selectable("New Timeline...")) requestNewTimeline(eligibleCanvases.empty() ? std::string() : eligibleCanvases.back().first);
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("A new timeline with this parameter on its first track:\n"
-                                      "on this canvas or one around it (in a macro without a timeline yet,\n"
-                                      "it becomes the macro's own).");
+                                      "on this canvas or one around it.");
                 ImGui::EndMenu();
             }
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Choose the timeline (this canvas's or one around it), then the track.");
             // Wherever it is bound, in any of those timelines.
             struct BoundLocation { TimelineRef ref; std::string trackId, label, bindingId; };
             std::vector<BoundLocation> boundLocations;
             for(const auto& [ref, canvas] : eligible) {
-                auto* sequence = timelineManager.timelineFor(ref);
+                auto* sequence = timelineManager.findTimeline(ref);
                 if(sequence == nullptr) continue;
                 const std::string path = pathFor(canvas);
                 for(const auto& track : sequence->tracks)
@@ -181,10 +201,8 @@ public:
                             boundLocations.push_back({ref, track.id, timelineManager.timelineName(ref) + " > " + track.name, binding.id});
             }
             auto removeAt = [&](const BoundLocation& location) {
-                if(auto* sequence = timelineManager.timelineFor(location.ref)) {
-                    if(sequence == &timelineManager.getMainSequence()) timelineManager.removeBinding(location.trackId, location.bindingId);
-                    else timelineManager.removeBinding(*sequence, location.trackId, location.bindingId);
-                }
+                if(auto* sequence = timelineManager.timelineFor(location.ref))
+                    timelineManager.removeBinding(*sequence, location.trackId, location.bindingId);
             };
             if(boundLocations.size() == 1){
                 if(ImGui::Selectable("Remove from Timeline")) removeAt(boundLocations.front());
@@ -213,110 +231,187 @@ public:
 
     }
     // The canvas's right-click menu: a new timeline on that canvas (the
-    // main one, or a macro's at any depth), shown in the Timeline window.
+    // main one, or a macro's at any depth), opened in a window of its own.
     void drawCanvasMenu(ofxOceanodeContainer& canvas) override {
         const bool root = &canvas == host || &canvas == &host->getAutomationHost();
         const std::string canvasId = root ? std::string() : canvas.getCanvasID();
         ImGui::Separator();
-        if(ImGui::Selectable("Add new timeline")) {
-            const auto ref = manager.addTimeline(canvasId, std::string());
-            if(!(ref.canvas.empty() && ref.timeline.empty())) manager.requestTimelineScope(ref); // {} : not made
+        if(ImGui::Selectable("New Timeline")) {
+            // Its name, colour and owner (this canvas preselected) in the New Timeline dialog.
+            ofxOceanodeTimelineManager::NewTimelineRequest request;
+            request.canvas = canvasId;
+            manager.requestNewTimeline(request);
             ImGui::CloseCurrentPopup();
         }
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", root ? "A new timeline on the main canvas, shown in the Timeline window."
-                                         : "A new timeline on this macro's canvas (its own one when it has none yet),\nshown in the Timeline window.");
+            ImGui::SetTooltip("%s", root ? "A new timeline, on the main canvas or a macro's, in a window of its own."
+                                         : "A new timeline, on this macro's canvas or another, in a window of its own.");
     }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
-                // A macro's own timeline, opened in the timeline editor.
-                if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&model); macro != nullptr && macro->getContainer()){
-                    ImGui::Separator();
-                    if(ImGui::Selectable("Edit Timeline")){
-                        manager.requestMacroScope(*macro->getContainer());
+        using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
+        // The canvases a node's timeline tracks can go on: the root, then the
+        // ones around the node, down to its own.
+        auto canvasesAround = [&](const std::string& own) {
+            std::vector<std::string> canvases{std::string()};
+            for(size_t at = own.find(" / "); ; at = own.find(" / ", at + 3)) {
+                const std::string prefix = at == std::string::npos ? own : own.substr(0, at);
+                if(!prefix.empty() && prefix != "Canvas" && prefix != "0" &&
+                   std::find(canvases.begin(), canvases.end(), prefix) == canvases.end())
+                    canvases.push_back(prefix);
+                if(at == std::string::npos) break;
+            }
+            return canvases;
+        };
+        auto timelineLabel = [&](const TimelineRef& ref) {
+            const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
+            return (root ? std::string() : ref.canvas + " > ") + manager.timelineName(ref);
+        };
+        auto newTimelineOn = [&](const std::string& canvas, ofxOceanodeAbstractParameter* parameter) {
+            ofxOceanodeTimelineManager::NewTimelineRequest request;
+            request.canvas = canvas;
+            request.parameter = parameter;
+            manager.requestNewTimeline(request);
+            ImGui::CloseCurrentPopup();
+        };
+        // A macro: its timelines (any number), each opened in the editor,
+        // placed as clips, set free or followed by the nodes inside.
+        if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&model); macro != nullptr && macro->getContainer()){
+            using ClockSource = ofxOceanodeTimelineManager::ClockSource;
+            const std::string macroCanvas = manager.canvasIdOf(*macro->getContainer());
+            const auto own = manager.timelinesOfCanvas(macroCanvas);
+            ImGui::Separator();
+            // One item acting on the macro's only timeline, a submenu over
+            // several, or the way to make its first one.
+            auto perTimeline = [&](const char* label, const char* tip, const std::function<bool(const TimelineRef&)>& enabled,
+                                   const std::function<bool(const TimelineRef&)>& checked,
+                                   const std::function<void(const TimelineRef&)>& act) {
+                if(own.empty()) {
+                    if(ImGui::MenuItem((std::string(label) + ": New Timeline...").c_str())) newTimelineOn(macroCanvas, nullptr);
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("This macro has no timeline: make one first.\n%s", tip);
+                } else if(own.size() == 1) {
+                    if(ImGui::MenuItem(label, nullptr, checked(own.front()), enabled(own.front()))) {
+                        act(own.front());
                         ImGui::CloseCurrentPopup();
                     }
-                    if(ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Open this macro's own timeline in the timeline window.\nIt is saved with the macro (copies of a library macro share it).");
-                    {
-                        // A track whose clips play this macro's timeline, with a first clip at
-                        // the start, on a timeline of the canvas the macro is in or one around it.
-                        using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
-                        const auto placed = manager.refForCanvas(*macro->getContainer());
-                        std::vector<TimelineRef> hosts;
-                        std::vector<std::string> canvases{std::string()};
-                        const std::string own = model.getParents();
-                        for(size_t at = own.find(" / "); ; at = own.find(" / ", at + 3)) {
-                            const std::string prefix = at == std::string::npos ? own : own.substr(0, at);
-                            if(!prefix.empty() && prefix != "Canvas" && prefix != "0" &&
-                               std::find(canvases.begin(), canvases.end(), prefix) == canvases.end())
-                                canvases.push_back(prefix);
-                            if(at == std::string::npos) break;
-                        }
-                        for(const auto& canvas : canvases)
-                            for(const auto& ref : manager.timelinesOfCanvas(canvas))
-                                if(!manager.timelineReaches(placed, ref)) hosts.push_back(ref);
-                        auto addTo = [&](const TimelineRef& host) {
-                            auto* sequence = manager.timelineFor(host);
-                            if(sequence == nullptr) return;
-                            const auto trackId = manager.createTimelineTrack(*sequence, placed);
-                            if(!trackId.empty()) manager.createMacroClip(*sequence, trackId, 0.0);
-                            if(!(host.canvas.empty() && host.timeline.empty())) manager.requestTimelineScope(host);
+                    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tip);
+                } else if(ImGui::BeginMenu(label)) {
+                    for(const auto& ref : own) {
+                        const std::string item = manager.timelineName(ref) + "##" + ofxOceanodeTimelineManager::timeSourceId(ref);
+                        if(ImGui::MenuItem(item.c_str(), nullptr, checked(ref), enabled(ref))) {
+                            act(ref);
                             ImGui::CloseCurrentPopup();
-                        };
-                        const char* tip = "A track whose clips play this macro's timeline:\n"
-                                          "place, repeat, stretch and offset them like any clip.";
-                        if(hosts.size() <= 1) {
-                            if(ImGui::Selectable("Add to Timeline as Macro Track") && !hosts.empty()) addTo(hosts.front());
-                            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-                        } else if(ImGui::BeginMenu("Add to Timeline as Macro Track")) {
-                            for(const auto& host : hosts) {
-                                const bool root = host.canvas.empty() || host.canvas == "Canvas" || host.canvas == "0";
-                                const std::string label = (root ? std::string() : host.canvas + " > ") + manager.timelineName(host) +
-                                                          "##host" + ofxOceanodeTimelineManager::timeSourceId(host);
-                                if(ImGui::MenuItem(label.c_str())) addTo(host);
+                        }
+                    }
+                    ImGui::EndMenu();
+                } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            };
+            auto always = [](const TimelineRef&) { return true; };
+            auto never = [](const TimelineRef&) { return false; };
+            perTimeline("Edit Timeline",
+                        "Open this macro's timeline in its window (a new one when none shows it).\nIt is saved with the macro (copies of a library macro share it).",
+                        always, never, [&](const TimelineRef& ref) { manager.requestTimelineScope(ref); });
+            {
+                // A track whose clips play one of this macro's timelines, with a
+                // first clip at the start, on a timeline of the canvas the macro
+                // is in or one around it.
+                const char* tip = "A track whose clips play this macro's timeline:\n"
+                                  "place, repeat, stretch and offset them like any clip.";
+                auto hostsFor = [&](const TimelineRef& placed) {
+                    std::vector<TimelineRef> hosts;
+                    for(const auto& canvas : canvasesAround(model.getParents())) {
+                        if(manager.canvasContainer(canvas) == nullptr) continue;
+                        for(const auto& ref : manager.timelinesOfCanvas(canvas))
+                            if(!manager.timelineReaches(placed, ref)) hosts.push_back(ref);
+                    }
+                    return hosts;
+                };
+                auto addTo = [&](const TimelineRef& placed, const TimelineRef& host) {
+                    auto* sequence = manager.timelineFor(host);
+                    if(sequence == nullptr) return;
+                    const auto trackId = manager.createTimelineTrack(*sequence, placed);
+                    if(!trackId.empty()) manager.createMacroClip(*sequence, trackId, 0.0);
+                    manager.requestTimelineScope(host);
+                    ImGui::CloseCurrentPopup();
+                };
+                auto hostItems = [&](const TimelineRef& placed) {
+                    const auto hosts = hostsFor(placed);
+                    if(hosts.empty()) ImGui::TextDisabled("No timeline around it to place it on.");
+                    for(const auto& host : hosts) {
+                        const std::string label = timelineLabel(host) + "##host" + ofxOceanodeTimelineManager::timeSourceId(host);
+                        if(ImGui::MenuItem(label.c_str())) addTo(placed, host);
+                    }
+                };
+                if(own.empty()) {
+                    if(ImGui::MenuItem("Add to Timeline as Macro Track: New Timeline...")) newTimelineOn(macroCanvas, nullptr);
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("This macro has no timeline: make one first.\n%s", tip);
+                } else if(ImGui::BeginMenu("Add to Timeline as Macro Track")) {
+                    if(own.size() == 1) hostItems(own.front());
+                    else
+                        for(const auto& placed : own)
+                            if(ImGui::BeginMenu((manager.timelineName(placed) + "##placed" + ofxOceanodeTimelineManager::timeSourceId(placed)).c_str())) {
+                                hostItems(placed);
+                                ImGui::EndMenu();
                             }
-                            ImGui::EndMenu();
-                        } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-                    }
-                    {
-                        const auto ref = manager.refForCanvas(*macro->getContainer());
-                        bool free = manager.isFree(ref);
-                        if(ImGui::MenuItem("Independent tempo for its timeline", nullptr, free)) {
-                            manager.setFree(ref, !free);
-                            ImGui::CloseCurrentPopup();
-                        }
-                        if(ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Its timeline gets its own transport: play, stop and seek it by itself,\n"
-                                              "at its own tempo, alongside the main timeline. Nodes inside the macro\n"
-                                              "set to Auto follow it. (Its macro clips still play it too.)");
-                        bool followsClips = manager.nodesFollowClips(ref.canvas);
-                        if(ImGui::MenuItem("Nodes inside follow its clips", nullptr, followsClips, !free)) {
-                            manager.setNodesFollowClips(ref.canvas, !followsClips);
-                            ImGui::CloseCurrentPopup();
-                        }
-                        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip(free ? "Its timeline has an independent tempo: nodes inside follow it."
-                                                   : "Nodes inside set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
-                                                     "the macro clip playing it: its beat, restarting with each clip and repeat,\n"
-                                                     "at its stretched tempo. Off: they follow the timeline around the macro.");
-                        if(ImGui::MenuItem("Open its timeline in a new window")) {
-                            manager.openTimelineWindow(ref);
-                            ImGui::CloseCurrentPopup();
-                        }
-                    }
-                }
-                // An instrument (a synth that takes notes): a piano-roll row
-                // playing it, set up in the timeline's dialog.
-                ofxOceanodeTimelineInstrument instrument;
-                if(model.getTimelineInstrument(instrument) &&
-                   (instrument.gate != nullptr || instrument.pitch != nullptr)){
-                    ImGui::Separator();
-                    if(ImGui::Selectable("Add to Timeline as Instrument...")){
-                        manager.requestNoteGroupSetup(
-                            instrument.gate != nullptr ? instrument.gate : instrument.pitch);
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
+                    ImGui::EndMenu();
+                } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            }
+            perTimeline("Free tempo for its timeline",
+                        "The timeline gets its own transport: play, stop and seek it by itself,\n"
+                        "at its own tempo, alongside the global transport. Nodes inside the macro\n"
+                        "set to Auto follow it. Off: linked to the global transport.\n"
+                        "(Greyed out: placed as clips in another timeline, it depends on that one.)",
+                        [&](const TimelineRef& ref) { return manager.clockSourceOf(ref) != ClockSource::Dependent; },
+                        [&](const TimelineRef& ref) { return manager.clockSourceOf(ref) == ClockSource::Free; },
+                        [&](const TimelineRef& ref) { manager.setFree(ref, manager.clockSourceOf(ref) != ClockSource::Free); });
+            perTimeline("Nodes inside follow its clips",
+                        "Nodes inside set to Auto (Phasor, LFO Track, Beat Transport...) follow\n"
+                        "the macro clip playing that timeline: its beat, restarting with each clip and\n"
+                        "repeat, at its stretched tempo. One timeline of the macro at most. Off: they\n"
+                        "follow the timeline around the macro. (Greyed out: a free timeline, followed anyway.)",
+                        [&](const TimelineRef& ref) { return manager.clockSourceOf(ref) != ClockSource::Free; },
+                        [&](const TimelineRef& ref) { return manager.nodesFollowClips(ref); },
+                        [&](const TimelineRef& ref) { manager.setNodesFollowClips(ref, !manager.nodesFollowClips(ref)); });
+            perTimeline("Open its timeline in a new window", "The timeline in a Timeline window of its own.",
+                        always, never, [&](const TimelineRef& ref) { manager.openTimelineWindow(ref); });
+        }
+        // An instrument (a synth that takes notes): a piano-roll row playing
+        // it, set up in the timeline's dialog; a chord bank: a track with a
+        // Chords lane, one row per chord. On a timeline of the node's canvas
+        // or one around it.
+        ofxOceanodeTimelineInstrument instrument;
+        if(model.getTimelineInstrument(instrument) && (instrument.gate != nullptr || instrument.pitch != nullptr)){
+            const bool chords = instrument.chords && instrument.gate != nullptr;
+            const char* label = chords ? "Add to Timeline as Chord Track" : "Add to Timeline as Instrument...";
+            const char* tip = chords ? "A track whose clips hold the chords: one row per chord of the bank,\ndrag in a row to play that chord for that long."
+                                     : "A piano-roll row playing this instrument, set up in the timeline's dialog.";
+            auto* parameter = instrument.gate != nullptr ? instrument.gate : instrument.pitch;
+            const auto canvases = canvasesAround(model.getParents());
+            std::vector<TimelineRef> candidates;
+            for(const auto& canvas : canvases)
+                for(const auto& ref : manager.timelinesOfCanvas(canvas)) candidates.push_back(ref);
+            auto addOn = [&](const TimelineRef& ref) {
+                if(chords) {
+                    auto* sequence = manager.timelineFor(ref);
+                    if(sequence == nullptr) return;
+                    const std::string trackId = manager.createTrack(*sequence, model.getParameterGroup().getName());
+                    if(!manager.requestParameterLane(ref, trackId, *parameter)) manager.removeTrack(*sequence, trackId);
+                } else manager.requestNoteGroupSetup(ref, parameter);
+                ImGui::CloseCurrentPopup();
+            };
+            ImGui::Separator();
+            if(candidates.empty()) {
+                if(ImGui::Selectable((std::string(label) + ": New Timeline...").c_str())) newTimelineOn(canvases.back(), parameter);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("No timeline on this canvas or around it: make one, with this instrument on its first track.");
+            } else if(candidates.size() == 1) {
+                if(ImGui::Selectable(label)) addOn(candidates.front());
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            } else if(ImGui::BeginMenu(label)) {
+                for(const auto& ref : candidates)
+                    if(ImGui::MenuItem((timelineLabel(ref) + "##on" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str())) addOn(ref);
+                ImGui::EndMenu();
+            } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        }
     }
 };
 }
@@ -345,5 +440,6 @@ void ofxOceanodeTimeline::setup(ofxOceanode& oceanode) {
     attach(*container);
     if(oceanode.getController<ofxOceanodeTimelineController>()) return;
     oceanode.registerModel<lfoTrack>("Generators");
+    oceanode.registerModel<timelineTransport>("Timeline");
     oceanode.addController(std::make_shared<ofxOceanodeTimelineController>(container));
 }

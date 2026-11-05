@@ -33,7 +33,7 @@ int main() {
     {
         // Dragging a clip while its notes are queued corrects them.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         Instrument synth(owner, model, 4);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.2,0.4,60,0.8f,1}};
@@ -61,7 +61,7 @@ int main() {
         // Back-to-back notes on a scheduled lane retrigger with a gate-off of
         // a few milliseconds, not the frame path's >= 10 ms.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingLookaheadAdaptive(false); model.setSchedulingLookaheadMs(500);
         Instrument synth(owner, model, 4);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.25,0.5,60,0.8f,1}, {0.75,0.5,60,0.8f,1}};
@@ -85,7 +85,7 @@ int main() {
         // The frame path keeps the long gap: just after the join the gate is
         // still off when nothing is scheduled.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Instrument synth(owner, model, 4);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.25,0.5,60,0.8f,1}, {0.75,0.5,60,0.8f,1}};
@@ -97,7 +97,7 @@ int main() {
         // The window follows recent frame intervals, capped by the setting;
         // a fixed window is the setting itself.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         const double adaptive = model.effectiveSchedulingLookaheadMs();
         if(adaptive < 50.0 || adaptive > 120.0) {
             std::cerr << "Adaptive lookahead " << adaptive << " ms\n"; ++failures;
@@ -109,7 +109,7 @@ int main() {
         model.setSchedulingLookaheadAdaptive(false);
         assert(model.effectiveSchedulingLookaheadMs() == 500);
         const auto saved = model.toJson();
-        ofxOceanodeTimelineManager copy(&owner);
+        TestTimeline copy(&owner);
         copy.fromJson(saved);
         assert(!copy.isSchedulingLookaheadAdaptive() && copy.getSchedulingLookaheadMs() == 500);
     }

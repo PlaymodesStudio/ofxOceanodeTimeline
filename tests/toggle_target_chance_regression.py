@@ -11,7 +11,7 @@ int main() {
     ofxOceanodeParameter<float> a,b,c;
     a.bindParameter(av); b.bindParameter(bv); c.bindParameter(cv);
     for(auto* p : {&a,&b,&c}) owner.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager model(&owner); model.setSchedulingEnabled(false);
+    TestTimeline model(&owner); model.setSchedulingEnabled(false);
     const auto t=model.createTrack("Toggles");
     const auto ab=model.addBinding(t,a), bb=model.addBinding(t,b), cb=model.addBinding(t,c);
     const auto clip=model.createClip(t,"Toggle",0,32);
@@ -64,7 +64,7 @@ int main() {
         ofxOceanodeParameter<std::vector<float>> x,y;
         x.bindParameter(xv); y.bindParameter(yv);
         for(auto* p : {&x,&y}) host.targets[p->getEscapedName()]=p;
-        ofxOceanodeTimelineManager rows(&host); rows.setSchedulingEnabled(false);
+        TestTimeline rows(&host); rows.setSchedulingEnabled(false);
         const auto rt=rows.createTrack("Gates");
         const auto xb=rows.addBinding(rt,x), yb=rows.addBinding(rt,y);
         const auto rc=rows.createClip(rt,"Gates",0,32);

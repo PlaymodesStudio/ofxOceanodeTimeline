@@ -25,7 +25,5 @@ struct ofxOceanodeTimelineClipEditorState {
     std::string resizingLaneId;
     float laneResizeStartMouseY = 0.0f;
     float laneResizeStartHeight = 0.0f;
-    // Clip editors folded down to their header row (session state, per clip id).
-    std::set<std::string> foldedClipEditors;
     bool clipEditorOpen = false;
 };

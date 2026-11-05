@@ -12,8 +12,16 @@ public:
     void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
+    bool hasPointSelection(const std::string& laneId) const {
+        return curveSelectionLaneId == laneId && !curveSelectedPointIndices.empty();
+    }
+    void clearSelection() { curveSelectedPointIndices.clear(); }
 
 private:
+    // Selected points (indices into the lane's curvePoints, which stay in
+    // beat order) of the one lane they were picked in.
+    std::string curveSelectionLaneId;
+    std::set<int> curveSelectedPointIndices;
     int curveDragPointIndex = -1;
     int curveValuePointIndex = -1;
     float curveNumericValue = 0.0f;

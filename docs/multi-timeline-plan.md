@@ -3,6 +3,12 @@
 Status: phases 1 to 6 implemented (core and SuperCollider on
 `megabranch26_A`, the timeline addon on `main`). Written 2026-10-31. See "Implementation notes" at the end for what was
 built differently from the plan below.
+
+Superseded in part on 2026-11-04 (branch `equal-timelines`): the "root
+player" and the main timeline this plan keeps are gone. Every canvas owns a
+plain list of timelines, none default, and every timeline is played by an
+engine; the primary manager plays nothing. See "Several timelines and their
+clock sources" in `architecture.md` for the current design.
 Touches `ofxOceanode` (core transport) and `ofxOceanodeTimeline`, and is checked
 against `ofxOceanodeSuperCollider` (the timestamping backend and its box synths).
 
@@ -517,9 +523,11 @@ What was built, and where it differs from the plan above.
   playing free drives the same parameters twice; the outer one wins where both
   are active, and rest values of placed macro copies can override the free
   one's gates between its clips.
-- **Windows (phase 5).** Further windows are editor instances the main Timeline
-  controller hosts (no core change); each swaps in its own view state (zoom,
-  scroll) while it draws. File drops onto a further window are not handled.
+- **Windows (phase 5).** Every timeline lives in a window of its own: editor
+  instances the main Timeline controller hosts, which draws no window itself
+  (the core's `drawsOwnWindows` hook); each swaps in its own view state (zoom,
+  scroll, saved with the window) while it draws. A new timeline opens in a new
+  window; the Window menu lists every timeline, ticked while open.
 - **Note-group setup** works on the timeline shown in the editor.
 - **Phase 6.** Per clip (**Keep its own tempo**), not per timeline. Instead of
   non-linear time maps, an own-tempo segment becomes several linear

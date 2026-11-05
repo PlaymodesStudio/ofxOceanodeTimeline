@@ -8,10 +8,13 @@
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Timeline/ofxOceanodeTimeline.h"
+#include "imgui.h"
 #include <deque>
 #include <functional>
 #include <map>
+#include <array>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -33,20 +36,30 @@ public:
     // manager's window list gives it.
     ofxOceanodeTimelineController(std::shared_ptr<ofxOceanodeContainer> container, int windowId);
 
+    // The editor of one window: every timeline lives in a window of its own
+    // (see drawTimelineWindows). The main controller (windowId 0) draws no
+    // window of its own: it opens, draws and focuses the timeline windows,
+    // routes requests to them, and shows the dialogs. (A test harness may
+    // still draw it as an editor: it then handles requests itself.)
     void draw() override;
-    // Handles a track name/creation request queued by anything outside this
-    // controller (currently: a node parameter's right-click "Add to Timeline
-    // Track -> New Timeline Track"). Call this every frame from
-    // ofxOceanodeControls::draw() UNCONDITIONALLY -- not gated behind this
-    // controller's own window being visible/focused the way draw() is.
-    // Requesting a new track can happen while the Timeline window is closed
-    // or just isn't the active docked tab; if consuming the request were
-    // left inside draw() (as it used to be), it would silently wait until
-    // the user happened to bring that window/tab forward, and would then
-    // pop up anchored to wherever that window/tab's viewport is instead of
-    // the main canvas the user was actually looking at.
+    bool drawsOwnWindows() const override { return true; }
+    // Handles a request queued by anything outside this controller (a node
+    // parameter's right-click "Add to Timeline", a track rename, a piano
+    // roll setup), on the editor that shows the timeline it names. Called
+    // every frame from the main controller's drawBeforeWindows, on the
+    // editor it picks (requestTaker) -- never gated behind a window being
+    // visible or focused: the request would otherwise wait until its tab
+    // came forward, and its dialog would anchor to that window's viewport
+    // instead of the main canvas the user was looking at.
     void drawPendingTrackPopup();
     void drawBeforeWindows() override;
+    // The New Timeline dialog, from the persistent DockSpace.
+    void drawPopups() override;
+    // The Window menu's Timelines list: every timeline, ticked while open.
+    void drawWindowMenuItems() override;
+    // Shows a macro's canvas in this window (its first timeline, or its
+    // empty state) from the next frame: never mid-draw.
+    void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScopeContainer = &macroContainer; }
 
 private:
     void drawSynthNavigation(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
@@ -119,6 +132,37 @@ private:
     void drawClipRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawClipPopup(ofxOceanodeTimelineManager& timeline);
+    // What the New Clip dialogs create on a track of the shown timeline,
+    // driving one binding: a clip with one lane of the chosen type (an LFO
+    // clip for the LFO entry), a clip of the binding's note group, or --
+    // for a Piano Roll / Drum Grid not in a group yet -- nothing yet: the
+    // note setup dialog opens to pick its parameters.
+    struct NewClip { enum Kind { Clip, NoteGroupClip, NoteSetup } kind = Clip; std::string clipId, laneId; };
+    NewClip createNewClip(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& bindingId,
+                          int typeIndex, const std::string& name, double startBeat, double durationBeats);
+    // A lane of the chosen type in a clip of the shown timeline, driving the
+    // binding (a value lane spans its parameter's range). Returns its id.
+    std::string addBoundLane(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& clipId,
+                             const ofxOceanodeTimelineParameterBinding& binding, int typeIndex, const std::string& name);
+    // A parameter's right-click "Add to Timeline": a new clip driving it on a
+    // track of a timeline, or on a new track, set up in one dialog.
+    void openParameterClipDialog(ofxOceanodeTimelineManager& timeline,
+                                 const ofxOceanodeTimelineManager::ParameterClipRequest& request);
+    void drawParameterClipPopup(ofxOceanodeTimelineManager& timeline);
+    void drawParameterLanePopup(ofxOceanodeTimelineManager& timeline, ofxOceanodeAbstractParameter& parameter,
+                                const ofxOceanodeTimelineTrack& track);
+    void drawParameterTargetPopup(ofxOceanodeTimelineManager& timeline, ofxOceanodeAbstractParameter& parameter,
+                                  const ofxOceanodeTimelineTrack& track);
+    ofxOceanodeTimelineManager::ParameterClipRequest parameterClip;
+    char parameterClipTrackName[128] = {};
+    float parameterClipTrackColor[4] = {};
+    char parameterClipName[128] = {};
+    int parameterClipType = 1; // Curve
+    std::string parameterLaneClipId; // New Lane / New Target: the clip it goes in
+    std::string parameterTargetLaneId; // New Target: the lane that drives it too
+    double parameterClipStart = 0.0;
+    double parameterClipDuration = 4.0;
+    bool requestParameterClipPopup = false;
     bool createWaveClipFromFile(ofxOceanodeTimelineManager& timeline,
                                 const std::string& trackId,
                                 const std::string& filePath,
@@ -186,6 +230,11 @@ private:
     // mouse is over (same row, another parameter row, another track).
     enum class ClipDragMode { None, Move, Resize, Stretch, Repeat, TrimStart, Duplicate };
     ClipDragMode clipDragMode = ClipDragMode::None;
+    // What dragging a clip's right edge does now: the End edit tool, or the
+    // one Shift (trim / extend) or Cmd (stretch) holds; Wave clips stretch.
+    ClipDragMode rightEdgeDragMode(bool waveTrack) const;
+    // Shows the cursor of an edge drag (trim, stretch or repeat) at the mouse.
+    void showEdgeCursor(ClipDragMode mode) const;
     std::string draggingTrackId;
     std::string draggingClipId;
     // Chance knob at a clip's top-left: a vertical drag sets the clip chance.
@@ -279,66 +328,137 @@ private:
     std::vector<TrackHeaderRow> trackHeaderRows;
     bool requestTrackDeletion = false;
     std::string trackDeletionId;
-    // ---- Editor scope: which sequence the editor shows and edits ----
-    // Empty: the main timeline. Otherwise macro timelines, outermost first
-    // (the breadcrumb). Entering or leaving clears selections and the clip
-    // editor, whose ids belong to a sequence.
+    // ---- Editor scope: which timeline the editor shows and edits ----
+    // The timeline shown (shownRef, {canvas, ""} while the canvas shown has
+    // none) and the macro canvases from the root down to it, outermost
+    // first (the breadcrumb: `scopes`, empty on the main canvas). Showing
+    // another clears selections and the clip editor, whose ids belong to a
+    // timeline.
     struct EditorScope {
-        ofxOceanodeTimelineSequence* sequence = nullptr;
+        ofxOceanodeTimelineSequence* sequence = nullptr; // the shown one, on the last entry
         ofxOceanodeContainer* container = nullptr; // the macro's (pickers resolve inside it)
         std::string label;
-        ofxOceanodeTimelineManager::TimelineRef ref; // which timeline it is
+        ofxOceanodeTimelineManager::TimelineRef ref; // the shown timeline on the last entry; {canvas, ""} above it
     };
     std::vector<EditorScope> scopes;
+    ofxOceanodeTimelineManager::TimelineRef shownRef;
+    ofxOceanodeTimelineSequence* shownSequence = nullptr; // re-resolved each frame (dropDeadScopes)
+    // The timeline edited: the shown one (a scratch, never shown, while the
+    // canvas shown has none: the editor draws its empty state then).
     ofxOceanodeTimelineSequence& scope(ofxOceanodeTimelineManager& timeline) {
         if(rowScope != nullptr) return *rowScope->sequence;
-        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+        static ofxOceanodeTimelineSequence none;
+        return shownSequence != nullptr ? *shownSequence : none;
     }
     const ofxOceanodeTimelineSequence& scope(const ofxOceanodeTimelineManager& timeline) const {
         if(rowScope != nullptr) return *rowScope->sequence;
-        return scopes.empty() ? timeline.getMainSequence() : *scopes.back().sequence;
+        static const ofxOceanodeTimelineSequence none;
+        return shownSequence != nullptr ? *shownSequence : none;
     }
+    // A macro's canvas is shown (its timeline, or its empty state).
     bool inMacroScope() const { return !scopes.empty(); }
+    // The canvas shown ("" the main canvas).
+    std::string shownCanvas() const { return shownRef.canvas; }
+    // A canvas: its first timeline, else its empty state.
+    void showCanvas(ofxOceanodeTimelineManager& timeline, const std::string& canvas);
     void enterMacroScope(ofxOceanodeTimelineManager& timeline, ofxOceanodeContainer& macroContainer);
-    // Any timeline: a macro's (as above) or a canvas's further one.
+    // Any timeline of any canvas.
     void enterTimelineScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
-    // The timeline shown (the main one when no scope is open).
-    ofxOceanodeTimelineManager::TimelineRef scopeRef() const {
-        return scopes.empty() ? ofxOceanodeTimelineManager::TimelineRef{} : scopes.back().ref;
-    }
+    void setShown(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref,
+                  ofxOceanodeTimelineSequence* sequence);
+    // A canvas to show on the next draw (leaving a breadcrumb step needs the manager).
+    std::string pendingCanvasToShow;
+    bool pendingCanvasShowRequested = false;
+    // The timeline shown ({canvas, ""}: none on that canvas).
+    ofxOceanodeTimelineManager::TimelineRef scopeRef() const { return shownRef; }
     // ---- Timelines: the list, the shown one's player, further windows ----
-    // The scope bar at the top of the window: which timeline is shown (a
-    // kind badge, the path to it, the timelines menu) and, for one other
-    // than the main, its player (transport when independent, own tempo).
+    // The scope bar at the top of the window: which timeline is shown (its
+    // name on a badge that opens the navigator, the actions menu) and, for
+    // one other than the main, its player (whether it is independent, else
+    // its own tempo; an independent one's transport is the toolbar's).
     void drawScopeBar(ofxOceanodeTimelineManager& timeline);
-    void drawTimelinesMenu(ofxOceanodeTimelineManager& timeline);
+    void drawTimelineActions(ofxOceanodeTimelineManager& timeline);
+    // The navigator: every timeline under its canvas, the canvases nested as
+    // they are, with how each plays, its tempo, meter and sync.
+    void drawTimelinesTree(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& shown);
     void drawTimelineRenamePopup(ofxOceanodeTimelineManager& timeline);
     void drawPlayerBar(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawPlayerSettingsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
     void drawTempoPointsPopup(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
-    // The main controller draws the further windows (before the core's windows).
+    // The main controller draws the timeline windows (before the core's windows).
     void drawTimelineWindows();
-    // Seeks the timeline shown: its own transport when it plays on its own,
-    // else the main one.
+    // The title of a window (its ImGui id after ###, stable across renames).
+    std::string timelineWindowTitle(const ofxOceanodeTimelineManager& timeline,
+                                    const ofxOceanodeTimelineManager::TimelineWindow& window) const;
+    // Brings a window forward once it has drawn (a new one draws unfocused first).
+    void focusTimelineWindow(ofxOceanodeTimelineManager& timeline, int id);
+    std::string pendingWindowFocus;
+    int pendingWindowFocusFrames = 0;
+    // The window showing that timeline, brought forward, else a new one on it. Its id.
+    int showTimelineInWindow(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineManager::TimelineRef& ref);
+    // The editor that handles the requests waiting (drawPendingTrackPopup):
+    // the one whose window shows the timeline a request names (opened if
+    // none does), else the last one picked, else the first window's; this
+    // controller itself while a harness draws it as an editor.
+    ofxOceanodeTimelineController& requestTaker(ofxOceanodeTimelineManager& timeline);
+    int requestTakerWindow = 0;
+    bool drawnAsEditor() const { return lastTimelineDrawFrame >= ImGui::GetFrameCount() - 1; }
+    ofxOceanodeContainer* pendingMacroScopeContainer = nullptr;
+    // Seeks the timeline shown: its own transport (free, or a dependent
+    // one's preview), else the global one it is linked to.
     void seekShownTimeline(ofxOceanodeTimelineManager& timeline, double beat);
+    // The loop of the timeline shown, true while it is on: the global
+    // transport's for one linked to it, else its own.
+    bool shownLoop(const ofxOceanodeTimelineManager& timeline, double& startBeat, double& endBeat) const;
+    void setShownLoop(ofxOceanodeTimelineManager& timeline, double startBeat, double endBeat);
+    // Whether the timeline shown plays on a transport of its own (its loop
+    // and tempo are its own) rather than the global one.
+    bool shownOwnsTransport(const ofxOceanodeTimelineManager& timeline) const;
+    // The BPM lane of the timeline shown: the global one for a timeline
+    // linked to the global transport, its own for a free one, none for a
+    // dependent one (it follows its host's tempo).
+    const std::vector<ofxOceanodeTimelineCurvePoint>* shownBpmLane(const ofxOceanodeTimelineManager& timeline) const;
+    ofxOceanodeTimelineTempoLane shownBpmLaneTarget(ofxOceanodeTimelineManager& timeline);
+    // No timeline to show (none made yet on this canvas): how to make one.
+    void drawEmptyState(ofxOceanodeTimelineManager& timeline);
     // Shows the timeline a timeline track places, from the next frame.
     void requestPlacedScope(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track);
     ofxOceanodeTimelineManager::TimelineRef pendingScope;
     bool pendingScopeRequested = false;
-    int windowId = 0; // 0: the main Timeline window
+    int windowId = 0; // 0: the main controller (no window of its own)
     bool secondary() const { return windowId != 0; }
+    // Call before every BeginPopupModal: the modal opens on the main OS window,
+    // centred, each time. Left to ImGui it reopens where imgui.ini last had it
+    // (often near the top of the screen), and outside the main window
+    // multi-viewport docking gives it an OS window of its own, where clicks
+    // can land a few pixels off.
+    static void centerNextModal();
     bool windowScopeApplied = false;
     ofxOceanodeTimelineManager::TimelineRef appliedWindowRef; // the entry as last applied
     bool windowScopeValid = false; // it could be shown (else its entry is left alone)
     // Scopes whose timeline is gone close (at the top of each draw).
     void dropDeadScopes(ofxOceanodeTimelineManager& timeline);
-    // A further window's zoom and scroll (the main window's are saved with the timeline).
-    ofxOceanodeTimelineViewState ownViewState;
     std::map<int, std::unique_ptr<ofxOceanodeTimelineController>> windowEditors;
     char timelineNameBuffer[128] = {};
     ofxOceanodeTimelineManager::TimelineRef timelineRenameRef;
     bool requestTimelineRename = false;
-    // Back to the scope at `depth` (0: the main timeline).
+    // ---- New Timeline: every new timeline's name, colour and owner ----
+    // Asked through the manager (requestNewTimeline) from the canvas and
+    // parameter menus and the timelines menu; the main controller shows it.
+    void openNewTimelineDialog(ofxOceanodeTimelineManager& timeline,
+                               const ofxOceanodeTimelineManager::NewTimelineRequest& request);
+    void drawNewTimelinePopup(ofxOceanodeTimelineManager& timeline);
+    // The name and colour it gets on the owner picked (while not edited).
+    void suggestNewTimelineDefaults(ofxOceanodeTimelineManager& timeline);
+    ofxOceanodeTimelineManager::NewTimelineRequest newTimelineRequest;
+    std::vector<std::string> newTimelineOwners, newTimelineOwnerLabels;
+    int newTimelineOwner = 0;
+    char newTimelineName[128] = {};
+    bool newTimelineNameEdited = false;
+    float newTimelineColor[3] = {};
+    bool newTimelineColorEdited = false;
+    bool requestNewTimelinePopup = false;
+    // Back to the canvas at `depth` of the breadcrumb (0: the main canvas).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();
     // ---- Unfolded macro tracks: a macro's timeline edited in place ----
@@ -366,6 +486,9 @@ private:
     // null: a clip of the scope's own). The ids say which clip, since ids
     // repeat between sequences.
     RowScope editorRowScope;
+    // The unfolded macro timeline whose clip's chance knob is dragged
+    // (sequence null: a clip of the scope's own).
+    RowScope chanceDragScope;
     std::string editorRowTrackId, editorRowClipId;
     std::string editorRowGroup; // the unfolded rows it docks in (macro track ids)
     bool innerEditorOpen() const {
@@ -408,8 +531,9 @@ private:
     std::vector<ofxOceanodeTimelineSequence*> unfoldedSequences, unfoldedSequencesDrawn;
     std::vector<ofxOceanodeTimelineSequence*> historySequences(ofxOceanodeTimelineManager& timeline) const;
     std::vector<ofxOceanodeTimelineSequence*> undoOrder, redoOrder;
-    // Two clips of one track to merge (applied after the track iteration).
-    std::string mergeTrackId, mergeFirstClipId, mergeSecondClipId;
+    // Clips of one track to merge into one (applied after the track iteration).
+    std::string mergeTrackId;
+    std::vector<std::string> mergeClipIds;
     bool requestClipDeletion = false;
     std::string clipDeletionTrackId;
     std::string clipDeletionClipId;
@@ -450,8 +574,25 @@ private:
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     float zoomAnchorViewportX = 0.0f;
     double zoomAnchorUntil = 0.0;
+    // A two-finger swipe over the clips zooms (vertical) or scrolls
+    // (horizontal), never both: it locks to the axis it mostly moves along
+    // and keeps it until the wheel goes quiet.
+    enum class WheelAxis { None, Vertical, Horizontal };
+    WheelAxis wheelAxis = WheelAxis::None;
+    ImVec2 wheelAxisTravel = ImVec2(0.0f, 0.0f);
+    double lastWheelTime = -1.0;
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
+    // The time scrollbar: its middle scrolls, a handle at either end of its
+    // thumb zooms, the view's other edge staying at the same time.
+    enum class ScrollbarDrag { None, Body, Start, End };
+    ScrollbarDrag scrollbarDrag = ScrollbarDrag::None;
+    double scrollbarDragSeconds = 0.0;   // the scrollbar's length in seconds when the drag began
+    double scrollbarFixedSeconds = 0.0;  // the view edge that stays put
+    struct { float x1 = 0, y1 = 0, x2 = 0, y2 = 0; } scrollbarThumb; // drawn this frame
     std::vector<double> tapTimes;      // tap tempo (seconds)
+    // The BPM fields are text fields (a number typed applies on Enter): the
+    // text of each while it is edited, refreshed from the tempo otherwise.
+    std::map<unsigned int, std::array<char, 24>> bpmFieldText;
 
     // ---- Clip box selection ----
     struct ClipScreenRect { std::string trackId, clipId; float x1, y1, x2, y2; };
@@ -506,6 +647,12 @@ private:
     // removeLane can reallocate the clip's lane vector and the editor keeps
     // pointers into it for the rest of the frame it was requested on.
     bool requestAddLane = false;
+    bool requestAddLanePopup = false;   // the track header's + asks the clip editor for its add-lane popup
+    ImVec2 addLanePopupAnchor;          // where it sits: 20px right of the +, centred on it
+    // That popup's New Clip tab: a clip on the track, made at the same fixed
+    // point as a new lane (making it can move the clip the editor holds).
+    bool requestTrackNewClip = false;
+    std::string trackNewClipTrackId;
     int pendingAddLaneType = 0;
     bool requestDuplicateLane = false;
     std::string pendingDuplicateLaneId;
@@ -539,6 +686,7 @@ private:
     char noteSetupName[128] = "";
     char noteSetupFilter[64] = "";
     std::string noteSetupTrackId;             // empty: a new track
+    std::optional<ofColor> noteSetupTrackColor; // new track color from Add to Timeline
     bool noteSetupTrackFixed = false;         // opened from a track row
     std::string noteSetupEditGroupId;         // retargeting this group
     double noteSetupClipStart = 0.0;

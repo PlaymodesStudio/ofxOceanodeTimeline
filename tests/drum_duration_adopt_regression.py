@@ -45,6 +45,7 @@ int main(int, char**) {
     auto types = std::make_shared<ofxOceanodeTypesRegistry>();
     auto owner = std::make_shared<ofxOceanodeContainer>(registry, types); owner->setCanvasID("Canvas");
     auto& model = ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
     auto& node = owner->createNode(std::make_unique<KitSynth>(), 1);
     auto& synth = static_cast<KitSynth&>(node.getNodeModel());
     auto& pitch = static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get("Pitch"));

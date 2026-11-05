@@ -39,10 +39,32 @@ namespace {
 // NEWER build, where a silent partial load would be the wrong answer.
 // 6 clip groups, 7 wave tracks, 8 self-contained LFO clips,
 // 9 preset-backed editor zoom and horizontal position,
-// 10 state-capture curve clips, 11 persisted timeline timebase, 12 Number lanes.
+// 10 state-capture curve clips, 11 persisted timeline timebase, 12 Number lanes,
+// 13 several timelines per canvas, 14 a clock source per timeline,
+// 15 equal timelines per canvas: no default one, every timeline in
+// "timelines" with its id (a document before 15 is upgraded on load, its
+// top-level timeline becoming "tl_1": see upgradeTimelineDocument).
 constexpr float kDefaultTimelinePixelsPerSecond = 140.0f;
 constexpr float kMinTimelinePixelsPerSecond = 0.25f;
 constexpr float kMaxTimelinePixelsPerSecond = 600.0f;
+
+// A view (zoom, scroll, column width, row height) as the preset keeps it.
+ofJson viewToJson(const ofxOceanodeTimelineViewState& view) {
+    return {
+        {"pixelsPerSecond", view.pixelsPerSecond},
+        {"labelWidth", view.labelWidth},
+        {"trackHeight", view.trackHeight},
+        {"scrollX", view.scrollX}
+    };
+}
+void viewFromJson(const ofJson& json, ofxOceanodeTimelineViewState& view) {
+    if(!json.is_object()) return;
+    view.pixelsPerSecond = ofClamp(json.value("pixelsPerSecond", kDefaultTimelinePixelsPerSecond),
+                                   kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
+    view.scrollX = std::max(0.0f, json.value("scrollX", 0.0f));
+    view.labelWidth = ofClamp(json.value("labelWidth", 280.0f), 200.0f, 520.0f);
+    view.trackHeight = ofClamp(json.value("trackHeight", kMinTrackHeight), kMinTrackHeight, kMaxTrackHeight);
+}
 
 // Drum Grid lane data. Format 2: hits at beat positions. Files without a
 // format hold the first, index-based shape (steps x beatsPerStep), converted
@@ -265,16 +287,114 @@ ofxOceanodeTimelineLaneType ofxOceanodeTimelineManager::laneTypeFromString(const
     return ofxOceanodeTimelineLaneType::Step;
 }
 
+namespace {
+// A timeline's play settings, whole: its name and clock source, tempo (the
+// fixed BPM, the clock ratio, the BPM lane), loop, meter, quantize, play on
+// load, colour and the macro's nodes-follow-clips choice.
+ofJson playSettingsToJson(const ofxOceanodeTimelinePlaySettings& play) {
+    ofJson json = {{"name", play.name}, {"bpm", play.bpm}, {"followClockTempo", play.followClockTempo},
+                   {"tempoRatio", play.tempoRatio}, {"quantize", play.quantize}};
+    if(play.free) json["free"] = true;
+    if(play.playOnLoad) json["playOnLoad"] = true; // older files stay as they were
+    if(play.customColor) json["color"] = {{"r", play.color.r}, {"g", play.color.g}, {"b", play.color.b}};
+    if(play.nodesFollowClips) json["nodesFollowClips"] = true;
+    json["tempo"] = {{"enabled", play.bpmAutomationEnabled}, {"minimum", play.bpmMinimum}, {"maximum", play.bpmMaximum},
+                     {"interpolation", play.bpmInterpolation}, {"visible", play.bpmLaneVisible},
+                     {"collapsed", play.bpmLaneCollapsed}, {"points", ofJson::array()}, {"tensions", ofJson::array()}};
+    for(const auto& point : play.bpmPoints) json["tempo"]["points"].push_back({{"beat", point.beat}, {"bpm", point.value}});
+    for(const auto& tension : play.bpmTensions)
+        json["tempo"]["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
+    json["loop"] = {{"enabled", play.loopEnabled}, {"startBeat", play.loopStartBeat}, {"endBeat", play.loopEndBeat}};
+    json["timeSignature"] = {{"numerator", play.timeSignatureNumerator}, {"denominator", play.timeSignatureDenominator}};
+    return json;
+}
+
+// A timeline's tempo lane, loop and meter in the shape timeline.json keeps
+// the global transport's: a sequence file carries its own beside "play" for
+// older readers.
+ofJson playTransportToJson(const ofxOceanodeTimelinePlaySettings& play) {
+    ofJson json;
+    json["tempo"] = {{"enabled", play.bpmAutomationEnabled}, {"collapsed", play.bpmLaneCollapsed},
+                     {"visible", play.bpmLaneVisible}, {"minimum", play.bpmMinimum}, {"maximum", play.bpmMaximum},
+                     {"interpolation", play.bpmInterpolation}, {"points", ofJson::array()}, {"tensions", ofJson::array()}};
+    for(const auto& point : play.bpmPoints) json["tempo"]["points"].push_back({{"beat", point.beat}, {"bpm", point.value}});
+    for(const auto& tension : play.bpmTensions)
+        json["tempo"]["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
+    json["loop"] = {{"enabled", play.loopEnabled}, {"startBeat", play.loopStartBeat}, {"endBeat", play.loopEndBeat}};
+    json["timeSignature"] = {{"numerator", play.timeSignatureNumerator}, {"denominator", play.timeSignatureDenominator}};
+    return json;
+}
+
+// Back: the "tempo", "loop" and "timeSignature" objects of `json` (a play
+// settings object, or an older sequence file keeping them at its top level).
+void playTransportFromJson(const ofJson& json, ofxOceanodeTimelinePlaySettings& play) {
+    if(!json.is_object()) return;
+    if(json.contains("tempo") && json["tempo"].is_object()) {
+        const auto& tempo = json["tempo"];
+        play.bpmAutomationEnabled = tempo.value("enabled", false);
+        play.bpmMinimum = ofClamp(tempo.value("minimum", 20.0f), 1.0f, 998.0f);
+        play.bpmMaximum = ofClamp(tempo.value("maximum", 300.0f), play.bpmMinimum + 1.0f, 999.0f);
+        play.bpmInterpolation = tempo.value("interpolation", std::string("Linear"));
+        play.bpmLaneVisible = tempo.value("visible", false);
+        play.bpmLaneCollapsed = tempo.value("collapsed", true);
+        play.bpmPoints.clear();
+        if(tempo.contains("points") && tempo["points"].is_array())
+            for(const auto& point : tempo["points"])
+                if(point.is_object())
+                    play.bpmPoints.push_back({point.value("beat", 0.0), ofClamp(point.value("bpm", 120.0f), play.bpmMinimum, play.bpmMaximum)});
+        std::sort(play.bpmPoints.begin(), play.bpmPoints.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
+        play.bpmTensions.assign(play.bpmPoints.empty() ? 0 : play.bpmPoints.size() - 1, {});
+        if(tempo.contains("tensions") && tempo["tensions"].is_array()) {
+            size_t index = 0;
+            for(const auto& tension : tempo["tensions"]) {
+                if(index >= play.bpmTensions.size()) break;
+                if(tension.is_object())
+                    play.bpmTensions[index] = {ofClamp(tension.value("inflection", 0.5f), 0.01f, 0.99f),
+                                               ofClamp(tension.value("steepness", 1.0f), 0.1f, 10.0f)};
+                ++index;
+            }
+        }
+    }
+    if(json.contains("loop") && json["loop"].is_object()) {
+        const auto& loop = json["loop"];
+        play.loopEnabled = loop.value("enabled", false);
+        play.loopStartBeat = std::max(0.0, loop.value("startBeat", 0.0));
+        play.loopEndBeat = std::max(play.loopStartBeat + 1.0 / 24.0, loop.value("endBeat", 4.0));
+    }
+    if(json.contains("timeSignature") && json["timeSignature"].is_object()) {
+        play.timeSignatureNumerator = ofClamp(json["timeSignature"].value("numerator", 4), 1, 64);
+        play.timeSignatureDenominator = std::max(1, json["timeSignature"].value("denominator", 4));
+    }
+}
+
+// Back; the keys an older file lacks keep what `play` had (its tempo, loop
+// and meter then come from the file's own "tempo", "loop" and "timeSignature").
+void playSettingsFromJson(const ofJson& json, ofxOceanodeTimelinePlaySettings& play) {
+    if(!json.is_object()) return;
+    play.name = json.value("name", std::string());
+    play.free = json.value("free", false);
+    play.bpm = ofClamp(json.value("bpm", 120.0f), 1.0f, 999.0f);
+    play.followClockTempo = json.value("followClockTempo", false);
+    play.tempoRatio = ofClamp(json.value("tempoRatio", 1.0f), 0.01f, 64.0f);
+    play.quantize = ofClamp(json.value("quantize", 2), 0, 2);
+    play.playOnLoad = json.value("playOnLoad", false);
+    play.nodesFollowClips = json.value("nodesFollowClips", false);
+    play.customColor = json.contains("color") && json["color"].is_object();
+    if(play.customColor) {
+        const auto& colorJson = json["color"];
+        play.color = ofColor(static_cast<unsigned char>(ofClamp(colorJson.value("r", 160), 0, 255)),
+                             static_cast<unsigned char>(ofClamp(colorJson.value("g", 100), 0, 255)),
+                             static_cast<unsigned char>(ofClamp(colorJson.value("b", 210), 0, 255)));
+    }
+    playTransportFromJson(json, play);
+}
+} // namespace
+
 ofJson ofxOceanodeTimelineManager::toJson() const {
     ofJson json;
     json["version"] = kPresetVersion;
     json["timebase"] = timebase == ofxOceanodeTimelineTimebase::Time ? "Time" : "Beats";
-    json["view"] = {
-        {"pixelsPerSecond", viewState.pixelsPerSecond},
-        {"labelWidth", viewState.labelWidth},
-        {"trackHeight", viewState.trackHeight},
-        {"scrollX", viewState.scrollX}
-    };
+    json["view"] = viewToJson(viewState);
     json["tempo"] = {
         {"enabled", bpmAutomationEnabled},
         {"collapsed", bpmLaneCollapsed},
@@ -290,11 +410,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     for(const auto& tension : bpmCurveTensions)
         json["tempo"]["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
     json["playOnPresetLoad"] = playOnPresetLoad;
-    json["loop"] = {
-        {"enabled", loopEnabled},
-        {"startBeat", loopStartBeat},
-        {"endBeat", loopEndBeat}
-    };
+    // (The loop is each timeline's own, saved in its "play".)
     json["markers"] = ofJson::array();
     for(const auto& marker : markers)
         json["markers"].push_back({{"id", marker.id}, {"name", marker.name}, {"beat", marker.beat}});
@@ -308,210 +424,232 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         {"lookaheadMs", schedulingLookaheadMs},
         {"adaptive", schedulingLookaheadAdaptive}
     };
-    json["tracks"] = ofJson::array();
-    for(const auto& track : mainSequence.tracks) {
-        ofJson trackJson;
-        trackJson["id"] = track.id;
-        trackJson["name"] = track.name;
-        trackJson["collapsed"] = track.collapsed;
-        trackJson["muted"] = track.muted;
-        trackJson["solo"] = track.solo;
-        trackJson["isWaveTrack"] = track.isWaveTrack;
-        if(track.isWaveTrack) trackJson["waveTrackHeight"] = track.waveTrackHeight;
-        trackJson["waveVolume"] = track.waveVolume;
-        trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
-        if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
-        if(track.isFolder) trackJson["isFolder"] = true;
-        if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
-        if(track.isMacroTrack()) {
-            trackJson["macroCanvas"] = track.macroCanvas;
-            trackJson["macroGate"] = track.macroGate;
-            if(!track.macroTimeline.empty()) trackJson["macroTimeline"] = track.macroTimeline;
-            if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
-            trackJson["macroPreRollMs"] = track.macroPreRollMs;
-            trackJson["macroTailMs"] = track.macroTailMs;
-        }
-        trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
-        trackJson["waveVolumePoints"] = ofJson::array();
-        for(const auto& point : track.waveVolumePoints)
-            trackJson["waveVolumePoints"].push_back({{"beat", point.beat}, {"value", point.value}});
-        trackJson["waveVolumeTensions"] = ofJson::array();
-        for(const auto& tension : track.waveVolumeTensions)
-            trackJson["waveVolumeTensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
-        trackJson["color"] = {
-            {"r", track.color.r}, {"g", track.color.g},
-            {"b", track.color.b}, {"a", track.color.a}
-        };
-        trackJson["bindings"] = ofJson::array();
-        for(const auto& binding : track.bindings) {
-            trackJson["bindings"].push_back({
-                {"id", binding.id},
-                {"parameterPath", binding.parameterPath},
-                {"valueType", binding.valueType},
-                {"defaultValue", binding.defaultValue},
-                {"mode", modeToString(binding.mode)},
-                {"laneType", laneTypeToString(binding.laneType)},
-                {"bypass", binding.bypass},
-                {"clampToRange", binding.clampToParameterRange},
-                {"rowHeight", binding.rowHeight},
-                {"valueScale", binding.valueScale}
-            });
-        }
-        trackJson["noteGroups"] = ofJson::array();
-        for(const auto& group : track.noteGroups) {
-            trackJson["noteGroups"].push_back({
-                {"id", group.id},
-                {"name", group.name},
-                {"pitch", group.pitchBindingId},
-                {"gate", group.gateBindingId},
-                {"velocity", group.velocityBindingId},
-                {"duration", group.durationBindingId},
-                {"durationDecided", group.durationDecided},
-                {"filter", group.filterBindingId},
-                {"filterDecided", group.filterDecided},
-                {"stutter", group.stutterBindingId},
-                {"stutterDecided", group.stutterDecided},
-                {"expanded", group.expanded},
-                {"rowHeight", group.rowHeight},
-                {"voices", group.voices}
-            });
-        }
-        trackJson["clips"] = ofJson::array();
-        for(const auto& clip : track.clips) {
-            ofJson clipJson;
-            clipJson["id"] = clip.id;
-            clipJson["name"] = clip.name;
-            clipJson["startBeat"] = clip.startBeat;
-            clipJson["durationBeats"] = clip.durationBeats;
-            clipJson["contentDurationBeats"] = clip.contentDurationBeats;
-            clipJson["contentStretch"] = clip.contentStretch;
-            clipJson["repeatContent"] = clip.repeatContent;
-            if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
-            if(clip.macroSnapshot >= 0) clipJson["macroSnapshot"] = clip.macroSnapshot;
-            if(clip.reversed) clipJson["reversed"] = true;
-            if(clip.ownTempo) clipJson["ownTempo"] = true;
-            clipJson["muted"] = clip.muted;
-            clipJson["chance"] = clip.chance;
-            clipJson["isLfo"] = clip.isLfo;
-            clipJson["isStateCapture"] = clip.isStateCapture;
-            clipJson["lfoOutputBindingId"] = clip.lfoOutputBindingId;
-            clipJson["lfoOutputMin"] = clip.lfoOutputMin;
-            clipJson["lfoOutputMax"] = clip.lfoOutputMax;
-            clipJson["waveFilePath"] = clip.waveFilePath;
-            clipJson["waveGain"] = clip.waveGain;
-            clipJson["wavePlaybackRate"] = clip.wavePlaybackRate;
-            clipJson["waveSourceStartBeat"] = clip.waveSourceStartBeat;
-            clipJson["waveFileDurationBeats"] = clip.waveFileDurationBeats;
-            clipJson["waveReverse"] = clip.waveReverse;
-            clipJson["lanes"] = ofJson::array();
-            for(const auto& lane : clip.lanes) {
-                ofJson laneJson;
-                laneJson["id"] = lane.id;
-                laneJson["name"] = lane.name;
-                laneJson["muted"] = lane.muted;
-                laneJson["solo"] = lane.solo;
-                if(lane.drivesTrackSolo) laneJson["drivesTrackSolo"] = true;
-                if(!lane.targetProbability.empty()) {
-                    laneJson["targetProbability"] = ofJson::object();
-                    for(const auto& [path, probability] : lane.targetProbability)
-                        laneJson["targetProbability"][path] = probability;
-                }
-                laneJson["laneType"] = laneTypeToString(lane.type);
-                laneJson["bindingIds"] = lane.bindingIds;
-                laneJson["stepCount"] = lane.stepCount;
-                laneJson["beatsPerStep"] = lane.beatsPerStep;
-                laneJson["valueMin"] = lane.valueMin;
-                laneJson["valueMax"] = lane.valueMax;
-                laneJson["probabilityEnabled"] = lane.probabilityEnabled;
-                laneJson["probabilitySeed"] = lane.probabilitySeed;
-                laneJson["behavior"] = lane.behavior;
-                laneJson["pianoLowPitch"] = lane.pianoLowPitch;
-                laneJson["pianoHighPitch"] = lane.pianoHighPitch;
-                laneJson["pianoSnapToGrid"] = lane.pianoSnapToGrid;
-                laneJson["pianoLiveEditSound"] = lane.pianoLiveEditSound;
-                laneJson["pianoPitchBindingId"] = lane.pianoPitchBindingId;
-                laneJson["pianoGateBindingId"] = lane.pianoGateBindingId;
-                laneJson["pianoVelocityBindingId"] = lane.pianoVelocityBindingId;
-                laneJson["pianoDefaultVelocity"] = lane.pianoDefaultVelocity;
-                if(!lane.drumDurationBindingId.empty()) laneJson["drumDurationBindingId"] = lane.drumDurationBindingId;
-                if(!lane.drumFilterBindingId.empty()) laneJson["drumFilterBindingId"] = lane.drumFilterBindingId;
-                if(!lane.drumStutterBindingId.empty()) laneJson["drumStutterBindingId"] = lane.drumStutterBindingId;
-                laneJson["pianoMonophonic"] = lane.pianoMonophonic;
-                laneJson["mutation"] = mutationRulesToJson(lane.mutation);
-                laneJson["mutationMonophonic"] = lane.mutationMonophonic;
-                laneJson["mutationDrift"] = lane.mutationDrift;
-                if(lane.mutationStrength < 1.0f) laneJson["mutationStrength"] = lane.mutationStrength;
-                laneJson["pianoScale"] = {{"enabled", lane.pianoScaleEnabled}, {"mask", lane.pianoScaleMask},
-                                          {"snap", lane.pianoScaleSnap}};
-                laneJson["randomDeviation"] = {{"octave", lane.randomOctave}, {"octaveRange", lane.randomOctaveRange},
-                                               {"octaveDirection", lane.randomOctaveDirection},
-                                               {"pitch", lane.randomPitch}, {"pitchRange", lane.randomPitchRange},
-                                               {"pitchDirection", lane.randomPitchDirection}};
-                laneJson["mutationGroups"] = ofJson::array();
-                for(const auto& group : lane.mutationGroups) {
-                    auto groupJson = mutationRulesToJson(group.rules);
-                    groupJson["overrides"] = group.overrides;
-                    laneJson["mutationGroups"].push_back(groupJson);
-                }
-                laneJson["curveClamp"] = lane.curveClamp;
-                laneJson["curveInterpolation"] = lane.curveInterpolation;
-                laneJson["curveScale"] = lane.curveScale;
-                laneJson["step"] = lane.step.toJson();
-                laneJson["curvePoints"] = ofJson::array();
-                for(const auto& point : lane.curvePoints) laneJson["curvePoints"].push_back({{"beat", point.beat}, {"value", point.value}});
-                laneJson["curveTensions"] = ofJson::array();
-                for(const auto& tension : lane.curveTensions) laneJson["curveTensions"].push_back({
-                    {"inflection", tension.inflection}, {"steepness", tension.steepness}
-                });
-                laneJson["pianoNotes"] = ofJson::array();
-                for(const auto& note : lane.pianoNotes) laneJson["pianoNotes"].push_back({
-                    {"startBeat", note.startBeat}, {"durationBeats", note.durationBeats},
-                    {"pitch", note.pitch}, {"velocity", note.velocity},
-                    {"probability", note.probability}, {"mutation", note.mutation},
-                    {"mutationGroup", note.mutationGroup}
-                });
-                laneJson["multiRowCount"] = lane.multiRowCount;
-                laneJson["multiValueRows"] = ofJson::array();
-                for(const auto& row : lane.multiValueRows) {
-                    ofJson rowJson = ofJson::array();
-                    for(const auto& region : row) rowJson.push_back({
-                        {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats},
-                        {"value", region.value}
-                    });
-                    laneJson["multiValueRows"].push_back(std::move(rowJson));
-                }
-                laneJson["multiGateRows"] = ofJson::array();
-                for(const auto& row : lane.multiGateRows) {
-                    ofJson rowJson = ofJson::array();
-                    for(const auto& region : row) rowJson.push_back({
-                        {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats},
-                        {"velocity", region.velocity}
-                    });
-                    laneJson["multiGateRows"].push_back(std::move(rowJson));
-                }
-                laneJson["multiValueInteger"] = lane.multiValueInteger;
-                laneJson["multiSliderValues"] = lane.multiSliderValues;
-                laneJson["valueQuantizeSteps"] = lane.valueQuantizeSteps;
-                laneJson["valueSnap"] = lane.valueSnap;
-                laneJson["lfoParameter"] = lane.lfoParameter;
-                laneJson["lfoValue"] = lane.lfoValue;
-                laneJson["lfoSnap"] = lane.lfoSnap;
-                laneJson["lfoSnapMode"] = lane.lfoSnapMode;
-                // Only Drum Grid lanes carry it, so other lanes save as before.
-                if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid || !lane.drumRows.empty())
-                    laneJson["drumGrid"] = drumGridToJson(lane);
-                // The Wave lane and the per-clip volume lane are load-only
-                // (see ofxOceanodeTimelineLane): audio and its envelope are
-                // written at clip and track level instead.
-                clipJson["lanes"].push_back(std::move(laneJson));
-            }
-            trackJson["clips"].push_back(std::move(clipJson));
-        }
-
-        json["tracks"].push_back(std::move(trackJson));
+    // The root canvas's timelines.
+    {
+        const auto canvas = canvasToJson(rootTimelines);
+        json["timelines"] = canvas["timelines"];
+        json["nextTimelineNumber"] = canvas["nextTimelineNumber"];
     }
+    // A host's windows (a MacroMixer's) are its own, opened again by it.
+    if(std::any_of(timelineWindows.begin(), timelineWindows.end(), [](const auto& window) { return window.hostLabel.empty(); })) {
+        json["windows"] = ofJson::array();
+        for(const auto& window : timelineWindows)
+            if(window.hostLabel.empty())
+                json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline},
+                                           {"view", viewToJson(window.view)}});
+    }
+    return json;
+}
+
+// One track as timeline.json keeps it.
+ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& track) const {
+    ofJson trackJson;
+    trackJson["id"] = track.id;
+    trackJson["name"] = track.name;
+    trackJson["collapsed"] = track.collapsed;
+    trackJson["muted"] = track.muted;
+    trackJson["solo"] = track.solo;
+    trackJson["isWaveTrack"] = track.isWaveTrack;
+    if(track.isWaveTrack) trackJson["waveTrackHeight"] = track.waveTrackHeight;
+    trackJson["waveVolume"] = track.waveVolume;
+    trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
+    if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
+    if(track.isFolder) trackJson["isFolder"] = true;
+    if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
+    if(track.isMacroTrack()) {
+        trackJson["macroCanvas"] = track.macroCanvas;
+        trackJson["macroGate"] = track.macroGate;
+            trackJson["macroTimeline"] = track.macroTimeline;
+        if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
+        trackJson["macroPreRollMs"] = track.macroPreRollMs;
+        trackJson["macroTailMs"] = track.macroTailMs;
+    }
+    trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
+    trackJson["waveVolumePoints"] = ofJson::array();
+    for(const auto& point : track.waveVolumePoints)
+        trackJson["waveVolumePoints"].push_back({{"beat", point.beat}, {"value", point.value}});
+    trackJson["waveVolumeTensions"] = ofJson::array();
+    for(const auto& tension : track.waveVolumeTensions)
+        trackJson["waveVolumeTensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
+    trackJson["color"] = {
+        {"r", track.color.r}, {"g", track.color.g},
+        {"b", track.color.b}, {"a", track.color.a}
+    };
+    trackJson["bindings"] = ofJson::array();
+    for(const auto& binding : track.bindings) {
+        trackJson["bindings"].push_back({
+            {"id", binding.id},
+            {"parameterPath", binding.parameterPath},
+            {"valueType", binding.valueType},
+            {"defaultValue", binding.defaultValue},
+            {"mode", modeToString(binding.mode)},
+            {"laneType", laneTypeToString(binding.laneType)},
+            {"bypass", binding.bypass},
+            {"clampToRange", binding.clampToParameterRange},
+            {"rowHeight", binding.rowHeight},
+            {"valueScale", binding.valueScale}
+        });
+    }
+    trackJson["noteGroups"] = ofJson::array();
+    for(const auto& group : track.noteGroups) {
+        trackJson["noteGroups"].push_back({
+            {"id", group.id},
+            {"name", group.name},
+            {"pitch", group.pitchBindingId},
+            {"gate", group.gateBindingId},
+            {"velocity", group.velocityBindingId},
+            {"duration", group.durationBindingId},
+            {"durationDecided", group.durationDecided},
+            {"filter", group.filterBindingId},
+            {"filterDecided", group.filterDecided},
+            {"stutter", group.stutterBindingId},
+            {"stutterDecided", group.stutterDecided},
+            {"expanded", group.expanded},
+            {"rowHeight", group.rowHeight},
+            {"voices", group.voices}
+        });
+    }
+    trackJson["clips"] = ofJson::array();
+    for(const auto& clip : track.clips) {
+        ofJson clipJson;
+        clipJson["id"] = clip.id;
+        clipJson["name"] = clip.name;
+        clipJson["startBeat"] = clip.startBeat;
+        clipJson["durationBeats"] = clip.durationBeats;
+        clipJson["contentDurationBeats"] = clip.contentDurationBeats;
+        clipJson["contentStretch"] = clip.contentStretch;
+        clipJson["repeatContent"] = clip.repeatContent;
+        if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
+        if(clip.macroSnapshot >= 0) clipJson["macroSnapshot"] = clip.macroSnapshot;
+        if(clip.reversed) clipJson["reversed"] = true;
+        clipJson["muted"] = clip.muted;
+        clipJson["chance"] = clip.chance;
+        clipJson["isLfo"] = clip.isLfo;
+        clipJson["isStateCapture"] = clip.isStateCapture;
+        clipJson["lfoOutputBindingId"] = clip.lfoOutputBindingId;
+        clipJson["lfoOutputMin"] = clip.lfoOutputMin;
+        clipJson["lfoOutputMax"] = clip.lfoOutputMax;
+        clipJson["waveFilePath"] = clip.waveFilePath;
+        clipJson["waveGain"] = clip.waveGain;
+        clipJson["wavePlaybackRate"] = clip.wavePlaybackRate;
+        clipJson["waveSourceStartBeat"] = clip.waveSourceStartBeat;
+        clipJson["waveFileDurationBeats"] = clip.waveFileDurationBeats;
+        clipJson["waveReverse"] = clip.waveReverse;
+        clipJson["lanes"] = ofJson::array();
+        for(const auto& lane : clip.lanes) {
+            ofJson laneJson;
+            laneJson["id"] = lane.id;
+            laneJson["name"] = lane.name;
+            laneJson["muted"] = lane.muted;
+            laneJson["solo"] = lane.solo;
+            if(lane.drivesTrackSolo) laneJson["drivesTrackSolo"] = true;
+            if(!lane.targetProbability.empty()) {
+                laneJson["targetProbability"] = ofJson::object();
+                for(const auto& [path, probability] : lane.targetProbability)
+                    laneJson["targetProbability"][path] = probability;
+            }
+            laneJson["laneType"] = laneTypeToString(lane.type);
+            laneJson["bindingIds"] = lane.bindingIds;
+            laneJson["stepCount"] = lane.stepCount;
+            laneJson["beatsPerStep"] = lane.beatsPerStep;
+            laneJson["valueMin"] = lane.valueMin;
+            laneJson["valueMax"] = lane.valueMax;
+            laneJson["probabilityEnabled"] = lane.probabilityEnabled;
+            laneJson["probabilitySeed"] = lane.probabilitySeed;
+            laneJson["behavior"] = lane.behavior;
+            laneJson["pianoLowPitch"] = lane.pianoLowPitch;
+            laneJson["pianoHighPitch"] = lane.pianoHighPitch;
+            laneJson["pianoSnapToGrid"] = lane.pianoSnapToGrid;
+            laneJson["pianoLiveEditSound"] = lane.pianoLiveEditSound;
+            laneJson["pianoPitchBindingId"] = lane.pianoPitchBindingId;
+            laneJson["pianoGateBindingId"] = lane.pianoGateBindingId;
+            laneJson["pianoVelocityBindingId"] = lane.pianoVelocityBindingId;
+            laneJson["pianoDefaultVelocity"] = lane.pianoDefaultVelocity;
+            if(!lane.drumDurationBindingId.empty()) laneJson["drumDurationBindingId"] = lane.drumDurationBindingId;
+            if(!lane.drumFilterBindingId.empty()) laneJson["drumFilterBindingId"] = lane.drumFilterBindingId;
+            if(!lane.drumStutterBindingId.empty()) laneJson["drumStutterBindingId"] = lane.drumStutterBindingId;
+            laneJson["pianoMonophonic"] = lane.pianoMonophonic;
+            laneJson["mutation"] = mutationRulesToJson(lane.mutation);
+            laneJson["mutationMonophonic"] = lane.mutationMonophonic;
+            laneJson["mutationDrift"] = lane.mutationDrift;
+            if(lane.mutationStrength < 1.0f) laneJson["mutationStrength"] = lane.mutationStrength;
+            laneJson["pianoScale"] = {{"enabled", lane.pianoScaleEnabled}, {"mask", lane.pianoScaleMask},
+                                      {"snap", lane.pianoScaleSnap}};
+            laneJson["randomDeviation"] = {{"octave", lane.randomOctave}, {"octaveRange", lane.randomOctaveRange},
+                                           {"octaveDirection", lane.randomOctaveDirection},
+                                           {"pitch", lane.randomPitch}, {"pitchRange", lane.randomPitchRange},
+                                           {"pitchDirection", lane.randomPitchDirection}};
+            laneJson["mutationGroups"] = ofJson::array();
+            for(const auto& group : lane.mutationGroups) {
+                auto groupJson = mutationRulesToJson(group.rules);
+                groupJson["overrides"] = group.overrides;
+                laneJson["mutationGroups"].push_back(groupJson);
+            }
+            laneJson["curveClamp"] = lane.curveClamp;
+            laneJson["curveInterpolation"] = lane.curveInterpolation;
+            laneJson["curveScale"] = lane.curveScale;
+            laneJson["step"] = lane.step.toJson();
+            laneJson["curvePoints"] = ofJson::array();
+            for(const auto& point : lane.curvePoints) laneJson["curvePoints"].push_back({{"beat", point.beat}, {"value", point.value}});
+            laneJson["curveTensions"] = ofJson::array();
+            for(const auto& tension : lane.curveTensions) laneJson["curveTensions"].push_back({
+                {"inflection", tension.inflection}, {"steepness", tension.steepness}
+            });
+            laneJson["pianoNotes"] = ofJson::array();
+            for(const auto& note : lane.pianoNotes) laneJson["pianoNotes"].push_back({
+                {"startBeat", note.startBeat}, {"durationBeats", note.durationBeats},
+                {"pitch", note.pitch}, {"velocity", note.velocity},
+                {"probability", note.probability}, {"mutation", note.mutation},
+                {"mutationGroup", note.mutationGroup}
+            });
+            laneJson["multiRowCount"] = lane.multiRowCount;
+            laneJson["multiValueRows"] = ofJson::array();
+            for(const auto& row : lane.multiValueRows) {
+                ofJson rowJson = ofJson::array();
+                for(const auto& region : row) rowJson.push_back({
+                    {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats},
+                    {"value", region.value}
+                });
+                laneJson["multiValueRows"].push_back(std::move(rowJson));
+            }
+            laneJson["multiGateRows"] = ofJson::array();
+            for(const auto& row : lane.multiGateRows) {
+                ofJson rowJson = ofJson::array();
+                for(const auto& region : row) rowJson.push_back({
+                    {"startBeat", region.startBeat}, {"durationBeats", region.durationBeats},
+                    {"velocity", region.velocity}
+                });
+                laneJson["multiGateRows"].push_back(std::move(rowJson));
+            }
+            laneJson["multiValueInteger"] = lane.multiValueInteger;
+            laneJson["multiSliderValues"] = lane.multiSliderValues;
+            laneJson["valueQuantizeSteps"] = lane.valueQuantizeSteps;
+            laneJson["valueSnap"] = lane.valueSnap;
+            laneJson["lfoParameter"] = lane.lfoParameter;
+            laneJson["lfoValue"] = lane.lfoValue;
+            laneJson["lfoSnap"] = lane.lfoSnap;
+            laneJson["lfoSnapMode"] = lane.lfoSnapMode;
+            // Only Drum Grid lanes carry it, so other lanes save as before.
+            if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid || !lane.drumRows.empty())
+                laneJson["drumGrid"] = drumGridToJson(lane);
+            // The Wave lane and the per-clip volume lane are load-only
+            // (see ofxOceanodeTimelineLane): audio and its envelope are
+            // written at clip and track level instead.
+            clipJson["lanes"].push_back(std::move(laneJson));
+        }
+        trackJson["clips"].push_back(std::move(clipJson));
+    }
+    return trackJson;
+}
+
+// A sequence's content: its tracks, clip groups and play settings. Not where
+// it is kept: its id, canvas and further timelines are the caller's.
+ofJson ofxOceanodeTimelineManager::sequenceContentToJson(const ofxOceanodeTimelineSequence& sequence) const {
+    ofJson json;
+    json["tracks"] = ofJson::array();
+    for(const auto& track : sequence.tracks) json["tracks"].push_back(trackToJson(track));
     json["clipGroups"] = ofJson::array();
-    for(const auto& group : mainSequence.clipGroups) {
+    for(const auto& group : sequence.clipGroups) {
         ofJson groupJson;
         groupJson["id"] = group.id;
         groupJson["members"] = ofJson::array();
@@ -519,33 +657,7 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
             groupJson["members"].push_back({{"trackId", member.first}, {"clipId", member.second}});
         json["clipGroups"].push_back(std::move(groupJson));
     }
-    const auto& play = mainSequence.play;
-    json["play"] = {{"name", play.name}, {"bpm", play.bpm}, {"followClockTempo", play.followClockTempo},
-                    {"tempoRatio", play.tempoRatio}, {"quantize", play.quantize}};
-    // The canvas's further timelines, and which timelines play on their own.
-    if(mainSequence.nextTimelineNumber > 2) json["nextTimelineNumber"] = mainSequence.nextTimelineNumber;
-    if(!mainSequence.timelines.empty()) {
-        json["timelines"] = ofJson::array();
-        for(const auto& timeline : mainSequence.timelines) {
-            auto timelineJson = sequenceToJson(*timeline);
-            timelineJson["id"] = timeline->timelineId;
-            json["timelines"].push_back(std::move(timelineJson));
-        }
-    }
-    if(!clipFollowCanvases.empty()) {
-        json["clipFollow"] = ofJson::array();
-        for(const auto& canvas : clipFollowCanvases) json["clipFollow"].push_back(canvas);
-    }
-    if(!timelineWindows.empty()) {
-        json["windows"] = ofJson::array();
-        for(const auto& window : timelineWindows)
-            json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline}});
-    }
-    if(!freeTimelines.empty()) {
-        json["players"] = ofJson::array();
-        for(const auto& ref : freeTimelines)
-            json["players"].push_back({{"canvas", ref.canvas}, {"timeline", ref.timeline}});
-    }
+    json["play"] = playSettingsToJson(sequence.play);
     return json;
 }
 namespace {
@@ -573,7 +685,7 @@ ofJson withoutNulls(const ofJson& json) {
 void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
     // Track ids repeat between files: nothing played before may carry over.
     playback = PlaybackState();
-    const ofJson json = withoutNulls(input);
+    const ofJson json = upgradeTimelineDocument(withoutNulls(input), false);
     const int fileVersion = json.value("version", kPresetVersion);
     if(fileVersion > kPresetVersion) {
         ofLogWarning("ofxOceanodeTimeline")
@@ -585,38 +697,8 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
     timebase = json.value("timebase", std::string("Beats")) == "Time"
         ? ofxOceanodeTimelineTimebase::Time
         : ofxOceanodeTimelineTimebase::Beats;
-    if(json.contains("view") && json["view"].is_object()) {
-        const auto& view = json["view"];
-        viewState.pixelsPerSecond = ofClamp(
-            view.value("pixelsPerSecond", kDefaultTimelinePixelsPerSecond),
-            kMinTimelinePixelsPerSecond, kMaxTimelinePixelsPerSecond);
-        viewState.scrollX = std::max(0.0f, view.value("scrollX", 0.0f));
-        viewState.labelWidth = ofClamp(view.value("labelWidth", 280.0f), 200.0f, 520.0f);
-        viewState.trackHeight = ofClamp(view.value("trackHeight", 80.0f), kMinTrackHeight, kMaxTrackHeight);
-    }
+    if(json.contains("view")) viewFromJson(json["view"], viewState);
     playOnPresetLoad = json.value("playOnPresetLoad", false);
-    if(!json.contains("tracks") || !json["tracks"].is_array()) return;
-
-    std::set<std::string> loadedTrackIds;
-    std::set<std::string> loadedBindingIds;
-    std::set<std::string> loadedClipIds;
-    std::set<std::string> loadedLaneIds;
-    std::set<std::string> loadedGroupIds;
-    // clipGroups (parsed after the tracks loop below) references clips by
-    // the track/clip id *as saved in the file*. uniqueLoadedId can remap an
-    // id that collides with one already loaded (or that was empty), so the
-    // original-id -> final-id mapping is recorded here as each track/clip
-    // loads, and consulted when resolving a group's members afterwards.
-    std::map<std::string, std::string> loadedTrackIdRemap;
-    std::map<std::string, std::string> loadedClipIdRemap;
-    auto uniqueLoadedId = [&](std::string candidate, const char* prefix,
-                              uint64_t& counter, std::set<std::string>& usedIds) {
-        if(!candidate.empty() && usedIds.insert(candidate).second) return candidate;
-        do {
-            candidate = ofxOceanodeTimelineSequence::makeId(prefix, counter++);
-        } while(!usedIds.insert(candidate).second);
-        return candidate;
-    };
 
     if(json.contains("tempo") && json["tempo"].is_object()) {
         const auto& tempo = json["tempo"];
@@ -652,11 +734,6 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         }
         bpmCurveTensions.resize(bpmAutomationPoints.empty() ? 0 : bpmAutomationPoints.size() - 1);
     }
-    if(json.contains("loop") && json["loop"].is_object()) {
-        const auto& loop = json["loop"];
-        loopEnabled = loop.value("enabled", false);
-        setLoopRange(loop.value("startBeat", 0.0), loop.value("endBeat", 4.0));
-    }
     if(json.contains("markers") && json["markers"].is_array()) {
         for(const auto& markerJson : json["markers"]) {
             if(!markerJson.is_object()) continue;
@@ -687,7 +764,94 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
     // Every clip, lane and loop below is about to be replaced.
     invalidateSchedule();
 
-    for(const auto& trackJson : json["tracks"]) {
+    // The root canvas's timelines.
+    canvasFromJson(rootTimelines, json);
+    // Before version 16 the loop at the top level was the global
+    // transport's, shared by every timeline linked to it: now each
+    // timeline's own. The root canvas's timelines linked to the global
+    // transport take the file's, where they had none of their own.
+    if(fileVersion < 16 && json.contains("loop") && json["loop"].is_object()) {
+        const auto& loop = json["loop"];
+        for(auto& timeline : rootTimelines.timelines) {
+            auto& play = timeline->play;
+            if(play.free || play.loopEnabled) continue;
+            play.loopEnabled = loop.value("enabled", false);
+            play.loopStartBeat = std::max(0.0, loop.value("startBeat", 0.0));
+            play.loopEndBeat = std::max(play.loopStartBeat + 1.0 / 24.0, loop.value("endBeat", 4.0));
+        }
+    }
+    // Older files kept whose clips a macro's nodes followed, and which
+    // timelines played free, apart from the timelines: now in their settings
+    // (a macro's apply as its timelines load).
+    if(json.contains("clipFollow") && json["clipFollow"].is_array())
+        for(const auto& entry : json["clipFollow"])
+            if(entry.is_object()) {
+                const auto ref = normalizedRef({entry.value("canvas", std::string()), entry.value("timeline", std::string())});
+                if(findTimeline(ref) != nullptr) setNodesFollowClips(ref, true);
+                else legacyClipFollowTimelines.insert(ref);
+            }
+    if(json.contains("windows") && json["windows"].is_array())
+        for(const auto& entry : json["windows"])
+            if(entry.is_object()) {
+                TimelineWindow window;
+                window.id = entry.value("id", static_cast<int>(timelineWindows.size()) + 1);
+                window.ref = normalizedRef({entry.value("canvas", std::string()), entry.value("timeline", std::string())});
+                window.view = viewState;
+                if(entry.contains("view")) viewFromJson(entry["view"], window.view);
+                timelineWindows.push_back(window);
+            }
+    // Every timeline lives in a window of its own; a preset saved with none
+    // (an older one, or every window closed) opens the root canvas's first
+    // timeline, so it is on screen after the load (the Window menu lists the rest).
+    if(timelineWindows.empty() && !rootTimelines.timelines.empty())
+        openTimelineWindow({std::string(), rootTimelines.timelines.front()->timelineId});
+    if(json.contains("players") && json["players"].is_array())
+        for(const auto& player : json["players"])
+            if(player.is_object()) {
+                const auto ref = normalizedRef({player.value("canvas", std::string()), player.value("timeline", std::string())});
+                if(auto* sequence = findTimeline(ref)) sequence->play.free = true;
+                else legacyFreeTimelines.insert(ref);
+            }
+    invalidateEvaluationIndexes();
+}
+
+// A sequence's content from what sequenceContentToJson wrote: its tracks
+// (ids made unique, folders and groups following any renaming), clip
+// groups and play settings. The sequence keeps where it is (its id, canvas
+// and further timelines); its counters continue after the highest id read.
+void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json) {
+    sequence.tracks.clear();
+    sequence.clipGroups.clear();
+    sequence.play = {};
+    sequence.nextTrackNumber = 1;
+    sequence.nextBindingNumber = 1;
+    sequence.nextClipNumber = 1;
+    sequence.nextLaneNumber = 1;
+    sequence.nextGroupNumber = 1;
+    if(!json.is_object()) return;
+    std::set<std::string> loadedTrackIds;
+    std::set<std::string> loadedBindingIds;
+    std::set<std::string> loadedClipIds;
+    std::set<std::string> loadedLaneIds;
+    std::set<std::string> loadedGroupIds;
+    // clipGroups (parsed after the tracks loop below) references clips by
+    // the track/clip id *as saved in the file*. uniqueLoadedId can remap an
+    // id that collides with one already loaded (or that was empty), so the
+    // original-id -> final-id mapping is recorded here as each track/clip
+    // loads, and consulted when resolving a group's members afterwards.
+    std::map<std::string, std::string> loadedTrackIdRemap;
+    std::map<std::string, std::string> loadedClipIdRemap;
+    auto uniqueLoadedId = [&](std::string candidate, const char* prefix,
+                              uint64_t& counter, std::set<std::string>& usedIds) {
+        if(!candidate.empty() && usedIds.insert(candidate).second) return candidate;
+        do {
+            candidate = ofxOceanodeTimelineSequence::makeId(prefix, counter++);
+        } while(!usedIds.insert(candidate).second);
+        return candidate;
+    };
+
+    const ofJson tracks = json.contains("tracks") && json["tracks"].is_array() ? json["tracks"] : ofJson::array();
+    for(const auto& trackJson : tracks) {
         if(!trackJson.is_object()) continue;
         // One unreadable track (a field of the wrong type throws) is skipped
         // instead of losing the whole timeline.
@@ -701,9 +865,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             return it == bindingRemap.end() ? savedId : it->second;
         };
         const std::string originalTrackId = trackJson.value("id", std::string());
-        track.id = uniqueLoadedId(originalTrackId, "timeline_track", mainSequence.nextTrackNumber, loadedTrackIds);
+        track.id = uniqueLoadedId(originalTrackId, "timeline_track", sequence.nextTrackNumber, loadedTrackIds);
         if(!originalTrackId.empty()) loadedTrackIdRemap[originalTrackId] = track.id;
-        track.name = mainSequence.makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
+        track.name = sequence.makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
         track.collapsed = trackJson.value("collapsed", false);
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
@@ -721,7 +885,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         track.parentId = trackJson.value("parentId", std::string());
         track.macroCanvas = trackJson.value("macroCanvas", std::string());
         track.macroGate = trackJson.value("macroGate", false);
+        // (A file before version 15 left it out for the canvas's then-default timeline: "tl_1" now.)
         track.macroTimeline = track.macroCanvas.empty() ? std::string() : trackJson.value("macroTimeline", std::string());
+        if(!track.macroCanvas.empty() && track.macroTimeline.empty()) track.macroTimeline = "tl_1";
         track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
         track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
@@ -771,7 +937,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                     if(!savedBindingId.empty()) bindingRemap[savedBindingId] = duplicate->id;
                     continue;
                 }
-                binding.id = uniqueLoadedId(savedBindingId, "timeline_binding", mainSequence.nextBindingNumber, loadedBindingIds);
+                binding.id = uniqueLoadedId(savedBindingId, "timeline_binding", sequence.nextBindingNumber, loadedBindingIds);
                 if(!savedBindingId.empty()) bindingRemap[savedBindingId] = binding.id;
                 binding.valueType = bindingJson.value("valueType", std::string());
                 binding.defaultValue = bindingJson.value("defaultValue", std::string());
@@ -790,7 +956,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 if(!clipJson.is_object()) continue;
                 ofxOceanodeTimelineClip clip;
                 const std::string originalClipId = clipJson.value("id", std::string());
-                clip.id = uniqueLoadedId(originalClipId, "timeline_clip", mainSequence.nextClipNumber, loadedClipIds);
+                clip.id = uniqueLoadedId(originalClipId, "timeline_clip", sequence.nextClipNumber, loadedClipIds);
                 if(!originalClipId.empty()) loadedClipIdRemap[originalClipId] = clip.id;
                 clip.name = ofxOceanodeTimelineSequence::makeUniqueClipName(track, clipJson.value("name", std::string("Clip")));
                 clip.startBeat = std::max(0.0, clipJson.value("startBeat", 0.0));
@@ -808,7 +974,6 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 clip.macroSnapshot = clipJson.value("macroSnapshot", -1);
                 clip.reversed = clipJson.value("reversed", false);
-                clip.ownTempo = clipJson.value("ownTempo", false);
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.lfoOutputBindingId = mapBinding(clipJson.value("lfoOutputBindingId", std::string()));
                 if(std::none_of(track.bindings.begin(), track.bindings.end(),
@@ -827,7 +992,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                         if(!laneJson.is_object()) continue;
                         ofxOceanodeTimelineLane lane;
                         lane.id = uniqueLoadedId(laneJson.value("id", std::string()),
-                                                 "timeline_lane", mainSequence.nextLaneNumber, loadedLaneIds);
+                                                 "timeline_lane", sequence.nextLaneNumber, loadedLaneIds);
                         lane.name = laneJson.value("name", std::string("Lane"));
                         lane.muted = laneJson.value("muted", false);
                         lane.solo = laneJson.value("solo", false);
@@ -1134,18 +1299,18 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             normalizeNoteGroups(track);
         }
 
-        mainSequence.tracks.push_back(std::move(track));
+        sequence.tracks.push_back(std::move(track));
         } catch(const std::exception& e) {
             ofLogError("ofxOceanodeTimeline") << "Skipped a timeline track that could not be read: " << e.what();
         }
     }
     // Folders refer to tracks by their saved ids: follow any renaming, then
     // put each folder's contents after it (a missing folder: top level).
-    for(auto& track : mainSequence.tracks) {
+    for(auto& track : sequence.tracks) {
         const auto renamed = loadedTrackIdRemap.find(track.parentId);
         if(renamed != loadedTrackIdRemap.end()) track.parentId = renamed->second;
     }
-    mainSequence.normalizeFolders();
+    sequence.normalizeFolders();
 
     // Continue numbering after the highest id in use, so an id is never
     // handed out again while something may still remember it.
@@ -1157,24 +1322,24 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
         if(digits.size() > 18) return current;
         return std::max<uint64_t>(current, std::stoull(digits) + 1);
     };
-    mainSequence.nextTrackNumber = mainSequence.tracks.size() + 1;
-    mainSequence.nextBindingNumber = 1;
-    mainSequence.nextClipNumber = 1;
-    mainSequence.nextLaneNumber = 1;
-    for(const auto& track : mainSequence.tracks) {
-        mainSequence.nextTrackNumber = nextAfter(track.id, mainSequence.nextTrackNumber);
-        for(const auto& binding : track.bindings) mainSequence.nextBindingNumber = nextAfter(binding.id, mainSequence.nextBindingNumber);
+    sequence.nextTrackNumber = sequence.tracks.size() + 1;
+    sequence.nextBindingNumber = 1;
+    sequence.nextClipNumber = 1;
+    sequence.nextLaneNumber = 1;
+    for(const auto& track : sequence.tracks) {
+        sequence.nextTrackNumber = nextAfter(track.id, sequence.nextTrackNumber);
+        for(const auto& binding : track.bindings) sequence.nextBindingNumber = nextAfter(binding.id, sequence.nextBindingNumber);
         for(const auto& clip : track.clips) {
-            mainSequence.nextClipNumber = nextAfter(clip.id, mainSequence.nextClipNumber);
-            for(const auto& lane : clip.lanes) mainSequence.nextLaneNumber = nextAfter(lane.id, mainSequence.nextLaneNumber);
+            sequence.nextClipNumber = nextAfter(clip.id, sequence.nextClipNumber);
+            for(const auto& lane : clip.lanes) sequence.nextLaneNumber = nextAfter(lane.id, sequence.nextLaneNumber);
         }
     }
 
     // Rebuild waveform caches after loading, once ids and clip storage are
     // final. Legacy Wave lanes were migrated to their containing clip above.
-    for(auto& track : mainSequence.tracks) {
+    for(auto& track : sequence.tracks) {
         for(auto& clip : track.clips) {
-            if(track.isWaveTrack && !clip.waveFilePath.empty()) reloadWaveform(track.id, clip.id);
+            if(track.isWaveTrack && !clip.waveFilePath.empty()) reloadWaveform(sequence, track.id, clip.id);
         }
     }
 
@@ -1183,7 +1348,7 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
             if(!groupJson.is_object()) continue;
             ofxOceanodeTimelineClipGroup group;
             group.id = uniqueLoadedId(groupJson.value("id", std::string()),
-                                      "timeline_group", mainSequence.nextGroupNumber, loadedGroupIds);
+                                      "timeline_group", sequence.nextGroupNumber, loadedGroupIds);
             if(groupJson.contains("members") && groupJson["members"].is_array()) {
                 for(const auto& memberJson : groupJson["members"]) {
                     if(!memberJson.is_object()) continue;
@@ -1196,59 +1361,27 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                     // Drop a member whose clip didn't survive the load above
                     // (a hand-edited file, or a clip that no longer exists)
                     // rather than keep a dangling reference around.
-                    if(getClip(resolvedTrackId, resolvedClipId) != nullptr)
+                    if(sequence.findClip(resolvedTrackId, resolvedClipId) != nullptr)
                         group.members.emplace_back(resolvedTrackId, resolvedClipId);
                 }
             }
-            if(group.members.size() >= 2) mainSequence.clipGroups.push_back(std::move(group));
+            if(group.members.size() >= 2) sequence.clipGroups.push_back(std::move(group));
         }
     }
-    mainSequence.nextGroupNumber = mainSequence.clipGroups.size() + 1;
-    for(const auto& group : mainSequence.clipGroups) mainSequence.nextGroupNumber = nextAfter(group.id, mainSequence.nextGroupNumber);
+    sequence.nextGroupNumber = sequence.clipGroups.size() + 1;
+    for(const auto& group : sequence.clipGroups) sequence.nextGroupNumber = nextAfter(group.id, sequence.nextGroupNumber);
 
     // Give loaded LFO clips any control lane they are missing (collect ids first:
     // adding lanes must not happen while iterating the clip containers).
     std::vector<std::pair<std::string, std::string>> lfoClipIds;
-    for(const auto& track : mainSequence.tracks) {
+    for(const auto& track : sequence.tracks) {
         for(const auto& clip : track.clips) {
             if(clip.isLfo) lfoClipIds.emplace_back(track.id, clip.id);
         }
     }
-    for(const auto& ids : lfoClipIds) ensureLfoLanes(ids.first, ids.second);
+    for(const auto& ids : lfoClipIds) ensureLfoLanes(sequence, ids.first, ids.second);
 
-    if(json.contains("play") && json["play"].is_object()) {
-        const auto& play = json["play"];
-        mainSequence.play.name = play.value("name", std::string());
-        mainSequence.play.bpm = ofClamp(play.value("bpm", 120.0f), 1.0f, 999.0f);
-        mainSequence.play.followClockTempo = play.value("followClockTempo", false);
-        mainSequence.play.tempoRatio = ofClamp(play.value("tempoRatio", 1.0f), 0.01f, 64.0f);
-        mainSequence.play.quantize = ofClamp(play.value("quantize", 2), 0, 2);
-    }
-    if(json.contains("timelines") && json["timelines"].is_array()) {
-        for(const auto& timelineJson : json["timelines"]) {
-            if(!timelineJson.is_object()) continue;
-            const std::string id = timelineJson.value("id", std::string());
-            if(id.empty()) continue;
-            auto timeline = std::make_shared<ofxOceanodeTimelineSequence>();
-            sequenceFromJson(*timeline, timelineJson);
-            timeline->timelineId = id;
-            timeline->base = mainSequence.base;
-            mainSequence.timelines.push_back(std::move(timeline));
-        }
-    }
-    mainSequence.nextTimelineNumber = std::max<uint64_t>(json.value("nextTimelineNumber", 2), mainSequence.timelines.size() + 2);
-    if(json.contains("clipFollow") && json["clipFollow"].is_array())
-        for(const auto& canvas : json["clipFollow"])
-            if(canvas.is_string()) clipFollowCanvases.insert(canvas.get<std::string>());
-    if(json.contains("windows") && json["windows"].is_array())
-        for(const auto& window : json["windows"])
-            if(window.is_object())
-                timelineWindows.push_back({window.value("id", static_cast<int>(timelineWindows.size()) + 1),
-                                           normalizedRef({window.value("canvas", std::string()), window.value("timeline", std::string())})});
-    if(json.contains("players") && json["players"].is_array())
-        for(const auto& player : json["players"])
-            if(player.is_object())
-                freeTimelines.insert(normalizedRef({player.value("canvas", std::string()), player.value("timeline", std::string())}));
+    if(json.contains("play") && json["play"].is_object()) playSettingsFromJson(json["play"], sequence.play);
 }
 namespace {
 
@@ -1272,8 +1405,13 @@ bool validClipDocument(const ofJson& document) {
 } // namespace
 
 ofJson ofxOceanodeTimelineManager::exportClip(const std::string& trackId, const std::string& clipId) const {
-    const auto* track = getTrack(trackId);
-    const auto* clip = getClip(trackId, clipId);
+    return exportClip(editSequence(), trackId, clipId);
+}
+
+ofJson ofxOceanodeTimelineManager::exportClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                              const std::string& clipId) const {
+    const auto* track = getTrack(sequence, trackId);
+    const auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr) return ofJson();
     ofxOceanodeTimelineTrack portable;
     portable.id = "clip_track";
@@ -1305,11 +1443,9 @@ ofJson ofxOceanodeTimelineManager::exportClip(const std::string& trackId, const 
         if(!used.count(group.stutterBindingId)) group.stutterBindingId.clear();
         if(!group.members().empty()) portable.noteGroups.push_back(std::move(group));
     }
-    // Use the preset codec so every lane type and future lane field stays in sync.
-    ofxOceanodeTimelineManager isolated;
-    isolated.mainSequence.tracks.push_back(std::move(portable));
+    // The preset codec, so every lane type and future lane field stays in sync.
     return {{"format", "ofxOceanodeTimelineClip"}, {"version", 1},
-            {"timelineVersion", kPresetVersion}, {"track", isolated.toJson()["tracks"][0]}};
+            {"timelineVersion", kPresetVersion}, {"track", trackToJson(portable)}};
 }
 
 bool ofxOceanodeTimelineManager::saveClipFile(const std::string& trackId, const std::string& clipId,
@@ -1352,12 +1488,14 @@ ofJson ofxOceanodeTimelineManager::readClipFile(const std::string& path, std::st
         auto encoded = document["track"];
         const auto audioPath = encoded["clips"][0].value("waveFilePath", std::string());
         encoded["clips"][0]["waveFilePath"] = "";
-        ofxOceanodeTimelineManager isolated;
-        isolated.fromJson({{"version", kPresetVersion}, {"tracks", ofJson::array({encoded})}});
-        if(isolated.mainSequence.tracks.size() != 1 || isolated.mainSequence.tracks.front().clips.size() != 1) {
+        // The codec needs a manager to host it (no project, no transport).
+        ofxOceanodeTimelineManager codec;
+        ofxOceanodeTimelineSequence decoded;
+        codec.sequenceContentFromJson(decoded, withoutNulls({{"version", kPresetVersion}, {"tracks", ofJson::array({encoded})}}));
+        if(decoded.tracks.size() != 1 || decoded.tracks.front().clips.size() != 1) {
             clipFileError(error, "The clip contents could not be read."); return ofJson();
         }
-        document = isolated.exportClip(isolated.mainSequence.tracks.front().id, isolated.mainSequence.tracks.front().clips.front().id);
+        document = codec.exportClip(decoded, decoded.tracks.front().id, decoded.tracks.front().clips.front().id);
         if(!audioPath.empty()) {
             std::filesystem::path media(audioPath);
             if(media.is_relative()) media = std::filesystem::absolute(path).parent_path() / media;
@@ -1383,12 +1521,12 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         auto encodedTrack = document["track"];
         const auto audioPath = encodedTrack["clips"][0].value("waveFilePath", std::string());
         encodedTrack["clips"][0]["waveFilePath"] = "";
-        ofxOceanodeTimelineManager isolated;
-        isolated.fromJson({{"version", kPresetVersion}, {"tracks", ofJson::array({encodedTrack})}});
-        if(isolated.mainSequence.tracks.size() != 1 || isolated.mainSequence.tracks.front().clips.size() != 1) {
+        ofxOceanodeTimelineSequence decoded;
+        sequenceContentFromJson(decoded, withoutNulls({{"version", kPresetVersion}, {"tracks", ofJson::array({encodedTrack})}}));
+        if(decoded.tracks.size() != 1 || decoded.tracks.front().clips.size() != 1) {
             clipFileError(error, "The clip contents could not be read."); return {};
         }
-        auto source = std::move(isolated.mainSequence.tracks.front());
+        auto source = std::move(decoded.tracks.front());
         auto copy = std::move(source.clips.front());
         copy.waveFilePath = audioPath;
         copy.isStateCapture = false;
@@ -1491,7 +1629,7 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         copy.lanes.clear();
         *getClip(destinationId, id) = std::move(copy);
         for(auto& lane : lanes) {
-            lane.id = mainSequence.makeUniqueLaneId(); ++mainSequence.nextLaneNumber;
+            lane.id = editSequence().makeUniqueLaneId(); ++editSequence().nextLaneNumber;
             getClip(destinationId, id)->lanes.push_back(std::move(lane));
         }
         if(source.isWaveTrack && !audioPath.empty()) reloadWaveform(destinationId, id);
@@ -1532,6 +1670,9 @@ bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath)
             return false;
         }
         fromJson(json);
+        // Its free timelines set to play on load start once their players run.
+        // (Named: a bare insert({}) picks the initializer_list overload and inserts nothing.)
+        for(const auto& timeline : rootTimelines.timelines) playOnLoadPending.insert(TimelineRef{std::string(), timeline->timelineId});
         return true;
     } catch(const std::exception& e) {
         ofLogError("ofxOceanodeTimeline") << "Could not load timeline: " << e.what()
@@ -1542,51 +1683,128 @@ bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath)
     }
 }
 
-ofJson ofxOceanodeTimelineManager::sequenceToJson(const ofxOceanodeTimelineSequence& sequence, bool withTimelines) const {
-    // The preset codec, on a timeline holding only this sequence, so every
-    // lane type and future field stays in step with timeline.json. Its play
-    // settings travel as the timeline's own tempo, loop and meter.
-    ofxOceanodeTimelineManager isolated;
-    isolated.mainSequence.tracks = sequence.tracks;
-    isolated.mainSequence.clipGroups = sequence.clipGroups;
-    isolated.mainSequence.play = sequence.play;
-    if(withTimelines) isolated.mainSequence.timelines = sequence.timelines;
-    isolated.adoptPlaySettings(sequence.play);
-    const auto full = isolated.toJson();
-    ofJson json = {{"version", full["version"]}, {"tracks", full["tracks"]}, {"clipGroups", full["clipGroups"]},
-                   {"tempo", full["tempo"]}, {"loop", full["loop"]}, {"timeSignature", full["timeSignature"]},
-                   {"play", full["play"]}};
-    if(full.contains("timelines")) json["timelines"] = full["timelines"];
-    if(full.contains("nextTimelineNumber")) json["nextTimelineNumber"] = full["nextTimelineNumber"];
+ofJson ofxOceanodeTimelineManager::sequenceToJson(const ofxOceanodeTimelineSequence& sequence) const {
+    // The content codec of timeline.json, with the timeline's id and its own
+    // tempo, loop and meter beside its play settings too (older readers
+    // took them from there).
+    ofJson json = sequenceContentToJson(sequence);
+    json["version"] = kPresetVersion;
+    if(!sequence.timelineId.empty()) json["id"] = sequence.timelineId;
+    const auto transport = playTransportToJson(sequence.play);
+    json["tempo"] = transport["tempo"];
+    json["loop"] = transport["loop"];
+    json["timeSignature"] = transport["timeSignature"];
     return json;
 }
 
-void ofxOceanodeTimelineManager::sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json) const {
-    ofxOceanodeTimelineManager isolated;
-    if(json.is_object()) isolated.fromJson(json);
-    auto* base = sequence.base;
-    const auto timelineId = sequence.timelineId;
-    auto timelines = std::move(sequence.timelines);
-    const auto nextTimeline = sequence.nextTimelineNumber;
-    sequence = std::move(isolated.mainSequence);
-    sequence.base = base;
-    sequence.timelineId = timelineId;
-    // Undo snapshots leave the canvas's further timelines out: keep them.
-    if(!(json.is_object() && json.contains("timelines"))) {
-        sequence.timelines = std::move(timelines);
-        sequence.nextTimelineNumber = std::max(nextTimeline, sequence.nextTimelineNumber);
+void ofxOceanodeTimelineManager::sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& input) {
+    const ofJson json = withoutNulls(input);
+    sequenceContentFromJson(sequence, json); // keeps its id and canvas
+    // An older file keeps the timeline's tempo, loop and meter beside its
+    // play settings (a newer one has them in "play" already).
+    const bool wholePlay = json.is_object() && json.contains("play") && json["play"].is_object() && json["play"].contains("tempo");
+    if(!wholePlay) playTransportFromJson(json, sequence.play);
+}
+
+ofJson ofxOceanodeTimelineManager::canvasToJson(const ofxOceanodeTimelineCanvas& canvas) const {
+    ofJson json;
+    json["timelines"] = ofJson::array();
+    for(const auto& timeline : canvas.timelines) json["timelines"].push_back(sequenceToJson(*timeline));
+    json["nextTimelineNumber"] = canvas.nextTimelineNumber;
+    return json;
+}
+
+namespace {
+// The number of a "tl_N" id (0 when it is not one).
+uint64_t timelineIdNumber(const std::string& id) {
+    if(id.rfind("tl_", 0) != 0 || id.size() <= 3 || id.size() > 21) return 0;
+    const std::string digits = id.substr(3);
+    if(!std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) return 0;
+    return std::stoull(digits);
+}
+} // namespace
+
+void ofxOceanodeTimelineManager::canvasFromJson(ofxOceanodeTimelineCanvas& canvas, const ofJson& json) {
+    canvas.timelines.clear();
+    canvas.nextTimelineNumber = 1;
+    if(!json.is_object()) return;
+    if(json.contains("timelines") && json["timelines"].is_array()) {
+        for(const auto& timelineJson : json["timelines"]) {
+            if(!timelineJson.is_object()) continue;
+            const std::string id = timelineJson.value("id", std::string());
+            if(id.empty() || canvas.find(id) != nullptr) continue;
+            auto timeline = std::make_shared<ofxOceanodeTimelineSequence>();
+            timeline->base = canvas.base;
+            sequenceFromJson(*timeline, timelineJson);
+            timeline->timelineId = id;
+            canvas.timelines.push_back(std::move(timeline));
+        }
     }
-    for(auto& timeline : sequence.timelines) timeline->base = base;
-    auto& play = sequence.play;
-    play.bpmAutomationEnabled = isolated.bpmAutomationEnabled;
-    play.bpmMinimum = isolated.bpmMinimum;
-    play.bpmMaximum = isolated.bpmMaximum;
-    play.bpmInterpolation = isolated.bpmInterpolation;
-    play.bpmPoints = isolated.bpmAutomationPoints;
-    play.bpmTensions = isolated.bpmCurveTensions;
-    play.loopEnabled = isolated.loopEnabled;
-    play.loopStartBeat = isolated.loopStartBeat;
-    play.loopEndBeat = isolated.loopEndBeat;
-    play.timeSignatureNumerator = isolated.timeSignatureNumerator;
-    play.timeSignatureDenominator = isolated.timeSignatureDenominator;
+    // Numbering continues after the highest id in use.
+    uint64_t next = std::max<uint64_t>(json.value("nextTimelineNumber", 1), 1);
+    for(const auto& timeline : canvas.timelines) next = std::max(next, timelineIdNumber(timeline->timelineId) + 1);
+    canvas.nextTimelineNumber = next;
+}
+
+ofJson ofxOceanodeTimelineManager::upgradeTimelineDocument(ofJson json, bool macroFile) {
+    if(!json.is_object()) return json;
+    const int version = json.value("version", 0);
+    // Written before 15: a timeline at the top level (the canvas's then
+    // default one), the canvas's further timelines in "timelines". (A
+    // document of today's shape that also carries "tracks" at its top level
+    // is left alone: the tests mirror the first timeline there.)
+    const bool older = version > 0 && version < 15;
+    const bool topLevelTimeline = json.contains("tracks") && !json.contains("timelines");
+    if(!older && !topLevelTimeline) return json;
+    const bool hadPlay = json.contains("play") && json["play"].is_object();
+    ofJson playJson = hadPlay ? json["play"] : ofJson::object();
+    // A macro file (and the older shape generally) kept the timeline's own
+    // tempo, loop and meter beside its play settings; a project file's are
+    // the global transport's and stay where they are.
+    const bool wholePlay = hadPlay && json["play"].contains("tempo");
+    if(macroFile && !wholePlay)
+        for(const char* key : {"tempo", "loop", "timeSignature"})
+            if(json.contains(key)) playJson[key] = json[key];
+    ofxOceanodeTimelinePlaySettings play;
+    playSettingsFromJson(playJson, play);
+    ofJson timeline = {{"id", "tl_1"}, {"play", playJson}};
+    timeline["tracks"] = json.contains("tracks") && json["tracks"].is_array() ? json["tracks"] : ofJson::array();
+    timeline["clipGroups"] = json.contains("clipGroups") && json["clipGroups"].is_array() ? json["clipGroups"] : ofJson::array();
+    // The default timeline was there once made on purpose, in use, playing
+    // on its own, or set up (older files made it by using it).
+    const bool created = hadPlay && json["play"].value("created", false);
+    const bool existed = created || !timeline["tracks"].empty() || play.free || play != ofxOceanodeTimelinePlaySettings();
+    ofJson timelines = json.contains("timelines") && json["timelines"].is_array() ? json["timelines"] : ofJson::array();
+    if(existed) timelines.insert(timelines.begin(), std::move(timeline));
+    for(const char* key : {"tracks", "clipGroups", "play"}) json.erase(key);
+    // Macro tracks placing a canvas's then-default timeline: "tl_1" now.
+    for(auto& entry : timelines) {
+        if(!entry.is_object() || !entry.contains("tracks") || !entry["tracks"].is_array()) continue;
+        for(auto& track : entry["tracks"])
+            if(track.is_object() && !track.value("macroCanvas", std::string()).empty() &&
+               track.value("macroTimeline", std::string()).empty())
+                track["macroTimeline"] = "tl_1";
+    }
+    json["timelines"] = std::move(timelines);
+    uint64_t next = std::max<uint64_t>(json.value("nextTimelineNumber", 1), 1);
+    for(const auto& entry : json["timelines"])
+        if(entry.is_object()) next = std::max(next, timelineIdNumber(entry.value("id", std::string())) + 1);
+    json["nextTimelineNumber"] = next;
+    // References to a canvas's then-default timeline name it.
+    auto name = [](ofJson& ref) {
+        if(ref.is_object() && ref.value("timeline", std::string()).empty()) ref["timeline"] = "tl_1";
+    };
+    for(const char* key : {"windows", "players"})
+        if(json.contains(key) && json[key].is_array())
+            for(auto& ref : json[key]) name(ref);
+    if(json.contains("clipFollow") && json["clipFollow"].is_array()) {
+        ofJson follow = ofJson::array();
+        for(const auto& entry : json["clipFollow"]) {
+            if(entry.is_string()) follow.push_back({{"canvas", entry.get<std::string>()}, {"timeline", "tl_1"}});
+            else if(entry.is_object()) { auto copy = entry; name(copy); follow.push_back(std::move(copy)); }
+        }
+        json["clipFollow"] = std::move(follow);
+    }
+    json["version"] = kPresetVersion;
+    return json;
 }

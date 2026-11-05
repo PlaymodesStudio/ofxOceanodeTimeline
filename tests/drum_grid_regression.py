@@ -102,7 +102,7 @@ int main() {
     {   // Creation from a note group, evaluation, polymeter in beats, swing, mute/solo.
         ofxOceanodeContainer owner;
         owner.transport->setDriverMode(TransportDriverMode::FrameStep);
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Kit kit(owner, model);
         auto& lane = kit.get(model);
@@ -231,7 +231,7 @@ int main() {
         const auto json = model.toJson();
         check(json["masterGridBeats"] == 0.75, "Master grid saved");
         auto noGrid = json; noGrid.erase("masterGridBeats");
-        ofxOceanodeTimelineManager loaded(&owner);
+        TestTimeline loaded(&owner);
         loaded.fromJson(json);
         check(loaded.getMasterGridBeats() == 0.75, "Master grid loads");
         loaded.fromJson(noGrid);
@@ -241,7 +241,7 @@ int main() {
     }
     {   // Shortening a row hides hits, never deletes them: 16 -> 3 -> 16 steps.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Kit kit(owner, model);
         auto& row = kit.get(model).drumRows[0];
@@ -264,7 +264,7 @@ int main() {
         check(std::abs(kit.gates(model, 0.51)[0] - 0.38f) < 1e-4f, "...the third hit at 0.5, nothing of the hidden ones");
         // Hidden hits survive save and load.
         const auto json = model.toJson();
-        ofxOceanodeTimelineManager loaded(&owner);
+        TestTimeline loaded(&owner);
         loaded.fromJson(json);
         const auto* reloaded = loaded.getLane(kit.track, kit.clip, kit.lane);
         check(reloaded != nullptr && reloaded->drumRows[0].steps.size() == 16 && reloaded->drumRows[0].length == 0.75,
@@ -339,7 +339,7 @@ int main() {
         // velocity; Duration leads its gate like the pitch.
         ofxOceanodeContainer owner;
         owner.transport->setDriverMode(TransportDriverMode::External);
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         Kit kit(owner, model);
         auto& lane = kit.get(model);
@@ -382,7 +382,7 @@ int main() {
     }
     {   // Files of the first, index-based Drum Grid play exactly as before.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Kit kit(owner, model);
         auto json = model.toJson();
@@ -398,7 +398,7 @@ int main() {
         steps[18] = {{"on", true}};                                           // past the length: never played
         laneJson["drumGrid"] = {{"swing", 0.5}, {"rows", {{{"slot", 0}, {"name", "Kick"}, {"length", 12}, {"gate", 0.5},
                                                            {"steps", steps}}}}};
-        ofxOceanodeTimelineManager loaded(&owner);
+        TestTimeline loaded(&owner);
         loaded.fromJson(json);
         const auto* lane = loaded.getLane(kit.track, kit.clip, kit.lane);
         check(lane != nullptr && lane->drumRows.size() == 1, "Old Drum Grid lane loads");
@@ -451,7 +451,7 @@ int main() {
     }
     {   // JSON: round trip, old files unchanged, malformed / unknown data defaults.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Kit kit(owner, model);
         auto& lane = kit.get(model);
@@ -466,7 +466,7 @@ int main() {
         lane.drumRows[2].solo = true;
         lane.drumRows[1].steps = {hit(0.1875, 0.0625, 0.4f, 0.4f, -7, 0.25f, 3, 16.0f, -0.75f, 49.5f)};
         const auto json = model.toJson();
-        ofxOceanodeTimelineManager loaded(&owner);
+        TestTimeline loaded(&owner);
         loaded.fromJson(json);
         const auto* back = loaded.getLane(kit.track, kit.clip, kit.lane);
         check(back != nullptr && back->type == DG::DrumGrid, "Drum Grid lane type survives JSON");
@@ -504,7 +504,7 @@ int main() {
                                                       {{"beat", 3.0}, {"duration", -1.0}, {"length", "long"}, {"filter", -9.0}, {"stutter", -4.0}}};
             laneJson["drumGrid"]["rows"][1]["hits"] = "none";
         }
-        ofxOceanodeTimelineManager clamped(&owner);
+        TestTimeline clamped(&owner);
         clamped.fromJson(edited);
         if(const auto* c = clamped.getLane(kit.track, kit.clip, kit.lane)) {
             check(c->drumSwing == 0.75f && c->drumRows[0].length == 64.0 && c->drumRows[0].gate == 0.5f, "Lane/row values clamp");
@@ -520,19 +520,19 @@ int main() {
             check(c->drumRows[1].steps.empty(), "Malformed hits load empty");
         } else check(false, "Clamped lane missing");
         // Older files: no Drum Grid anywhere, so nothing new is written.
-        ofxOceanodeTimelineManager old(&owner);
+        TestTimeline old(&owner);
         const auto t = old.createTrack("Old");
         const auto c = old.createClip(t, "Old", 0, 4);
         old.createLane(t, c, "Steps", DG::Step);
         old.createLane(t, c, "Piano", DG::PianoRoll);
         const auto oldJson = old.toJson();
         check(oldJson.dump().find("drumGrid") == std::string::npos, "Other lanes write no drumGrid data");
-        ofxOceanodeTimelineManager reloaded(&owner);
+        TestTimeline reloaded(&owner);
         reloaded.fromJson(oldJson);
         check(reloaded.toJson() == oldJson, "Old JSON loads and saves unchanged");
         auto stripped = json;
         for(auto& track : stripped["tracks"]) for(auto& clip : track["clips"]) for(auto& laneJson : clip["lanes"]) laneJson.erase("drumGrid");
-        ofxOceanodeTimelineManager bare(&owner);
+        TestTimeline bare(&owner);
         bare.fromJson(stripped);
         if(const auto* l = bare.getLane(kit.track, kit.clip, kit.lane))
             check(l->type == DG::DrumGrid && l->drumRows.empty() &&
@@ -540,7 +540,7 @@ int main() {
                   "Drum Grid without rows loads and plays nothing");
         auto unknown = oldJson;
         unknown["tracks"][0]["clips"][0]["lanes"][0]["laneType"] = "SomethingNew";
-        ofxOceanodeTimelineManager future(&owner);
+        TestTimeline future(&owner);
         future.fromJson(unknown);
         check(future.getTracks()[0].clips[0].lanes[0].type == DG::Step, "Unknown lane types load as Step");
         // Splitting a clip keeps each row's phase.

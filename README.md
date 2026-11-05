@@ -15,13 +15,13 @@ void ofApp::setup() {
 }
 ```
 
-For a headless host, call `ofxOceanodeTimeline::attach(container)` and register `lfoTrack` yourself if needed; attachment forwards to the root host.
+For a headless host, call `ofxOceanodeTimeline::attach(container)` and register `lfoTrack` and `timelineTransport` yourself if needed; attachment forwards to the root host.
 
 The root container owns the timeline service. Macro containers share that service. Repeating `setup` on the same host does nothing. Without attachment, Oceanode has no timeline window, publishing menus or automation processing. Calling `getTimelineManager()` without attachment throws an explanatory exception; linking code that calls it requires this addon.
 
-The existing manager API stays available through `oceanode.getTimelineManager()` and `container.getTimelineManager()`. Existing `timeline.json` files, clip IDs, binding paths and LFO Track node names are unchanged. Timeline JSON is left untouched when saving a project with core alone. To use projects containing LFO Track nodes, attach this addon before loading them.
+The existing manager API stays available through `oceanode.getTimelineManager()` and `container.getTimelineManager()`. A canvas owns any number of timelines and none by default; `timeline.json` files written before version 15 (one timeline at their top level) are upgraded on load, that timeline becoming `tl_1`, and saved in the new shape. Clip IDs, binding paths and LFO Track node names are unchanged. Timeline JSON is left untouched when saving a project with core alone. To use projects containing LFO Track nodes, attach this addon before loading them.
 
-Includes timeline model and persistence, portable multi-lane clip files with target remapping, clip/lane editors, parameter publishing menus and badges, piano roll and instrument setup, BPM automation and timebase retiming, LFO Track, wave clips and scheduling lookahead. Shared transport, deterministic random utilities and backend scheduling registration stay in core. Node instrument/value-scale metadata remains available in core so instrument addons do not need a timeline dependency.
+Includes timeline model and persistence, portable multi-lane clip files with target remapping, clip/lane editors, parameter publishing menus and badges, piano roll and instrument setup, BPM automation and timebase retiming, LFO Track, the Timeline node (play, stop and restart a timeline from the patch), wave clips and scheduling lookahead. Any number of timelines per canvas, each linked to the global transport, free on its own transport and tempo, or dependent on the timeline placing it as clips (see [timeline model usage](docs/timeline.md)). Shared transport, deterministic random utilities and backend scheduling registration stay in core. Node instrument/value-scale metadata remains available in core so instrument addons do not need a timeline dependency.
 
 See [timeline model usage](docs/timeline.md) and `example-timeline` (generate its project files with the OF project generator).
 
@@ -45,6 +45,10 @@ python3 ../ofxOceanodeTimeline/tests/controller_clarity_regression.py
 python3 ../ofxOceanodeTimeline/tests/attachment_regression.py
 python3 ../ofxOceanodeTimeline/tests/drum_grid_regression.py
 python3 ../ofxOceanodeTimeline/tests/drum_duration_adopt_regression.py
+python3 ../ofxOceanodeTimeline/tests/multi_timeline_regression.py
+python3 ../ofxOceanodeTimeline/tests/beat_transport_source_regression.py
+python3 ../ofxOceanodeTimeline/tests/macro_mixer_timeline_regression.py
+python3 ../ofxOceanodeTimeline/tests/encapsulate_timeline_regression.py
 ```
 
 The runtime regressions use real OF parameters and JSON under ASan/UBSan; the editor suite also runs production editors with headless ImGui. Set `OCEANODE_TEST_OF_ROOT` to a compiled macOS OF tree if needed. `OCEANODE_CORE_ROOT` can override the default sibling core path. These checks do not verify visual appearance or exercise audio hardware.

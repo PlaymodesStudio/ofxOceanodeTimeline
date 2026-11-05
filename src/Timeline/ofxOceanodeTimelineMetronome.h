@@ -18,6 +18,8 @@ public:
     : transport(std::move(transport)) {}
     ~ofxOceanodeTimelineMetronome() { stream.close(); }
 
+    const std::shared_ptr<ofxOceanodeTransport>& getTransport() const { return transport; }
+
     bool start() {
         ofSoundStreamSettings settings;
         settings.setOutListener(this);

@@ -22,7 +22,7 @@ int main() {
     np.bindParameter(newPitch); ng.bindParameter(newGate); nf.bindParameter(newFilter);
     for(auto* p:{&op,&og,&of}) oldProject.targets[p->getEscapedName()]=p;
     for(auto* p:{&np,&ng,&nf}) newProject.targets[p->getEscapedName()]=p;
-    ofxOceanodeTimelineManager source(&oldProject), dest(&newProject);
+    TestTimeline source(&oldProject), dest(&newProject);
     const auto t=source.createTrack("Laser"), pb=source.addBinding(t,op), gb=source.addBinding(t,og), fb=source.addBinding(t,of);
     const auto c=source.createClip(t,"Mixed phrase",12,8);
     const auto piano=source.createLane(t,c,"Melody",ofxOceanodeTimelineLaneType::PianoRoll);

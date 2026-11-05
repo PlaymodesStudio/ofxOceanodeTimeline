@@ -52,7 +52,7 @@ int main() {
 
     // The manager's main timeline is a Sequence: what it creates is found there.
     ofxOceanodeContainer owner;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     const auto t = model.createTrack("Main");
     const auto c = model.createClip(t, "A", 0, 4);
     assert(model.getTracks().size() == 1 && model.getTrack(t) == &model.getTracks()[0]);

@@ -27,7 +27,7 @@ int main() {
     {
         // A gate held open by a clip is released when an undo removes the clip.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Synth synth(owner, model);
         model.beginTimelineEdit();
@@ -46,7 +46,7 @@ int main() {
     {
         // ... and when a loaded timeline no longer has it.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Synth synth(owner, model);
         const auto empty = model.toJson();
@@ -64,7 +64,7 @@ int main() {
     {
         // ... and when its binding is bypassed mid-note.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         model.setSchedulingEnabled(false);
         Synth synth(owner, model);
         std::string lane;
@@ -85,7 +85,7 @@ int main() {
     {
         // A step's probability is rolled again in every repeat of its clip.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         ofParameter<float> gv("Step Gate", 0, 0, 1);
         ofxOceanodeParameter<float> gate; gate.bindParameter(gv);
         owner.targets[gate.getEscapedName()] = &gate;
@@ -108,7 +108,7 @@ int main() {
     {
         // A note that does not sound neither steals the voice nor moves the pitch.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Synth synth(owner, model);
         model.setNoteGroupVoices(synth.track, synth.group, 1);
         std::string lane;
@@ -134,7 +134,7 @@ int main() {
     {
         // A duplicated piano lane does not double its notes, and rolls on its own seed.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         ofParameter<std::vector<float>> pv("Poly Pitch", {60, 60, 60, 60}, {0}, {127}), gv("Poly Gate", {0, 0, 0, 0}, {0}, {1});
         ofxOceanodeParameter<std::vector<float>> pitch, gate;
         pitch.bindParameter(pv); gate.bindParameter(gv);
@@ -163,7 +163,7 @@ int main() {
     {
         // A non-finite value (saved as null) does not drop its track.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         ofParameter<float> value("Value", 0, 0, 10);
         ofxOceanodeParameter<float> target; target.bindParameter(value);
         owner.targets[target.getEscapedName()] = &target;
@@ -176,7 +176,7 @@ int main() {
         model.setClipNumber(track, clip, lane, 2.0, 5.0f);
         model.getLane(track, clip, lane)->curvePoints[1].value = std::numeric_limits<float>::quiet_NaN();
         auto saved = ofJson::parse(model.toJson().dump()); // NaN is written as null
-        ofxOceanodeTimelineManager loaded(&owner);
+        TestTimeline loaded(&owner);
         loaded.fromJson(saved);
         check(loaded.getTracks().size() == 1 && loaded.getLane(track, clip, lane) != nullptr,
               "A null value dropped its whole track on load");

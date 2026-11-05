@@ -21,7 +21,7 @@ int main() {
     pitch.bindParameter(pitches); gate.bindParameter(gates);
     owner.targets[pitch.getEscapedName()] = &pitch;
     owner.targets[gate.getEscapedName()] = &gate;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     const auto t = model.createTrack("Instrument");
     const auto pb = model.addBinding(t, pitch), gb = model.addBinding(t, gate);
@@ -85,7 +85,7 @@ int main() {
         ofParameter<std::vector<float>> pv("Poly Pitch",{60,64},{0},{127}), gv("Poly Gate",{0,0},{0},{1});
         ofxOceanodeParameter<std::vector<float>> pp,gp; pp.bindParameter(pv); gp.bindParameter(gv);
         polyOwner.targets[pp.getEscapedName()]=&pp; polyOwner.targets[gp.getEscapedName()]=&gp;
-        ofxOceanodeTimelineManager poly(&polyOwner); poly.setSchedulingEnabled(false);
+        TestTimeline poly(&polyOwner); poly.setSchedulingEnabled(false);
         const auto pt=poly.createTrack("Poly");
         const auto p=poly.addBinding(pt,pp),g=poly.addBinding(pt,gp);
         const auto ng=poly.createNoteGroup(pt,"Poly",p,g,"");

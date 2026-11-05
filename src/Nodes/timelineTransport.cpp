@@ -1,0 +1,103 @@
+//
+//  timelineTransport.cpp
+//  ofxOceanode
+//
+
+#include "timelineTransport.h"
+#include "ofxOceanodeContainer.h"
+
+void timelineTransport::setup() {
+    color = ofColor::red;
+    description = "Plays, stops and restarts the selected timeline. Stop goes back to its start, "
+                  "Restart plays it again from its start. Play and Stop follow the timeline's quantize "
+                  "setting on its own transport (free, or the preview of a dependent one); a timeline "
+                  "linked to the global transport plays, stops and seeks that transport at once.";
+
+    timelineRefs = {TimelineRef{}};
+    timelineNames = {"(none)"};
+    // Not saved as an index: the timeline reference is saved in presetSave instead.
+    timelineSelectorParam = addParameterDropdown(timelineSelector, "Timeline", 0, timelineNames,
+        ofxOceanodeParameterFlags_DisableSavePreset | ofxOceanodeParameterFlags_DisableSaveProject);
+    addParameter(play.set("Play"));
+    addParameter(stop.set("Stop"));
+    addParameter(restart.set("Restart"));
+
+    listeners.push(timelineSelector.newListener([this](int &index) {
+        if(updatingSelector) return;
+        if(index >= 0 && index < static_cast<int>(timelineRefs.size())) selectedRef = timelineRefs[index];
+    }));
+    // The manager, while a timeline is selected (none: nothing to play).
+    auto manager = [this]() -> ofxOceanodeTimelineManager* {
+        if(hostContainer == nullptr || selectedRef.timeline.empty()) return nullptr;
+        return &hostContainer->getTimelineManager();
+    };
+    // As the timeline toolbar does: Stop goes back to the start.
+    listeners.push(play.newListener([this, manager]() {
+        if(auto* timeline = manager()) timeline->playTimeline(selectedRef);
+    }));
+    listeners.push(stop.newListener([this, manager]() {
+        if(auto* timeline = manager()) timeline->stopTimeline(selectedRef, true);
+    }));
+    listeners.push(restart.newListener([this, manager]() {
+        if(auto* timeline = manager()) {
+            timeline->seekTimeline(selectedRef, 0.0);
+            timeline->playTimeline(selectedRef);
+        }
+    }));
+}
+
+void timelineTransport::refreshTimelineList() {
+    if(hostContainer == nullptr) return;
+    auto& manager = hostContainer->getTimelineManager();
+    std::vector<TimelineRef> refs{TimelineRef{}};
+    std::vector<std::string> names{"(none)"};
+    for(const auto& ref : manager.allTimelines()) {
+        const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
+        std::string name = (root ? std::string() : ref.canvas + " > ") + manager.timelineName(ref);
+        if(manager.clockSourceOf(ref) == ofxOceanodeTimelineManager::ClockSource::Dependent) name += " (dependent)";
+        refs.push_back(ofxOceanodeTimelineManager::normalizedRef(ref));
+        names.push_back(name);
+    }
+    // A saved timeline that is not there (yet: the timeline loads after node
+    // presets) stays selected, shown as missing.
+    if(!selectedRef.timeline.empty() && std::find(refs.begin(), refs.end(), selectedRef) == refs.end()) {
+        refs.push_back(selectedRef);
+        names.push_back("Missing timeline");
+    }
+    if(refs != timelineRefs || names != timelineNames) {
+        timelineRefs = refs;
+        timelineNames = names;
+        // The selection is kept by reference: a shorter list does not retarget it.
+        updatingSelector = true;
+        timelineSelector.setMax(static_cast<int>(timelineNames.size()) - 1);
+        if(timelineSelectorParam) timelineSelectorParam->setDropdownOptions(timelineNames);
+        updatingSelector = false;
+    }
+    // Keep the dropdown showing the selected timeline (by reference).
+    const int index = static_cast<int>(std::find(timelineRefs.begin(), timelineRefs.end(), selectedRef) - timelineRefs.begin());
+    if(timelineSelector.get() != index) {
+        updatingSelector = true;
+        timelineSelector = index;
+        updatingSelector = false;
+    }
+}
+
+void timelineTransport::update(ofEventArgs &a) {
+    refreshTimelineList();
+}
+
+void timelineTransport::presetSave(ofJson &json) {
+    json["timelineCanvas"] = selectedRef.canvas;
+    json["timelineId"] = selectedRef.timeline;
+    json["timelineFormat"] = 15; // an empty id means none (before 15: the canvas's default timeline)
+}
+
+void timelineTransport::presetRecallAfterSettingParameters(ofJson &json) {
+    if(json.contains("timelineCanvas") && json["timelineCanvas"].is_string() &&
+       json.contains("timelineId") && json["timelineId"].is_string()) {
+        selectedRef = ofxOceanodeTimelineManager::normalizedRef(
+            {json["timelineCanvas"].get<std::string>(), json["timelineId"].get<std::string>()});
+        // Saved before timelines had ids of their own: the canvas's then-default one, "tl_1" now.
+        if(selectedRef.timeline.empty() && json.value("timelineFormat", 0) < 15) selectedRef.timeline = "tl_1";
+    }
+}

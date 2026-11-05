@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Several timelines on one canvas, each playing on its own transport.
+"""Several timelines on one canvas, each with its clock source.
 
-A further timeline on the root canvas plays free: started, stopped and
-seeked by itself at its own tempo while the main timeline is stopped, on the
-shared clock. It is listed as a time source, keeps its tempo, loop and meter,
-and saves with which timelines play free.
+A timeline is linked to the global transport by default (it plays with the
+root transport, at the global tempo), plays free on a transport of its own
+(started, stopped and seeked by itself at its own tempo, on the shared
+clock), or depends on the timeline placing it as clips (it plays where they
+place it, at that timeline's tempo, and previews alone). Each is listed as a
+time source, keeps its tempo, loop and meter, and saves its clock source and
+play on load with its own settings. No timeline exists until one is made.
 """
 import timeline_regression as fixture
 
-CASES = fixture.CASES.split('int main()')[0] + r'''
+CASES = '#include <filesystem>\n' + fixture.CASES.split('int main()')[0] + r'''
 int main() {
     ofSeedRandom();
     ofxOceanodeContainer owner;
@@ -18,7 +21,7 @@ int main() {
     ofxOceanodeParameter<float> drum; drum.bindParameter(drumValue);
     owner.targets[level.getEscapedName()] = &level;
     owner.targets[drum.getEscapedName()] = &drum;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     auto frame = [&](double seconds) {
         owner.transport->advanceFrameStep(seconds);
@@ -55,11 +58,21 @@ int main() {
     model.addBindingToLane(*pattern, t, second, secondLane, b);
     model.setClipNumber(*pattern, t, second, secondLane, 0, 0.9f);
 
-    // Not free yet: no transport, listed but not selectable.
-    assert(!model.isFree(drums) && model.transportFor(drums) == nullptr);
+    using ClockSource = ofxOceanodeTimelineManager::ClockSource;
+    // Linked to the global transport by default: it plays with the root
+    // transport, at the global tempo, and is that transport as a time source.
+    assert(!model.isFree(drums) && model.clockSourceOf(drums) == ClockSource::Global);
     frame(0.1);
-    assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == nullptr);
+    assert(model.transportFor(drums) == owner.transport);
+    assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == owner.transport);
     assert(owner.transport->findTimeSource("root#default") == owner.transport);
+    owner.transport->seekToBeat(3.0); owner.transport->latchFrameState(); model.update();
+    near(drumValue, 0.9f);
+    near(levelValue, 0.25f);
+    double shownBeat = -1.0;
+    assert(model.timelinePlayheadBeat(drums, shownBeat)); near(shownBeat, 3.0);
+    owner.transport->seekToBeat(0.0); owner.transport->latchFrameState(); model.update();
+    near(drumValue, 0.5f);
 
     // Free: its own transport, at its own tempo, unquantized.
     auto settings = *model.playSettings(drums);
@@ -92,7 +105,7 @@ int main() {
     assert(!drumsTransport->getState().isPlaying);
     near(drumsTransport->getState().beatPosition, 0.0);
     near(drumValue, 0.5f);
-    model.playTimeline({"", ""});
+    model.playTimeline(model.getEditTarget());
     for(int i = 0; i < 5; ++i) frame(0.1);
     assert(owner.transport->getState().isPlaying && !drumsTransport->getState().isPlaying);
     model.seekTimeline(drums, 3.0);
@@ -110,15 +123,31 @@ int main() {
     const double barBeat = std::ceil(rootState.beatPosition / 4.0 - 1e-9) * 4.0;
     near(at, rootState.clockSeconds + (barBeat - rootState.beatPosition) * 60.0 / rootState.bpm);
 
-    // Saved: the timeline, its play settings and that it plays free.
+    // Saved: the timeline, its play settings and that it plays free (with
+    // its own settings, no longer in a list of players).
     const auto json = model.toJson();
     assert(json.contains("timelines") && json["timelines"].size() == 1);
-    assert(json.contains("players") && json["players"].size() == 1);
+    assert(!json.contains("players") && json["timelines"][0]["play"].value("free", false));
+    assert(json["play"].contains("tempo") && json["play"].contains("loop")); // the root default's, whole
     ofxOceanodeContainer other;
-    ofxOceanodeTimelineManager restored(&other);
+    TestTimeline restored(&other);
     restored.fromJson(json);
     assert(restored.timelinesOfCanvas("").size() == 2);
-    assert(restored.isFree(drums));
+    assert(restored.isFree(drums) && restored.clockSourceOf(drums) == ClockSource::Free);
+    {
+        // An older file listed the free timelines apart: read into their settings.
+        auto legacy = json;
+        legacy["timelines"][0]["play"].erase("free");
+        legacy["players"] = ofJson::array({{{"canvas", ""}, {"timeline", id}}});
+        TestTimeline fromLegacy(&other);
+        fromLegacy.fromJson(legacy);
+        assert(fromLegacy.isFree(drums));
+        // Any timeline can go: removed, the canvas keeps the rest.
+        assert(fromLegacy.timelineExists({"", "tl_1"}) && !fromLegacy.getTracks().empty());
+        assert(fromLegacy.removeTimeline({"", "tl_1"}));
+        assert(!fromLegacy.timelineExists({"", "tl_1"}) && fromLegacy.findTimeline({"", "tl_1"}) == nullptr);
+        assert(fromLegacy.timelinesOfCanvas("").size() == 1 && fromLegacy.allTimelines().size() == 1);
+    }
     assert(restored.timelineName(drums) == "Drums");
     near(restored.playSettings(drums)->bpm, 60.0);
     assert(restored.playSettings(drums)->quantize == 2);
@@ -129,6 +158,50 @@ int main() {
     ofxOceanodeTimelineSequence copy;
     model.sequenceFromJson(copy, model.sequenceToJson(*pattern));
     assert(copy.play == pattern->play);
+    assert(!model.sequenceToJson(*pattern)["play"].contains("playOnLoad")); // off: not written
+
+    // Play on load: after its preset loads, a free timeline set to it starts
+    // from its beginning by itself; one not set to it stays stopped.
+    {
+        settings.playOnLoad = true;
+        settings.quantize = 0;
+        model.setPlaySettings(drums, settings);
+        model.sequenceFromJson(copy, model.sequenceToJson(*pattern));
+        assert(copy.play.playOnLoad && copy.play == pattern->play);
+        const auto still = model.createTimeline("", "Still");
+        model.setFree({"", still}, true);
+        frame(0.1);
+        const auto folder = std::filesystem::temp_directory_path() / ("oceanode-play-on-load-" + ofToString(ofGetSystemTimeMicros()));
+        std::filesystem::create_directories(folder);
+        assert(model.savePreset(folder.string()));
+        ofxOceanodeContainer loadedOwner;
+        loadedOwner.transport->setDriverMode(TransportDriverMode::FrameStep);
+        TestTimeline loaded(&loadedOwner);
+        loaded.setSchedulingEnabled(false);
+        assert(loaded.loadPreset(folder.string()));
+        assert(loaded.playSettings(drums)->playOnLoad && !loaded.playSettings({"", still})->playOnLoad);
+        for(int i = 0; i < 5; ++i) {
+            loadedOwner.transport->advanceFrameStep(0.1);
+            loadedOwner.transport->latchFrameState();
+            loaded.update();
+        }
+        assert(loaded.transportFor(drums) != nullptr && loaded.transportFor(drums)->getState().isPlaying);
+        assert(loaded.transportFor(drums)->getState().beatPosition < 1.0);
+        assert(loaded.transportFor({"", still}) != nullptr && !loaded.transportFor({"", still})->getState().isPlaying);
+        assert(!loadedOwner.transport->getState().isPlaying); // the main timeline is not set to play on load
+        // Stopped by hand, it stays stopped: only a load starts it.
+        loaded.stopTimeline(drums, true, false);
+        for(int i = 0; i < 3; ++i) {
+            loadedOwner.transport->advanceFrameStep(0.1);
+            loadedOwner.transport->latchFrameState();
+            loaded.update();
+        }
+        assert(!loaded.transportFor(drums)->getState().isPlaying);
+        std::filesystem::remove_all(folder);
+        model.removeTimeline({"", still});
+        settings.playOnLoad = false;
+        model.setPlaySettings(drums, settings);
+    }
 
     // Added from a parameter's menu: on the root canvas, always a further one.
     const auto pads = model.addTimeline("", "Pads");
@@ -143,11 +216,81 @@ int main() {
     assert(model.renameTimeline({"", twin}, "Fills") && model.timelineName({"", twin}) == "Fills");
     assert(model.removeTimeline({"", twin}) && model.timelinesOfCanvas("").size() == 2);
 
-    // No longer free: its transport goes, its source is listed as unselectable.
+    // No longer free: back on the global transport.
     model.setFree(drums, false);
-    assert(model.transportFor(drums) == nullptr);
     for(int i = 0; i < 20; ++i) frame(0.05);
-    assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == nullptr);
+    assert(model.transportFor(drums) == owner.transport);
+    assert(owner.transport->findTimeSource(ofxOceanodeTimelineManager::timeSourceId(drums)) == owner.transport);
+
+    // ---- The root canvas's first timeline is a timeline like any other ----
+    const auto mainRef = model.getEditTarget();
+    {
+        // Free, it leaves the global transport: an engine plays it on its own.
+        const auto second = model.createClip(mainTrack, "Main clip 2", 2, 2);
+        const auto secondLane = model.createLane(mainTrack, second, "Level", ofxOceanodeTimelineLaneType::Number);
+        model.addBindingToLane(mainTrack, second, secondLane, mainBinding);
+        model.setClipNumber(mainTrack, second, secondLane, 0, 0.75f);
+        owner.transport->stop(); owner.transport->latchFrameState();
+        frame(0.1); near(levelValue, 0.25f);
+        auto mainSettings = *model.playSettings(mainRef);
+        mainSettings.quantize = 0;
+        model.setPlaySettings(mainRef, mainSettings);
+        model.setFree(mainRef, true);
+        assert(model.clockSourceOf(mainRef) == ClockSource::Free);
+        frame(0.1);
+        auto mainTransport = model.transportFor(mainRef);
+        assert(mainTransport != nullptr && mainTransport != owner.transport && mainTransport->isDerived());
+        near(model.playSettings(mainRef)->bpm, owner.transport->getState().bpm); // it started from the global tempo
+        model.seekTimeline(mainRef, 3.0);
+        frame(0.1);
+        near(levelValue, 0.75f);
+        near(owner.transport->getState().beatPosition, 0.0); // the global transport did not move
+        // Linked again: the global transport's position.
+        model.setFree(mainRef, false);
+        frame(0.1);
+        assert(model.transportFor(mainRef) == owner.transport);
+        near(levelValue, 0.25f);
+        assert(model.removeClip(mainTrack, second));
+    }
+    // ---- No timeline until one is made ----
+    {
+        ofxOceanodeContainer blank;
+        ofxOceanodeTimelineManager none(&blank);
+        assert(!none.timelineExists({"", "tl_1"}) && none.allTimelines().empty() && none.timelinesOfCanvas("").empty());
+        const auto first = none.addTimeline("", "First");
+        assert(first.canvas.empty() && first.timeline == "tl_1" && none.timelineExists(first));
+        assert(none.timelineName(first) == "First" && none.allTimelines().size() == 1);
+        const auto next = none.addTimeline("", "Second");
+        assert(next.timeline == "tl_2" && none.allTimelines().size() == 2);
+        // A removed timeline's id is never given to another.
+        assert(none.removeTimeline(next) && none.addTimeline("", "Third").timeline == "tl_3");
+        // The name a new one gets, and its own when it has one.
+        assert(none.suggestTimelineName("") == "Timeline 4" && none.timelineName({"", "tl_3"}) == "Third");
+        {
+            // A document written before version 15: its top-level timeline becomes "tl_1",
+            // empty references to it name it, a track placing a macro's then-default one too.
+            ofJson old = none.toJson();
+            old["version"] = 14;
+            old["tracks"] = ofJson::array({{{"id", "timeline_track_9"}, {"name", "Old"},
+                                           {"macroCanvas", "Macro 1"}, {"macroGate", false}}});
+            old["play"] = {{"name", "Main"}, {"created", true}};
+            old.erase("timelines");
+            old["windows"] = ofJson::array({{{"id", 1}, {"canvas", ""}, {"timeline", ""}}});
+            old["players"] = ofJson::array({{{"canvas", ""}, {"timeline", ""}}});
+            old["clipFollow"] = ofJson::array({"Macro 1"});
+            ofxOceanodeTimelineManager upgraded(&blank);
+            upgraded.fromJson(old);
+            assert(upgraded.timelinesOfCanvas("").size() == 1 && upgraded.timelineExists({"", "tl_1"}));
+            assert(upgraded.timelineName({"", "tl_1"}) == "Main" && upgraded.isFree({"", "tl_1"}));
+            const auto* track = upgraded.getTrack(*upgraded.findTimeline({"", "tl_1"}), "timeline_track_9");
+            assert(track != nullptr && track->macroTimeline == "tl_1");
+            assert(upgraded.getTimelineWindows().size() == 1 && upgraded.getTimelineWindows().front().ref.timeline == "tl_1");
+            ofJson empty = {{"version", 14}, {"tracks", ofJson::array()}};
+            ofxOceanodeTimelineManager nothing(&blank);
+            nothing.fromJson(empty);
+            assert(nothing.allTimelines().empty()); // a default timeline never used was none
+        }
+    }
     // ---- A timeline placed in another as a clip, stretched ----
     {
         ofxOceanodeContainer nest;
@@ -157,7 +300,7 @@ int main() {
         ofxOceanodeParameter<float> hit; hit.bindParameter(hitValue);
         nest.targets[fill.getEscapedName()] = &fill;
         nest.targets[hit.getEscapedName()] = &hit;
-        ofxOceanodeTimelineManager nested(&nest);
+        TestTimeline nested(&nest);
         nested.setSchedulingEnabled(false);
         const auto fillsId = nested.createTimeline("", "Fills");
         const ofxOceanodeTimelineManager::TimelineRef fills{"", fillsId};
@@ -173,7 +316,7 @@ int main() {
         nested.addBindingToLane(*fillSequence, ft, fh, fhl, fb);
         nested.setClipNumber(*fillSequence, ft, fh, fhl, 0, 0.7f);
         // On the main timeline at beat 4, at half speed (2 beats per beat of Fills).
-        auto& mainTimeline = nested.getMainSequence();
+        auto& mainTimeline = nested.editSequence();
         const auto placing = nested.createTimelineTrack(mainTimeline, fills);
         assert(!placing.empty());
         assert(nested.getTrack(mainTimeline, placing)->macroCanvas == ".");
@@ -184,9 +327,9 @@ int main() {
         clip->contentStretch = 2.0;
         clip->repeatContent = true;
         // Neither may play itself, directly or through the other.
-        assert(nested.createTimelineTrack(*fillSequence, {"", ""}).empty());
+        assert(nested.createTimelineTrack(*fillSequence, nested.getEditTarget()).empty());
         assert(nested.createTimelineTrack(*fillSequence, fills).empty());
-        assert(nested.timelineReaches({"", ""}, fills));
+        assert(nested.timelineReaches(nested.getEditTarget(), fills));
         nest.transport->seekToBeat(5.0); // Fills beat 0.5
         nest.transport->play();
         nest.transport->latchFrameState();
@@ -196,52 +339,89 @@ int main() {
         nest.transport->latchFrameState();
         nested.update();
         near(fillValue, 0.7f);
-        // Keeping its own tempo: Fills at 60 BPM inside the main timeline at
-        // 120 advances half a beat per main beat (stretch 1).
-        auto fillSettings = *nested.playSettings(fills);
-        fillSettings.bpm = 60.0f;
-        nested.setPlaySettings(fills, fillSettings);
-        clip->contentStretch = 1.0;
-        clip->contentDurationBeats = 4.0;
-        clip->ownTempo = true;
-        nest.transport->setBpm(120.0f);
         auto at = [&](double beat) {
             nest.transport->seekToBeat(beat);
             nest.transport->latchFrameState();
             nested.update();
         };
+        // Placed, Fills depends on the main timeline: its Free setting is
+        // kept but not used, it follows the host's tempo beat for beat
+        // (through the clip's stretch), and its playhead is where the host
+        // places it while the host plays.
+        ofxOceanodeTimelineManager::TimelineRef host;
+        assert(nested.clockSourceOf(fills) == ClockSource::Dependent);
+        assert(nested.placedBy(fills, host) && host.canvas.empty() && host.timeline.empty());
+        nested.setFree(fills, true);
+        assert(nested.isFree(fills) && nested.clockSourceOf(fills) == ClockSource::Dependent);
+        auto fillSettings = *nested.playSettings(fills);
+        fillSettings.bpm = 60.0f; // ignored while dependent
+        fillSettings.quantize = 0;
+        nested.setPlaySettings(fills, fillSettings);
         at(5.5); near(fillValue, 0.3f);  // Fills beat 0.75
         at(6.5); near(fillValue, 0.7f);  // Fills beat 1.25
-        // Its own tempo lane: 60 BPM until its beat 1, then 120 (step).
-        fillSettings.bpmAutomationEnabled = true;
-        fillSettings.bpmInterpolation = "Step";
-        fillSettings.bpmPoints = {{0.0, 60.0f}, {1.0, 120.0f}};
-        nested.setPlaySettings(fills, fillSettings);
-        at(5.5); near(fillValue, 0.3f);  // Fills beat 0.75 (still at 60)
-        at(6.5); near(fillValue, 0.7f);  // past beat 1 at main beat 6, then 1 beat per beat: 1.5
-        clip->ownTempo = false;
-        fillSettings.bpmAutomationEnabled = false;
-        // A timeline at 180 BPM lasting 4 beats, in the main timeline at 120:
-        // switched to its own tempo, its clip lasts 2.667 beats, and each
-        // repeat with it.
-        fillSettings.bpm = 180.0f;
-        nested.setPlaySettings(fills, fillSettings);
-        clip->contentDurationBeats = 4.0;
-        clip->durationBeats = 4.0;
-        assert(nested.setClipOwnTempo(mainTimeline, placing, placedClip, true));
-        near(clip->durationBeats, 8.0 / 3.0);
-        near(clip->ownTempoFactor, 2.0 / 3.0);
-        // The main tempo changes: the factor follows (the clip's length stays).
+        double placedBeat = -1.0;
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 1.25);
+        // Its own transport previews it at the host's tempo (the global one
+        // here), and never plays the host.
+        auto fillsTransport = nested.transportFor(fills);
+        assert(fillsTransport != nullptr && fillsTransport->isDerived());
+        near(fillsTransport->getState().bpm, 120.0); near(nested.hostBpmFor(fills), 120.0);
         nest.transport->setBpm(90.0f);
-        nested.update();
-        near(clip->ownTempoFactor, 0.5);
+        at(6.5);
+        near(fillsTransport->getState().bpm, 90.0);
         nest.transport->setBpm(120.0f);
+        nest.transport->pause();
+        nest.transport->latchFrameState();
         nested.update();
-        // Off again: back to the same number of repeats at the host's tempo.
-        assert(nested.setClipOwnTempo(mainTimeline, placing, placedClip, false));
-        near(clip->durationBeats, 4.0);
+        nested.seekTimeline(fills, 0.0);
+        nested.playTimeline(fills, false);
+        assert(!nest.transport->getState().isPlaying);
+        auto step = [&](double seconds) {
+            nest.transport->advanceFrameStep(seconds);
+            nest.transport->latchFrameState();
+            nested.update();
+        };
+        for(int i = 0; i < 3; ++i) step(0.1);   // 0.6 beats at 120
+        assert(fillsTransport->getState().isPlaying && !nest.transport->getState().isPlaying);
+        near(fillValue, 0.3f);
+        for(int i = 0; i < 4; ++i) step(0.1);   // 1.4 beats
+        near(fillValue, 0.7f);
+        assert(nested.timelinePlayheadBeat(fills, placedBeat) && placedBeat > 1.3 && placedBeat < 1.5);
+        nested.stopTimeline(fills, true, false);
+        step(0.1);
+        assert(!fillsTransport->getState().isPlaying);
+        nest.transport->play();
+        at(5.0); // the host plays: its placement drives the playhead again
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 0.5);
+        // Past the clip's end its playhead holds where the clip left it: the
+        // end of its content, not back at 0.
+        at(9.0);
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 2.0);
+        clip->contentOffsetBeats = 0.5;
+        at(9.0);
+        assert(nested.timelinePlayheadBeat(fills, placedBeat)); near(placedBeat, 0.5);
+        clip->contentOffsetBeats = 0.0;
+        at(5.0);
+        // A new clip placing a timeline lasts one pass of it: the end of its
+        // last clip, at least a bar of its own meter.
+        fillSettings.timeSignatureNumerator = 3;
+        nested.setPlaySettings(fills, fillSettings);
+        {
+            const auto made = nested.createMacroClip(mainTimeline, placing, 20.0);
+            const auto* madeClip = nested.getClip(mainTimeline, placing, made);
+            assert(madeClip != nullptr);
+            near(madeClip->durationBeats, 3.0); near(madeClip->contentDurationBeats, 3.0);
+            assert(nested.removeClip(mainTimeline, placing, made));
+            const auto longer = nested.createClip(*fillSequence, ft, "Tail", 4, 2);
+            const auto again = nested.createMacroClip(mainTimeline, placing, 20.0);
+            near(nested.getClip(mainTimeline, placing, again)->durationBeats, 6.0);
+            assert(nested.removeClip(mainTimeline, placing, again) && nested.removeClip(*fillSequence, ft, longer));
+        }
+        fillSettings.timeSignatureNumerator = 4;
+        nested.setPlaySettings(fills, fillSettings);
         // Stretched (Cmd+drag on its right edge), then restored: natural
         // speed, as many repeats.
+        clip = nested.getClip(mainTimeline, placing, placedClip);
         clip->contentStretch = 2.0;
         clip->durationBeats = 8.0;
         assert(nested.isClipStretched(*clip));
@@ -249,10 +429,10 @@ int main() {
         near(clip->contentStretch, 1.0);
         near(clip->durationBeats, 4.0);
         assert(!nested.isClipStretched(*clip));
-        // Nested: Fills (following the main tempo again) places Hits, whose
-        // clip keeps Hits' own 240 BPM. Fills plays through a copy, so the
-        // factor the main tempo gives that clip must reach the copy without
-        // a rebuild: at 120 its cycle is 1 Fills beat, at 90 it is 0.75.
+        clip->contentStretch = 2.0;
+        clip->durationBeats = 4.0;
+        // Nested: Fills places Hits, which then depends on Fills and plays
+        // beat for beat with it (so with the main timeline through Fills).
         fillSettings.bpm = 120.0f;
         nested.setPlaySettings(fills, fillSettings);
         const auto hitsId = nested.createTimeline("", "Hits");
@@ -269,7 +449,7 @@ int main() {
         nested.addBindingToLane(*hitSequence, ht, hbClip, hbl, hb);
         nested.setClipNumber(*hitSequence, ht, hbClip, hbl, 0, 0.8f);
         auto hitSettings = *nested.playSettings(hits);
-        hitSettings.bpm = 240.0f;
+        hitSettings.bpm = 240.0f; // its own tempo: unused once placed
         nested.setPlaySettings(hits, hitSettings);
         const auto hitTrack = nested.createTimelineTrack(*fillSequence, hits);
         assert(!hitTrack.empty());
@@ -278,19 +458,22 @@ int main() {
         placedHits->contentDurationBeats = 2.0;
         placedHits->contentStretch = 1.0;
         placedHits->repeatContent = true;
-        assert(nested.setClipOwnTempo(*fillSequence, hitTrack, hitClip, true));
+        assert(nested.clockSourceOf(hits) == ClockSource::Dependent);
+        assert(nested.placedBy(hits, host) && host == fills);
         nest.transport->setBpm(120.0f);
-        at(4.45); near(hitValue, 0.2f); // Fills 0.45: Hits beat 0.9
+        at(4.9); near(hitValue, 0.2f);  // Fills 0.45: Hits beat 0.45
+        at(6.45); near(hitValue, 0.8f); // Fills 1.225: Hits beat 1.225
         nest.transport->setBpm(90.0f);
-        at(4.45); near(hitValue, 0.8f); // Hits beat 1.2
+        at(6.45); near(hitValue, 0.8f); // beat for beat, whatever the tempo
         nest.transport->setBpm(120.0f);
-        at(4.45); near(hitValue, 0.2f);
+        nested.update();
+        near(nested.hostBpmFor(hits), 120.0); // Fills' tempo, the global one through it
         // Saved with which timeline the track plays.
         const auto saved = nested.toJson();
         ofxOceanodeContainer reloadedOwner;
-        ofxOceanodeTimelineManager reloaded(&reloadedOwner);
+        TestTimeline reloaded(&reloadedOwner);
         reloaded.fromJson(saved);
-        const auto* reloadedTrack = reloaded.getTrack(reloaded.getMainSequence(), placing);
+        const auto* reloadedTrack = reloaded.getTrack(reloaded.editSequence(), placing);
         assert(reloadedTrack != nullptr && reloadedTrack->macroCanvas == "." && reloadedTrack->macroTimeline == fillsId);
     }
 
@@ -302,7 +485,7 @@ int main() {
         ofParameter<float> gateValue("Gate", 0, 0, 1);
         ofxOceanodeParameter<float> gate; gate.bindParameter(gateValue);
         clocked.targets[gate.getEscapedName()] = &gate;
-        ofxOceanodeTimelineManager scheduled(&clocked);
+        TestTimeline scheduled(&clocked);
         scheduled.setSchedulingLookaheadAdaptive(false); // the 120 ms window
         std::vector<ofxOceanodeScheduledParameterEvent> events;
         ofxOceanodeScheduling::registerParameterTarget(&gate, &scheduled, [&](const auto& event) {
@@ -342,7 +525,7 @@ int main() {
         assert(events.front().value == "1");
         ofxOceanodeScheduling::unregisterOwner(&scheduled);
     }
-    std::cout << "Multi-timeline regression passed: further timelines, free players, own tempo, quantized launch, time sources, persistence, nested timelines, own-tempo clips.\n";
+    std::cout << "Multi-timeline regression passed: clock sources (global, free, dependent), quantized launch, time sources, persistence, play on load, nested timelines, the root default as any timeline, no timeline until made.\n";
 }
 '''
 

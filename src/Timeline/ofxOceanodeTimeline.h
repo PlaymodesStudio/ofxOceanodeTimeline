@@ -26,6 +26,7 @@
 class ofxOceanodeAbstractParameter;
 class ofxOceanodeContainer;
 class ofxOceanodeNodeModel;
+class ofxOceanodeNodeMacro;
 struct ofxOceanodeTimelineInstrument;
 
 // How a binding's per-frame value should combine with whatever other
@@ -84,6 +85,11 @@ inline bool ofxOceanodeTimelineIsHeldValueLane(ofxOceanodeTimelineLaneType type)
 // The option names of a scalar int/float dropdown parameter, empty for any
 // other parameter.
 std::vector<std::string> ofxOceanodeTimelineDropdownOptions(ofxOceanodeAbstractParameter& parameter);
+// A chord bank's gate input (ofxOceanodeTimelineInstrument::chords, HarmonyBox):
+// true, with what the node reports (its chords: voices, rowNames, rowColors).
+// A Multi Gate lane bound to one is a Chords lane, one row per chord.
+bool ofxOceanodeTimelineChordInstrument(ofxOceanodeAbstractParameter* parameter,
+                                        ofxOceanodeTimelineInstrument* instrument = nullptr);
 
 // Determines what stays fixed when the manual transport tempo changes.
 // Beats is the traditional musical timeline: beat positions are unchanged,
@@ -650,17 +656,6 @@ struct ofxOceanodeTimelineClip {
     // itself is shared and stays as written). Other clips reverse by
     // rewriting their content (reverseClip); Wave clips use waveReverse.
     bool reversed = false;
-    // A timeline clip that plays its timeline at that timeline's own tempo
-    // (fixed, ratio of the clock, or its tempo lane) instead of following the
-    // host's; contentStretch still slows it down. Not when reversed.
-    bool ownTempo = false;
-    // An own-tempo clip's host beats per beat of its timeline at stretch 1:
-    // the host's tempo over the timeline's (averaged over its content when it
-    // has a tempo lane), so 4 beats at 180 BPM last 2.667 beats at 120. Not
-    // saved: the manager keeps it up to date each frame. Playback, repeats
-    // and previews multiply the stretch by it (ownTempoScale).
-    double ownTempoFactor = 1.0;
-    double ownTempoScale() const { return ownTempo && !reversed ? ownTempoFactor : 1.0; }
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -962,6 +957,9 @@ struct ofxOceanodeTimelineClipGroup {
     std::vector<std::pair<std::string, std::string>> members;
 };
 
+constexpr float kMinTrackHeight = 40.0f;
+constexpr float kMaxTrackHeight = 240.0f;
+
 // Editor viewport state belongs to the preset just like the timeline data:
 // switching presets should restore both the horizontal scale and the place
 // the user was looking at. Keeping it on the manager also means savePreset()
@@ -973,10 +971,8 @@ struct ofxOceanodeTimelineViewState {
     // Pinned left column width (track pads / lane properties), in pixels.
     float labelWidth = 280.0f;
     // Height of every track row in the Clips view (Wave tracks have their own).
-    float trackHeight = 80.0f;
+    float trackHeight = kMinTrackHeight;
 };
-constexpr float kMinTrackHeight = 40.0f;
-constexpr float kMaxTrackHeight = 240.0f;
 
 // Optional, addon-agnostic hook that lets a project which also includes
 // ofxOceanodeSuperCollider drive REAL audio playback for Wave tracks,
@@ -1017,11 +1013,20 @@ struct ofxOceanodeTimelineResolver {
     std::string pathOf(ofxOceanodeAbstractParameter& parameter) const;
 };
 
-// How a timeline plays when it plays on its own (a free player): its name,
-// tempo (a fixed BPM, a ratio of the clock's, or a tempo lane), loop, meter
-// and launch quantize. The main timeline keeps these on the manager.
+// How a timeline plays: its name, clock source (free, or linked to the
+// global transport), tempo (a fixed BPM, a ratio of the clock's, or a BPM
+// lane: used while it plays free), loop, meter and launch quantize. A
+// timeline linked to the global transport takes its tempo lane and meter
+// from the manager (they are the global ones); its loop is its own, like
+// every timeline's: the global transport never loops, the timeline wraps
+// that transport's position in its loop itself.
 struct ofxOceanodeTimelinePlaySettings {
     std::string name;                // empty: named after its canvas
+    // Free: its own transport and tempo. Off: linked to the global transport
+    // (its position, play state and tempo; the loop stays the timeline's
+    // own). Neither applies while the timeline is placed as clips in
+    // another: it then depends on that one.
+    bool free = false;
     float bpm = 120.0f;
     bool followClockTempo = false;   // tempo = the clock's x tempoRatio
     float tempoRatio = 1.0f;
@@ -1037,23 +1042,35 @@ struct ofxOceanodeTimelinePlaySettings {
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     int quantize = 2;                // play/stop on: 0 now, 1 the next beat, 2 the next bar
-    // A tempo of its own (not the default 120 BPM): new clips placing the
-    // timeline then keep it (ofxOceanodeTimelineClip::ownTempo).
-    bool hasOwnTempo() const { return bpmAutomationEnabled || followClockTempo || bpm != 120.0f; }
+    // Playing on its own: starts from its beginning once a preset (the
+    // project's or its macro's) loads, and whenever its macro turns active;
+    // waits while the macro (or one around it) is inactive, stops when it is.
+    bool playOnLoad = false;
+    // The colour its window's scope bar is tinted with; off: its kind's colour.
+    bool customColor = false;
+    ofColor color = ofColor(160, 100, 210);
+    // A macro canvas's timeline: nodes inside the macro (Time Source Auto)
+    // follow the clip playing it (beat, stretched tempo, restarting with each
+    // clip) instead of the canvas around it. At most one timeline of a
+    // canvas has it. Saved with the macro.
+    bool nodesFollowClips = false;
+    // Its BPM lane in the editor (view state, left out of the comparison).
+    bool bpmLaneVisible = false;
+    bool bpmLaneCollapsed = true;
     bool operator==(const ofxOceanodeTimelinePlaySettings& other) const;
     bool operator!=(const ofxOceanodeTimelinePlaySettings& other) const { return !(*this == other); }
 };
 
 // The arrangement of one timeline: its tracks (with their bindings, clips and
-// lanes), clip groups and the counters new ids start from. The main timeline
-// is one; a macro will own one. Data and plain lookups only: parameters,
-// playback, scheduling and undo stay with the manager.
+// lanes), clip groups and the counters new ids start from. Every timeline of
+// every canvas is one; an engine plays a copy of one. Data and plain lookups
+// only: parameters, playback, scheduling and undo stay with the manager.
 class ofxOceanodeTimelineSequence {
 public:
     std::vector<ofxOceanodeTimelineTrack> tracks;
     std::vector<ofxOceanodeTimelineClipGroup> clipGroups;
     // The container its binding paths are relative to (not saved; nullptr:
-    // the timeline's own root, as for the main timeline).
+    // the root canvas, absolute paths).
     ofxOceanodeContainer* base = nullptr;
     // First number tried for each kind of new id.
     uint64_t nextTrackNumber = 1;
@@ -1061,16 +1078,10 @@ public:
     uint64_t nextClipNumber = 1;
     uint64_t nextLaneNumber = 1;
     uint64_t nextGroupNumber = 1;
-    // First number tried for a further timeline's id (saved: a deleted
-    // timeline's id is never given to a new one, so tracks, windows and
-    // time sources that still name it stay unbound).
-    uint64_t nextTimelineNumber = 2;
-    // Its tempo, loop and meter when it plays on its own.
+    // Its name, clock source, tempo, loop, meter and the rest of its settings.
     ofxOceanodeTimelinePlaySettings play;
-    // A canvas's default timeline keeps the canvas's further timelines here;
-    // their own id is unique within the canvas ("" is the default's).
+    // Its id within its canvas ("tl_N"; empty for a copy or a scratch sequence).
     std::string timelineId;
-    std::vector<std::shared_ptr<ofxOceanodeTimelineSequence>> timelines;
 
     // Linear lookups by id (nullptr when missing).
     ofxOceanodeTimelineTrack* findTrack(const std::string& trackId);
@@ -1111,12 +1122,27 @@ public:
     void normalizeFolders();
 };
 
+// One canvas's timelines (the root canvas's, or a macro's): any number, none
+// special, in the order they were made. A canvas may have none.
+struct ofxOceanodeTimelineCanvas {
+    std::vector<std::shared_ptr<ofxOceanodeTimelineSequence>> timelines;
+    // First number tried for a new timeline's id (saved: a deleted
+    // timeline's id is never given to a new one, so tracks, windows and
+    // time sources that still name it stay unbound).
+    uint64_t nextTimelineNumber = 1;
+    // The container the timelines' paths are relative to (nullptr: the root).
+    ofxOceanodeContainer* base = nullptr;
+    ofxOceanodeTimelineSequence* find(const std::string& timelineId) const {
+        for(const auto& timeline : timelines) if(timeline->timelineId == timelineId) return timeline.get();
+        return nullptr;
+    }
+};
+
 class ofxOceanodeTimelineManager {
 public:
     // A timeline is named by its canvas (the canvas id as the core reports
-    // it, "" for the root) and its id within the canvas ("" for the
-    // canvas's default timeline: the main timeline at the root, a macro's
-    // own inside it).
+    // it, "" for the root) and its id within the canvas ("tl_N"). An empty
+    // id names no timeline ({} is "none").
     struct TimelineRef {
         std::string canvas;
         std::string timeline;
@@ -1125,9 +1151,11 @@ public:
             return canvas != other.canvas ? canvas < other.canvas : timeline < other.timeline;
         }
     };
-    // Editing operations come in pairs: one takes the Sequence to edit, the
-    // other edits the main timeline (mainSequence). Undo, playback and the
-    // per-frame caches follow the main timeline only.
+    // Editing operations come in pairs: one takes the Sequence to edit (a
+    // timeline as kept here), the other is an engine's, on the copy it plays
+    // (playedSequence). The primary keeps every canvas's timelines, the
+    // global transport's settings, the players and the undo histories, and
+    // plays nothing itself.
     explicit ofxOceanodeTimelineManager(ofxOceanodeContainer* container = nullptr);
 
     void setContainer(ofxOceanodeContainer* container);
@@ -1152,14 +1180,23 @@ public:
     // takes effect starting with the next evaluateAutomation()/applyAutomation()
     // pass; the caller is responsible for calling clearLiveOverride once the
     // interaction ends (e.g. on mouse release) -- there's no timeout.
+    // Live overrides are playback state: they live in the engine playing
+    // the timeline (the sequence overloads find it; nothing happens while
+    // the timeline has no engine yet) and are kept across the engine's
+    // copy rebuilds. The id-only overloads are the engine's own, on its copy.
     void setLiveOverride(const std::string& trackId, const std::string& bindingId, const std::string& value);
     void clearLiveOverride(const std::string& trackId, const std::string& bindingId);
+    void setLiveOverride(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId, const std::string& value);
+    void clearLiveOverride(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId);
     // The piano roll's keyboard: a key sounds in one voice (a kit: its own
     // pad) through live overrides on the lane's gate and pitch, until cleared.
     void setPianoKeyPreview(const std::string& trackId, const std::string& clipId, const std::string& laneId, int pitch);
     void clearPianoKeyPreview(const std::string& trackId, const std::string& clipId, const std::string& laneId);
+    void setPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, int pitch);
+    void clearPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId);
     void clear();
 
+    static ofColor defaultTrackColor(size_t trackIndex);
     std::string createTrack(const std::string& requestedName = "Timeline Track");
     std::string createTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Timeline Track");
     // A track with no bindings, dedicated to Wave clips (see
@@ -1181,14 +1218,15 @@ public:
     ofxOceanodeTimelineTrack* getTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId);
     const ofxOceanodeTimelineTrack* getTrack(const std::string& trackId) const;
     const ofxOceanodeTimelineTrack* getTrack(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId) const;
-    const std::vector<ofxOceanodeTimelineTrack>& getTracks() const { return mainSequence.tracks; }
-    // The main timeline's arrangement, read-only (folder depth, parents...).
-    const ofxOceanodeTimelineSequence& getMainSequence() const { return mainSequence; }
-    ofxOceanodeTimelineSequence& getMainSequence() { return mainSequence; }
+    // Every timeline as kept here, with its reference (the root canvas's,
+    // then each macro's), for callers outside the manager.
+    std::vector<std::pair<TimelineRef, ofxOceanodeTimelineSequence*>> allTimelineSequences() const;
+    template<typename Fn> void forEachTimeline(Fn&& fn) {
+        for(auto& [ref, sequence] : allTimelineSequences()) fn(ref, *sequence);
+    }
 
-    // ---- Macro tracks: clips that play a macro's own timeline ----
-    std::string createMacroTrack(ofxOceanodeContainer& macroContainer);
-    std::string createMacroTrack(ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& macroContainer);
+    // ---- Macro tracks: clips that play a macro canvas's timeline ----
+    // (Made by createTimelineTrack below, with the timeline placed.)
     // A clip on a macro track. A content length of 0 uses the macro
     // timeline's length (the end of its last clip, at least one bar).
     std::string createMacroClip(const std::string& trackId, double startBeat, double durationBeats = 0.0);
@@ -1201,15 +1239,6 @@ public:
     // same canvas or of a canvas inside it, never one that (through its own
     // timeline tracks) plays host. Its id, empty when refused.
     std::string createTimelineTrack(ofxOceanodeTimelineSequence& host, const TimelineRef& placed);
-    // The tempo factor an own-tempo clip of `host` placing `placed` has now.
-    double ownTempoFactorFor(const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineClip& clip,
-                             const ofxOceanodeTimelineSequence& placed) const;
-    // Refreshes every own-tempo clip's factor (main, further and macro timelines).
-    void refreshOwnTempoFactors();
-    // Turns Keep its own tempo on or off, keeping how many times it repeats
-    // (its length scales with the tempo factor).
-    bool setClipOwnTempo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
-                         const std::string& clipId, bool ownTempo);
     // A timeline clip whose speed was changed (a Stretch edit, Cmd+drag on its
     // right edge): its timeline at its natural speed again, as many repeats
     // as it had (a one-shot fitted to the clip goes back to its own length).
@@ -1220,8 +1249,12 @@ public:
     // The live container of the macro a macro track plays (nullptr: gone).
     ofxOceanodeContainer* findMacroContainer(const ofxOceanodeTimelineSequence& sequence,
                                              const ofxOceanodeTimelineTrack& track) const;
-    // One pass of a macro timeline: the end of its last clip, at least a bar.
+    // One pass of a macro timeline: the end of its last clip, at least a bar
+    // of its own meter.
     double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
+    // A timeline's beats per bar: the global meter for the root canvas's
+    // default timeline while it is linked to the global transport, else its own.
+    double beatsPerBarOf(const ofxOceanodeTimelineSequence& sequence) const;
     // A macro timeline as a reversed macro clip plays it: mirrored over one
     // pass (macroTimelineLength of the original).
     ofxOceanodeTimelineSequence reversedMacroTimeline(const ofxOceanodeTimelineSequence& macroSequence) const;
@@ -1250,34 +1283,39 @@ public:
                                  const std::map<std::string, std::string>& oldToNew, bool moveIntoMacro);
     void replayParameterMove(ofxOceanodeContainer& canvas, ofxOceanodeContainer* macroContainer,
                              const std::map<std::string, std::string>& oldToNew, const ofJson& record, bool backwards);
-    // Every parameter a timeline (main or a macro's) drives.
+    // Every parameter any timeline drives.
     void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
+    // Drops the parameter's bindings from every timeline (a node going away).
+    void removeBindingsOf(ofxOceanodeAbstractParameter& parameter);
 
-    // ---- Macro timelines: each macro's own sequence ----
-    // The sequence of the macro owning this container (created empty on first
-    // use, its paths relative to the macro); nullptr when no macro owns it.
-    // Copies of a library macro share one; a local macro owns its own.
-    ofxOceanodeTimelineSequence* getMacroSequence(ofxOceanodeContainer& macroContainer);
-    // How the editor names it: the macro's title, else its canvas id.
+    // ---- Macro canvases: each macro's timelines ----
+    // The timelines of the macro owning this container (an empty list on
+    // first use, their paths relative to the macro); nullptr when no macro
+    // owns it. Copies of a library macro share one list; a local macro owns
+    // its own.
+    ofxOceanodeTimelineCanvas* getMacroTimelines(ofxOceanodeContainer& macroContainer);
+    // How the editor names the macro: its title, else its canvas id.
     std::string getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const;
     // Called with the macro's own preset or library folder (sequence.json).
     void loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder);
     bool saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const;
-    // False once the macro it belongs to is gone (an editor scope then closes).
+    // False once the timeline is gone, or its macro (an editor scope then closes).
     bool isLiveSequence(const ofxOceanodeTimelineSequence& sequence) const;
-    // A sequence's own data as JSON ("tracks", "clipGroups"), and back.
-    // withTimelines: also the canvas's further timelines a default one keeps
-    // (undo snapshots leave them out).
-    ofJson sequenceToJson(const ofxOceanodeTimelineSequence& sequence, bool withTimelines = true) const;
-    void sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json) const;
-    // Undo per sequence: the main timeline's is the timeline history above,
-    // a macro sequence keeps its own.
+    // A sequence's own data as JSON (its id, "tracks", "clipGroups",
+    // "play"), and back (the sequence keeps its id and canvas).
+    ofJson sequenceToJson(const ofxOceanodeTimelineSequence& sequence) const;
+    void sequenceFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json);
+    // Undo per timeline (each keeps its own history), and the global
+    // transport's settings (markers, tempo lane, loop, meter...) apart.
     void beginTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
     // True when the edit changed something (an undo step was recorded).
     bool endTimelineEdit(const ofxOceanodeTimelineSequence& sequence);
     bool undoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
     bool redoTimelineEdit(ofxOceanodeTimelineSequence& sequence);
-    // "Edit timeline" from a macro's node menu, picked up by the editor.
+    bool canUndoTimelineEdit(const ofxOceanodeTimelineSequence& sequence) const;
+    bool canRedoTimelineEdit(const ofxOceanodeTimelineSequence& sequence) const;
+    // A canvas to show in the editor (a macro's timelines, from its node
+    // menu), picked up by the editor.
     void requestMacroScope(ofxOceanodeContainer& macroContainer) { pendingMacroScope = &macroContainer; }
     ofxOceanodeContainer* consumeMacroScopeRequest() { auto* requested = pendingMacroScope; pendingMacroScope = nullptr; return requested; }
     // Any timeline to show in the editor (picked up like the above).
@@ -1288,78 +1326,171 @@ public:
         ref = pendingTimelineScope;
         return true;
     }
+    // Every new timeline goes through the editor's New Timeline dialog (its
+    // name, colour and owner canvas), picked up like the above.
+    struct NewTimelineRequest {
+        std::string canvas;                  // the owner preselected ("" the root)
+        std::vector<std::string> canvases;   // the owners offered; empty: every canvas
+        ofxOceanodeAbstractParameter* parameter = nullptr; // put on its first track
+        TimelineRef duplicateOf;             // a copy of this one (its canvas only)
+        bool duplicate = false;
+        int window = 0;                      // the Timeline window to show it in
+    };
+    void requestNewTimeline(const NewTimelineRequest& request) { pendingNewTimeline = request; newTimelineRequested = true; }
+    bool consumeNewTimelineRequest(NewTimelineRequest& request) {
+        if(!newTimelineRequested) return false;
+        newTimelineRequested = false;
+        request = pendingNewTimeline;
+        return true;
+    }
+    // A parameter's right-click "Add to Timeline": a new clip driving it on
+    // a track of that timeline (a new track when trackId is empty), a new
+    // lane driving it in one of the track's clips, or one more target of an
+    // existing lane, set up in the editor's dialog, picked up like the above.
+    struct ParameterClipRequest {
+        enum class Kind { Clip, Lane, Target };
+        TimelineRef timeline;
+        std::string trackId;        // empty: a new track
+        std::string parameterPath;  // as that timeline saves it
+        Kind kind = Kind::Clip;
+    };
+    void requestParameterClip(const ParameterClipRequest& request) { pendingParameterClip = request; parameterClipRequested = true; }
+    bool consumeParameterClipRequest(ParameterClipRequest& request) {
+        if(!parameterClipRequested) return false;
+        parameterClipRequested = false;
+        request = pendingParameterClip;
+        return true;
+    }
+    // Whether a request an editor handles (a parameter lane, a track rename,
+    // a parameter clip, a piano roll setup) waits, and which timeline it
+    // names ({}: none named): the controller picks the window to handle it.
+    bool peekEditorRequest(TimelineRef& ref) const {
+        if(!pendingParameterLanes.empty()) { ref = pendingParameterLanes.front().ref; return true; }
+        if(!pendingTrackRenameId.empty()) { ref = pendingTrackRenameRef; return true; }
+        if(parameterClipRequested) { ref = normalizedRef(pendingParameterClip.timeline); return true; }
+        if(pendingNoteGroupSetupParameter != nullptr) { ref = pendingNoteGroupSetupRef; return true; }
+        return false;
+    }
+    // Every canvas a timeline can belong to: the root (""), then each
+    // macro's, at any depth.
+    std::vector<std::string> allCanvases() const;
 
     // ---- Timelines by reference (TimelineRef), and independent players ----
     // The canvas's container (the root for ""), nullptr when gone.
     ofxOceanodeContainer* canvasContainer(const std::string& canvas) const;
-    // The timeline itself (created empty for a canvas's default on first
-    // use); nullptr when its canvas or id is unknown.
+    // A canvas's id as a reference names it ("" for the root).
+    std::string canvasIdOf(const ofxOceanodeContainer& canvas) const;
+    // A canvas's timelines: the root's, or a macro's (its entry made on first
+    // use); nullptr when the canvas is unknown. findCanvasTimelines makes
+    // nothing and walks no graph.
+    ofxOceanodeTimelineCanvas* canvasTimelines(const std::string& canvas);
+    ofxOceanodeTimelineCanvas* findCanvasTimelines(const std::string& canvas) const;
+    // The timeline itself; nullptr when its canvas or id is unknown.
     ofxOceanodeTimelineSequence* timelineFor(const TimelineRef& ref);
-    // The timeline, without creating a canvas's default one (nullptr when it
-    // has none yet).
-    ofxOceanodeTimelineSequence* findTimeline(const TimelineRef& ref);
-    // Whether a timeline is there to list: the main one always; a further
-    // one while it exists; a macro's own once it has something (tracks,
-    // further timelines, play settings) or plays on its own.
-    bool timelineExists(const TimelineRef& ref);
+    // The same, making no canvas entry.
+    ofxOceanodeTimelineSequence* findTimeline(const TimelineRef& ref) const;
+    bool timelineExists(const TimelineRef& ref) const { return findTimeline(ref) != nullptr; }
     // Where a sequence lives (false for a copy or an unknown one).
     bool refOf(const ofxOceanodeTimelineSequence& sequence, TimelineRef& ref) const;
-    TimelineRef refForCanvas(const ofxOceanodeContainer& canvas, const std::string& timeline = std::string()) const;
-    // The name shown for a timeline: its own, else its canvas's.
-    std::string timelineName(const TimelineRef& ref);
+    TimelineRef refForCanvas(const ofxOceanodeContainer& canvas, const std::string& timeline) const;
+    // The name shown for a timeline: its own, else "Timeline N".
+    std::string timelineName(const TimelineRef& ref) const;
+    // The name a new timeline on a canvas would get.
+    std::string suggestTimelineName(const std::string& canvas) const;
     // The time source id a node saves to follow it.
     static std::string timeSourceId(const TimelineRef& ref);
-    // Every timeline there is: the root's, then each macro's (defaults first).
-    std::vector<TimelineRef> allTimelines();
-    // Every timeline of a canvas: the default first.
+    // Every timeline there is: the root canvas's, then each macro's.
+    std::vector<TimelineRef> allTimelines() const;
+    // Every timeline of a canvas, in order.
     std::vector<TimelineRef> timelinesOfCanvas(const std::string& canvas);
-    // A further timeline on a canvas (its id), and its removal (not the default's).
+    // A new timeline on a canvas (its id, "tl_N"), named, or "Timeline N".
     std::string createTimeline(const std::string& canvas, const std::string& name);
-    bool removeTimeline(const TimelineRef& ref);
-    // A new timeline on a canvas: a macro's own one when it has none yet,
-    // else a further one. Its reference (canvas "" when it could not).
+    // The same, as a reference ({} when the canvas is unknown).
     TimelineRef addTimeline(const std::string& canvas, const std::string& name);
+    // Removes a timeline with its tracks (clips placing it elsewhere then
+    // play nothing). Its id is never given to another.
+    bool removeTimeline(const TimelineRef& ref);
     bool renameTimeline(const TimelineRef& ref, const std::string& name);
     // Copies a timeline as a new one on the same canvas (its id).
     std::string duplicateTimeline(const TimelineRef& ref, const std::string& name = std::string());
 
-    // A timeline that plays on its own transport ("free"), started, stopped
-    // and seeked by itself, at its own tempo, alongside the root timeline.
-    // The root's default timeline is the root transport itself and always
-    // plays on its own. A macro's default timeline playing free also becomes
-    // what the macro's canvas plays to, so nodes inside it set to Auto follow it.
+    // Where a timeline's transport comes from. Global: it is slaved to the
+    // global transport (the root's: position, play state, tempo and loop),
+    // the default. Free: its own transport on the shared clock, started,
+    // stopped and seeked by itself, at its own tempo (the Free setting). A
+    // timeline placed as clips in another is Dependent whatever its setting:
+    // it plays where the clips place it, at that timeline's tempo; its own
+    // transport previews it alone (at its host's tempo), and never plays the
+    // host. A macro's default timeline playing free also becomes what the
+    // macro's canvas plays to, so nodes inside it set to Auto follow it.
+    enum class ClockSource { Global, Free, Dependent };
+    ClockSource clockSourceOf(const TimelineRef& ref);
     // The same reference however the root canvas was spelled ("" for it).
     static TimelineRef normalizedRef(TimelineRef ref);
+    // The Free setting (a dependent timeline keeps it for when it is unplaced).
     bool isFree(const TimelineRef& ref) const;
     void setFree(const TimelineRef& ref, bool free);
-    // Its transport: the root's for the root default, a free one's own,
-    // nullptr otherwise.
+    // The first timeline whose timeline tracks place `ref` (false: none).
+    bool placedBy(const TimelineRef& ref, TimelineRef& host);
+    // The tempo a dependent timeline plays at on its own: its host's now.
+    float hostBpmFor(const TimelineRef& ref);
+    // Its transport: the root's while it is linked to the global transport,
+    // its own when free or dependent; nullptr before its player runs.
     std::shared_ptr<ofxOceanodeTransport> transportFor(const TimelineRef& ref) const;
     // Play, stop (pause, or back to the start) and seek it, at the next
     // beat or bar of its quantize setting when quantized (the root
-    // timeline's grid while it plays, else the clock's).
+    // timeline's grid while it plays, else the clock's). A timeline linked
+    // to the global transport plays, stops and seeks that transport, at once.
     void playTimeline(const TimelineRef& ref, bool quantized = true);
     void stopTimeline(const TimelineRef& ref, bool rewind = false, bool quantized = true);
     void seekTimeline(const TimelineRef& ref, double beat);
-    // Nodes inside a macro whose timeline does not play on its own follow,
-    // as Auto, the macro clip playing it: its beat (restarting with each
-    // clip and repeat), its stretched tempo, playing while a clip plays it.
-    // Off (the default): they follow the canvas around it.
-    bool nodesFollowClips(const std::string& canvas) const { return clipFollowCanvases.count(canvas) > 0; }
-    void setNodesFollowClips(const std::string& canvas, bool follow);
-    // Where its playhead is: its own transport's beat when it plays free,
-    // else where the clip playing it now has it (false: none plays it).
+    // Nodes inside a macro follow, as Auto, the macro clips playing one of
+    // its timelines (one that does not play on its own): its beat
+    // (restarting with each clip and repeat), its stretched tempo, playing
+    // while a clip plays it. Off (the default): they follow the canvas
+    // around it. At most one timeline of a canvas: setting it clears the
+    // others. Saved with the timeline.
+    bool nodesFollowClips(const TimelineRef& ref);
+    void setNodesFollowClips(const TimelineRef& ref, bool follow);
+    // The timeline of a canvas whose clips its nodes follow, if any.
+    bool clipFollowTimeline(const std::string& canvas, TimelineRef& ref);
+    // Where its playhead is: where the clip of a playing timeline places it
+    // now when it is dependent (the host drives it, as a precomposition's
+    // playhead follows its composition), else its own transport's beat
+    // (false: no transport yet).
     bool timelinePlayheadBeat(const TimelineRef& ref, double& beat);
+    // Where a clip of a playing timeline places it now (false: none does).
+    bool placedPlayheadBeat(const TimelineRef& ref, double& beat);
+    // Where the last clip that ended before the playhead left it (false:
+    // none has ended yet).
+    bool heldPlayheadBeat(const TimelineRef& ref, double& beat);
     // Timeline windows besides the main one: which timeline each shows.
     // Saved with the timeline; the editor opens and closes them.
-    struct TimelineWindow { int id = 0; TimelineRef ref; };
+    // A host's window (a MacroMixer's, on a source graph's timeline) carries
+    // its host label: titled "(label)" after it, its ImGui id keyed on it
+    // (so docking finds it again across activations), never saved.
+    // Each window keeps its own zoom, scroll and column width (saved with it).
+    struct TimelineWindow { int id = 0; TimelineRef ref; std::string hostLabel; ofxOceanodeTimelineViewState view; };
     const std::vector<TimelineWindow>& getTimelineWindows() const { return timelineWindows; }
+    TimelineWindow* findTimelineWindow(int id) {
+        for(auto& window : timelineWindows) if(window.id == id) return &window;
+        return nullptr;
+    }
+    // A window on this timeline (one a host opened last); nullptr: none.
+    const TimelineWindow* windowShowing(const TimelineRef& ref) const;
     int openTimelineWindow(const TimelineRef& ref);
     void closeTimelineWindow(int id);
+    // Opens (once) or closes every window on this timeline, for a host.
+    void setHostedTimelineWindow(const TimelineRef& ref, bool open, const std::string& hostLabel);
     void setTimelineWindowRef(int id, const TimelineRef& ref);
-    // Tempo, loop and meter of a timeline that plays on its own.
+    // A timeline's play settings (nullptr: unknown timeline).
     const ofxOceanodeTimelinePlaySettings* playSettings(const TimelineRef& ref);
     void setPlaySettings(const TimelineRef& ref, const ofxOceanodeTimelinePlaySettings& settings);
+    // A timeline's own colour (its scope bar's tint), the main one's
+    // included; false when it keeps its kind's colour.
+    bool customTimelineColor(const TimelineRef& ref, ofColor& color);
+    void setTimelineColor(const TimelineRef& ref, const ofColor& color);
+    void resetTimelineColor(const TimelineRef& ref);
 
     // Resolves a sequence's binding paths (its base, else this timeline's root).
     ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {
@@ -1383,14 +1514,18 @@ public:
     bool renameTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& requestedName);
     // Parameter menus bind immediately, then let the controller choose the clip
     // from its current selection. Existing bindings can be used by another clip.
+    // Each request names its timeline ({}: the one the editor shows).
+    struct ParameterLaneRequest { TimelineRef ref; std::string trackId, bindingId; };
     bool requestParameterLane(const std::string& trackId, ofxOceanodeAbstractParameter& parameter);
-    std::vector<std::pair<std::string, std::string>> consumePendingParameterLanes() {
-        std::vector<std::pair<std::string, std::string>> requests;
+    bool requestParameterLane(const TimelineRef& ref, const std::string& trackId, ofxOceanodeAbstractParameter& parameter);
+    std::vector<ParameterLaneRequest> consumePendingParameterLanes() {
+        std::vector<ParameterLaneRequest> requests;
         requests.swap(pendingParameterLanes);
         return requests;
     }
     void requestTrackRename(const std::string& trackId, bool isNewTrack = false);
-    bool consumePendingTrackRename(std::string& trackId, bool* isNewTrack = nullptr);
+    void requestTrackRename(const TimelineRef& ref, const std::string& trackId, bool isNewTrack = false);
+    bool consumePendingTrackRename(std::string& trackId, bool* isNewTrack = nullptr, TimelineRef* ref = nullptr);
     bool isParameterBound(const ofxOceanodeAbstractParameter& parameter) const;
     bool getParameterTrackColor(const ofxOceanodeAbstractParameter& parameter, ofColor& color) const;
     bool isStepLaneCompatible(const ofxOceanodeAbstractParameter& parameter) const;
@@ -1483,15 +1618,25 @@ public:
                             int& voices, std::vector<std::string>& names, bool* kit = nullptr,
                             std::vector<ofColor>* colors = nullptr,
                             ofxOceanodeTimelineInstrument* instrument = nullptr) const;
+    // A Chords lane: a Multi Gate lane whose first target is a chord bank's
+    // gate (see ofxOceanodeTimelineChordInstrument). False for any other lane.
+    bool chordLaneInstrument(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineLane& lane,
+                             ofxOceanodeTimelineInstrument* instrument = nullptr) const;
     // The same for a note group's roles.
     bool noteGroupInstrument(const std::string& trackId, const std::string& groupId,
                              int& voices, bool& kit, std::vector<std::string>* names = nullptr) const;
     // "Add to Timeline as Piano Roll..." from a parameter's right-click menu:
     // queued here, shown by the timeline controller (like track renames).
-    void requestNoteGroupSetup(ofxOceanodeAbstractParameter* parameter) { pendingNoteGroupSetupParameter = parameter; }
-    ofxOceanodeAbstractParameter* consumePendingNoteGroupSetup() {
+    void requestNoteGroupSetup(ofxOceanodeAbstractParameter* parameter) { requestNoteGroupSetup(TimelineRef{}, parameter); }
+    void requestNoteGroupSetup(const TimelineRef& ref, ofxOceanodeAbstractParameter* parameter) {
+        pendingNoteGroupSetupParameter = parameter;
+        pendingNoteGroupSetupRef = normalizedRef(ref);
+    }
+    ofxOceanodeAbstractParameter* consumePendingNoteGroupSetup(TimelineRef* ref = nullptr) {
         auto* parameter = pendingNoteGroupSetupParameter;
+        if(ref != nullptr) *ref = pendingNoteGroupSetupRef;
         pendingNoteGroupSetupParameter = nullptr;
+        pendingNoteGroupSetupRef = {};
         return parameter;
     }
     const ofxOceanodeTimelineParameterBinding* getBinding(const std::string& trackId, const std::string& bindingId) const;
@@ -1522,6 +1667,7 @@ public:
     // beat, so playback, scrubbing and seeking give identical results. Between or
     // outside clips: active = false, phase 0, cycle holds the count reached so far.
     ofxOceanodeTimelineLfoSample evaluateLfoTrack(const std::string& trackId, double beat) const;
+    ofxOceanodeTimelineLfoSample evaluateLfoTrack(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat) const;
     // Adds any LFO control lane the clip is missing (e.g. clips saved before a
     // control existed), initialised to the control's default.
     void ensureLfoLanes(const std::string& trackId, const std::string& clipId);
@@ -1544,6 +1690,13 @@ public:
     std::string mergeClips(const std::string& trackId, const std::string& firstClipId, const std::string& secondClipId);
     std::string mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                            const std::string& firstClipId, const std::string& secondClipId);
+    // Any number of clips of one track, joined the same way in start order:
+    // the earliest keeps its id, and where clips overlap the later one wins.
+    // All or nothing: refused (and nothing changes) when any clip could not
+    // be merged.
+    std::string mergeClips(const std::string& trackId, const std::vector<std::string>& clipIds);
+    std::string mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                           const std::vector<std::string>& clipIds);
     std::string splitClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double timelineBeat);
     // Copies a clip, with fresh clip/lane ids, to dstTrackId at newStartBeat
     // and returns the new clip's id ("" when it cannot go there).
@@ -1770,7 +1923,7 @@ public:
     bool ungroupClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     const ofxOceanodeTimelineClipGroup* getGroupForClip(const std::string& trackId, const std::string& clipId) const;
     const ofxOceanodeTimelineClipGroup* getGroupForClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) const;
-    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return mainSequence.clipGroups; }
+    const std::vector<ofxOceanodeTimelineClipGroup>& getClipGroups() const { return playedSequence.clipGroups; }
 
     ofxOceanodeTimelineViewState& getViewState() { return viewState; }
     const ofxOceanodeTimelineViewState& getViewState() const { return viewState; }
@@ -1791,6 +1944,7 @@ public:
     // tempo automation keeps playing.
     bool isBpmLaneVisible() const { return bpmLaneVisible; }
     void setBpmLaneVisible(bool visible) { bpmLaneVisible = visible; }
+    const bool& bpmLaneVisibleRef() const { return bpmLaneVisible; }
     float getBpmMinimum() const { return bpmMinimum; }
     float getBpmMaximum() const { return bpmMaximum; }
     void setBpmRange(float minimum, float maximum);
@@ -1805,6 +1959,11 @@ public:
     // The inverse: the beat reached `seconds` after beat 0.
     double secondsToBeat(double seconds, float fallbackBpm) const;
 
+    // The loop this manager plays with: an engine's is its timeline's own
+    // (adopted from its play settings each pass); the primary plays nothing
+    // and keeps none. A transport of the timeline's own (derived) wraps in
+    // it itself; the root transport is never looped: a manager playing on
+    // it wraps the position into the loop itself (loopedState).
     bool isLoopEnabled() const { return loopEnabled; }
     bool didLoopWrapThisFrame() const { return loopWrappedThisFrame; }
     // ---- Markers ----
@@ -1820,8 +1979,11 @@ public:
     // transport starts from the beginning (saved per preset, off by default)
     bool getPlayOnPresetLoad() const { return playOnPresetLoad; }
     void setPlayOnPresetLoad(bool enabled) { playOnPresetLoad = enabled; }
+    // The metronome clicks along one timeline's transport (whatever its
+    // clock source), in that timeline's meter: the one it was switched on for.
     bool isMetronomeEnabled() const { return metronome != nullptr; }
-    bool setMetronomeEnabled(bool enabled);
+    bool isMetronomeEnabled(const TimelineRef& ref) const { return metronome != nullptr && normalizedRef(ref) == metronomeRef; }
+    bool setMetronomeEnabled(bool enabled, const TimelineRef& ref = TimelineRef());
     double getLoopStartBeat() const { return loopStartBeat; }
     double getLoopEndBeat() const { return loopEndBeat; }
     void setLoopRange(double startBeat, double endBeat);
@@ -1875,14 +2037,33 @@ public:
     static uint64_t lanePlaybackSignature(const ofxOceanodeTimelineLane& lane);
 
     // Like canvas history, transactions span a complete user gesture. Runtime
-    // automation and view scrolling/zooming are never recorded.
+    // automation and view scrolling/zooming are never recorded. The global
+    // edit covers the global transport's settings (markers, tempo lane,
+    // loop, meter, timebase, scheduling); each timeline has its own history
+    // (beginTimelineEdit(sequence)...).
+    void beginGlobalEdit();
+    bool endGlobalEdit();
+    bool undoGlobalEdit();
+    bool redoGlobalEdit();
+    bool canUndoGlobalEdit() const { return !timelineUndo.empty(); }
+    bool canRedoGlobalEdit() const { return !timelineRedo.empty(); }
+    // Every history: the global one and each timeline's.
+    void clearTimelineHistory();
+    // ---- The edit target: the timeline the id-only overloads act on ----
+    // An engine: the copy it plays. The primary: the timeline set here (a
+    // caller keeping one timeline; the tests), else a scratch sequence that
+    // is never shown or played. Nothing is made by itself.
+    void setEditTarget(const TimelineRef& ref) { editTarget = normalizedRef(ref); }
+    TimelineRef getEditTarget() const { return editTarget; }
+    ofxOceanodeTimelineSequence& editSequence();
+    const ofxOceanodeTimelineSequence& editSequence() const;
+    // The edit target's history, with the global one: one gesture over both.
     void beginTimelineEdit();
     bool endTimelineEdit();
     bool undoTimelineEdit();
     bool redoTimelineEdit();
-    bool canUndoTimelineEdit() const { return !timelineUndo.empty(); }
-    bool canRedoTimelineEdit() const { return !timelineRedo.empty(); }
-    void clearTimelineHistory();
+    bool canUndoTimelineEdit() const;
+    bool canRedoTimelineEdit() const;
 
     ofJson toJson() const;
     void fromJson(const ofJson& json);
@@ -1890,6 +2071,7 @@ public:
     // Map saved binding IDs to parameter paths in the destination project.
     // Missing mappings leave content intact and unassigned. Empty trackId creates a track.
     ofJson exportClip(const std::string& trackId, const std::string& clipId) const;
+    ofJson exportClip(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) const;
     bool saveClipFile(const std::string& trackId, const std::string& clipId,
                       const std::string& path, std::string* error = nullptr) const;
     static ofJson readClipFile(const std::string& path, std::string* error = nullptr);
@@ -1905,15 +2087,17 @@ public:
     static ofxOceanodeTimelineAutomationMode modeFromString(const std::string& mode);
 
 private:
-    static constexpr int kPresetVersion = 13;
+    // 16: the loop is each timeline's own (the top-level "loop", the global
+    // transport's until then, is read into the root canvas's timelines
+    // linked to it).
+    static constexpr int kPresetVersion = 16;
+    // The global transport's settings for the global history: typed copies
+    // of what the JSON would reload lossily, and the JSON a step compares.
     struct TimelineState {
         ofJson data;
-        std::vector<ofxOceanodeTimelineTrack> tracks;
-        std::vector<ofxOceanodeTimelineClipGroup> groups;
         std::vector<ofxOceanodeTimelineMarker> markers;
         std::vector<ofxOceanodeTimelineCurvePoint> tempoPoints;
         std::vector<ofxOceanodeTimelineCurveTension> tempoTensions;
-        uint64_t nextTrack, nextBinding, nextClip, nextLane, nextGroup;
         size_t bytes = 0;
     };
     struct TimelineEdit {
@@ -1923,11 +2107,23 @@ private:
         size_t bytes = 0;
     };
     std::unique_ptr<TimelineEdit> pendingTimelineEdit;
-    // Macro sequences: where each one lives and who shares it.
+    // One timeline's state for its history: typed copies (waveform caches
+    // kept) and the content JSON they were taken from (what a step compares).
+    struct SequenceSnapshot {
+        ofJson data;
+        std::vector<ofxOceanodeTimelineTrack> tracks;
+        std::vector<ofxOceanodeTimelineClipGroup> groups;
+        ofxOceanodeTimelinePlaySettings play;
+        uint64_t nextTrack = 1, nextBinding = 1, nextClip = 1, nextLane = 1, nextGroup = 1;
+        size_t bytes = 0;
+    };
+    SequenceSnapshot captureSequence(const ofxOceanodeTimelineSequence& sequence) const;
+    void restoreSequence(ofxOceanodeTimelineSequence& sequence, const SequenceSnapshot& snapshot);
+    // Macro canvases: each macro's timelines, where they live and who shares them.
     struct MacroSequenceEntry {
         std::weak_ptr<ofxOceanodeContainer> container; // expires with the macro
         const ofxOceanodeContainer* address = nullptr;
-        std::shared_ptr<ofxOceanodeTimelineSequence> sequence;
+        std::shared_ptr<ofxOceanodeTimelineCanvas> timelines;
         std::string libraryFolder; // a library macro's definition: shared by every copy
     };
     mutable std::vector<MacroSequenceEntry> macroSequences;
@@ -1958,8 +2154,9 @@ private:
         size_t trackIndex = 0;
     };
     std::vector<MacroSource> collectMacroSources() const;
-    // The timeline whose paths are relative to this canvas (main at the root).
-    ofxOceanodeTimelineSequence* sequenceForCanvas(ofxOceanodeContainer& canvas);
+    // The timeline of a macro that encapsulation moves tracks into: its
+    // first one, made (named after the macro) when it has none.
+    ofxOceanodeTimelineSequence* encapsulationTarget(ofxOceanodeContainer& macroContainer, bool& made);
     // Moves source's tracks driving only what is inside the macro at
     // `relativeCanvas` into target (only `onlyIds` when given) and adds the
     // macro track playing them (id `macroTrackId` when free). Record for undo.
@@ -1990,38 +2187,63 @@ private:
     void mirrorSequence(ofxOceanodeTimelineSequence& sequence, double length) const;
     // The played copies, then the main timeline: what evaluation walks.
     std::vector<ofxOceanodeTimelineSequence*> evaluatedSequences() const;
-    // The sequence a track belongs to (main, a played copy or a macro's own).
+    // The sequence a track belongs to (the played copy, a placed copy, or
+    // a timeline as kept here).
     const ofxOceanodeTimelineSequence& sequenceOf(const ofxOceanodeTimelineTrack& track) const;
-    // Drops entries of deleted macros and keeps each shared sequence's base
-    // on a live copy's container.
+    // Drops entries of deleted macros and keeps each shared list's base on
+    // a live copy's container.
     void pruneMacroSequences() const;
     struct SequenceHistory {
-        std::unique_ptr<ofJson> pending;
-        std::deque<std::pair<ofJson, ofJson>> undo, redo; // (before, after)
+        std::unique_ptr<SequenceSnapshot> pending;
+        std::deque<std::pair<SequenceSnapshot, SequenceSnapshot>> undo, redo; // (before, after)
     };
     mutable std::map<const ofxOceanodeTimelineSequence*, SequenceHistory> sequenceHistories;
     ofxOceanodeContainer* pendingMacroScope = nullptr;
     std::deque<TimelineEdit> timelineUndo, timelineRedo;
 
-    // ---- Independent players ----
-    // A free timeline plays through an engine: a manager of its own that
-    // evaluates, schedules and applies an absolute-path copy of it on the
-    // player's transport, exactly as this one plays the main timeline.
-    // Engines run before the main timeline each frame, inner canvases
-    // first, so on a path both drive the outer timeline's value wins.
+    // ---- Players ----
+    // Every existing timeline plays through an engine: a manager of its own
+    // that evaluates, schedules and applies an absolute-path copy of it on
+    // the player's transport. The primary manager plays nothing itself: it
+    // keeps the timelines, the global transport's settings and the players.
+    // A player runs on the root transport itself when its timeline is linked
+    // to the global transport, on a transport of its own when free, and on a
+    // preview transport of its own when dependent (run only while that
+    // previews). Engines run inner canvases first each frame, so on a path
+    // two timelines drive the outer timeline's value lands last.
     struct Player {
         TimelineRef ref;
+        ClockSource source = ClockSource::Global;
         std::shared_ptr<ofxOceanodeTransport> transport;
         std::unique_ptr<ofxOceanodeTimelineManager> engine;
         std::weak_ptr<ofxOceanodeContainer> canvas; // a macro's container (empty at the root)
         const ofxOceanodeContainer* canvasAddress = nullptr;
         uint64_t sourceSignature = 0;
-        const ofxOceanodeTimelineSequence* source = nullptr;
+        const ofxOceanodeTimelineSequence* sourceSequence = nullptr;
         bool overridesCanvas = false;
+        // A dependent timeline's preview ran last frame (one more pass after
+        // it stops releases what it held).
+        bool ranLastFrame = false;
+        // Play on load: armed by a preset load, it starts once its macro is active.
+        bool startArmed = false;
+        int wasActive = -1; // -1: not watched (not set to play on load)
+        // The macros around its canvas (outermost first), each with the canvas
+        // holding it (the root's, or a macro's) and that canvas's node revision
+        // when found: an unchanged revision keeps the macro pointer valid.
+        struct MacroLink {
+            const ofxOceanodeNodeMacro* macro;
+            std::weak_ptr<ofxOceanodeContainer> holder;
+            bool heldByRoot;
+            uint64_t revision;
+        };
+        std::vector<MacroLink> macros;
     };
-    std::set<TimelineRef> freeTimelines;   // saved
+    std::set<TimelineRef> playOnLoadPending; // loaded since their players last ran
+    // Whether its macro and every macro around it are active (the root's: always).
+    bool macrosActive(Player& player) const;
+    // Arms, starts and stops the free timelines set to play on load.
+    void updatePlayOnLoad();
     std::vector<TimelineWindow> timelineWindows; // saved
-    std::set<std::string> clipFollowCanvases;    // saved
     struct ClipTransport {
         std::shared_ptr<ofxOceanodeTransport> transport;
         std::weak_ptr<ofxOceanodeContainer> canvas;
@@ -2035,6 +2257,10 @@ private:
     void releaseClipTransport(ClipTransport& entry);
     TimelineRef pendingTimelineScope;
     bool timelineScopeRequested = false;
+    NewTimelineRequest pendingNewTimeline;
+    bool newTimelineRequested = false;
+    ParameterClipRequest pendingParameterClip;
+    bool parameterClipRequested = false;
     std::vector<std::unique_ptr<Player>> players;
     std::set<std::string> registeredTimeSources;
     uint64_t timeSourcesFrame = 0;
@@ -2052,6 +2278,50 @@ private:
     // Engine state: the manager owning its sequences, and its transport.
     ofxOceanodeTimelineManager* primary = nullptr;
     std::shared_ptr<ofxOceanodeTransport> engineTransport;
+    // The engine plays on the root transport itself (a timeline linked to
+    // the global transport): it reads the transport's tempo and loop, and
+    // never sets them.
+    bool engineSharesRoot = false;
+    // The engine playing a timeline (nullptr until its player runs), and the
+    // one playing a sequence as kept here (an engine: itself, for its copy).
+    ofxOceanodeTimelineManager* engineFor(const TimelineRef& ref) const;
+    ofxOceanodeTimelineManager* enginePlaying(const ofxOceanodeTimelineSequence& sequence) const;
+    // Whether a timeline, as kept here, follows the global transport (its
+    // position, tempo and meter; its loop is its own): not free, and not
+    // placed in another timeline.
+    bool followsGlobalTransport(const ofxOceanodeTimelineSequence& sequence) const;
+    // Explicit live overrides (piano key previews...) by timeline, kept here
+    // so an engine gets them back when its copy is rebuilt. The engine
+    // notes them as they are set and cleared on it.
+    std::map<TimelineRef, std::map<std::pair<std::string, std::string>, std::string>> liveOverrides;
+    void noteLiveOverride(const TimelineRef& ref, const std::string& trackId, const std::string& bindingId, const std::string& value);
+    void forgetLiveOverride(const TimelineRef& ref, const std::string& trackId, const std::string& bindingId);
+    // After an engine's copy was rebuilt: the explicit overrides again; the
+    // id-keyed state of the old copy (state-capture override keys, driven
+    // solos) dropped, path-keyed state kept.
+    void reapplyTransients(Player& player);
+    // An engine's state-capture bookkeeping, told by the primary's edits.
+    void dropStateCaptureOverride(const std::string& trackId, const std::string& bindingId);
+    void noteStateCaptured(const std::string& absolutePath, const std::string& value);
+    // A path as a sequence keeps it (relative to its canvas), from the root.
+    std::string absolutePathOf(const ofxOceanodeTimelineSequence& sequence, const std::string& path) const;
+    // Which engine's value lands last on each path this frame: it schedules
+    // the path; the others leave it to the frame path.
+    std::unordered_map<std::string, const ofxOceanodeTimelineManager*> lastDriverForPath;
+    // The timelines placed by timeline tracks, each with the first timeline
+    // placing it (its host), refreshed each update pass and after edits.
+    mutable std::map<TimelineRef, TimelineRef> placedTimelines;
+    mutable bool placedTimelinesValid = false;
+    void refreshPlacedTimelines() const;
+    // Every manager playing placements now (this one, then each player's
+    // engine), with the state it plays at.
+    template<typename Fn> void forEachPlayingManager(Fn&& fn);
+    // Which timeline the metronome follows.
+    TimelineRef metronomeRef;
+    // Older files: which timelines played free and whose clips a macro's
+    // nodes followed, by reference, applied as their macros load.
+    std::set<TimelineRef> legacyFreeTimelines;
+    std::set<TimelineRef> legacyClipFollowTimelines;
     // Paths an outer timeline drives: an engine leaves them to it.
     std::function<bool(const std::string&)> pathDrivenElsewhere;
     bool isEngine() const { return primary != nullptr; }
@@ -2067,16 +2337,12 @@ private:
     // Releases the Wave voices of the clips in `previous` that `next` no
     // longer has (all of them when next is null).
     void releaseWaveClips(const ofxOceanodeTimelineSequence& previous, const ofxOceanodeTimelineSequence* next);
-    // A clip keeping its timeline's own tempo: its segment as linear pieces
-    // (host from, host to, map offset, map ratio), see the definition.
-    void ownTempoPieces(const ofxOceanodeTimelinePlaySettings& play, const ofxOceanodeTimelineTimeMap& outer,
-                        double zero, double stretch, double userStretch, double segmentFrom, double segmentTo,
-                        double from, double to,
-                        bool atBeat, std::vector<std::array<double, 4>>& pieces) const;
     // Scheduling stops here (a timestamped stop); 0: no limit.
     uint64_t scheduleHorizonUs = 0;
     // The transport this manager plays (its engine transport, else the root's).
     std::shared_ptr<ofxOceanodeTransport> playTransport() const;
+    // Its state as played: the root's wrapped into this manager's loop
+    // (loopedState); a derived transport's as it is (it loops itself).
     ofxOceanodeTransportState playState() const;
     // Copies a timeline's play settings into this engine's tempo, loop and meter.
     void adoptPlaySettings(const ofxOceanodeTimelinePlaySettings& settings);
@@ -2091,11 +2357,28 @@ private:
     std::unique_ptr<ofxOceanodeTimelineMetronome> metronome;
     static std::string laneTypeToString(ofxOceanodeTimelineLaneType laneType);
     static ofxOceanodeTimelineLaneType laneTypeFromString(const std::string& laneType);
+    // The codec of one sequence's content (tracks, clip groups, play
+    // settings): timeline.json, sequence.json, undo snapshots and clip files
+    // all go through it. A sequence keeps its id, canvas and further
+    // timelines across a read.
+    ofJson trackToJson(const ofxOceanodeTimelineTrack& track) const;
+    ofJson sequenceContentToJson(const ofxOceanodeTimelineSequence& sequence) const;
+    void sequenceContentFromJson(ofxOceanodeTimelineSequence& sequence, const ofJson& json);
+    // A canvas's timelines ("timelines", "nextTimelineNumber"), and back
+    // (the list's base is kept; timelines absent from the document go).
+    ofJson canvasToJson(const ofxOceanodeTimelineCanvas& canvas) const;
+    void canvasFromJson(ofxOceanodeTimelineCanvas& canvas, const ofJson& json);
+    // A document written before version 15 (a timeline at its top level,
+    // the canvas's others in "timelines") in today's shape: the top-level
+    // timeline, when it existed, becomes "tl_1", and empty references to a
+    // canvas's then-default timeline name it.
+    static ofJson upgradeTimelineDocument(ofJson json, bool macroFile);
     std::string insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
     std::string insertTrackCopy(ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
     // Engine state keyed by ids (wave voices, state-capture overrides,
-    // driven solos, the track id cache) exists for the main timeline only.
-    bool isMainSequence(const ofxOceanodeTimelineSequence& sequence) const { return &sequence == &mainSequence; }
+    // driven solos) exists for the sequence an engine plays: its copy, in
+    // playedSequence. The primary keeps the timelines there and plays none.
+    bool isPlayedSequence(const ofxOceanodeTimelineSequence& sequence) const { return &sequence == &playedSequence; }
     // Keeps clipGroups' invariants (every member clip still exists, every
     // group has at least two members) after a clip is removed -- called
     // from removeClip/removeTrack rather than left to every caller.
@@ -2207,15 +2490,23 @@ private:
     };
 
     ofxOceanodeContainer* container = nullptr;
-    // The main timeline's arrangement. Tempo, markers, loop, time signature
-    // and view settings belong to the main timeline only and stay here.
-    ofxOceanodeTimelineSequence mainSequence;
+    // The root canvas's timelines (the primary's; a macro's are in
+    // macroSequences). Tempo, markers, loop, time signature and view
+    // settings are the global transport's on the primary.
+    ofxOceanodeTimelineCanvas rootTimelines;
+    // An engine: the copy of the timeline it plays, with its own tempo, loop
+    // and meter adopted into the fields above. On the primary: the scratch
+    // the id-only overloads edit while no edit target is set.
+    ofxOceanodeTimelineSequence playedSequence;
+    TimelineRef editTarget;
     std::vector<ofxOceanodeTimelineMarker> markers; // sorted by beat
     ofxOceanodeTimelineViewState viewState;
     ofxOceanodeTimelineTimebase timebase = ofxOceanodeTimelineTimebase::Beats;
-    std::vector<std::pair<std::string, std::string>> pendingParameterLanes;
+    std::vector<ParameterLaneRequest> pendingParameterLanes;
     std::string pendingTrackRenameId;
+    TimelineRef pendingTrackRenameRef;
     bool pendingTrackRenameIsNew = false;
+    TimelineRef pendingNoteGroupSetupRef;
     mutable std::string failedLoadPath; // timeline.json that could not be read
     // Per-update cache of parameter lookups by path (see update()).
     ofxOceanodeAbstractParameter* findParameterCached(const std::string& path) const;
@@ -2334,11 +2625,6 @@ private:
     // which clears it).
     mutable std::unordered_map<const ofxOceanodeTimelineSequence*, bool> anySoloCache;
     bool anySoloCacheActive = false;
-    // Copies of an own-tempo clip's factor into the played copies of its
-    // timeline (and the engines playing it), so a factor that follows the
-    // clock never forces a rebuild.
-    void patchOwnTempoFactor(const ofxOceanodeTimelineSequence& host, const std::string& trackId,
-                             const std::string& clipId, double factor);
     // The node GUI asks this for every visible parameter. Cache path -> color
     // once per frame instead of scanning every track/binding for every row.
     void rebuildParameterTrackColorCache() const;
@@ -2384,10 +2670,12 @@ private:
     // The content offset at which a clip played backwards over mirrored
     // content plays exactly what it played forwards at `offset`.
     double reversedContentOffset(const ofxOceanodeTimelineClip& clip, double offset) const;
-    // Keep the transport-side range in lockstep with edits made by the UI.
-    // Waiting for the next automation pass leaves a frame in which the icon
-    // says loop is on but the playhead can cross the old end point.
-    void syncLoopToTransport();
+    // The root transport's state as this manager plays it: its position
+    // wrapped into this manager's loop (the loop's pass as loopCount), the
+    // loop in the state. The root transport itself never loops, so every
+    // timeline linked to it loops on its own while it runs on. Identity
+    // while the loop is off or the position is before it.
+    ofxOceanodeTransportState loopedState(ofxOceanodeTransportState state) const;
     // Points every piano-roll lane that uses any of affectedBindingIds at the group's roles.
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);

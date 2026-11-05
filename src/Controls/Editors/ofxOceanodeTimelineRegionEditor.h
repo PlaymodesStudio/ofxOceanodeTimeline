@@ -12,6 +12,9 @@ public:
     void drawProperties(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
+    // A Chords lane's chord names, left of its rows (taken from the
+    // properties column, like the piano roll's keyboard).
+    static float chordHeaderWidth();
 
 private:
     // MultiValue / MultiGate region drag (create/move/resize), shared by
@@ -28,6 +31,13 @@ private:
     double regionDragAnchorBeat = 0.0;
     double regionDragOriginalStart = 0.0;
     double regionDragOriginalDuration = 0.0;
+    // A Chords lane plays one chord at a time: the block drawn or moved
+    // carves its span out of the other rows when it is let go.
+    // A Chords lane's row menu (right-click a chord in the header): its lane
+    // and row, drawn by the node (ofxOceanodeTimelineInstrument::rowMenu).
+    std::string chordMenuLaneId;
+    int chordMenuRow = -1;
+    static void carveOtherRows(ofxOceanodeTimelineLane& lane, int row, double start, double end);
     // MultiValue's double-click "edit value" popup (mirrors the Curve
     // lane's "Curve point value" popup).
     int multiValueEditRow = -1;

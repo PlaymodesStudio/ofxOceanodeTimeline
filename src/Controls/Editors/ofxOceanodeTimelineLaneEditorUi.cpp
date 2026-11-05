@@ -7,11 +7,29 @@
 namespace ofxOceanodeTimelineLaneEditorUi {
 bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip) {
     ImGui::PushID(id.c_str());
-    if(on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.45f, 0.12f, 1.0f));
+    // Lit, Solo ("S") is black on yellow and Mute ("M") white on red;
+    // unlit, the letter is the same white as the track names.
+    const bool solo = label[0] == 'S';
+    const ImVec4 onColor = solo ? ImVec4(1.0f, 190.0f / 255.0f, 0.0f, 1.0f) : ImVec4(0.72f, 0.20f, 0.20f, 1.0f);
+    if(on) {
+        ImGui::PushStyleColor(ImGuiCol_Button, onColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(onColor.x * 1.2f, onColor.y * 1.2f, onColor.z * 1.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(onColor.x * 0.85f, onColor.y * 0.85f, onColor.z * 0.85f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, solo ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    } else ImGui::PushStyleColor(ImGuiCol_Text, ofxOceanodeTimelineEditorUi::labelTextColor);
     const bool clicked = ImGui::SmallButton(label);
-    if(on) ImGui::PopStyleColor();
+    ImGui::PopStyleColor(on ? 4 : 1);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
     ImGui::PopID();
+    return clicked;
+}
+
+bool laneNameSelectable(const std::string& label, bool focused, const ImVec2& size) {
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
+    const bool clicked = ImGui::Selectable(label.c_str(), focused, ImGuiSelectableFlags_None, size);
+    ImGui::PopStyleColor(3);
     return clicked;
 }
 
@@ -181,53 +199,6 @@ std::string fitText(const std::string& text, float maxWidth) {
     std::string shortened = text;
     while(!shortened.empty() && ImGui::CalcTextSize((shortened + "...").c_str()).x > maxWidth) shortened.pop_back();
     return shortened + "...";
-}
-ClipEditorHeaderActions drawClipEditorHeader(const ImVec2& rowMin, const ImVec2& rowMax,
-                                             const ofxOceanodeTimelineTrack& track,
-                                             const ofxOceanodeTimelineClip& clip,
-                                             bool folded, const char* tag, bool addLaneButton) {
-    ClipEditorHeaderActions actions;
-    ImGui::PushID(clip.id.c_str());
-    const float buttonY = rowMin.y + (rowMax.y - rowMin.y - ImGui::GetFrameHeight()) * 0.5f + 1.0f;
-    const float right = rowMin.x + kLabelWidth - 5.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x * 0.5f;
-    auto buttonWidth = [](const char* label) {
-        return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    };
-    const float closeX = right - buttonWidth("x");
-    const float addX = addLaneButton ? closeX - spacing - buttonWidth("+") : closeX;
-
-    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kClipEditorIndent + 5.0f, buttonY));
-    if(ImGui::SmallButton(folded ? ">##foldClipEditor" : "v##foldClipEditor")) actions.toggleFold = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip(folded ? "Unfold the clip editor" : "Fold the clip editor to this header");
-    ImGui::SameLine(0.0f, spacing);
-
-    // The name fills the space between the fold toggle and the buttons.
-    std::string label = clip.name;
-    if(tag != nullptr) label += std::string("  [") + tag + "]";
-    if(clip.chance < 1.0f) label += "  " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%";
-    const ImVec2 namePos = ImGui::GetCursorScreenPos();
-    const float nameWidth = std::max(1.0f, addX - spacing - namePos.x);
-    ImGui::InvisibleButton("##clipEditorName", ImVec2(nameWidth, ImGui::GetFrameHeight()));
-    if(ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Track: %s > Clip: %s%s\nDouble-click to rename.", track.name.c_str(), clip.name.c_str(),
-                          clip.chance < 1.0f ? (" (chance " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%)").c_str() : "");
-        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) actions.rename = true;
-    }
-    ImGui::GetWindowDrawList()->AddText(ImVec2(namePos.x, namePos.y + ImGui::GetStyle().FramePadding.y * 0.5f),
-                                        IM_COL32(track.color.r, track.color.g, track.color.b, 255),
-                                        fitText(label, nameWidth).c_str());
-
-    if(addLaneButton) {
-        ImGui::SetCursorScreenPos(ImVec2(addX, buttonY));
-        if(ImGui::SmallButton("+##addLane")) actions.addLane = true;
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to this clip");
-    }
-    ImGui::SetCursorScreenPos(ImVec2(closeX, buttonY));
-    if(ImGui::SmallButton("x##closeClipEditor")) actions.close = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Close the clip editor");
-    ImGui::PopID();
-    return actions;
 }
 float smallButtonReserve(const char* label) {
     return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f +

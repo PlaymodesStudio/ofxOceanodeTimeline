@@ -10,7 +10,7 @@ int main() {
     ofParameter<float> controlValue("Control",0,0,1);
     ofxOceanodeParameter<float> control; control.bindParameter(controlValue);
     owner.targets[control.getEscapedName()]=&control;
-    ofxOceanodeTimelineManager model(&owner);
+    TestTimeline model(&owner);
     model.setSchedulingEnabled(false);
     const auto t=model.createTrack("Control");
     const auto b=model.addBinding(t,control);

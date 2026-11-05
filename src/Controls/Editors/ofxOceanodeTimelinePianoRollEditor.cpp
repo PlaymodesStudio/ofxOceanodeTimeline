@@ -555,11 +555,11 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             pianoKeyboardPreviewPitch = keyboardPitch;
             pianoKeyboardPreviewClipId = clip->id;
             pianoKeyboardPreviewLaneId = lane->id;
-            timeline.setPianoKeyPreview(track.id, clip->id, lane->id, keyboardPitch);
+            timeline.setPianoKeyPreview(context.sequence, track.id, clip->id, lane->id, keyboardPitch);
         } else if(pianoKeyboardPreviewActive && pianoKeyboardPreviewTrackId == track.id && keyHovered &&
                   ImGui::IsMouseDown(ImGuiMouseButton_Left) && pianoKeyboardPreviewPitch != keyboardPitch) {
             pianoKeyboardPreviewPitch = keyboardPitch;
-            timeline.setPianoKeyPreview(track.id, pianoKeyboardPreviewClipId, pianoKeyboardPreviewLaneId, keyboardPitch);
+            timeline.setPianoKeyPreview(context.sequence, track.id, pianoKeyboardPreviewClipId, pianoKeyboardPreviewLaneId, keyboardPitch);
         }
         dl->PushClipRect(ImVec2(keyboardLeft, keyTop), ImVec2(keyboardRight, keyBottom), true);
         if(blackKey) {
@@ -587,8 +587,8 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     dl->AddRect(ImVec2(keyboardLeft, rollTop), ImVec2(keyboardRight, rollBottom),
                 IM_COL32(track.color.r, track.color.g, track.color.b, 210));
     if(pianoKeyboardPreviewActive && pianoKeyboardPreviewTrackId == track.id && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        if(!pianoKeyboardPreviewGateBindingId.empty()) timeline.clearLiveOverride(track.id, pianoKeyboardPreviewGateBindingId);
-        if(!pianoKeyboardPreviewPitchBindingId.empty()) timeline.clearLiveOverride(track.id, pianoKeyboardPreviewPitchBindingId);
+        if(!pianoKeyboardPreviewGateBindingId.empty()) timeline.clearLiveOverride(context.sequence, track.id, pianoKeyboardPreviewGateBindingId);
+        if(!pianoKeyboardPreviewPitchBindingId.empty()) timeline.clearLiveOverride(context.sequence, track.id, pianoKeyboardPreviewPitchBindingId);
         pianoKeyboardPreviewActive = false;
         pianoKeyboardPreviewTrackId.clear();
         pianoKeyboardPreviewGateBindingId.clear();
@@ -1143,7 +1143,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
        pianoDragNoteIndex >= 0 && pianoDragNoteIndex < static_cast<int>(lane->pianoNotes.size())) {
         const int monitorPitch = lane->pianoNotes[pianoDragNoteIndex].pitch;
         if(!editPreviewActive || editPreviewPitch != monitorPitch) {
-            timeline.setPianoKeyPreview(track.id, clip->id, lane->id, monitorPitch);
+            timeline.setPianoKeyPreview(context.sequence, track.id, clip->id, lane->id, monitorPitch);
             editPreviewActive = true;
             editPreviewTrackId = track.id; editPreviewClipId = clip->id; editPreviewLaneId = lane->id;
             editPreviewGateId = lane->pianoGateBindingId; editPreviewPitchId = lane->pianoPitchBindingId;
@@ -1248,8 +1248,8 @@ void ofxOceanodeTimelinePianoRollEditor::updateMonitoring(ofxOceanodeTimelineMan
     const auto* lane = timeline.getLane(sequence, editPreviewTrackId, editPreviewClipId, editPreviewLaneId);
     if(ImGui::IsMouseDown(ImGuiMouseButton_Left) && lane != nullptr && lane->pianoLiveEditSound &&
        activeLaneId == editPreviewLaneId && pianoDragMode != PianoDragMode::None) return;
-    timeline.clearLiveOverride(editPreviewTrackId, editPreviewGateId);
-    timeline.clearLiveOverride(editPreviewTrackId, editPreviewPitchId);
+    timeline.clearLiveOverride(sequence, editPreviewTrackId, editPreviewGateId);
+    timeline.clearLiveOverride(sequence, editPreviewTrackId, editPreviewPitchId);
     editPreviewActive = false;
     editPreviewPitch = -1;
 }
@@ -1290,7 +1290,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawPreview(const ofxOceanodeTimelineCl
             const float nx1 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat, cycle));
             const float nx2 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat + note.durationBeats, cycle));
             const float ny = max.y - 5.0f - (note.pitch % 12) / 12.0f * (max.y - min.y - 10.0f);
-            dl->AddRectFilled(ImVec2(nx1, ny - 3.0f), ImVec2(nx2, ny + 2.0f), IM_COL32(245, 245, 245, 180), 1.0f);
+            dl->AddRectFilled(ImVec2(nx1, ny - 3.0f), ImVec2(nx2, ny + 2.0f), previewInk(preview, 180), 1.0f);
         }
     }
     dl->PopClipRect();

@@ -26,7 +26,7 @@ int main() {
     {   // Frame path: a gate step / gate region plays at its velocity.
         ofxOceanodeContainer owner;
         owner.transport->setDriverMode(TransportDriverMode::FrameStep);
-        ofxOceanodeTimelineManager manager(&owner);
+        TestTimeline manager(&owner);
         GateFixture step(owner, manager, ofxOceanodeTimelineLaneType::Step);
         auto* stepLane = manager.getLane(step.track, step.clip, step.lane);
         stepLane->beatsPerStep = 1.0; stepLane->stepCount = 2;
@@ -48,7 +48,7 @@ int main() {
 
         // Both survive save/load.
         const auto json = manager.toJson();
-        ofxOceanodeTimelineManager reloaded(&owner);
+        TestTimeline reloaded(&owner);
         reloaded.fromJson(json);
         near(reloaded.getLane(step.track, step.clip, step.lane)->step.steps[0].velocity, 0.5);
         near(reloaded.getLane(toggle.track, toggle.clip, toggle.lane)->multiGateRows[0][0].velocity, 0.25);
@@ -60,7 +60,7 @@ int main() {
     for(auto type : {ofxOceanodeTimelineLaneType::Step, ofxOceanodeTimelineLaneType::MultiGate}) {
         ofxOceanodeContainer owner;
         owner.transport->setDriverMode(TransportDriverMode::External);
-        ofxOceanodeTimelineManager manager(&owner);
+        TestTimeline manager(&owner);
         manager.setSchedulingLookaheadAdaptive(false); // the default 120 ms window
         GateFixture gate(owner, manager, type);
         auto* lane = manager.getLane(gate.track, gate.clip, gate.lane);

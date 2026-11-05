@@ -56,7 +56,7 @@ int main() {
         // Seek while events of the old position are queued: the corrections
         // for them must not cut or retune the note scheduled at the new one.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Instrument synth(owner, model, 8);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes =
             {{0.5,0.25,60,0.8f,1}, {4.1,0.8,72,0.8f,1}};
@@ -85,7 +85,7 @@ int main() {
         // An edit while playing is corrected on the next update, with the
         // value due at the correction's own instant.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Instrument synth(owner, model, 8);
         auto* lane = model.getLane(synth.track, synth.clip, synth.lane);
         lane->pianoNotes = {{0.4,0.2,60,0.8f,1}};
@@ -117,7 +117,7 @@ int main() {
         // handed ahead, the frame path plays the notes.
         ofxOceanodeContainer owner;
         owner.transport->setDriverMode(TransportDriverMode::FrameStep);
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Instrument synth(owner, model, 4);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.1,0.5,60,0.8f,1}};
         owner.transport->seekToBeat(0); owner.transport->play();
@@ -135,7 +135,7 @@ int main() {
         // A curve sharing Pitch keeps Pitch on the frame path; Gate must
         // then stay there too, or it would open with the previous pitch.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Instrument synth(owner, model, 4);
         model.getLane(synth.track, synth.clip, synth.lane)->pianoNotes = {{0.1,0.2,60,0.8f,1}, {0.4,0.2,64,0.8f,1}};
         const auto bend = model.createLane(synth.track, synth.clip, "Bend", ofxOceanodeTimelineLaneType::Curve);
@@ -155,7 +155,7 @@ int main() {
     {
         // A parameter no longer routed to a piano lane loses the pitch lead.
         ofxOceanodeContainer owner;
-        ofxOceanodeTimelineManager model(&owner);
+        TestTimeline model(&owner);
         Instrument synth(owner, model, 4);
         ofParameter<float> qv("Other", 0, 0, 10);
         ofxOceanodeParameter<float> other; other.bindParameter(qv);

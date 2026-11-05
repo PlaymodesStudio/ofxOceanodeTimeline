@@ -14,10 +14,11 @@ class ofxOceanodeTimelineLaneEditors {
 public:
     ofxOceanodeTimelineLaneEditor& forType(ofxOceanodeTimelineLaneType type);
     bool hasNoteSelection(const std::string& laneId) const { return pianoRoll.hasNoteSelection(laneId); }
+    bool hasCurvePointSelection(const std::string& laneId) const { return curve.hasPointSelection(laneId); }
     void updateMonitoring(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, const std::string& laneId) {
         pianoRoll.updateMonitoring(timeline, sequence, laneId);
     }
-    void clearSelection() { pianoRoll.clearSelection(); drumGrid.clearSelection(); }
+    void clearSelection() { pianoRoll.clearSelection(); drumGrid.clearSelection(); curve.clearSelection(); }
     void forgetTrack(const std::string& trackId) { pianoRoll.forgetTrack(trackId); }
     static float keyboardReserve(ofxOceanodeTimelineLaneType type);
     static float defaultHeight(ofxOceanodeTimelineLaneType type);

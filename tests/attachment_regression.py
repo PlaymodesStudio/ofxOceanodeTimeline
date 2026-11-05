@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
     try { root.getTimelineManager(); } catch(const std::logic_error&) { missing = true; }
     assert(missing);
     auto& timeline = ofxOceanodeTimeline::attach(root);
+    timeline.setEditTarget(timeline.addTimeline("", "Timeline 1"));
     assert(&ofxOceanodeTimeline::attach(root) == &timeline);
     ofxOceanodeContainer child(registry, types, transport);
     child.setTimelineHost(&root);
@@ -114,7 +115,7 @@ int main(int argc, char** argv) {
         assert(!timeline.addBinding(pattern, patternTrack, innerParameter).empty());
         assert(pattern.tracks.front().bindings.front().parameterPath == "Automation_Probe_1/Value");
         // The main timeline keeps absolute paths.
-        assert(timeline.resolverFor(timeline.getMainSequence()).pathOf(innerParameter) == "Inner::Automation_Probe_1/Value");
+        assert(timeline.resolverFor(timeline.editSequence()).pathOf(innerParameter) == "Inner::Automation_Probe_1/Value");
     }
     std::unordered_set<ofxOceanodeAbstractParameter*> published;
     root.getAutomationExtension()->collectBoundParameters(published);
@@ -127,7 +128,7 @@ int main(int argc, char** argv) {
     const auto saved = timeline.toJson();
     const auto folder = std::string(argv[2]);
     assert(root.getAutomationExtension()->savePreset(folder));
-    timeline.clear(); assert(timeline.getTracks().empty());
+    timeline.clear(); assert(timeline.editSequence().tracks.empty());
     assert(root.getAutomationExtension()->loadPreset(folder));
     assert(timeline.toJson()["tracks"] == saved["tracks"]);
     // Verify the actual container save/load phases also invoke the service.
@@ -140,7 +141,7 @@ int main(int argc, char** argv) {
     assert(restoredParameter && restoredParameter->isTimelined());
     root.getAutomationExtension()->removeParameterBindings(*restoredParameter);
     assert(!restoredParameter->isTimelined());
-    root.clearContainer(); assert(timeline.getTracks().empty());
+    root.clearContainer(); assert(timeline.editSequence().tracks.empty());
     std::cout << "Timeline attachment passed: optional core, idempotence, macro sharing, update order, retiming, persistence, cleanup.\n";
 }
 '''

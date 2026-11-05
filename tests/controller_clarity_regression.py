@@ -77,6 +77,14 @@ int main() {
     auto owner=std::make_shared<ofxOceanodeContainer>(registry,types);
     owner->setCanvasID("Canvas");
     auto& model=ofxOceanodeTimeline::attach(*owner);
+    model.setEditTarget(model.addTimeline("", "Timeline 1"));
+    // A macro's timeline (its first), made on first use as the macro's own one was.
+    auto macroTimelineOf = [&](ofxOceanodeContainer& canvas) -> ofxOceanodeTimelineSequence* {
+        auto* list = model.getMacroTimelines(canvas);
+        if(list == nullptr) return nullptr;
+        if(list->timelines.empty()) model.createTimeline(canvas.getCanvasID(), model.getMacroSequenceLabel(canvas));
+        return list->timelines.empty() ? nullptr : list->timelines.front().get();
+    };
     auto& node=owner->createNode(std::make_unique<ClarityProbe>(),1);
     auto bind=[&](const std::string& track,const char* name) {
         return model.addBinding(track,static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get(name)));
@@ -97,6 +105,10 @@ int main() {
     ImGui::CreateContext(); auto& io=ImGui::GetIO();
     io.IniFilename=nullptr; io.DisplaySize=ImVec2(1280,1000); io.DeltaTime=1.f/60;
     unsigned char* atlas; int aw,ah; io.Fonts->GetTexDataAsRGBA32(&atlas,&aw,&ah);
+    // Tracks start at the minimum height; the fixed screen points below
+    // were laid out for 80px rows.
+    assert(std::abs(model.getViewState().trackHeight-kMinTrackHeight)<0.01f);
+    model.getViewState().trackHeight=80.0f;
     ofxOceanodeTimelineController ui(owner);
     auto frame=[&](float width=1250,ImVec2 mouse=ImVec2(-100,-100),bool down=false,const char* screenshot=nullptr) {
         io.AddMousePosEvent(mouse.x,mouse.y); io.AddMouseButtonEvent(0,down);
@@ -112,6 +124,22 @@ int main() {
     // (its row, padding and spacing); fixed screen points add this.
     const float kScopeBar=31.0f;
     assert(!ui.targetsView && ui.clipScreenRects.size()==3);
+    {
+        // The main timeline's colour: its kind's (black) by default, its own
+        // once set (the scope bar tinted with it), saved with the timeline.
+        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        ofColor color;
+        assert(!model.customTimelineColor(mainRef,color));
+        model.setTimelineColor(mainRef,ofColor(200,40,90)); frame();
+        bool tinted=false;
+        for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer) tinted |= v.col==IM_COL32(200,40,90,255);
+        assert(tinted);
+        const auto saved=model.toJson();
+        model.resetTimelineColor(mainRef); assert(!model.customTimelineColor(mainRef,color));
+        model.fromJson(saved);
+        assert(model.customTimelineColor(mainRef,color) && color==ofColor(200,40,90));
+        model.resetTimelineColor(mainRef); frame();
+    }
     frame(1250,ImVec2(-100,-100),false,"clips");
     // Track pads own a separate selection; modifiers toggle tracks without
     // selecting their clips or mutating the preset. Both track types participate.
@@ -155,11 +183,16 @@ int main() {
         const ImVec2 point(ui.fileDropBounds.x+offset,(row->top+row->bottom)*0.5f);
         frame(1250,point,false); frame(1250,point,true); frame(1250,point,false);
     };
+    // M, S and the colour swatch (as wide as S) end at the column's edge, 6px in.
+    const float spacing=ImGui::GetStyle().ItemSpacing.x, padX=ImGui::GetStyle().FramePadding.x;
+    const float soloWidth=ImGui::CalcTextSize("S").x+padX*2, muteWidth=ImGui::CalcTextSize("M").x+padX*2;
+    const float soloOffset=-6-soloWidth-spacing-soloWidth*0.5f;
+    const float muteOffset=-6-soloWidth-spacing-soloWidth-spacing-muteWidth*0.5f;
     for(const auto& track : {t,wt}) {
-        trackToggle(track,-74); assert(model.getTrack(track)->muted);
-        trackToggle(track,-74); assert(!model.getTrack(track)->muted);
-        trackToggle(track,-49); assert(model.getTrack(track)->solo);
-        trackToggle(track,-49); assert(!model.getTrack(track)->solo);
+        trackToggle(track,muteOffset); assert(model.getTrack(track)->muted);
+        trackToggle(track,muteOffset); assert(!model.getTrack(track)->muted);
+        trackToggle(track,soloOffset); assert(model.getTrack(track)->solo);
+        trackToggle(track,soloOffset); assert(!model.getTrack(track)->solo);
     }
 
     // Wheel zoom keeps the time under the pointer fixed, including the right
@@ -190,6 +223,102 @@ int main() {
     const double rulerTime=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
     io.AddMouseWheelEvent(0,-1); frame(1250,rulerZoom,false);
     assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-rulerTime)<0.0001);
+    {
+        // A two-finger swipe locks to the axis it mostly moves along: a
+        // horizontal one with some vertical drift scrolls without zooming,
+        // a vertical one with some sideways drift zooms without scrolling.
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);   // the last swipe has ended
+        zoomView.scrollX=0; frame(1250,zoomPoint,false);
+        const float swipeScale=zoomView.pixelsPerSecond;
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(-0.3f,i%2?0.08f:0.0f); frame(1250,zoomPoint,false); }
+        assert(zoomView.pixelsPerSecond==swipeScale && zoomView.scrollX>0);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        const double swipeTime=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(i%2?0.08f:0.0f,0.3f); frame(1250,zoomPoint,false); }
+        assert(zoomView.pixelsPerSecond>swipeScale);
+        assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-swipeTime)<0.0001);
+        // Shift turns a vertical swipe into scrolling the tracks; Cmd zooms
+        // at the playhead.
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        model.getViewState().trackHeight=kMaxTrackHeight;   // tall enough to scroll
+        std::vector<std::string> extraTracks;
+        for(int i=0;i<4;++i) extraTracks.push_back(model.createTrack("Scroll filler"));
+        zoomView.scrollX=0; frame(1250,zoomPoint,false); frame(1250,zoomPoint,false);
+        ImGuiWindow* viewport=nullptr;
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(window->ParentWindow==ImGui::FindWindowByName("Timeline") &&
+               std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
+        assert(viewport && viewport->ScrollMax.y>0 && viewport->Scroll.y==0);
+        const float shiftScale=zoomView.pixelsPerSecond;
+        io.AddKeyEvent(ImGuiMod_Shift,true); frame(1250,zoomPoint,false);
+        for(int i=0;i<3;++i) { io.AddMouseWheelEvent(0,-0.5f); frame(1250,zoomPoint,false); }
+        io.AddKeyEvent(ImGuiMod_Shift,false); frame(1250,zoomPoint,false);
+        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX==0 && viewport->Scroll.y>0);
+        ImGui::SetScrollY(viewport,0.0f); model.getViewState().trackHeight=80.0f;
+        for(const auto& extra:extraTracks) model.removeTrack(extra);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        // Over the track column on the left, a swipe neither zooms nor scrolls the time.
+        const ImVec2 trackColumn(ui.fileDropBounds.x-100,zoomPoint.y);
+        zoomView.scrollX=50; frame(1250,trackColumn,false);
+        for(int i=0;i<3;++i) { io.AddMouseWheelEvent(-0.5f,0); frame(1250,trackColumn,false); }
+        for(int i=0;i<15;++i) frame(1250,trackColumn,false);
+        io.AddMouseWheelEvent(0,1); frame(1250,trackColumn,false);
+        assert(zoomView.pixelsPerSecond==shiftScale && zoomView.scrollX==50);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+        // With Cmd the playhead is brought to the middle of the view and
+        // zoomed there, whether it was in view (left of the middle) or not.
+        owner->getTransport()->seekToBeat(6); zoomView.pixelsPerSecond=400;
+        const double playheadAt=model.beatToSeconds(6,120);
+        for(const float startScroll : {900.0f, 0.0f}) {
+            for(int i=0;i<15;++i) frame(1250,zoomPoint,false);
+            zoomView.scrollX=startScroll; frame(1250,zoomPoint,false);
+            const double before=playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX;
+            assert(startScroll==0 ? before>zoomVisible : before>0 && before<zoomVisible*0.5-100);
+            const float startScale=zoomView.pixelsPerSecond;
+            io.AddKeyEvent(ImGuiMod_Ctrl,true); frame(1250,zoomPoint,false);
+            io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
+            io.AddKeyEvent(ImGuiMod_Ctrl,false); frame(1250,zoomPoint,false);
+            assert(zoomView.pixelsPerSecond>startScale);
+            assert(std::abs(playheadAt*zoomView.pixelsPerSecond-zoomView.scrollX-zoomVisible*0.5)<2.0);
+        }
+        owner->getTransport()->seekToBeat(0);
+        // Alt+Z zooms to fit.
+        zoomView.pixelsPerSecond=500; zoomView.scrollX=300; frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiMod_Alt,true); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiKey_Z,true); frame(1250,zoomPoint,false);
+        io.AddKeyEvent(ImGuiKey_Z,false); io.AddKeyEvent(ImGuiMod_Alt,false); frame(1250,zoomPoint,false);
+        assert(zoomView.pixelsPerSecond<500 && zoomView.scrollX==0);
+        {
+            // The time scrollbar: dragging an end of its thumb zooms with the
+            // other end staying put; dragging its middle scrolls.
+            zoomView.pixelsPerSecond=140; zoomView.scrollX=0;
+            for(int i=0;i<15;++i) frame();
+            auto drag=[&](ImVec2 from,float dx) {
+                frame(1250,from,false); frame(1250,from,true);
+                for(int i=1;i<=8;++i) frame(1250,ImVec2(from.x+dx*i/8.0f,from.y),true);
+                frame(1250,ImVec2(from.x+dx,from.y),false); frame(); frame();
+            };
+            const float barY=(ui.scrollbarThumb.y1+ui.scrollbarThumb.y2)*0.5f;
+            auto thumb=ui.scrollbarThumb;
+            assert(thumb.x2-thumb.x1>60);
+            float scale=zoomView.pixelsPerSecond;
+            drag(ImVec2(thumb.x2-2,barY),-80);                    // end handle, inwards: zoom in
+            assert(zoomView.pixelsPerSecond>scale && std::abs(ui.scrollbarThumb.x1-thumb.x1)<1.5f);
+            assert(std::abs(ui.scrollbarThumb.x2-(thumb.x2-82))<1.5f);   // the end follows the mouse
+            thumb=ui.scrollbarThumb; scale=zoomView.pixelsPerSecond;
+            drag(ImVec2(thumb.x1+2,barY),40);                     // start handle, inwards: zoom in
+            assert(zoomView.pixelsPerSecond>scale && std::abs(ui.scrollbarThumb.x2-thumb.x2)<1.5f);
+            thumb=ui.scrollbarThumb; scale=zoomView.pixelsPerSecond;
+            const float scrollBefore=zoomView.scrollX;
+            drag(ImVec2((thumb.x1+thumb.x2)*0.5f,barY),60);       // middle: scroll only
+            assert(zoomView.pixelsPerSecond==scale && zoomView.scrollX>scrollBefore);
+            thumb=ui.scrollbarThumb;
+            drag(ImVec2(thumb.x2-2,barY),120);                    // end handle, outwards: zoom out
+            assert(zoomView.pixelsPerSecond<scale && std::abs(ui.scrollbarThumb.x1-thumb.x1)<1.5f);
+            zoomView.pixelsPerSecond=140; zoomView.scrollX=0; for(int i=0;i<15;++i) frame();
+        }
+    }
     // Locate and click the actual toolbar button by its hover id.
     auto toolbarPoint=[&](const char* key) {
         // Row 2 of the toolbar sits under the scope bar and row 1: scan the rows.
@@ -271,7 +400,23 @@ int main() {
         assert(model.getLane(t,c,piano)->mutation.scaleMask==0xAB5);
         {
             // Right-clicking Range opens its direction menu, not the lane menu.
-            const ImVec2 range(150,444+kScopeBar);
+            // Found by hovering the lane's properties panel for its id.
+            ImGuiWindow* panel=nullptr;
+            for(auto* window:ImGui::GetCurrentContext()->Windows)
+                if(window->Active && std::string(window->Name).find("##clipProperties"+t+c+piano)!=std::string::npos) panel=window;
+            assert(panel);
+            ImGuiID mutateTab=0;
+            for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+                if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+                    for(auto& tab:bar->Tabs)
+                        if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="Mutate") mutateTab=tab.ID;
+            assert(mutateTab);
+            ImVec2 range(-1,-1);
+            for(float y=panel->Pos.y;y<panel->Pos.y+panel->Size.y && range.x<0;y+=2) {
+                frame(1250,ImVec2(150,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId==ImHashStr("##mutationPitchRange",0,mutateTab)) range=ImVec2(150,y);
+            }
+            assert(range.x>=0);
             frame(1250,range,false);
             io.AddMouseButtonEvent(1,true); frame(1250,range,false);
             io.AddMouseButtonEvent(1,false); frame(1250,range,false);
@@ -366,17 +511,134 @@ int main() {
             assert(ui.editorState.editorLaneId!=piano);
             auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
             const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
-            click(ImVec2(240,302+kScopeBar)); // "+": zoom in
+            // "+" is the first control down the keys' scrollbar column, beside the lane's panel.
+            ImGuiWindow* pianoPanel=nullptr;
+            for(auto* window:ImGui::GetCurrentContext()->Windows)
+                if(window->Active && std::string(window->Name).find("##clipProperties"+t+c+piano)!=std::string::npos) pianoPanel=window;
+            assert(pianoPanel);
+            ImVec2 zoomIn(-1,-1);
+            for(float y=pianoPanel->Pos.y;y<pianoPanel->Pos.y+pianoPanel->Size.y && zoomIn.x<0;y+=2) {
+                frame(1250,ImVec2(240,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId!=0) zoomIn=ImVec2(240,y+2);
+            }
+            assert(zoomIn.x>=0);
+            click(zoomIn); // "+": zoom in
             auto* lane=model.getLane(t,c,piano);
             assert(lane->pianoHighPitch-lane->pianoLowPitch < high-low);
             const int zoomedLow=lane->pianoLowPitch;
-            click(ImVec2(240,600+kScopeBar)); // track near the bottom: jump down
+            click(ImVec2(240,zoomIn.y+298)); // track near the bottom: jump down
             lane=model.getLane(t,c,piano);
             assert(lane->pianoLowPitch < zoomedLow);
             assert(ui.editorState.editorLaneId!=piano);
             lane->pianoLowPitch=low; lane->pianoHighPitch=high;
         }
         model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF; model.getLane(t,c,piano)->mutation.pitchDirection=0;
+    }
+    {
+        // The track header's arrow closes and reopens the clip editor (no
+        // clip header row of its own); its + opens the add-lane popup, and
+        // opens the editor first when it is closed. Rows move when the
+        // editor's breadcrumb line above the ruler comes and goes, so the
+        // points are found again each time.
+        frame();
+        const float padLeft=ui.fileDropBounds.x-ofxOceanodeTimelineEditorUi::labelWidth;
+        auto rowY=[&]() {
+            const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),
+                [&](const auto& r){return r.trackId==t && !r.isFolder;});
+            assert(row!=ui.trackHeaderRows.end());
+            return (row->minY+row->maxY)*0.5f;
+        };
+        auto arrow=[&]() { return ImVec2(padLeft+12,rowY()); };
+        auto plus=[&]() {   // the first button right of the name: found by hovering
+            const float y=rowY();
+            for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth;x+=2) {
+                frame(1250,ImVec2(x,y),false);
+                if(ImGui::GetCurrentContext()->HoveredId!=0) return ImVec2(x,y);
+            }
+            assert(false && "+ not found"); return ImVec2();
+        };
+        auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(); };
+        ImGuiWindow* viewport=nullptr;
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(window->ParentWindow==ImGui::FindWindowByName("Timeline") &&
+               std::string(window->Name).find("##TimelineViewport")!=std::string::npos) viewport=window;
+        assert(viewport);
+        auto addLanePopupOpen=[&]() {
+            return ImGui::GetCurrentContext()->OpenPopupStack.size()==1 &&
+                   ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##addLaneTypePopup",0,viewport->ID);
+        };
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
+        const auto lanesBefore=model.getClip(t,c)->lanes.size();
+        const ImVec2 plusAt=plus();
+        {
+            // It opens at its final size: the first frame it shows is the
+            // same as a few frames later (no wrapped text settling its width).
+            frame(1250,plusAt,false); frame(1250,plusAt,true); frame(1250,plusAt,false);
+            std::vector<ImVec2> shown;
+            for(int i=0;i<6;++i) {
+                frame();
+                const auto* opened=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+                if(!opened->Hidden) shown.push_back(opened->Size);
+            }
+            assert(shown.size()>=4);
+            for(const auto& size:shown) assert(size.x==shown.back().x && size.y==shown.back().y);
+        }
+        assert(addLanePopupOpen());
+        {
+            // It opens 20px right of the +, centred on its height.
+            const auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const float gap=popup->Pos.x-plusAt.x;   // plusAt: the +'s left edge (found from the left)
+            assert(gap>20.0f && gap<20.0f+ImGui::CalcTextSize("+").x+ImGui::GetStyle().FramePadding.x*2.0f+3.0f);
+            assert(std::abs(popup->Pos.y+popup->Size.y*0.5f-plusAt.y)<1.5f);
+        }
+        {
+            // Two tabs, New Lane shown first; New Clip makes a clip on the
+            // track (opened in the editor), in one undo step.
+            auto tabBar=[&]() -> ImGuiTabBar* {
+                for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+                    if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+                        for(auto& tab:bar->Tabs) if(std::string(ImGui::TabBarGetTabName(bar,&tab))=="New Clip") return bar;
+                return nullptr;
+            };
+            auto tabId=[&](const char* name) { ImGuiID id=0;
+                for(auto& tab:tabBar()->Tabs) if(std::string(ImGui::TabBarGetTabName(tabBar(),&tab))==name) id=tab.ID;
+                return id; };
+            assert(tabBar() && tabBar()->SelectedTabId==tabId("New Lane"));
+            selectTab("New Clip"); frame(); frame(1250,ImVec2(-100,-100),false,"track-plus-new-clip");
+            assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Clip"));
+            const auto editorBefore=ui.editorState;
+            const auto plusTracks=model.toJson()["tracks"];
+            const auto clipsBefore=model.getTrack(t)->clips.size();
+            std::strcpy(ui.pendingClipName,"From plus");
+            auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const ImGuiID create=ImHashStr("Create Clip",0,tabId("New Clip"));
+            bool created=false;
+            for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && !created;y+=2) {
+                const ImVec2 at(popup->Pos.x+ImGui::GetStyle().WindowPadding.x+6,y);
+                frame(1250,at,false);
+                if(ImGui::GetCurrentContext()->HoveredId!=create) continue;
+                click(at); created=true;
+            }
+            assert(created && ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            assert(model.getTrack(t)->clips.size()==clipsBefore+1);
+            const auto* made=model.getClip(t,ui.editorState.editorClipId);
+            assert(made && made->name=="From plus" && ui.editorState.clipEditorOpen);
+            assert(model.undoTimelineEdit() && model.toJson()["tracks"]==plusTracks);
+            ui.editorState=editorBefore; frame();
+            click(plus());
+            assert(addLanePopupOpen() && tabBar()->SelectedTabId==tabId("New Lane"));   // New Lane again on reopening
+        }
+        ImGui::ClosePopupToLevel(0,true); frame();
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.selectedTracks.empty());
+        click(arrow());
+        assert(!ui.editorState.clipEditorOpen && ui.selectedTracks.empty());
+        click(plus());
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && addLanePopupOpen());
+        ImGui::ClosePopupToLevel(0,true); frame();
+        click(arrow());
+        assert(!ui.editorState.clipEditorOpen);
+        click(arrow());
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t && ui.editorState.editorClipId==c);
     }
     selectTab("Targets"); frame();
     ui.targetsView=true;
@@ -386,6 +648,16 @@ int main() {
     model.getTrack(t)->collapsed=true; frame(); assert(ui.editorState.clipEditorOpen);
     model.getTrack(t)->collapsed=false;
     frame(460); frame(460,ImVec2(-100,-100),false,"narrow");
+    {
+        // A sideways swipe moves only the clips area, never the window around it.
+        auto* window=ImGui::FindWindowByName("Timeline");
+        assert(window && window->ScrollMax.x>0 && window->Scroll.x==0);
+        const ImVec2 clips(ui.fileDropBounds.x+40,ui.fileDropBounds.y+25);
+        for(int i=0;i<15;++i) frame(460,clips,false);
+        for(int i=0;i<6;++i) { io.AddMouseWheelEvent(-0.5f,0); frame(460,clips,false); }
+        assert(window->Scroll.x==0);
+        model.getViewState().scrollX=0; for(int i=0;i<15;++i) frame(460);
+    }
     ui.targetsView=false;
     ui.editorState.editorClipId=lc; ui.editorState.editorLaneId=model.getClip(t,lc)->lanes.front().id;
     frame(); frame(1250,ImVec2(-100,-100),false,"lfo");
@@ -571,21 +843,21 @@ int main() {
     assert(std::abs(imported.durationBeats-owner->getTransportState().bpm/60.0)<1e-6);
     assert(model.undoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips);
     assert(model.redoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips+1);
-    const auto trackCount=model.getTracks().size();
+    const auto trackCount=model.editSequence().tracks.size();
     auto normalRow=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
         [&](const auto& row){return row.trackId==t;});
     assert(normalRow!=ui.clipDropRows.end());
     const float normalY=(normalRow->top+normalRow->bottom)*0.5f;
     dropAt(dx,normalY,samplePath.string()); frame();
-    assert(model.getTracks().size()==trackCount+1);
-    assert(model.getTracks().back().isWaveTrack && model.getTracks().back().clips.size()==1);
-    assert(model.undoTimelineEdit()); assert(model.getTracks().size()==trackCount);
+    assert(model.editSequence().tracks.size()==trackCount+1);
+    assert(model.editSequence().tracks.back().isWaveTrack && model.editSequence().tracks.back().clips.size()==1);
+    assert(model.undoTimelineEdit()); assert(model.editSequence().tracks.size()==trackCount);
     // Unsupported files, unreadable WAVs, and drops outside the canvas leave
     // no empty tracks or placeholder clips behind.
     dropAt(dx,normalY,"/tmp/not-audio.txt"); frame();
     dropAt(dx,normalY,"/tmp/missing-timeline-drop.wav"); frame();
     dropAt(ui.fileDropBounds.x-40,normalY,samplePath.string()); frame();
-    assert(model.getTracks().size()==trackCount);
+    assert(model.editSequence().tracks.size()==trackCount);
     assert(model.getTrack(wt)->clips.size()==originalClips+1);
     // A secondary platform viewport supplies desktop coordinates directly;
     // it never emits the main OF window's fileDragEvent.
@@ -594,7 +866,7 @@ int main() {
     ui.queueAudioDrop({samplePath.string()},dx,normalY);
     assert(ui.pendingAudioDrops.size()==1);
     frame();
-    assert(model.getTracks().size()==trackCount+1);
+    assert(model.editSequence().tracks.size()==trackCount+1);
     assert(model.undoTimelineEdit());
     // Hover feedback uses the file's duration and the same snap/zoom mapping
     // as the import, while leaving the model and undo history untouched.
@@ -643,7 +915,7 @@ int main() {
     const ImVec2 duplicatePoint(trackMenu->Pos.x+50,trackMenu->Pos.y+trackMenu->Size.y-
         ImGui::GetStyle().WindowPadding.y-ImGui::GetTextLineHeight()*0.5f-ImGui::GetTextLineHeightWithSpacing());
     frame(1250,duplicatePoint,false);frame(1250,duplicatePoint,true);frame(1250,duplicatePoint,false);
-    assert(model.getTracks().size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
+    assert(model.editSequence().tracks.size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
     const auto duplicatedTrack=*ui.selectedTracks.begin();assert(duplicatedTrack!=t);
     assert(model.getTrack(duplicatedTrack)->clips.size()==model.getTrack(t)->clips.size());
     assert(model.undoTimelineEdit() && model.toJson()["tracks"]==trackBefore);frame();
@@ -724,6 +996,128 @@ int main() {
     assert(model.getClip(lfoOnly,oldLfo)->isLfo && model.getTrack(lfoOnly)->clips.size()==2);
     assert(!model.getClip(lfoOnly,ui.editorState.editorClipId)->isLfo);
 
+    // A parameter's "Add to Timeline" opens one dialog: New Track... names the
+    // track and the clip, a track gets a new clip; Create makes it all at once
+    // (one undo step) driving the parameter and opens it, Cancel makes nothing.
+    auto popupOpen=[&]() { return !ImGui::GetCurrentContext()->OpenPopupStack.empty(); };
+    auto confirmModal=[&](const char* label) {   // the button, found down the dialog's left edge
+        auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID button=ImHashStr(label,0,popup->ID);
+        const float x=popup->Pos.x+ImGui::GetStyle().WindowPadding.x+6;
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y;y+=2) {
+            frame(1250,ImVec2(x,y),false);
+            if(ImGui::GetCurrentContext()->HoveredId!=button) continue;
+            frame(1250,ImVec2(x,y),true); frame(1250,ImVec2(x,y),false); frame();
+            return true;
+        }
+        return false;
+    };
+    {
+        const auto editorBefore=ui.editorState; const auto selectionBefore=ui.selectedClips;
+        const ofxOceanodeTimelineManager::TimelineRef mainRef;
+        auto& filter=static_cast<ofxOceanodeAbstractParameter&>(otherNode.getParameters().get("Cutoff"));
+        const std::string filterPath=owner->getTimelineParameterPath(filter);
+        const auto tracksBefore=model.toJson()["tracks"];
+        const auto trackCount=model.editSequence().tracks.size();
+        {
+            // The parameter's own menu, Add to Timeline hovered: every timeline
+            // with New Track... and its tracks under it (a screenshot only).
+            auto menuFrame=[&](ImVec2 mouse,const char* shot) {
+                io.AddMousePosEvent(mouse.x,mouse.y);
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(1250,980));
+                ImGui::Begin("Timeline",nullptr,ImGuiWindowFlags_NoDecoration);
+                if(!ImGui::IsPopupOpen("##parameterMenu")) { ImGui::SetNextWindowPos(ImVec2(300,200)); ImGui::OpenPopup("##parameterMenu"); }
+                if(ImGui::BeginPopup("##parameterMenu")) { owner->getAutomationExtension()->drawParameterMenu(filter); ImGui::EndPopup(); }
+                ImGui::End(); ImGui::Render();
+                if(shot) capture(shot,atlas,aw,ah);
+            };
+            menuFrame(ImVec2(-100,-100),nullptr);
+            const ImVec2 addItem(330,200+ImGui::GetStyle().WindowPadding.y+ImGui::GetTextLineHeight()*0.5f);
+            for(int i=0;i<30;++i) menuFrame(addItem,nullptr);
+            menuFrame(addItem,"add-to-timeline-menu");
+            // A track (the third row: Main, New Track..., Synth phrases): New Lane / New Clip.
+            auto* list=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+            const ImVec2 trackItem(list->Pos.x+40,list->Pos.y+ImGui::GetStyle().WindowPadding.y+ImGui::GetTextLineHeightWithSpacing()*2.5f);
+            for(int i=0;i<30;++i) menuFrame(ImVec2(addItem.x+60,trackItem.y),nullptr);   // across, then down
+            for(int i=0;i<30;++i) menuFrame(trackItem,nullptr);
+            menuFrame(trackItem,"add-to-timeline-track");
+            ImGui::ClosePopupToLevel(0,true); frame();
+        }
+        model.requestParameterClip({mainRef,"",filterPath}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-dialog");
+        assert(popupOpen() && ui.parameterClipType==1);   // a float: Curve
+        assert(std::string(ui.parameterClipTrackName)=="Cutoff" && std::string(ui.parameterClipName)=="Cutoff");
+        // The track name is focused and selected: typing replaces it.
+        io.AddInputCharactersUTF8("Filter"); frame();
+        std::strcpy(ui.parameterClipName,"Sweep");
+        assert(confirmModal("Create Track and Clip") && !popupOpen());
+        assert(model.editSequence().tracks.size()==trackCount+1);
+        const auto& made=model.editSequence().tracks.back();
+        assert(made.name=="Filter" && made.bindings.size()==1 && made.bindings[0].parameterPath==filterPath);
+        assert(made.clips.size()==1 && made.clips[0].name=="Sweep" && made.clips[0].lanes.size()==1);
+        assert(made.clips[0].lanes[0].type==ofxOceanodeTimelineLaneType::Curve);
+        assert(made.clips[0].lanes[0].bindingIds==std::vector<std::string>{made.bindings[0].id});
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==made.id && ui.editorState.editorClipId==made.clips[0].id);
+        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBefore);
+        // A track that already has the parameter: a new clip on its row.
+        const std::string pitchPath=owner->getTimelineParameterPath(addedParameter);
+        const auto clipsBefore=model.getTrack(t)->clips.size(), bindingsBefore=model.getTrack(t)->bindings.size();
+        std::string pitchBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==pitchPath) pitchBinding=binding.id;
+        assert(!pitchBinding.empty());
+        model.requestParameterClip({mainRef,t,pitchPath}); frame(); frame();
+        assert(popupOpen() && confirmModal("Create Clip") && !popupOpen());
+        assert(model.getTrack(t)->clips.size()==clipsBefore+1 && model.getTrack(t)->bindings.size()==bindingsBefore);
+        const auto* added=model.getClip(t,ui.editorState.editorClipId);
+        assert(added && added->name=="Pitch" && added->lanes.size()==1 && added->lanes[0].bindingIds==std::vector<std::string>{pitchBinding});
+        assert(model.undoTimelineEdit() && model.getTrack(t)->clips.size()==clipsBefore);
+        // New Lane: a lane driving it in one of the track's clips (the selected
+        // one), on a row made for the parameter; undone at once.
+        ui.selectedClips={{t,c}};
+        const auto lanesBefore=model.getClip(t,c)->lanes.size();
+        const auto tracksBeforeLane=model.toJson()["tracks"];
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Lane}); frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-lane");
+        assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterClipType==1);
+        assert(confirmModal("Create Lane") && !popupOpen());
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore+1);
+        std::string filterBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==filterPath) filterBinding=binding.id;
+        const auto& newLane=model.getClip(t,c)->lanes.back();
+        assert(!filterBinding.empty() && newLane.bindingIds==std::vector<std::string>{filterBinding});
+        assert(newLane.name=="Cutoff" && newLane.type==ofxOceanodeTimelineLaneType::Curve);
+        assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && ui.editorState.editorLaneId==newLane.id);
+        assert(model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
+        // New Target: an existing lane (the one being edited, in the selected
+        // clip) drives it too, on a row made for it; a lane it already drives
+        // cannot take it again.
+        ui.selectedClips={{t,c}}; ui.editorState.clipEditorOpen=true;
+        ui.editorState.editorTrackId=t; ui.editorState.editorClipId=c; ui.editorState.editorLaneId=curve; frame();
+        const auto targetsBefore=model.getLane(t,c,curve)->bindingIds;
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Target});
+        frame(); frame(1250,ImVec2(-100,-100),false,"add-to-timeline-target");
+        assert(popupOpen() && ui.parameterLaneClipId==c && ui.parameterTargetLaneId==curve);
+        assert(confirmModal("Add Target") && !popupOpen());
+        std::string targetBinding;
+        for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==filterPath) targetBinding=binding.id;
+        auto targetsAfter=targetsBefore; targetsAfter.push_back(targetBinding);
+        assert(!targetBinding.empty() && model.getLane(t,c,curve)->bindingIds==targetsAfter);
+        assert(model.getClip(t,c)->lanes.size()==lanesBefore && ui.editorState.editorLaneId==curve);
+        const auto targetedJson=model.toJson();
+        model.requestParameterClip({mainRef,t,filterPath,ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Target}); frame(); frame();
+        assert(popupOpen() && ui.parameterTargetLaneId==curve);
+        confirmModal("Add Target");   // disabled: already a target
+        assert(popupOpen() && model.toJson()==targetedJson);
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        assert(!popupOpen() && model.undoTimelineEdit() && model.toJson()["tracks"]==tracksBeforeLane);
+        // Cancel makes nothing.
+        const auto beforeCancel=model.toJson();
+        model.requestParameterClip({mainRef,"",filterPath}); frame(); frame();
+        assert(popupOpen());
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        assert(!popupOpen() && model.toJson()==beforeCancel);
+        ui.editorState=editorBefore; ui.selectedClips=selectionBefore; frame();
+    }
+
     // A note selection owns Delete before the arrangement can remove its clip,
     // even if the shell's last-click flag is stale and the mouse has moved away.
     const auto dt=model.createTrack("Delete test");
@@ -761,6 +1155,74 @@ int main() {
         assert(std::abs(model.getClip(t,lc)->startBeat-(lfoStart+1.0))<1e-6);
         model.ungroupClip(t,c);
     }
+    {
+        // Four clips one after the other, all selected: right-click one and
+        // "Merge 4 clips" turns them into a single clip.
+        for(int i=0;i<25;++i) frame();
+        const auto mt=model.createTrack("Merge test");
+        assert(model.moveTrack(mt,"",0)); // on screen
+        const auto mb=model.addBinding(mt,addedParameter);
+        std::vector<std::string> quarters;
+        for(int i=0;i<4;++i) {
+            const auto id=model.createClip(mt,"Q"+ofToString(i),i*2.0,2);
+            const auto laneId=model.createLane(mt,id,"Pitch",ofxOceanodeTimelineLaneType::Number);
+            model.addBindingToLane(mt,id,laneId,mb);
+            quarters.push_back(id);
+        }
+        ui.selectedClips.clear();
+        for(const auto& id:quarters) ui.selectedClips.insert({mt,id});
+        frame(); frame();
+        const auto it=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==quarters[1];});
+        assert(it!=ui.clipScreenRects.end());
+        const ImVec2 at((it->x1+it->x2)*0.5f,(it->y1+it->y2)*0.5f);
+        io.AddMousePosEvent(at.x,at.y); frame(1250,at,false);
+        io.AddMouseButtonEvent(1,true); frame(1250,at,false);
+        io.AddMouseButtonEvent(1,false); frame(1250,at,false);
+        assert(popupOpen() && ui.selectedClips.size()==4);
+        auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID item=ImHashStr("Merge 4 clips",0,popup->ID);
+        ImVec2 found(-1,-1);
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && found.x<0;y+=2) {
+            const ImVec2 p(popup->Pos.x+30,y);
+            frame(1250,p,false);
+            if(ImGui::GetCurrentContext()->HoveredId==item) found=p;
+        }
+        assert(found.x>=0);
+        frame(1250,found,true); frame(1250,found,false); frame(); frame();
+        const auto* merged=model.getTrack(mt);
+        if(merged->clips.size()!=1) { std::cerr<<"merge left "<<merged->clips.size()<<" clips\n"; std::abort(); }
+        assert(merged->clips.front().id==quarters[0] && merged->clips.front().lanes.size()==1);
+        assert(std::abs(merged->clips.front().durationBeats-8)<1e-9);
+        // Grouped instead of selected (only the right-clicked clip is
+        // selected): the menu merges the whole group.
+        std::vector<std::string> grouped;
+        for(int i=0;i<4;++i) grouped.push_back(model.createClip(mt,"G"+ofToString(i),8+i*1.0,1));
+        std::vector<std::pair<std::string,std::string>> members;
+        for(const auto& id:grouped) members.push_back({mt,id});
+        assert(!model.groupClips(members).empty());
+        ui.selectedClips.clear(); frame(); frame();
+        const auto gt=std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==grouped[1];});
+        assert(gt!=ui.clipScreenRects.end());
+        const ImVec2 gat((gt->x1+gt->x2)*0.5f,(gt->y1+gt->y2)*0.5f);
+        for(int i=0;i<25;++i) frame(1250,gat,false);
+        io.AddMouseButtonEvent(1,true); frame(1250,gat,false);
+        io.AddMouseButtonEvent(1,false); frame(1250,gat,false);
+        assert(popupOpen() && ui.selectedClips.size()==1);
+        popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        const ImGuiID groupItem=ImHashStr("Merge 4 clips",0,popup->ID);
+        found=ImVec2(-1,-1);
+        for(float y=popup->Pos.y;y<popup->Pos.y+popup->Size.y && found.x<0;y+=2) {
+            const ImVec2 p(popup->Pos.x+30,y);
+            frame(1250,p,false);
+            if(ImGui::GetCurrentContext()->HoveredId==groupItem) found=p;
+        }
+        assert(found.x>=0);
+        frame(1250,found,true); frame(1250,found,false); frame(); frame();
+        assert(model.getTrack(mt)->clips.size()==2 && model.getClip(mt,grouped[0]) && !model.getClip(mt,grouped[1]));
+        assert(std::abs(model.getClip(mt,grouped[0])->durationBeats-4)<1e-9);
+        assert(model.getGroupForClip(mt,grouped[0])==nullptr);
+        model.removeTrack(mt); frame();
+    }
     // Track folders: drag a header into a folder, fold it, drag it back out.
     for(int i=0;i<25;++i) frame(); // no double-click with the clicks above
     const auto folder=model.createFolder("Group");
@@ -796,7 +1258,7 @@ int main() {
     // Drag it above the first row: back at the top level, first.
     for(int i=0;i<25;++i) frame();
     dragHeader(dt,ImVec2(ui.fileDropBounds.x-150,ui.trackHeaderRows.front().minY+2.0f));
-    assert(model.getTrack(dt)->parentId.empty() && model.getTracks().front().id==dt);
+    assert(model.getTrack(dt)->parentId.empty() && model.editSequence().tracks.front().id==dt);
     // Never into itself: a folder dropped on its own row stays where it was.
     folderRow=headerRow(folder);
     dragHeader(folder,ImVec2(ui.fileDropBounds.x-150,(folderRow->minY+folderRow->maxY)*0.5f+20.0f));
@@ -851,7 +1313,7 @@ int main() {
         auto inside=static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
         auto& innerProbe=inside->createNode(std::make_unique<ClarityProbe>(),1);
         auto& innerCutoff=static_cast<ofxOceanodeAbstractParameter&>(innerProbe.getParameters().get("Cutoff"));
-        auto* pattern=model.getMacroSequence(*inside);
+        auto* pattern=macroTimelineOf(*inside);
         assert(pattern && pattern->tracks.empty() && pattern->base==inside.get());
         const auto mainBefore=model.toJson()["tracks"];
         const auto pt=model.createTrack(*pattern,"Pattern");
@@ -862,6 +1324,17 @@ int main() {
         const auto pl=model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
         model.addBindingToLane(*pattern,pt,pc,pl,pb);
         assert(model.toJson()["tracks"]==mainBefore); // the main timeline is untouched
+        {
+            // "Add to Timeline" into the macro's own timeline: its sequence
+            // gets the track (shown in the editor), the main one stays as it was.
+            model.requestParameterClip({model.refForCanvas(*inside,pattern->timelineId),"","Synth_1/Cutoff"}); frame(); frame();
+            assert(popupOpen() && confirmModal("Create Track and Clip"));
+            assert(pattern->tracks.size()==2 && pattern->tracks[1].bindings.size()==1);
+            assert(pattern->tracks[1].bindings[0].parameterPath=="Synth_1/Cutoff" && pattern->tracks[1].clips.size()==1);
+            assert(model.toJson()["tracks"]==mainBefore && &ui.scope(model)==pattern);
+            model.removeTrack(*pattern,pattern->tracks[1].id);
+            ui.leaveScopesTo(0); for(int i=0;i<25;++i) frame();
+        }
 
         // "Edit Timeline": the editor shows the macro's sequence.
         for(int i=0;i<25;++i) frame();
@@ -896,16 +1369,18 @@ int main() {
         std::filesystem::remove(folder/"sequence.json");
         assert(inside->savePreset(folder.string()) && std::filesystem::exists(folder/"sequence.json"));
         model.loadMacroSequence(*inside,folder.string());
-        auto* reloaded=model.getMacroSequence(*inside);
+        auto* reloaded=macroTimelineOf(*inside);
         assert(reloaded && reloaded->tracks.size()==1 && reloaded->tracks[0].clips.size()==1);
         assert(std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
         assert(inside->loadPreset(folder.string()));
-        reloaded=model.getMacroSequence(*inside);
+        reloaded=macroTimelineOf(*inside);
         assert(reloaded && reloaded->tracks.size()==1 && std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
-        frame(); frame(); // the old scope's sequence was replaced: back to the main timeline
-        assert(!ui.inMacroScope());
-        // An emptied timeline leaves no file behind.
+        frame(); frame(); // the old scope's sequence was replaced: the macro's reloaded timeline is shown
+        assert(ui.inMacroScope() && &ui.scope(model)==reloaded);
+        // A timeline with no tracks is still a timeline: the file stays; a removed one leaves no file behind.
         model.removeTrack(*reloaded,reloaded->tracks[0].id);
+        assert(model.saveMacroSequence(*inside,folder.string()) && std::filesystem::exists(folder/"sequence.json"));
+        assert(model.removeTimeline({inside->getCanvasID(),reloaded->timelineId}));
         assert(model.saveMacroSequence(*inside,folder.string()) && !std::filesystem::exists(folder/"sequence.json"));
         std::filesystem::remove_all(folder);
 
@@ -914,14 +1389,14 @@ int main() {
         ui.leaveScopesTo(0); frame(); assert(!ui.inMacroScope());
         {
             // A macro track on the main timeline: its clips play the macro's timeline.
-            const auto mt=model.createMacroTrack(*inside);
+            const auto mt=model.createTimelineTrack(model.editSequence(),ofxOceanodeTimelineManager::TimelineRef{inside->getCanvasID(),macroTimelineOf(*inside)->timelineId});
             assert(!mt.empty() && model.getTrack(mt)->macroCanvas==inside->getCanvasID());
             const auto mc=model.createMacroClip(mt,0.0);
             assert(!mc.empty() && model.getClip(mt,mc)->contentDurationBeats>=model.getBeatsPerBar());
             assert(model.createLane(mt,mc,"x",ofxOceanodeTimelineLaneType::Curve).empty()); // no lanes in a macro clip
             {
                 // Content in the macro's timeline, previewed inside the macro clip.
-                auto* pattern=model.getMacroSequence(*inside);
+                auto* pattern=macroTimelineOf(*inside);
                 const auto ct=model.createTrack(*pattern,"Sweep");
                 const auto cb=model.addBinding(*pattern,ct,innerCutoff);
                 const auto cc=model.createClip(*pattern,ct,"Sweep",0,4);
@@ -950,7 +1425,7 @@ int main() {
             const ImVec2 at((mrect->x1+mrect->x2)*0.5f,(mrect->y1+mrect->y2)*0.5f);
             frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); frame(1250,at,true); frame(1250,at,false);
             frame(); frame();
-            assert(ui.inMacroScope() && &ui.scope(model)==model.getMacroSequence(*inside)); // double-click opens it
+            assert(ui.inMacroScope() && &ui.scope(model)==macroTimelineOf(*inside)); // double-click opens it
             {
                 // The main playhead shows where the macro clip has the macro's timeline.
                 double macroBeat=-1;
@@ -963,7 +1438,7 @@ int main() {
             {
                 // Unfolded: the macro's tracks as rows under the macro track, their
                 // clips where the macro clip plays them (here at half speed), edited there.
-                auto* pattern=model.getMacroSequence(*inside); // read back from the macro's folder above
+                auto* pattern=macroTimelineOf(*inside); // read back from the macro's folder above
                 const auto pt=model.createTrack(*pattern,"Phrase");
                 const auto pb=model.addBinding(*pattern,pt,innerCutoff);
                 const auto pc=model.createClip(*pattern,pt,"Phrase",2,4);
