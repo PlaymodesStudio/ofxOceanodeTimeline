@@ -14,7 +14,8 @@ public:
               const ofxOceanodeTimelineEditorView& view,
               ofxOceanodeTimelineClipEditorState& editorState,
               float contentWidth, double beatPosition,
-              ofxOceanodeTimelineEndEdit endEdit = ofxOceanodeTimelineEndEdit::Repeat);
+              ofxOceanodeTimelineEndEdit endEdit = ofxOceanodeTimelineEndEdit::Repeat,
+              bool allowFocus = true);
     void setTargetPaths(std::vector<std::string> paths) { availableTargetPaths = std::move(paths); }
     std::string consumeOutputTargetRequest() {
         auto path = std::move(requestedOutputTargetPath); requestedOutputTargetPath.clear(); return path;

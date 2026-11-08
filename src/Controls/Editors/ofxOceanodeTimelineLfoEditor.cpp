@@ -17,7 +17,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
     const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
     const ofxOceanodeTimelineEditorView& view,
     ofxOceanodeTimelineClipEditorState& editorState,
-    float contentWidth, double beatPosition, ofxOceanodeTimelineEndEdit endEdit) {
+    float contentWidth, double beatPosition, ofxOceanodeTimelineEndEdit endEdit, bool allowFocus) {
     const float timelineScrollX = timeline.getViewState().scrollX;
     // Laid out like drawLaneEditor's rows rather than as one fixed block: a
     // row per section, each reserving its own height from editorState.laneEditorHeights,
@@ -119,7 +119,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
         // The canvas stops short of the resize strip so the two can never
         // fight over the same click.
         ImGui::SetCursorScreenPos(ImVec2(zoneLeft, row.rowMin.y));
-        ImGui::InvisibleButton(("##lfoRowCanvas" + editorState.editorTrackId + editorState.editorClipId + key).c_str(),
+        ImGui::InvisibleButton(("##lfoRowCanvas" + track.id + clip.id + key).c_str(),
                                ImVec2(std::max(1.0f, contentWidth - kLabelWidth),
                                       std::max(1.0f, row.height - kLaneResizeHandleHeight)));
         row.canvasHovered = ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
@@ -162,7 +162,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
     // caller fills it and closes it with EndChild, hence the "begin" name.
     auto beginRowProperties = [&](const LfoRow& row, const std::string& key) {
         ImGui::SetCursorScreenPos(ImVec2(row.rowMin.x + 5.0f + clipIndent, row.rowMin.y + 4.0f));
-        ImGui::BeginChild(("##lfoRowProperties" + editorState.editorTrackId + editorState.editorClipId + key).c_str(),
+        ImGui::BeginChild(("##lfoRowProperties" + track.id + clip.id + key).c_str(),
                           ImVec2(kLabelWidth - 10.0f - clipIndent,
                                  std::max(1.0f, row.height - 8.0f - kLaneResizeHandleHeight)), false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -233,7 +233,7 @@ void ofxOceanodeTimelineLfoEditor::draw(
     bool anyLfoCanvasHovered = false;
     for(size_t laneIndex = 0; laneIndex < clip.lanes.size(); ++laneIndex) {
         auto& lane = clip.lanes[laneIndex];
-        const bool focused = editorState.editorLaneId == lane.id;
+        const bool focused = allowFocus && editorState.editorLaneId == lane.id;
         const float current = ofxOceanodeTimelineLfo::evaluateParameter(clip, lane.lfoParameter,
                                                                         resultSourceBeat, 0.0f);
         if(editorState.collapsedLaneIds.count(lane.id) > 0) {

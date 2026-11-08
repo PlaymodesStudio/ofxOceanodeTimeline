@@ -119,6 +119,9 @@ private:
                    double endBeat, double beatPosition, float bpm);
     void drawLaneEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
                         float contentWidth, double endBeat, double beatPosition);
+    void drawClipLaneEditor(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
+                            ofxOceanodeTimelineClip& clip, float contentWidth, double endBeat, double beatPosition);
+    void expandClipLanes(const ofxOceanodeTimelineTrack& track, const std::string& clipId);
     void drawWaveClipProperties(ofxOceanodeTimelineManager& timeline,
                                 const ofxOceanodeTimelineTrack& track,
                                 ofxOceanodeTimelineClip& clip);
@@ -497,8 +500,14 @@ private:
     }
     // The open clip editor is on this track of the scope's own timeline.
     bool scopeEditorOnTrack(const std::string& trackId) const {
-        return editorState.clipEditorOpen && !innerEditorOpen() && editorState.editorTrackId == trackId;
+        return editorState.openTrackIds.count(trackId) > 0 ||
+            (editorState.clipEditorOpen && !innerEditorOpen() && editorState.editorTrackId == trackId);
     }
+    void closeTrackEditor(const std::string& trackId) {
+        editorState.openTrackIds.erase(trackId);
+        if(!innerEditorOpen() && editorState.editorTrackId == trackId) editorState.clipEditorOpen = false;
+    }
+    std::vector<std::pair<float, float>> editorScreenSpans;
     // The sequence whose ids editorState holds.
     ofxOceanodeTimelineSequence& editorSequence(ofxOceanodeTimelineManager& timeline) {
         if(innerEditorOpen() && timeline.isLiveSequence(*editorRowScope.sequence)) return *editorRowScope.sequence;

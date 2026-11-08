@@ -128,9 +128,10 @@ void ofxOceanodeTimelineWaveVolumeEditor::draw(
             ImGui::OpenPopup("Volume point value");
         } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && nearest >= 0) {
             waveVolumeDragPointIndex = nearest;
+            waveVolumeDragTrackId = track.id;
         }
     }
-    if(waveVolumeDragPointIndex >= 0 && waveVolumeDragPointIndex < static_cast<int>(points.size())) {
+    if(waveVolumeDragTrackId == track.id && waveVolumeDragPointIndex >= 0 && waveVolumeDragPointIndex < static_cast<int>(points.size())) {
         if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             points[waveVolumeDragPointIndex].beat = view.snapBeat(ofClamp(beatForX(mouse.x), 0.0, endBeat));

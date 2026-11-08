@@ -70,6 +70,14 @@ Closing or folding the editor retains content. Right-click anywhere in a
 lane's left properties pad for **Duplicate lane** and **Delete lane**.
 **Delete lane and clip** explicitly removes the last lane and its containing clip.
 
+Several tracks can keep their lane editors open together. Each open track shows
+every clip's lanes as separate rows, in clip order. Selecting a clip on an open
+track expands all of that clip's lanes and folds the other clips' lanes on the
+same track. Double-clicking a clip also opens a closed track this way. Other
+tracks retain their own expansion state. A folded lane keeps a
+compact data preview in the clip's color, aligned to its position in the
+arrangement. Click the preview to focus its lane; double-click to expand it.
+
 LFO clips have oscillator **control envelopes** and one result/output target.
 Their controls do not directly automate node parameters. Audio clips contain
 samples; clip gain belongs to the selected sample, while the separately

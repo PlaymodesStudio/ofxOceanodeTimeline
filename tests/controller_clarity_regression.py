@@ -111,6 +111,9 @@ int main() {
     model.getViewState().trackHeight=80.0f;
     ofxOceanodeTimelineController ui(owner);
     auto frame=[&](float width=1250,ImVec2 mouse=ImVec2(-100,-100),bool down=false,const char* screenshot=nullptr) {
+        // These coordinate-based scenarios keep one track editor open. The
+        // separate lane-view suite exercises simultaneous track expansion.
+        ui.editorState.openTrackIds.clear();
         io.AddMousePosEvent(mouse.x,mouse.y); io.AddMouseButtonEvent(0,down);
         ImGui::NewFrame();
         ui.drawBeforeWindows();

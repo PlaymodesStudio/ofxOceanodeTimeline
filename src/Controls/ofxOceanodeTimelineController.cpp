@@ -1201,6 +1201,8 @@ void ofxOceanodeTimelineController::resetEditorForScope() {
     loopDragMode = LoopDragMode::None;
     pendingJump = false;
     editorState.clipEditorOpen = false;
+    editorState.openTrackIds.clear();
+    editorState.lastClipForTrack.clear();
     editorState.editorTrackId.clear();
     editorState.editorClipId.clear();
     editorState.editorLaneId.clear();
@@ -1208,6 +1210,21 @@ void ofxOceanodeTimelineController::resetEditorForScope() {
     innerDrag = {};
     innerMenuTrackId.clear();
     innerMenuClipId.clear();
+}
+
+void ofxOceanodeTimelineController::expandClipLanes(const ofxOceanodeTimelineTrack& track, const std::string& clipId) {
+    for(const auto& clip : track.clips) {
+        const bool expand = clip.id == clipId;
+        for(const auto& lane : clip.lanes) {
+            if(expand) editorState.collapsedLaneIds.erase(lane.id);
+            else editorState.collapsedLaneIds.insert(lane.id);
+        }
+        if(clip.isLfo) {
+            const auto key = "lfoResult:" + clip.id;
+            if(expand) editorState.collapsedLaneIds.erase(key);
+            else editorState.collapsedLaneIds.insert(key);
+        }
+    }
 }
 
 void ofxOceanodeTimelineController::openInnerClipEditor(const RowScope& at, const std::string& trackId,
@@ -1221,6 +1238,9 @@ void ofxOceanodeTimelineController::openInnerClipEditor(const RowScope& at, cons
     editorState.clipEditorOpen = true;
     editorAnchorBindingId.clear();
     laneEditors.clearSelection();
+    if(at.sequence != nullptr)
+        for(const auto& track : at.sequence->tracks)
+            if(track.id == trackId) { expandClipLanes(track, clipId); break; }
 }
 
 void ofxOceanodeTimelineController::enterMacroScope(ofxOceanodeTimelineManager& timeline,
@@ -1405,6 +1425,7 @@ void ofxOceanodeTimelineController::drawBeforeWindows() {
 void ofxOceanodeTimelineController::draw() {
     if(container == nullptr) return;
     editorScreenValid = false;
+    editorScreenSpans.clear();
     auto& timeline = container->getTimelineManager();
     lastTimelineDrawFrame = ImGui::GetFrameCount();
     // A horizontal swipe would also make ImGui scroll this whole window
@@ -2504,6 +2525,18 @@ void ofxOceanodeTimelineController::draw() {
 
     trackHeaderRows.clear();
     const auto& arrangement = scope(timeline);
+    auto rememberTrackEditor = [&]() {
+        if(innerEditorOpen()) return;
+        if(editorState.clipEditorOpen) {
+            editorState.openTrackIds.insert(editorState.editorTrackId);
+            editorState.lastClipForTrack[editorState.editorTrackId] = editorState.editorClipId;
+        } else editorState.openTrackIds.erase(editorState.editorTrackId);
+    };
+    rememberTrackEditor();
+    for(auto it = editorState.openTrackIds.begin(); it != editorState.openTrackIds.end();) {
+        if(timeline.getTrack(scope(timeline), *it) == nullptr) it = editorState.openTrackIds.erase(it);
+        else ++it;
+    }
     // Where tracks go when dragged: a sibling position, or into a folder.
     auto siblingIndex = [&](const ofxOceanodeTimelineTrack& of) {
         size_t index = 0;
@@ -2897,6 +2930,7 @@ void ofxOceanodeTimelineController::draw() {
                     }
                     editorScreenBottom = ImGui::GetCursorScreenPos().y;
                     editorScreenValid = true;
+                    editorScreenSpans.emplace_back(editorScreenTop, editorScreenBottom);
                     innerEditorDocked = true;
                 }
                 if(innerTrack.isMacroTrack() && innerTrack.macroUnfolded)
@@ -3095,9 +3129,13 @@ void ofxOceanodeTimelineController::draw() {
         // The clip the editor shows, or would open on: the selected clip of
         // this track, else the one it last edited, else its first.
         const ofxOceanodeTimelineClip* editorClip = nullptr;
-        if(editorOpenHere)
-            editorClip = timeline.getClip(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline)), track.id, editorState.editorClipId);
-        else if(editorArrow) {
+        if(editorOpenHere) {
+            const auto remembered = editorState.lastClipForTrack.find(track.id);
+            const std::string clipId = editorState.editorTrackId == track.id && !innerEditorOpen()
+                ? editorState.editorClipId : remembered == editorState.lastClipForTrack.end() ? std::string() : remembered->second;
+            editorClip = timeline.getClip(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline)), track.id, clipId);
+        }
+        if(editorClip == nullptr && editorArrow) {
             auto editable = [&](const ofxOceanodeTimelineClip& clip) { return track.isWaveTrack || !clip.lanes.empty(); };
             for(const auto& clip : track.clips)
                 if(!editorClip && editable(clip) && selectedClips.count({track.id, clip.id})) editorClip = &clip;
@@ -3114,6 +3152,9 @@ void ofxOceanodeTimelineController::draw() {
             editorAnchorBindingId.clear();
             editorRowScope = {};
             editorState.clipEditorOpen = true;
+            editorState.openTrackIds.insert(track.id);
+            editorState.lastClipForTrack[track.id] = editorClip->id;
+            expandClipLanes(track, editorClip->id);
         };
         const bool addLaneButton = editorClip != nullptr && !editorClip->isLfo && !track.isWaveTrack;
         const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
@@ -3136,7 +3177,7 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::SetTooltip(editorOpenHere ? "Close the clip editor" : "Open the clip editor");
         if(editorArrowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             anyClipInteractionClaimedThisFrame = true;   // keeps the selection the editor follows
-            if(editorOpenHere) editorState.clipEditorOpen = false;
+            if(editorOpenHere) closeTrackEditor(track.id);
             else if(editorClip != nullptr) openEditor();
         }
         dl->PushClipRect(headerMin, ImVec2(padRight, headerMax.y), true);
@@ -3228,7 +3269,7 @@ void ofxOceanodeTimelineController::draw() {
                 anyClipInteractionClaimedThisFrame = true;
                 addLanePopupAnchor = ImVec2(ImGui::GetItemRectMax().x + 20.0f,
                                             (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
-                if(!editorOpenHere) openEditor();
+                if(!editorOpenHere || editorState.editorTrackId != track.id || innerEditorOpen()) openEditor();
                 requestAddLanePopup = true;   // opened by the clip editor below
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to %s", editorClip->name.c_str());
@@ -3783,21 +3824,22 @@ void ofxOceanodeTimelineController::draw() {
                 pendingClipId = clip.id;
                 pendingLaneId = lane != nullptr ? lane->id : (clip.lanes.empty() ? "" : clip.lanes.front().id);
                 const double clickedBeat = beatAtOffset(mouse.x - min.x);
-                const bool editorShowingThisClip = scopeEditorOnTrack(track.id) &&
-                    editorState.editorClipId == clip.id;
-                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
-                    // Into the macro's own timeline (next frame: never mid-iteration).
-                    requestPlacedScope(timeline, track);
-                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && editorShowingThisClip) {
-                    // Double-clicking the clip whose editor is open closes it again.
-                    editorState.clipEditorOpen = false;
-                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                auto editThisClip = [&]() {
                     editorState.editorTrackId = track.id;
                     editorState.editorClipId = clip.id;
                     editorState.editorLaneId = lane != nullptr ? lane->id : std::string();
                     editorAnchorBindingId = currentRowBindingId;
                     editorRowScope = {};
                     editorState.clipEditorOpen = true;
+                    editorState.openTrackIds.insert(track.id);
+                    editorState.lastClipForTrack[track.id] = clip.id;
+                    expandClipLanes(track, clip.id);
+                };
+                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
+                    // Into the macro's own timeline (next frame: never mid-iteration).
+                    requestPlacedScope(timeline, track);
+                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    editThisClip();
                     if(singleRowTrack && targetsView) {
                         // Layout stays single-row for the rest of this frame,
                         // but the model expands now (irrelevant for a Wave
@@ -3823,6 +3865,8 @@ void ofxOceanodeTimelineController::draw() {
                     }
                     const bool commandDown = ImGui::GetIO().KeyCtrl ||
                         (ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) != 0;
+                    if(scopeEditorOnTrack(track.id) && !edge && !leftEdge && !commandDown && selectedClips.size() == 1)
+                        editThisClip();
                     // Cmd on the body (not on an edge) drags out a copy instead.
                     clipDragMode = edge ? rightEdgeDragMode(track.isWaveTrack)
                                         : leftEdge ? ClipDragMode::TrimStart
@@ -3938,6 +3982,7 @@ void ofxOceanodeTimelineController::draw() {
                         editorState.editorLaneId = candidate.lanes.empty() ? std::string() : candidate.lanes.front().id;
                         editorRowScope = {};
                         editorState.clipEditorOpen = true;
+                        expandClipLanes(track, candidate.id);
                     }
                 }
                 ImGui::EndMenu();
@@ -4235,6 +4280,7 @@ void ofxOceanodeTimelineController::draw() {
                     drawWaveTrackEditor(timeline, track, contentWidth, endBeat, transportState.beatPosition);
                     editorScreenBottom = ImGui::GetCursorScreenPos().y;
                     editorScreenValid = true;
+                    editorScreenSpans.emplace_back(editorScreenTop, editorScreenBottom);
                 }
             } else if(scopeEditorOnTrack(track.id) && !expandTrackForEditor) {
                 editorScreenTop = ImGui::GetCursorScreenPos().y;
@@ -4242,6 +4288,7 @@ void ofxOceanodeTimelineController::draw() {
                 drawLaneEditor(timeline, track, contentWidth, endBeat, transportState.beatPosition);
                 editorScreenBottom = ImGui::GetCursorScreenPos().y;
                 editorScreenValid = true;
+                editorScreenSpans.emplace_back(editorScreenTop, editorScreenBottom);
             }
         } else {
             int index = 0;
@@ -4293,7 +4340,7 @@ void ofxOceanodeTimelineController::draw() {
                     return !id.empty() && std::any_of(track.bindings.begin(), track.bindings.end(),
                                                       [&](const auto& b) { return b.id == id; });
                 };
-                if(hasBinding(editorAnchorBindingId)) editorAnchorId = editorAnchorBindingId;
+                if(editorState.editorTrackId == track.id && hasBinding(editorAnchorBindingId)) editorAnchorId = editorAnchorBindingId;
                 else {
                     const auto clipIt = std::find_if(track.clips.begin(), track.clips.end(),
                         [&](const auto& c) { return c.id == editorState.editorClipId; });
@@ -4328,6 +4375,7 @@ void ofxOceanodeTimelineController::draw() {
                     editorScreenTop = editorSpanScreen.first;
                     editorScreenBottom = editorSpanScreen.second;
                     editorScreenValid = true;
+                    editorScreenSpans.push_back(editorSpanScreen);
                     editorDrawn = true;
                 };
                 if(firstGroupMember) {
@@ -4908,6 +4956,7 @@ void ofxOceanodeTimelineController::draw() {
                 drawLaneEditor(timeline, track, contentWidth, endBeat, transportState.beatPosition);
                 editorScreenBottom = ImGui::GetCursorScreenPos().y;
                 editorScreenValid = true;
+                editorScreenSpans.emplace_back(editorScreenTop, editorScreenBottom);
             }
         }
         if(track.isMacroTrack() && track.macroUnfolded) {
@@ -4923,6 +4972,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(row.trackId == track.id) row.maxY = ImGui::GetCursorScreenPos().y;
         }
     }
+    rememberTrackEditor();
     unfoldedSequences = unfoldedSequencesDrawn;
     // Folded away (or its macro gone): the clip editor of an unfolded row closes.
     if(innerEditorOpen() && !innerEditorDocked) {
@@ -5047,9 +5097,11 @@ void ofxOceanodeTimelineController::draw() {
     // "##TimelineViewport" and handle the click themselves).
     // A click inside the clip editor is editing that clip, not empty space:
     // keep the selection so S / Delete / Group still act on it.
-    const bool clickInEditor = editorScreenValid &&
-        ImGui::GetIO().MousePos.y >= editorScreenTop && ImGui::GetIO().MousePos.y <= editorScreenBottom;
-    if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+    const bool clickInEditor = std::any_of(editorScreenSpans.begin(), editorScreenSpans.end(), [&](const auto& span) {
+        return ImGui::GetIO().MousePos.y >= span.first && ImGui::GetIO().MousePos.y <= span.second;
+    });
+    if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+       ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
         lastClickInEditor = clickInEditor;
     if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !anyClipInteractionClaimedThisFrame && !clickInEditor &&
        !ImGui::GetIO().KeyShift && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
@@ -6398,14 +6450,18 @@ void ofxOceanodeTimelineController::drawWaveTrackEditor(
     float contentWidth, double endBeat, double beatPosition) {
     const float timelineScrollX = timeline.getViewState().scrollX;
     auto* editTrack = timeline.getTrack(scope(timeline), track.id);
-    auto* clip = timeline.getClip(scope(timeline), editorState.editorTrackId, editorState.editorClipId);
+    const auto remembered = editorState.lastClipForTrack.find(track.id);
+    const std::string clipId = editorState.editorTrackId == track.id ? editorState.editorClipId
+        : remembered == editorState.lastClipForTrack.end() ? std::string() : remembered->second;
+    auto* clip = timeline.getClip(scope(timeline), track.id, clipId);
+    if(clip == nullptr && !track.clips.empty()) clip = timeline.getClip(scope(timeline), track.id, track.clips.front().id);
     if(editTrack == nullptr || clip == nullptr) {
-        editorState.clipEditorOpen = false;
+        closeTrackEditor(track.id);
         return;
     }
 
     drawSharedClipProperties(timeline, track, *clip, contentWidth, endBeat);
-    if(ImGui::SmallButton("Close editor##wave")) editorState.clipEditorOpen = false;
+    if(ImGui::SmallButton(("Close editor##wave" + track.id).c_str())) closeTrackEditor(track.id);
     const float editorHeight = 300.0f;
     ImGui::Dummy(ImVec2(contentWidth, editorHeight));
     const ImVec2 editorMin = ImGui::GetItemRectMin();
@@ -6416,12 +6472,12 @@ void ofxOceanodeTimelineController::drawWaveTrackEditor(
     ImGui::SetCursorScreenPos(editorMin);
     // Let the properties column scroll vertically if a narrow panel needs it;
     // the sample label and controls must never paint outside the column.
-    ImGui::BeginChild("##waveClipPropertiesPanel", ImVec2(propertiesWidth, editorHeight), true);
+    ImGui::BeginChild(("##waveClipPropertiesPanel" + track.id).c_str(), ImVec2(propertiesWidth, editorHeight), true);
     drawWaveClipProperties(timeline, track, *clip);
     ImGui::EndChild();
 
     ImGui::SetCursorScreenPos(ImVec2(editorMin.x + propertiesWidth + gap, editorMin.y));
-    ImGui::BeginChild("##waveTrackVolumePanel", ImVec2(automationWidth, editorHeight), true,
+    ImGui::BeginChild(("##waveTrackVolumePanel" + track.id).c_str(), ImVec2(automationWidth, editorHeight), true,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::TextWrapped("Track: %s / Volume automation - applies to every audio clip", track.name.c_str());
     waveVolumeEditor.draw(timeline, scope(timeline), *editTrack,
@@ -6436,23 +6492,62 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
                                                    const ofxOceanodeTimelineTrack& track,
                                                    float contentWidth, double endBeat,
                                                    double beatPosition) {
-    const float timelineScrollX = timeline.getViewState().scrollX;
-    const ScheduledContentEditGuard scheduledEdits(timeline, scope(timeline), editorState.editorTrackId, editorState.editorClipId);
-    auto* clip = timeline.getClip(scope(timeline), editorState.editorTrackId, editorState.editorClipId);
-    if(clip == nullptr || (clip->lanes.empty() && !track.isWaveTrack)) {
-        editorState.clipEditorOpen = false;
+    if(editorState.editorTrackId == track.id && &editorSequence(timeline) == &scope(timeline) &&
+       timeline.getClip(scope(timeline), track.id, editorState.editorClipId) == nullptr) {
+        closeTrackEditor(track.id);
         return;
     }
+    // Keep every clip's lanes visible. Selection changes the editing focus,
+    // rather than replacing the other clips' rows.
+    std::vector<ofxOceanodeTimelineClip*> clips;
+    for(const auto& clip : track.clips)
+        if(auto* editable = timeline.getClip(scope(timeline), track.id, clip.id)) clips.push_back(editable);
+    std::stable_sort(clips.begin(), clips.end(), [](const auto* a, const auto* b) { return a->startBeat < b->startBeat; });
+    for(auto* clip : clips) {
+        if(clip->lanes.empty() && !track.isWaveTrack) continue;
+        const auto focusedLaneBefore = editorState.editorLaneId;
+        drawClipLaneEditor(timeline, track, *clip, contentWidth, endBeat, beatPosition);
+        // Self-contained editors can change their focused lane internally.
+        if(((editorState.editorTrackId == track.id && &editorSequence(timeline) == &scope(timeline)) ||
+            focusedLaneBefore != editorState.editorLaneId) &&
+           std::any_of(clip->lanes.begin(), clip->lanes.end(), [&](const auto& lane) {
+            return lane.id == editorState.editorLaneId;
+        })) {
+            editorState.editorTrackId = track.id;
+            editorState.editorClipId = clip->id;
+            editorState.clipEditorOpen = true;
+            if(rowScope == nullptr) {
+                editorRowScope = {};
+                editorState.lastClipForTrack[track.id] = clip->id;
+            } else {
+                editorRowScope = *rowScope;
+                editorRowTrackId = track.id;
+                editorRowClipId = clip->id;
+            }
+        }
+    }
+}
+
+void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManager& timeline,
+                                                       const ofxOceanodeTimelineTrack& track,
+                                                       ofxOceanodeTimelineClip& shownClip,
+                                                       float contentWidth, double endBeat,
+                                                       double beatPosition) {
+    const float timelineScrollX = timeline.getViewState().scrollX;
+    auto* clip = &shownClip;
+    const ScheduledContentEditGuard scheduledEdits(timeline, scope(timeline), track.id, clip->id);
+    const bool focusedTrack = editorState.editorTrackId == track.id && &editorSequence(timeline) == &scope(timeline);
     if(clip->isLfo) {
         lfoEditor.setTargetPaths(patchTargetPaths());
         lfoEditor.draw(timeline, scope(timeline), *container, track, *clip,
                        editorView(timeline, container->getTransportState().bpm, endBeat),
-                       editorState, contentWidth, beatPosition, static_cast<ofxOceanodeTimelineEndEdit>(endEditTool));
+                       editorState, contentWidth, beatPosition, static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), focusedTrack);
         const auto path = lfoEditor.consumeOutputTargetRequest();
         if(!path.empty()) pendingTargetAssignment = {track.id, clip->id, {}, path, ofxOceanodeTimelineTargetRole::LfoOutput, &scope(timeline)};
         return;
     }
-    if(!clip->lanes.empty() && timeline.getLane(scope(timeline), editorState.editorTrackId, editorState.editorClipId, editorState.editorLaneId) == nullptr) {
+    if(focusedTrack && clip->id == editorState.editorClipId && !clip->lanes.empty() &&
+       timeline.getLane(scope(timeline), track.id, clip->id, editorState.editorLaneId) == nullptr) {
         editorState.editorLaneId = clip->lanes.front().id;
     }
     const float fallbackBpm = container->getTransportState().bpm;
@@ -6470,7 +6565,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     // frame would let them stomp on each other's notes/points. Click a
     // lane's header (or its canvas) to focus it before editing it.
     const float clipIndent = kClipEditorIndent;
-    {
+    if(focusedTrack && clip->id == editorState.editorClipId) {
         if(requestAddLanePopup) {
             requestAddLanePopup = false;
             pendingAddLaneTarget.clear();
@@ -6568,7 +6663,22 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     const auto& availableTargets = patchTargetPaths();
     for(size_t laneIndex = 0; laneIndex < clip->lanes.size(); ++laneIndex) {
     auto* lane = &clip->lanes[laneIndex];
-    const bool isFocused = lane->id == editorState.editorLaneId;
+    auto focusLane = [&]() {
+        editorState.editorTrackId = track.id;
+        editorState.editorClipId = clip->id;
+        editorState.editorLaneId = lane->id;
+        editorState.clipEditorOpen = true;
+        if(rowScope == nullptr) {
+            editorRowScope = {};
+            editorState.openTrackIds.insert(track.id);
+            editorState.lastClipForTrack[track.id] = clip->id;
+        } else {
+            editorRowScope = *rowScope;
+            editorRowTrackId = track.id;
+            editorRowClipId = clip->id;
+        }
+    };
+    const bool isFocused = focusedTrack && lane->id == editorState.editorLaneId;
     const auto view = editorView(timeline, fallbackBpm, endBeat);
     ofxOceanodeTimelineLaneEditorContext context{timeline, *container, scope(timeline), track, *clip, *lane,
                                                view, editorState.editorLaneId, isFocused, {}};
@@ -6588,7 +6698,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             open = ImGui::BeginPopup(menuId.c_str());
         } else open = ImGui::BeginPopupContextItem(menuId.c_str());
         if(open) {
-            editorState.editorLaneId = lane->id;
+            focusLane();
             if(ImGui::MenuItem("Duplicate lane")) {
                 requestDuplicateLane = true;
                 pendingDuplicateLaneId = lane->id;
@@ -6609,7 +6719,8 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             timeline.setLaneSolo(scope(timeline), track.id, clip->id, lane->id, !lane->solo);
         ImGui::SameLine();
     };
-    const std::string laneLabel = lane->name.empty() ? laneDisplayName(*lane) : lane->name;
+    const std::string laneLabel = (track.clips.size() > 1 ? clip->name + " / " : std::string()) +
+                                 (lane->name.empty() ? laneDisplayName(*lane) : lane->name);
     if(editorState.collapsedLaneIds.count(lane->id) > 0) {
         ImGui::Dummy(ImVec2(contentWidth, 22.0f));
         const ImVec2 rowMin = ImGui::GetItemRectMin();
@@ -6627,11 +6738,38 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeaderCollapsed" + lane->id, isFocused,
                                ImVec2(nameWidth, 0));
         }
-        if(ImGui::IsItemClicked()) editorState.editorLaneId = lane->id;
+        if(ImGui::IsItemClicked()) focusLane();
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s\n%s / %zu target(s)%s",
             track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), laneDisplayName(*lane), lane->bindingIds.size(),
             lane->bindingIds.empty() ? " - No target" : "");
         drawLaneMenu(false);
+        // Reuse the clip miniature in the folded row, at the clip's own time.
+        const float originX = rowZoneLeft - timelineScrollX;
+        const float left = std::max(rowZoneLeft, originX + beatOffset(clip->startBeat));
+        const float right = std::min(rowMax.x, originX + beatOffset(clip->startBeat + clip->durationBeats));
+        if(right > left) {
+            const double cycle = ofxOceanodeTimelineClipTime::cycleDuration(*clip);
+            const int first = clip->repeatContent ? std::max(0, static_cast<int>(std::floor(
+                (beatAtOffset(left - originX) - clip->startBeat) / cycle))) : 0;
+            const int last = clip->repeatContent ? std::max(first, static_cast<int>(std::floor(
+                (beatAtOffset(right - originX) - clip->startBeat) / cycle))) : 0;
+            rowDl->PushClipRect(ImVec2(rowZoneLeft, rowMin.y), rowMax, true);
+            rowDl->AddRectFilled(ImVec2(left, rowMin.y), ImVec2(right, rowMax.y), mutedTrackColor(track.color, 0.13f, 0.26f));
+            const float lift = selectedClips.count({track.id, clip->id}) > 0 ? 0.45f : 0.0f;
+            auto lit = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * lift); };
+            const ImU32 ink = IM_COL32(lit(track.color.r), lit(track.color.g), lit(track.color.b), 255);
+            laneEditor.drawPreview({timeline, *container, scope(timeline), track, *clip, lane, view,
+                                   ImVec2(originX, rowMin.y), rowMax, left, right, first, last, ink});
+            const float playheadX = originX + beatOffset(beatPosition);
+            if(playheadX >= rowZoneLeft && playheadX <= rowMax.x)
+                rowDl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2.0f);
+            rowDl->PopClipRect();
+            ImGui::SetCursorScreenPos(ImVec2(left, rowMin.y));
+            ImGui::InvisibleButton(("##collapsedLanePreview" + lane->id).c_str(), ImVec2(right - left, rowMax.y - rowMin.y));
+            if(ImGui::IsItemClicked()) focusLane();
+            if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                editorState.collapsedLaneIds.erase(lane->id);
+        }
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         continue;
     }
@@ -6653,11 +6791,11 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     const ImVec2 timelineMin(zoneLeft - timelineScrollX, editorMin.y);
     const float editorCanvasStartX = std::max(zoneLeft, timelineMin.x);
     ImGui::SetCursorScreenPos(ImVec2(editorCanvasStartX, timelineMin.y));
-    ImGui::InvisibleButton(("##clipEditorCanvas" + editorState.editorTrackId + editorState.editorClipId + lane->id).c_str(),
+    ImGui::InvisibleButton(("##clipEditorCanvas" + track.id + clip->id + lane->id).c_str(),
                            ImVec2(std::max(1.0f, contentWidth - kLabelWidth - (editorCanvasStartX - timelineMin.x)),
                                   std::max(1.0f, editorHeight - kLaneResizeHandleHeight)));
     const bool editorCanvasHovered = ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
-    if(!isFocused && editorCanvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) editorState.editorLaneId = lane->id;
+    if(!isFocused && editorCanvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) focusLane();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Leave the hierarchy gutter to the left of the lane indentation
@@ -6680,7 +6818,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
             editorState.resizingLaneId = lane->id;
             editorState.laneResizeStartMouseY = ImGui::GetIO().MousePos.y;
             editorState.laneResizeStartHeight = editorHeight;
-            editorState.editorLaneId = lane->id;
+            focusLane();
         }
         const bool resizeActive = editorState.resizingLaneId == lane->id && ImGui::IsMouseDown(ImGuiMouseButton_Left);
         if(resizeHovered || resizeActive) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
@@ -6702,7 +6840,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
     const float pianoKeyboardReserve = chordLane ? ofxOceanodeTimelineRegionEditor::chordHeaderWidth()
                                                  : laneEditors.keyboardReserve(lane->type);
-    ImGui::BeginChild(("##clipProperties" + editorState.editorTrackId + editorState.editorClipId + lane->id).c_str(),
+    ImGui::BeginChild(("##clipProperties" + track.id + clip->id + lane->id).c_str(),
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
                       ImGuiWindowFlags_None);
@@ -6715,7 +6853,7 @@ void ofxOceanodeTimelineController::drawLaneEditor(ofxOceanodeTimelineManager& t
         const float nameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
         if(laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id, isFocused,
                               ImVec2(nameWidth, 0)))
-            editorState.editorLaneId = lane->id;
+            focusLane();
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s%s",
             track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), isFocused ? "\n(editing)" : "\nClick to edit this lane");
     }

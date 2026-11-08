@@ -9,6 +9,9 @@ struct ofxOceanodeTimelineClipEditorState {
     std::string editorTrackId;
     std::string editorClipId;
     std::string editorLaneId;
+    // Track expansion is independent of the one lane currently being edited.
+    std::set<std::string> openTrackIds;
+    std::unordered_map<std::string, std::string> lastClipForTrack;
     // Independent expand/collapse state for each lane in a multi-lane
     // clip's editor (keyed by lane id, globally unique). Absence from
     // this set means expanded -- most lanes are expanded most of the

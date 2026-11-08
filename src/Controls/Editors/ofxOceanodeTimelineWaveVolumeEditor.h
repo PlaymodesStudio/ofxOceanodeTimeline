@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 class ofxOceanodeTimelineManager;
 class ofxOceanodeTimelineEditorView;
@@ -15,6 +16,7 @@ public:
 
 private:
     int waveVolumeDragPointIndex = -1;
+    std::string waveVolumeDragTrackId;
     int waveVolumeValuePointIndex = -1;
     float waveVolumeNumericValue = 1.0f;
 };

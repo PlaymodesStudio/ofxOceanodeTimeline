@@ -43,6 +43,7 @@ python3 ../ofxOceanodeTimeline/tests/track_duplication_regression.py
 python3 ../ofxOceanodeTimeline/tests/target_routing_regression.py
 python3 ../ofxOceanodeTimeline/tests/clarity_regression.py
 python3 ../ofxOceanodeTimeline/tests/controller_clarity_regression.py
+python3 ../ofxOceanodeTimeline/tests/lane_view_regression.py
 python3 ../ofxOceanodeTimeline/tests/attachment_regression.py
 python3 ../ofxOceanodeTimeline/tests/drum_grid_regression.py
 python3 ../ofxOceanodeTimeline/tests/drum_duration_adopt_regression.py
