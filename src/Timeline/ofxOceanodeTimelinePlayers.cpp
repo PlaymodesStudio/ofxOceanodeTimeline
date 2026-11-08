@@ -56,21 +56,43 @@ ofxOceanodeTransportState ofxOceanodeTimelineManager::playState() const {
     return transport->isDerived() ? transport->getState() : loopedState(transport->getState());
 }
 
+void ofxOceanodeTimelineManager::preserveLoopPlayhead() {
+    if(!engineSharesRoot || !hasAdoptedPlaySettings || engineTransport == nullptr) return;
+    const auto clock = engineTransport->getState();
+    const auto local = loopedState(clock);
+    loopPositionAnchor = {true, clock.beatPosition, local.beatPosition, local.loopCount, clock.generation};
+}
+
 ofxOceanodeTransportState ofxOceanodeTimelineManager::loopedState(ofxOceanodeTransportState state) const {
+    if(loopPositionAnchor.valid && state.generation != loopPositionAnchor.generation) {
+        // Play/pause can change generation without seeking. Keep the mapping
+        // through those toggles; an explicit seek/stop restores the clock position.
+        const double expected = previousLoopClock.beatPosition + (previousLoopClock.isPlaying
+            ? (state.clockSeconds - previousLoopClock.clockSeconds) * previousLoopClock.bpm / 60.0 : 0.0);
+        const bool toggled = hasPreviousLoopClock && state.isPlaying != previousLoopClock.isPlaying &&
+                             std::abs(state.beatPosition - expected) < 1e-5;
+        if(toggled) loopPositionAnchor.generation = state.generation;
+        else loopPositionAnchor.valid = false;
+    }
+    previousLoopClock = state;
+    hasPreviousLoopClock = true;
     state.loopEnabled = loopEnabled;
     state.loopStartBeat = loopStartBeat;
     state.loopEndBeat = loopEndBeat;
-    state.loopCount = 0;
-    if(!state.loopActive() || state.beatPosition < loopStartBeat) return state;
-    // Past the loop start, the position wraps in the loop: the pass it is
-    // in counts as a loop wrap (clip starts roll again, the scheduler looks
-    // past the end into the next pass), a seek that changes it as a jump.
+    state.loopCount = loopPositionAnchor.valid ? loopPositionAnchor.pass : 0;
+    if(loopPositionAnchor.valid) {
+        state.beatPosition = loopPositionAnchor.localBeat + state.beatPosition - loopPositionAnchor.clockBeat;
+        state.seconds = beatToSeconds(state.beatPosition, state.bpm);
+    }
+    // Moving the end behind the playhead must not pull the playhead back.
+    // Continue from here; the next seek/play start can enter the new loop.
+    if(!state.loopActive() || state.beatPosition < loopStartBeat ||
+       (loopPositionAnchor.valid && loopPositionAnchor.localBeat >= loopEndBeat)) return state;
     const double length = loopEndBeat - loopStartBeat;
     const double passes = std::floor((state.beatPosition - loopStartBeat) / length);
-    state.loopCount = static_cast<uint64_t>(std::max(0.0, passes));
+    state.loopCount += static_cast<uint64_t>(std::max(0.0, passes));
     state.beatPosition = loopStartBeat + (state.beatPosition - loopStartBeat - passes * length);
-    if(state.beatPosition >= loopEndBeat) state.beatPosition = loopStartBeat; // rounding at the end
-    // Seconds of play follow the beat, as a transport's do on a wrap.
+    if(state.beatPosition >= loopEndBeat) state.beatPosition = loopStartBeat;
     state.seconds = beatToSeconds(state.beatPosition, state.bpm);
     return state;
 }
@@ -92,6 +114,7 @@ void ofxOceanodeTimelineManager::adoptPlaySettings(const ofxOceanodeTimelinePlay
     engineBpm = std::max(1.0f, settings.bpm);
     engineFollowsClockTempo = settings.followClockTempo;
     engineTempoRatio = std::max(0.01f, settings.tempoRatio);
+    hasAdoptedPlaySettings = true;
 }
 
 // "Node/Param" is in the canvas itself, "Macro 2::Node/Param" further in.

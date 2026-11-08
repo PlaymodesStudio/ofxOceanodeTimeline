@@ -2405,6 +2405,18 @@ private:
     // Its state as played: the root's wrapped into this manager's loop
     // (loopedState); a derived transport's as it is (it loops itself).
     ofxOceanodeTransportState playState() const;
+    // A live loop edit keeps this timeline's current position while the
+    // shared global transport continues on its own unwrapped clock.
+    void preserveLoopPlayhead();
+    bool hasAdoptedPlaySettings = false;
+    struct LoopPositionAnchor {
+        bool valid = false;
+        double clockBeat = 0.0, localBeat = 0.0;
+        uint64_t pass = 0, generation = 0;
+    };
+    mutable LoopPositionAnchor loopPositionAnchor;
+    mutable ofxOceanodeTransportState previousLoopClock;
+    mutable bool hasPreviousLoopClock = false;
     // Copies a timeline's play settings into this engine's tempo, loop and meter.
     void adoptPlaySettings(const ofxOceanodeTimelinePlaySettings& settings);
     // The macro sequences entries (an engine reads its primary's).

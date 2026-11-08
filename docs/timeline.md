@@ -146,6 +146,11 @@ All durations are in beats:
 | Trim / extend | Change the source window at the existing stretch; disable repeats; hidden notes/points remain stored |
 | Stretch | Fit the existing source into a new timeline length; disable repeats |
 
+Moving either loop handle preserves the red playhead's current position,
+both while playing and while paused. Playback continues towards the edited
+boundary. Moving the end behind the playhead leaves playback beyond that
+boundary until an explicit seek or restart enters the loop again.
+
 Shift-dragging a right edge temporarily selects Trim / extend. Cmd/Ctrl-dragging
 it selects Stretch. Audio always stretches the complete source slice, which
 changes playback speed. Left-edge trim and Cmd/Ctrl-drag on a clip body (copy)

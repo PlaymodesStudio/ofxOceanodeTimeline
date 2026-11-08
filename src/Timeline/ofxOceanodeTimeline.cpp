@@ -4455,6 +4455,7 @@ const ofxOceanodeTimelineMarker* ofxOceanodeTimelineManager::getMarker(const std
 // hands a derived transport its loop, and wraps the root's position itself).
 void ofxOceanodeTimelineManager::setLoopEnabled(bool enabled) {
     if(loopEnabled == enabled) return;
+    preserveLoopPlayhead();
     loopEnabled = enabled;
     hasEvaluatedTransportBeat = false;
     invalidateSchedule();
@@ -4462,8 +4463,12 @@ void ofxOceanodeTimelineManager::setLoopEnabled(bool enabled) {
 
 void ofxOceanodeTimelineManager::setLoopRange(double startBeat, double endBeat) {
     const double minimumLength = 1.0 / 24.0;
-    loopStartBeat = std::max(0.0, std::min(startBeat, endBeat - minimumLength));
-    loopEndBeat = std::max(loopStartBeat + minimumLength, endBeat);
+    startBeat = std::max(0.0, std::min(startBeat, endBeat - minimumLength));
+    endBeat = std::max(startBeat + minimumLength, endBeat);
+    if(loopStartBeat == startBeat && loopEndBeat == endBeat) return;
+    preserveLoopPlayhead();
+    loopStartBeat = startBeat;
+    loopEndBeat = endBeat;
     hasEvaluatedTransportBeat = false;
     // Events past the old boundary belong to a loop that no longer exists.
     invalidateSchedule();
