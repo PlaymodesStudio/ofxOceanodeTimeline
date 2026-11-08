@@ -144,10 +144,43 @@ int main() {
     assert(ui.scopeEditorOnTrack(other) && folded(d) == otherFolded);
     fullFrame(ImVec2(-100, -100), false, "clip-focus-folding");
 
+    // A vertical trackpad swipe stops at a view of [0, 2 * last clip end].
+    // The last clip is on the other track; changing its length updates the limit.
+    ui.followPlayhead = false;
+    auto& view = model.getViewState(); view.pixelsPerSecond = 500; view.scrollX = 200;
+    fullFrame();
+    const ImVec2 zoomPoint(ui.fileDropBounds.x + 400, ui.fileDropBounds.y + 5);
+    for(int i = 0; i < 20; ++i) fullFrame(zoomPoint);
+    io.AddMouseWheelEvent(0, -100); fullFrame(zoomPoint);
+    const float width = ImGui::FindWindowByName("Track view")->WorkRect.GetWidth() - ofxOceanodeTimelineEditorUi::labelWidth;
+    const float minimum = width / model.beatToSeconds(32, 120);
+    assert(std::abs(view.pixelsPerSecond - minimum) < 0.001f && view.scrollX == 0);
+    io.AddMouseWheelEvent(0, -100); fullFrame(zoomPoint);
+    assert(std::abs(view.pixelsPerSecond - minimum) < 0.001f && view.scrollX == 0);
+    model.setClipTiming(other, otherClip, 8, 12);
+    fullFrame(zoomPoint); io.AddMouseWheelEvent(0, -100); fullFrame(zoomPoint);
+    assert(std::abs(view.pixelsPerSecond - width / model.beatToSeconds(40, 120)) < 0.001f);
+    model.getBpmAutomationPoints() = {{0, 60}, {20, 180}};
+    model.setBpmInterpolation("Linear"); model.setBpmAutomationEnabled(true);
+    fullFrame(zoomPoint); io.AddMouseWheelEvent(0, -100); fullFrame(zoomPoint);
+    assert(std::abs(model.beatToSeconds(20, 120) * view.pixelsPerSecond - width * 0.5f) < 0.01f);
+    model.setBpmAutomationEnabled(false);
+    // A short clip on another timeline has its own limit, even when the scale
+    // needed to fit it is above the ordinary maximum zoom-in setting.
+    const auto shortRef = model.addTimeline("", "Short");
+    model.setEditTarget(shortRef); ui.enterTimelineScope(model, shortRef);
+    const auto shortTrack = model.createTrack("Short");
+    model.createClip(shortTrack, "Half beat", 0, 0.5);
+    fullFrame();
+    const ImVec2 shortZoom(ui.fileDropBounds.x + 400, ui.fileDropBounds.y + 5);
+    for(int i = 0; i < 20; ++i) fullFrame(shortZoom);
+    io.AddMouseWheelEvent(0, -100); fullFrame(shortZoom);
+    assert(std::abs(model.getViewState().pixelsPerSecond - width / model.beatToSeconds(1, 120)) < 0.001f);
+    assert(model.getViewState().scrollX == 0);
     ImGui::DestroyContext();
     std::cout << "Lane view passed: three separate rows across two clips, focus switches, "
                  "colored folded miniatures, time alignment, independent track expansion, "
-                 "clip-selection folding and focus routing.\n";
+                 "clip-selection folding, focus routing and content-based zoom-out limits.\n";
 }
 '''
 

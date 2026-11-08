@@ -78,6 +78,11 @@ tracks retain their own expansion state. A folded lane keeps a
 compact data preview in the clip's color, aligned to its position in the
 arrangement. Click the preview to focus its lane; double-click to expand it.
 
+Zooming out stops when the last clip's end is halfway across the view, leaving
+an equal amount of empty space to its right. This limit uses clips from every
+track in the timeline, including hidden or muted tracks, and updates as their
+lengths change. Reaching the limit returns the view to the origin.
+
 LFO clips have oscillator **control envelopes** and one result/output target.
 Their controls do not directly automate node parameters. Audio clips contain
 samples; clip gain belongs to the selected sample, while the separately

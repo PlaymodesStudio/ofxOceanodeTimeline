@@ -2324,6 +2324,17 @@ void ofxOceanodeTimelineController::draw() {
 
     const double endBeat = getContentEndBeat(timeline);
     const float availableWidth = std::max(320.0f, ImGui::GetContentRegionAvail().x);
+    const float visibleWidth = std::max(1.0f, availableWidth - kLabelWidth);
+    double lastClipBeat = 0.0;
+    for(const auto& track : scope(timeline).tracks)
+        for(const auto& clip : track.clips) lastClipBeat = std::max(lastClipBeat, clip.startBeat + clip.durationBeats);
+    if(lastClipBeat <= 0.0) lastClipBeat = timeline.getBeatsPerBar() * 4.0;
+    // The widest view contains the content from beat zero, followed by the
+    // same span of empty timeline. Markers, loops and the playhead do not
+    // extend this clip-based zoom limit.
+    const double maximumViewSeconds = std::max(0.001, 2.0 * timeline.beatToSeconds(lastClipBeat, transportState.bpm));
+    const float minimumZoomScale = std::max(kMinPixelsPerSecond, static_cast<float>(visibleWidth / maximumViewSeconds));
+    const float maximumZoomScale = std::max(kMaxPixelsPerSecond, minimumZoomScale);
     const bool fittingTimeline = requestZoomToFit;
     if(requestZoomToFit) {
         requestZoomToFit = false;
@@ -2336,10 +2347,9 @@ void ofxOceanodeTimelineController::draw() {
         if(lastBeat <= 0.0) lastBeat = timeline.getBeatsPerBar() * 4.0;
         const double seconds = std::max(0.001, timeline.beatToSeconds(lastBeat, transportState.bpm));
         const float usable = std::max(40.0f, availableWidth - kLabelWidth - 24.0f);
-        pixelsPerSecond = ofClamp(static_cast<float>(usable / seconds), kMinPixelsPerSecond, kMaxPixelsPerSecond);
+        pixelsPerSecond = ofClamp(static_cast<float>(usable / seconds), minimumZoomScale, maximumZoomScale);
         timelineScrollX = 0.0f;
     }
-    const float visibleWidth = std::max(1.0f, availableWidth - kLabelWidth);
     const float scrollbarHeight = ImGui::GetStyle().ScrollbarSize;
     const ImVec2 timelineAreaMin = ImGui::GetCursorScreenPos();
     const ImVec2 timelineAreaMax(timelineAreaMin.x + availableWidth,
@@ -2347,11 +2357,18 @@ void ofxOceanodeTimelineController::draw() {
     bool zoomedThisFrame = false;
     auto zoomAt = [&](float scale, float anchorX) {
         const float oldScale = std::max(kMinPixelsPerSecond, pixelsPerSecond);
-        const float newScale = ofClamp(scale, kMinPixelsPerSecond, kMaxPixelsPerSecond);
-        if(newScale == pixelsPerSecond) return;
+        // An old/saved view may already be wider than the new limit. Zooming
+        // in still preserves its anchor; only zooming out applies the floor.
+        const float newScale = ofClamp(scale, scale < pixelsPerSecond ? minimumZoomScale : kMinPixelsPerSecond,
+                                      maximumZoomScale);
+        if(newScale == pixelsPerSecond) {
+            if(scale <= minimumZoomScale) timelineScrollX = 0.0f;
+            return;
+        }
         const double seconds = (timelineScrollX + anchorX) / oldScale;
         pixelsPerSecond = newScale;
         timelineScrollX = std::max(0.0f, static_cast<float>(seconds * newScale - anchorX));
+        if(newScale == minimumZoomScale && scale < oldScale) timelineScrollX = 0.0f;
         zoomAnchorViewportX = kLabelWidth + anchorX;
         zoomAnchorUntil = ImGui::GetTime() + 0.7;
         zoomedThisFrame = true;
@@ -5794,10 +5811,11 @@ void ofxOceanodeTimelineController::draw() {
             const double atMouse = ofClamp((mouseX - trackLeft) / trackWidth, 0.0f, 1.0f) * scrollbarDragSeconds;
             const double shown = std::max(1e-3, scrollbarDrag == ScrollbarDrag::End ? atMouse - scrollbarFixedSeconds
                                                                                      : scrollbarFixedSeconds - atMouse);
-            pixelsPerSecond = ofClamp(static_cast<float>(visibleWidth / shown), kMinPixelsPerSecond, kMaxPixelsPerSecond);
+            pixelsPerSecond = ofClamp(static_cast<float>(visibleWidth / shown), minimumZoomScale, maximumZoomScale);
             timelineScrollX = std::max(0.0f, static_cast<float>(scrollbarDrag == ScrollbarDrag::End
                 ? scrollbarFixedSeconds * pixelsPerSecond
                 : scrollbarFixedSeconds * pixelsPerSecond - visibleWidth));
+            if(pixelsPerSecond == minimumZoomScale) timelineScrollX = 0.0f;
         }
         if(overStart || overEnd || scrollbarDrag == ScrollbarDrag::Start || scrollbarDrag == ScrollbarDrag::End)
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);

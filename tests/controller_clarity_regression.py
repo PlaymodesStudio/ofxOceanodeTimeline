@@ -203,15 +203,15 @@ int main() {
     const auto originalView=model.getViewState();
     auto& zoomView=model.getViewState();
     ui.followPlayhead=false;
-    zoomView.pixelsPerSecond=80; frame();
+    zoomView.pixelsPerSecond=200; frame();
     const float zoomVisible=ImGui::FindWindowByName("Timeline")->WorkRect.GetWidth()-ofxOceanodeTimelineEditorUi::labelWidth;
-    const float oldZoomMax=std::max(0.0f,static_cast<float>(model.beatToSeconds(ui.getContentEndBeat(model),120)*80)-zoomVisible);
+    const float oldZoomMax=std::max(0.0f,static_cast<float>(model.beatToSeconds(ui.getContentEndBeat(model),120)*200)-zoomVisible);
     zoomView.scrollX=oldZoomMax; frame();
     const ImVec2 zoomPoint(ui.fileDropBounds.x+700,ui.fileDropBounds.y+25);
     frame(1250,zoomPoint,false);
     const double timeAtPointer=(zoomView.scrollX+700)/zoomView.pixelsPerSecond;
     io.AddMouseWheelEvent(0,1); frame(1250,zoomPoint,false);
-    assert(zoomView.pixelsPerSecond>80 && zoomView.scrollX>oldZoomMax);
+    assert(zoomView.pixelsPerSecond>200 && zoomView.scrollX>oldZoomMax);
     assert(std::abs((zoomView.scrollX+700)/zoomView.pixelsPerSecond-timeAtPointer)<0.0001);
     assert(ui.zoomAnchorUntil>ImGui::GetTime());
     bool zoomGuide=false;
