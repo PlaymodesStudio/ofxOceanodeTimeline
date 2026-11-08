@@ -79,6 +79,14 @@ int main() {
         assert(!ui.editorState.collapsedLaneIds.count(a));
         assert(chancePanel->Scroll.y==0 && !chancePanel->ScrollbarY);
         assert(chancePanel->Size.y>=ImGui::GetTextLineHeight());
+        // Expanded curves retain their editor grid below the old cutoff.
+        // The folded preview does not draw this grid.
+        bool editorGrid=false;
+        for(const auto* list:ImGui::GetDrawData()->CmdLists)
+            for(const auto& vertex:list->VtxBuffer)
+                editorGrid |= vertex.col==ofxOceanodeTimelineLaneEditorUi::kGrid &&
+                              vertex.pos.y>=80 && vertex.pos.y<80+minimum;
+        assert(editorGrid);
         frame(ImVec2(-100,-100),false,"header-height-lane");
         const ImVec2 grow(150,80+minimum-5);
         frame(grow); frame(grow,true);
@@ -240,8 +248,8 @@ int main() {
     io.AddMouseWheelEvent(0, -100); fullFrame(shortZoom);
     assert(std::abs(model.getViewState().pixelsPerSecond - width / model.beatToSeconds(1, 120)) < 0.001f);
     assert(model.getViewState().scrollX == 0);
-    // Every lane kind can draw safely at the new minimum. Tall editors use
-    // their preview here; no canvas edit may leak into a neighboring row.
+    // Every lane kind keeps its canvas at the minimum, without folding or
+    // leaking canvas input into a neighboring row.
     const auto tinyTrack=model.createTrack("Header-height editors");
     const auto tinyClip=model.createClip(tinyTrack,"Tiny",0,4);
     using LaneType=ofxOceanodeTimelineLaneType;
@@ -249,10 +257,14 @@ int main() {
                   LaneType::Number,LaneType::Dropdown,LaneType::MultiSlider,LaneType::MultiValue,LaneType::MultiGate}) {
         const auto id=model.createLane(tinyTrack,tinyClip,"Header",type);
         ui.editorState.laneEditorHeights[id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+        ui.editorState.collapsedLaneIds.erase(id);
     }
     const auto tinyLfo=model.createLfoClip(tinyTrack,"","Small LFO",0,4);
-    for(const auto& lane:model.getClip(tinyTrack,tinyLfo)->lanes)
+    for(const auto& lane:model.getClip(tinyTrack,tinyLfo)->lanes) {
         ui.editorState.laneEditorHeights[lane.id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+        ui.editorState.collapsedLaneIds.erase(lane.id);
+    }
+    ui.editorState.collapsedLaneIds.erase("lfoResult:"+tinyLfo);
     ui.editorState.laneEditorHeights["lfoResult:"+tinyLfo]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
     auto tinyFrame=[&]() {
         io.AddMousePosEvent(-100,-100); ImGui::NewFrame();

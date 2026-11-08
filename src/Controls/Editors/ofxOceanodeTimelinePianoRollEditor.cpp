@@ -451,6 +451,9 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     const auto& timelineMin = canvas.timelineOrigin;
     const float zoneLeft = canvas.zoneLeft, left = canvas.left, right = canvas.right;
     const bool editorCanvasHovered = canvas.hovered;
+    const float canvasHeight = editorMax.y - editorMin.y;
+    const bool withinLane = ImGui::GetIO().MousePos.y >= editorMin.y &&
+        ImGui::GetIO().MousePos.y < editorMax.y - (canvasHeight < 90.0f ? kLaneResizeHandleHeight : 0.0f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // The note selection is keyed by index into this lane's pianoNotes,
@@ -466,23 +469,27 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         pianoDragNoteIndex = -1;
         pianoMarqueeActive = false;
     }
-    const float rollTop = editorMin.y + 8.0f;
-    // VEL / PROB / MUT strip heights: dragged from the handles above them
-    // (the roll keeps at least 40 px)
+    // Keep the piano-roll canvas when resized below the former 90px minimum.
+    // Compress its vertical spacing and strips without changing their stored sizes.
+    const float geometryHeight = std::max(90.0f, canvasHeight);
+    const float geometryScale = std::min(1.0f, canvasHeight / 90.0f);
+    const float rollTop = editorMin.y + 8.0f * geometryScale;
     auto& strips = pianoStripHeights.try_emplace(lane->id, std::array<float, 3>{25.0f, 26.0f, 22.0f}).first->second;
+    auto displayedStrips = strips;
     {
-        const float room = std::max(36.0f, (editorMax.y - 19.0f) - rollTop - 40.0f);
-        strips[0] = ofClamp(strips[0], 12.0f, std::max(12.0f, room - 24.0f));
-        strips[1] = ofClamp(strips[1], 12.0f, std::max(12.0f, room - strips[0] - 12.0f));
-        strips[2] = ofClamp(strips[2], 12.0f, std::max(12.0f, room - strips[0] - strips[1]));
+        const float room = std::max(36.0f, geometryHeight - 19.0f - 8.0f - 40.0f);
+        displayedStrips[0] = ofClamp(strips[0], 12.0f, std::max(12.0f, room - 24.0f));
+        displayedStrips[1] = ofClamp(strips[1], 12.0f, std::max(12.0f, room - displayedStrips[0] - 12.0f));
+        displayedStrips[2] = ofClamp(strips[2], 12.0f, std::max(12.0f, room - displayedStrips[0] - displayedStrips[1]));
+        if(geometryScale == 1.0f) strips = displayedStrips;
     }
-    const float mutationBottom = editorMax.y - 6.0f;
-    const float mutationTop = mutationBottom - strips[2];
-    const float probabilityBottom = mutationTop - 4.0f;
-    const float probabilityTop = probabilityBottom - strips[1];
-    const float velocityBottom = probabilityTop - 4.0f;
-    const float velocityTop = velocityBottom - strips[0];
-    const float rollBottom = velocityTop - 5.0f;
+    const float mutationBottom = editorMax.y - 6.0f * geometryScale;
+    const float mutationTop = mutationBottom - displayedStrips[2] * geometryScale;
+    const float probabilityBottom = mutationTop - 4.0f * geometryScale;
+    const float probabilityTop = probabilityBottom - displayedStrips[1] * geometryScale;
+    const float velocityBottom = probabilityTop - 4.0f * geometryScale;
+    const float velocityTop = velocityBottom - displayedStrips[0] * geometryScale;
+    const float rollBottom = velocityTop - 5.0f * geometryScale;
     const float stripsBottom = mutationBottom;
     // A note's value in one strip: 0 VEL, 1 PROB, 2 MUT.
     auto noteValue = [](ofxOceanodeTimelinePianoNote& note, int field) -> float& {
@@ -511,6 +518,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     dl->AddRectFilled(ImVec2(keyboardLeft, rollTop), ImVec2(keyboardRight, rollBottom),
                       IM_COL32(205, 205, 200, 255));
     const float pitchHeight = (rollBottom - rollTop) / static_cast<float>(highPitch - lowPitch + 1);
+    const float noteInset = std::min(1.0f, pitchHeight * 0.2f);
     // Black keys are drawn on the side away from the note grid (like the
     // shank of a real key, which doesn't reach all the way to the front
     // edge). Each row is clipped to its own bounds so a black key can
@@ -528,7 +536,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         // writing anything into the clip.
         const bool keyPressedHere = pianoKeyboardPreviewActive && pianoKeyboardPreviewTrackId == track.id &&
             pianoKeyboardPreviewPitch == keyboardPitch;
-        const bool keyHovered = hoverRect(ImVec2(keyboardLeft, keyTop), ImVec2(keyboardRight, keyBottom));
+        const bool keyHovered = withinLane && hoverRect(ImVec2(keyboardLeft, keyTop), ImVec2(keyboardRight, keyBottom));
         if(keyHovered) ImGui::SetTooltip("Left-click to audition. Right-click to select all notes at this pitch.\nShift+right-click adds this pitch to the selection.");
         if(keyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             editorLaneId = lane->id;
@@ -603,7 +611,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // window there -- the same conventions as the horizontal timeline
     // scrollbar drawn by hand below the whole viewport. Shown on every
     // piano lane, focused or not: it only changes which keys are visible.
-    {
+    if(rollBottom - rollTop >= 2.0f * (kPianoZoomButtonHeight + 2.0f)) {
         const int scrollRangeSize = highPitch - lowPitch + 1;
         const int maxLowPitch = std::max(0, 128 - scrollRangeSize);
         // The zoom buttons below occupy a strip at the top and bottom of
@@ -692,9 +700,12 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     dl->AddRectFilled(ImVec2(left, velocityTop), ImVec2(right, velocityBottom), IM_COL32(28, 28, 31, 255));
     dl->AddRectFilled(ImVec2(left, probabilityTop), ImVec2(right, probabilityBottom), IM_COL32(24, 24, 27, 255));
     dl->AddRectFilled(ImVec2(left, mutationTop), ImVec2(right, mutationBottom), IM_COL32(27, 24, 30, 255));
-    dl->AddText(ImVec2(left + 4.0f, velocityTop + 5.0f), IM_COL32(145, 145, 150, 210), "VEL");
-    dl->AddText(ImVec2(left + 4.0f, probabilityTop + 5.0f), IM_COL32(145, 145, 150, 210), "PROB");
-    dl->AddText(ImVec2(left + 4.0f, mutationTop + 4.0f), IM_COL32(150, 140, 165, 210), "MUT");
+    if(velocityBottom - velocityTop >= ImGui::GetTextLineHeight() + 5.0f)
+        dl->AddText(ImVec2(left + 4.0f, velocityTop + 5.0f), IM_COL32(145, 145, 150, 210), "VEL");
+    if(probabilityBottom - probabilityTop >= ImGui::GetTextLineHeight() + 5.0f)
+        dl->AddText(ImVec2(left + 4.0f, probabilityTop + 5.0f), IM_COL32(145, 145, 150, 210), "PROB");
+    if(mutationBottom - mutationTop >= ImGui::GetTextLineHeight() + 4.0f)
+        dl->AddText(ImVec2(left + 4.0f, mutationTop + 4.0f), IM_COL32(150, 140, 165, 210), "MUT");
     for(int pitch = lowPitch; pitch <= highPitch; ++pitch) {
         const float y = rollBottom - (pitch - lowPitch + 1) * pitchHeight;
         const int noteClass = pitch % 12;
@@ -760,12 +771,12 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
             const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
             const float y2 = rollBottom - (soundingPitch - lowPitch) * pitchHeight;
-            const float y1 = y2 - pitchHeight + 1.0f;
+            const float y1 = y2 - pitchHeight + noteInset;
             const bool selected = isFocused && pianoSelectedNoteIndices.count(static_cast<int>(noteIndex)) > 0;
             if(soundingPitch != note.pitch && note.pitch >= lowPitch && note.pitch <= highPitch) {
                 // the ghost: where the note is stored
                 const float gy2 = rollBottom - (note.pitch - lowPitch) * pitchHeight;
-                const float gy1 = gy2 - pitchHeight + 1.0f;
+                const float gy1 = gy2 - pitchHeight + noteInset;
                 dl->AddRect(ImVec2(x1 + 1.0f, gy1), ImVec2(x2 - 1.0f, gy2),
                             selected ? IM_COL32(250, 210, 90, 150) : IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 110 : 60), 2.0f, 0, 1.0f);
             }
@@ -775,16 +786,16 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 dl->AddLine(ImVec2(x2 - 3.0f, y1 + 1.0f), ImVec2(x2 - 3.0f, y2 - 1.0f), IM_COL32(255, 255, 255, 180), 1.0f);
             }
             const float handleX = x1 + 3.0f;
-            const float velocityY = velocityBottom - ofClamp(note.velocity, 0.0f, 1.0f) * (velocityBottom - velocityTop - 3.0f);
-            const float probabilityY = probabilityBottom - ofClamp(note.probability, 0.0f, 1.0f) * (probabilityBottom - probabilityTop - 3.0f);
-            dl->AddLine(ImVec2(handleX, velocityBottom - 2.0f), ImVec2(handleX, velocityY), IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 235 : 125), 3.0f);
-            dl->AddCircleFilled(ImVec2(handleX, velocityY), 3.5f, IM_COL32(240, 240, 245, cycle == 0 ? 245 : 135));
-            dl->AddLine(ImVec2(handleX, probabilityBottom - 2.0f), ImVec2(handleX, probabilityY), IM_COL32(245, 185, 80, cycle == 0 ? 235 : 125), 3.0f);
-            dl->AddCircleFilled(ImVec2(handleX, probabilityY), 3.5f, IM_COL32(250, 225, 150, cycle == 0 ? 245 : 135));
-            const float mutationY = mutationBottom - ofClamp(note.mutation, 0.0f, 1.0f) * (mutationBottom - mutationTop - 3.0f);
+            const float velocityY = velocityBottom - ofClamp(note.velocity, 0.0f, 1.0f) * (velocityBottom - velocityTop - 3.0f * geometryScale);
+            const float probabilityY = probabilityBottom - ofClamp(note.probability, 0.0f, 1.0f) * (probabilityBottom - probabilityTop - 3.0f * geometryScale);
+            dl->AddLine(ImVec2(handleX, velocityBottom - 2.0f * geometryScale), ImVec2(handleX, velocityY), IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 235 : 125), 3.0f);
+            dl->AddCircleFilled(ImVec2(handleX, velocityY), 3.5f * geometryScale, IM_COL32(240, 240, 245, cycle == 0 ? 245 : 135));
+            dl->AddLine(ImVec2(handleX, probabilityBottom - 2.0f * geometryScale), ImVec2(handleX, probabilityY), IM_COL32(245, 185, 80, cycle == 0 ? 235 : 125), 3.0f);
+            dl->AddCircleFilled(ImVec2(handleX, probabilityY), 3.5f * geometryScale, IM_COL32(250, 225, 150, cycle == 0 ? 245 : 135));
+            const float mutationY = mutationBottom - ofClamp(note.mutation, 0.0f, 1.0f) * (mutationBottom - mutationTop - 3.0f * geometryScale);
             const int group = note.mutationGroup;
-            dl->AddLine(ImVec2(handleX, mutationBottom - 2.0f), ImVec2(handleX, mutationY), mutationGroupColor(group, cycle == 0 ? 235 : 125), 3.0f);
-            dl->AddCircleFilled(ImVec2(handleX, mutationY), 3.5f, mutationGroupColor(group, cycle == 0 ? 255 : 135));
+            dl->AddLine(ImVec2(handleX, mutationBottom - 2.0f * geometryScale), ImVec2(handleX, mutationY), mutationGroupColor(group, cycle == 0 ? 235 : 125), 3.0f);
+            dl->AddCircleFilled(ImVec2(handleX, mutationY), 3.5f * geometryScale, mutationGroupColor(group, cycle == 0 ? 255 : 135));
             // A note that may mutate wears an outline in its group's colour.
             const bool lit = groupFocus && group == mutationEditGroup;
             if(shown && (note.mutation > 0.0f || lit))
@@ -818,7 +829,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, played.startBeat, repeat));
                 const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, played.startBeat + played.durationBeats, repeat));
                 const float y2 = rollBottom - (playedPitch - lowPitch) * pitchHeight;
-                const float y1 = y2 - pitchHeight + 1.0f;
+                const float y1 = y2 - pitchHeight + noteInset;
                 dl->AddRectFilled(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 70), 2.0f);
                 dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2 - 1.0f, y2), mutationGroupColor(written.mutationGroup, 235), 2.0f, 0, 1.5f);
             }
@@ -827,19 +838,19 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     dl->PopClipRect();
 
     if(isFocused) {
-    const bool hovered = hoverRect(ImVec2(left, rollTop), ImVec2(right, rollBottom));
-    const bool velocityHovered = hoverRect(ImVec2(left, velocityTop), ImVec2(right, velocityBottom));
-    const bool probabilityHovered = hoverRect(ImVec2(left, probabilityTop), ImVec2(right, probabilityBottom));
-    const bool mutationHovered = hoverRect(ImVec2(left, mutationTop), ImVec2(right, mutationBottom));
+    const bool hovered = withinLane && hoverRect(ImVec2(left, rollTop), ImVec2(right, rollBottom));
+    const bool velocityHovered = withinLane && hoverRect(ImVec2(left, velocityTop), ImVec2(right, velocityBottom));
+    const bool probabilityHovered = withinLane && hoverRect(ImVec2(left, probabilityTop), ImVec2(right, probabilityBottom));
+    const bool mutationHovered = withinLane && hoverRect(ImVec2(left, mutationTop), ImVec2(right, mutationBottom));
     const bool valueStripHovered = velocityHovered || probabilityHovered || mutationHovered;
     const int hoveredField = velocityHovered ? 0 : probabilityHovered ? 1 : 2;
     // The handles in the gaps above VEL, PROB and MUT: drag to resize the strip
-    {
+    if(geometryScale == 1.0f) {
         const float gapTop[3] = {rollBottom, velocityBottom, probabilityBottom};
         const float gapBottom[3] = {velocityTop, probabilityTop, mutationTop};
         int handle = 0;
         for(int strip = 0; strip < 3; ++strip)
-            if(hoverRect(ImVec2(left, gapTop[strip] + 0.5f), ImVec2(right, gapBottom[strip] - 0.5f))) handle = strip + 1;
+            if(withinLane && hoverRect(ImVec2(left, gapTop[strip] + 0.5f), ImVec2(right, gapBottom[strip] - 0.5f))) handle = strip + 1;
         if(pianoStripResize == 0 && handle != 0) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -1046,7 +1057,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                     const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
                     const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
                     const float y2 = rollBottom - (soundingPitch - lowPitch) * pitchHeight;
-                    const float y1 = y2 - pitchHeight + 1.0f;
+                    const float y1 = y2 - pitchHeight + noteInset;
                     if(x2 >= marqueeMinX && x1 <= marqueeMaxX && y2 >= marqueeMinY && y1 <= marqueeMaxY) {
                         pianoSelectedNoteIndices.insert(static_cast<int>(noteIndex));
                     }
@@ -1165,7 +1176,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         const float top = paintField == 0 ? velocityTop : paintField == 1 ? probabilityTop : mutationTop;
         const float bottom = paintField == 0 ? velocityBottom : paintField == 1 ? probabilityBottom : mutationBottom;
         if(!pianoValueSnapshot.empty()) {
-            const float delta = (pianoValueStartMouseY - mouse.y) / std::max(1.0f, bottom - top - 3.0f);
+            const float delta = (pianoValueStartMouseY - mouse.y) / std::max(1.0f, bottom - top - 3.0f * geometryScale);
             const float anchor = ofClamp(pianoValueAnchor + delta, 0.0f, 1.0f);
             for(const auto& entry : pianoValueSnapshot) {
                 if(entry.first < 0 || entry.first >= static_cast<int>(lane->pianoNotes.size())) continue;
@@ -1188,7 +1199,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                     if(x < left || x > right || x < x1 - radius || x > x2 + radius) continue;
                     const float t = std::abs(dx) < 1.0f ? 1.0f : ofClamp((x - pianoValuePaintPreviousMouse.x) / dx, 0.0f, 1.0f);
                     const float y = pianoValuePaintPreviousMouse.y + t * (mouse.y - pianoValuePaintPreviousMouse.y);
-                    const float value = ofClamp((bottom - y) / std::max(1.0f, bottom - top - 3.0f), 0.0f, 1.0f);
+                    const float value = ofClamp((bottom - y) / std::max(1.0f, bottom - top - 3.0f * geometryScale), 0.0f, 1.0f);
                     noteValue(note, paintField) = value;
                 }
             }
