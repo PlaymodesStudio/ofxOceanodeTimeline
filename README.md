@@ -36,6 +36,7 @@ python3 tests/integration_compile.py
 python3 tests/integration_compile.py --timeline ../ofxOceanodeTimeline
 python3 tests/transport_regression.py
 python3 ../ofxOceanodeTimeline/tests/timeline_regression.py
+python3 ../ofxOceanodeTimeline/tests/curve_endpoint_regression.py
 python3 ../ofxOceanodeTimeline/tests/editor_regression.py
 python3 ../ofxOceanodeTimeline/tests/clip_file_regression.py
 python3 ../ofxOceanodeTimeline/tests/track_duplication_regression.py

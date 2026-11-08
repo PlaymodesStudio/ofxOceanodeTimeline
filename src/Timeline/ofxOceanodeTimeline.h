@@ -2446,12 +2446,14 @@ private:
     // Pure evaluation of every binding at one beat. evaluateAutomation() uses
     // it for the current playhead; the scheduler uses it for beats that have
     // not been reached yet, which is what makes lookahead possible without a
-    // second implementation of the lane semantics.
+    // second implementation of the lane semantics. A finite previousBeat adds
+    // one terminal sample for curves whose end was crossed during playback.
     void collectActiveValues(const ofxOceanodeTimelinePlayContext& context,
                              double beat, bool isPlaying, bool applyPianoRanges,
                              ActiveValueMap& activeValues,
                              ofxOceanodeTimelineTargetInspection* inspection = nullptr,
-                             const std::set<std::string>* onlyPaths = nullptr) const;
+                             const std::set<std::string>* onlyPaths = nullptr,
+                             double previousBeat = std::numeric_limits<double>::quiet_NaN()) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
                                ofxOceanodeAbstractParameter* parameter,

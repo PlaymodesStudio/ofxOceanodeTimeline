@@ -4802,6 +4802,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
             if(!scheduledPaths.empty()) invalidateSchedule();
         }
     }
+    // Only finish curves during continuous forward playback. A seek, a loop
+    // wrap or a stopped preview must not replay endpoints across the gap.
+    const double previousCurveBeat = hasEvaluatedTransportBeat && transport.isPlaying &&
+        playContext.generation == transport.generation && !loopWrappedThisFrame &&
+        transport.beatPosition >= lastEvaluatedTransportBeat
+        ? lastEvaluatedTransportBeat : std::numeric_limits<double>::quiet_NaN();
     lastEvaluatedTransportBeat = transport.beatPosition;
     hasEvaluatedTransportBeat = true;
 
@@ -4836,7 +4842,8 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     }
     // Drifted notes start again from the written ones on the next play.
     if(!transport.isPlaying && !playback.pianoDrift.empty()) playback.clearRolls();
-    collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues);
+    collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues,
+                        nullptr, nullptr, previousCurveBeat);
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);
     updateMacroGating(transport);

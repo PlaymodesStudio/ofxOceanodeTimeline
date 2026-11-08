@@ -45,6 +45,17 @@ bool clipSourceBeat(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimeli
     return true;
 }
 
+// The last value of a clip is its left-hand endpoint, before a repeat wraps.
+// Evaluate that exact position, rather than the last frame before the boundary.
+double curveEndSourceBeat(const ofxOceanodeTimelineClip& clip, double endBeat) {
+    using namespace ofxOceanodeTimelineClipTime;
+    const double content = sourceDuration(clip);
+    const double source = (endBeat - clip.startBeat) / effectiveStretch(clip) + contentOffset(clip);
+    double phase = std::fmod(source, content);
+    if(source > 0.0 && (phase < kEpsilon || content - phase < kEpsilon)) phase = content;
+    return phase;
+}
+
 std::string mapNormalizedLaneValue(const ofxOceanodeTimelineLane& lane,
                                    const ofxOceanodeTimelineParameterBinding& binding,
                                    const std::string& normalizedValue) {
@@ -1502,7 +1513,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                                      bool applyPianoRanges,
                                                      ActiveValueMap& activeValues,
                                                      ofxOceanodeTimelineTargetInspection* inspection,
-                                                     const std::set<std::string>* onlyPaths) const {
+                                                     const std::set<std::string>* onlyPaths,
+                                                     double previousBeat) const {
     if(container == nullptr) return;
     if(!evaluationIndexesValid)
         const_cast<ofxOceanodeTimelineManager*>(this)->rebuildEvaluationIndexes();
@@ -1512,6 +1524,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     using ClipContributions = std::unordered_map<const ofxOceanodeTimelineClip*, LaneContributions>;
     std::unordered_map<const ofxOceanodeTimelineParameterBinding*, ClipContributions> bindingClipValues;
     bindingClipValues.reserve(bindingsByPathCache.size());
+    std::unordered_map<const ofxOceanodeTimelineClip*, double> endingCurveClips;
 
     const ofxOceanodeTimelineTrack* contributionTrack = nullptr;
     const ofxOceanodeTimelineClip* contributionClip = nullptr;
@@ -1618,7 +1631,15 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
     // (Forward and reversed copies of a macro are one macro timeline.)
     std::unordered_set<const ofxOceanodeTimelineSequence*> placed;
     std::unordered_set<std::string> placedTimelines; // timeSourceId: a canvas's timelines are each their own
-    for(const auto& placement : playedSequences(context, beatPosition, beatPosition)) {
+    auto placements = playedSequences(context, beatPosition, beatPosition);
+    if(std::isfinite(previousBeat) && !playedMacros.empty()) {
+        // Active placements come first, so a new macro copy wins over an old
+        // one whose window ended between frames.
+        for(const auto& placement : playedSequences(context, previousBeat, beatPosition))
+            if(placement.windowTo > previousBeat + kEpsilon && placement.windowTo <= beatPosition + kEpsilon)
+                placements.push_back(placement);
+    }
+    for(const auto& placement : placements) {
         if(const auto* played = playedMacroOf(*placement.sequence))
             if(!placedTimelines.insert(timeSourceId({played->canvas, played->timeline})).second) continue;
         placed.insert(placement.sequence);
@@ -1639,7 +1660,17 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 contributionClip = &clip;
                 contributionLanes.clear();
                 double sourceBeat = 0.0;
-                if(!clipSourceBeat(clip, copyContext, beat, sourceBeat)) {
+                const double endBeat = std::min(clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats),
+                                                placement.map.toSequence(placement.windowTo));
+                const double endTimelineBeat = placement.map.toTimeline(endBeat);
+                const bool endingCurve = std::isfinite(previousBeat) &&
+                    previousBeat < endTimelineBeat - kEpsilon && beatPosition >= endTimelineBeat - kEpsilon &&
+                    endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon &&
+                    !clip.isLfo && !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
+                if(endingCurve) {
+                    sourceBeat = curveEndSourceBeat(clip, endBeat);
+                    endingCurveClips[&clip] = endTimelineBeat;
+                } else if(beatPosition >= placement.windowTo - kEpsilon || !clipSourceBeat(clip, copyContext, beat, sourceBeat)) {
                     // A clip its chance roll left out plays as an empty pass: the
                     // lanes that rest at 0 between their events (gates, toggles,
                     // steps, value regions) write that rest, instead of holding
@@ -1677,6 +1708,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 }
                 for(const auto& sourceLane : clip.lanes) {
                     if(!laneAudible(clip, sourceLane)) continue;
+                    if(endingCurve && sourceLane.type != ofxOceanodeTimelineLaneType::Curve) continue;
                     if(onlyPaths != nullptr) {
                         bool wanted = false;
                         for(const auto& id : sourceLane.bindingIds)
@@ -1729,6 +1761,10 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 // A bypassed binding shouldn't contribute to a
                                 // shared parameter's combined value at all.
                                 if(binding->bypass) continue;
+                                // A gate sharing this binding must still release
+                                // to its rest, rather than hold the curve endpoint.
+                                if(endingCurve && (zeroWhenInactiveBindingsCache.count(binding) > 0 ||
+                                                  restWhenInactiveCache.count(binding) > 0)) continue;
                                 contribute(binding, ofxOceanodeTimelineIsHeldValueLane(lane.type)
                                         ? (binding->valueType == typeid(int).name() ||
                                            lane.type == ofxOceanodeTimelineLaneType::Dropdown
@@ -2054,8 +2090,11 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                         const auto orderIt = trackIndexIt->second.clipOrder.find(clipEntry.first);
                         if(orderIt != trackIndexIt->second.clipOrder.end()) clipIndex = orderIt->second;
                     }
-                    const std::pair<double, size_t> order{clipEntry.first->startBeat, clipIndex};
-                    if(winner == nullptr || order > winnerOrder) {
+                    const auto end = endingCurveClips.find(clipEntry.first);
+                    const bool ending = end != endingCurveClips.end();
+                    const std::pair<double, size_t> order{ending ? end->second : clipEntry.first->startBeat, clipIndex};
+                    const bool winnerEnding = endingCurveClips.count(winningClip) > 0;
+                    if(winner == nullptr || (winnerEnding && !ending) || (winnerEnding == ending && order > winnerOrder)) {
                         winner = &clipEntry.second;
                         winningClip = clipEntry.first;
                         winnerOrder = order;
