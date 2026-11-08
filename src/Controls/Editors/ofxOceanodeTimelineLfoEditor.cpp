@@ -78,6 +78,9 @@ void ofxOceanodeTimelineLfoEditor::draw(
         ImGui::SameLine();
     };
 
+    const bool chanceVisible = std::min(xForSource(contentDuration), dl->GetClipRectMax().x) -
+        std::max(graphOriginX, rowOriginX + kLabelWidth) >= 44.0f;
+
     // One folded row, shared by the result view and the lanes. Returns true
     // when its label was clicked, which is how a lane takes focus.
     auto drawCollapsedRow = [&](const std::string& key, const std::string& label, bool focused) {
@@ -89,12 +92,15 @@ void ofxOceanodeTimelineLfoEditor::draw(
                              ImVec2(rowMin.x + kLabelWidth, rowMax.y),
                              mutedTrackColor(track.color, 0.18f, 0.30f));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
-        if(auto* lane = timeline.getLane(sequence, track.id, clip.id, key)) drawLanePlayback(*lane);
+        auto* rowLane = timeline.getLane(sequence, track.id, clip.id, key);
+        if(rowLane != nullptr) drawLanePlayback(*rowLane);
         if(foldButton(("##lfoExpand" + key).c_str(), false)) editorState.collapsedLaneIds.erase(key);
         ImGui::SameLine();
         laneNameSelectable(label + "##lfoHeaderCollapsed" + key, focused,
-                           ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0));
+                           ImVec2(std::max(1.0f, rowMin.x + kLabelWidth - ImGui::GetCursorScreenPos().x - 6.0f), 0));
         const bool clicked = ImGui::IsItemClicked();
+        if(rowLane != nullptr && chanceVisible) laneChanceControl(timeline, sequence, track, clip, *rowLane,
+            laneChanceCenter(rowMin, ImVec2(xForSource(contentDuration), rowMax.y)));
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         return clicked;
     };
@@ -118,10 +124,14 @@ void ofxOceanodeTimelineLfoEditor::draw(
         // The canvas stops short of the resize strip so the two can never
         // fight over the same click.
         ImGui::SetCursorScreenPos(ImVec2(zoneLeft, row.rowMin.y));
-        ImGui::InvisibleButton(("##lfoRowCanvas" + track.id + clip.id + key).c_str(),
-                               ImVec2(std::max(1.0f, contentWidth - kLabelWidth),
-                                      std::max(1.0f, row.height - kLaneResizeHandleHeight)));
-        row.canvasHovered = ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
+        const auto center = laneChanceCenter(row.rowMin, ImVec2(xForSource(contentDuration), row.rowMax.y));
+        const bool overChance = chanceVisible && key != resultKey && hoverRect(ImVec2(center.x - 8, center.y - 8),
+                                                             ImVec2(center.x + 8, center.y + 8));
+        const ImVec2 canvasSize(std::max(1.0f, contentWidth - kLabelWidth),
+                               std::max(1.0f, row.height - kLaneResizeHandleHeight));
+        if(overChance) ImGui::Dummy(canvasSize);
+        else ImGui::InvisibleButton(("##lfoRowCanvas" + track.id + clip.id + key).c_str(), canvasSize);
+        row.canvasHovered = !overChance && ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
 
         dl->AddRectFilled(ImVec2(row.rowMin.x + clipIndent, row.rowMin.y), row.rowMax,
                           IM_COL32(27, 29, 35, 235));
@@ -246,8 +256,9 @@ void ofxOceanodeTimelineLfoEditor::draw(
         anyLfoCanvasHovered = anyLfoCanvasHovered || row.canvasHovered;
         beginRowProperties(row, lane.id);
         drawLanePlayback(lane);
+        const float nameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - 4.0f);
         if(laneNameSelectable(lane.name + "##lfoLaneHeader" + lane.id, focused,
-                              ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, 0))) {
+                              ImVec2(nameWidth, 0))) {
             editorState.editorLaneId = lane.id;
         }
         ImGui::TextDisabled("Control envelope / %.3g", current);
@@ -533,6 +544,8 @@ void ofxOceanodeTimelineLfoEditor::draw(
             lane.curvePoints[lfoDragPointIndex].beat = std::max(minimum, std::min(maximum, beat));
             lane.curvePoints[lfoDragPointIndex].value = normalizedAtMouseY(mouse.y);
         }
+        if(chanceVisible) laneChanceControl(timeline, sequence, track, clip, lane,
+            laneChanceCenter(row.rowMin, ImVec2(xForSource(contentDuration), row.rowMax.y)));
         finishAbsoluteLayout(ImVec2(row.rowMin.x, row.rowMax.y));
     }
 

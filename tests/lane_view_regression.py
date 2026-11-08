@@ -45,6 +45,24 @@ int main() {
         if(shot) capture(shot, atlas, aw, ah);
     };
     frame(); frame();
+    // Chance is editable on an unfocused lane and stays separate from its sibling.
+    ImGuiWindow* chancePanel=nullptr;
+    for(auto* window:ImGui::GetCurrentContext()->Windows)
+        if(window->Active && std::string(window->Name).find("##clipProperties"+track+first+a)!=std::string::npos)
+            chancePanel=window;
+    assert(chancePanel);
+    const float clipRight=ImGui::GetStyle().WindowPadding.x+ofxOceanodeTimelineEditorUi::labelWidth+280.0f;
+    const ImVec2 chanceAt(clipRight-15.0f,80.0f+6.0f+ImGui::GetTextLineHeight()*0.5f);
+    frame(chanceAt); frame(chanceAt,true);
+    frame(ImVec2(chanceAt.x,chanceAt.y+75),true); frame(ImVec2(chanceAt.x,chanceAt.y+75));
+    assert(std::abs(model.getLane(track,first,a)->chance-0.5f)<0.001f);
+    assert(model.getLane(track,first,b)->chance==1.0f);
+    assert(ui.editorState.editorLaneId==c); // chance need not focus the lane
+    frame(ImVec2(-100,-100),false,"lane-chance");
+    model.setLaneChance(track,first,a,1.0f); frame();
+    for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
+        if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
+            for(auto& tab:bar->Tabs) assert(std::string(ImGui::TabBarGetTabName(bar,&tab))!="Clip");
     const auto saved = model.toJson();
     auto panels = [&]() {
         std::vector<const ImGuiWindow*> panels;
@@ -60,6 +78,13 @@ int main() {
     for(const auto& lane : {a, b, c}) ui.editorState.collapsedLaneIds.insert(lane);
     frame(); frame(ImVec2(-100, -100), false, "folded-lanes");
     assert(panels().empty() && model.toJson() == saved);
+    // The collapsed lane exposes the same chance circle.
+    for(int i=0;i<25;++i) frame();
+    const ImVec2 foldedChance(clipRight-15.0f,91);
+    frame(foldedChance); frame(foldedChance,true);
+    frame(ImVec2(foldedChance.x,foldedChance.y+75),true); frame(ImVec2(foldedChance.x,foldedChance.y+75));
+    assert(std::abs(model.getLane(track,first,a)->chance-0.5f)<0.001f);
+    model.setLaneChance(track,first,a,1.0f); frame();
     // White miniature curve lines span each clip's own X interval in all 3 rows.
     for(int row = 0; row < 3; ++row) {
         const float top = 80 + row * (22 + ImGui::GetStyle().ItemSpacing.y);

@@ -175,6 +175,16 @@ Clip settings window, or in the clip's right-click menu. A clip below 100% shows
 next to its name; during playback, a clip its roll left out is drawn dimmed.
 Chance is saved with the clip; older presets load at 100%.
 
+Each lane also has a **Chance** circle at the top-right corner of its clip content, in both
+expanded and collapsed rows. Drag vertically to set it, hold Shift for fine
+adjustment, or double-click to reset to 100%. Its independent roll stays fixed
+for the same clip start. The effective probability is clip chance multiplied
+by lane chance: 50% × 50% gives 25%. The circle's tooltip shows both values.
+Skipped gates, steps and value regions rest at zero; curves, numbers, dropdowns
+and sliders hold their previous value. Piano parts sharing an instrument roll
+independently. Skipped LFO control envelopes use the oscillator's default for
+that control. Lane chance is saved and undoable; older lanes load at 100%.
+
 Deleting a Curve point preserves the Sigmoid or Log/Exp settings of all
 surviving segments. When two segments merge, the merged span keeps the
 incoming segment's settings. The same rule applies to LFO control curves.

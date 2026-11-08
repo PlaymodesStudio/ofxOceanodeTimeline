@@ -24,6 +24,63 @@ bool playbackToggle(const std::string& id, const char* label, bool on, const cha
     return clicked;
 }
 
+void drawChanceKnob(ImDrawList* dl, float clipChance, bool active, const ImVec2& center, float radius) {
+    // Ring = 100%; the filled arc shows how likely the clip is to play.
+    const float chance = ofClamp(clipChance, 0.0f, 1.0f);
+    dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
+    if(chance > 0.0f) {
+        constexpr float pi = 3.14159265358979323846f;
+        const float a0 = -pi * 0.5f;
+        dl->PathLineTo(center);
+        dl->PathArcTo(center, radius - 1.0f, a0, a0 + pi * 2.0f * chance, 24);
+        dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
+    }
+    dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
+}
+ImVec2 laneChanceCenter(const ImVec2& min, const ImVec2& max) {
+    const float right = std::min(max.x, ImGui::GetWindowDrawList()->GetClipRectMax().x);
+    const float titleBottom = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
+    return ImVec2(right - 15.0f, (min.y + 3.0f + titleBottom) * 0.5f);
+}
+
+bool laneChanceControl(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence,
+        const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
+        ofxOceanodeTimelineLane& lane, const ImVec2& center) {
+    constexpr float radius = 6.0f;
+    const auto cursor = ImGui::GetCursorScreenPos();
+    ImGui::PushID(clip.id.c_str());
+    ImGui::PushID(lane.id.c_str());
+    ImGui::SetCursorScreenPos(ImVec2(center.x - 8.0f, center.y - 8.0f));
+    ImGui::InvisibleButton("##laneChance", ImVec2(16.0f, 16.0f));
+    auto* storage = ImGui::GetStateStorage();
+    const ImGuiID startValue = ImGui::GetID("chanceStartValue");
+    const ImGuiID startY = ImGui::GetID("chanceStartY");
+    if(ImGui::IsItemClicked()) {
+        storage->SetFloat(startValue, lane.chance);
+        storage->SetFloat(startY, ImGui::GetIO().MousePos.y);
+    }
+    bool changed = false;
+    const bool active = ImGui::IsItemActive();
+    if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        changed = timeline.setLaneChance(sequence, track.id, clip.id, lane.id, 1.0f);
+    else if(active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        const float pixelsPerUnit = ImGui::GetIO().KeyShift ? 600.0f : 150.0f;
+        const float chance = ofClamp(storage->GetFloat(startValue, lane.chance) +
+            (storage->GetFloat(startY) - ImGui::GetIO().MousePos.y) / pixelsPerUnit, 0.0f, 1.0f);
+        changed = timeline.setLaneChance(sequence, track.id, clip.id, lane.id, std::round(chance * 100.0f) / 100.0f);
+    }
+    drawChanceKnob(ImGui::GetWindowDrawList(), lane.chance, active, center, radius);
+    if(ImGui::IsItemHovered() || active) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        ImGui::SetTooltip("Lane chance: %.0f%%\nCombined with clip: %.0f%%\nDrag vertically. Shift: fine adjustment. Double-click: 100%%.",
+                          lane.chance * 100.0f, clip.chance * lane.chance * 100.0f);
+    }
+    ImGui::PopID();
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(cursor);
+    return changed;
+}
+
 bool laneNameSelectable(const std::string& label, bool focused, const ImVec2& size) {
     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));

@@ -8,6 +8,11 @@
 namespace ofxOceanodeTimelineLaneEditorUi {
 bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip);
 // A lane's name: a Selectable drawn with no background, focused or not.
+void drawChanceKnob(ImDrawList* dl, float chance, bool active, const ImVec2& center, float radius);
+ImVec2 laneChanceCenter(const ImVec2& min, const ImVec2& max);
+bool laneChanceControl(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence,
+                       const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
+                       ofxOceanodeTimelineLane& lane, const ImVec2& center);
 bool laneNameSelectable(const std::string& label, bool focused, const ImVec2& size);
 constexpr double kPPQ = ofxOceanodeTimelineEditorView::ppq;
 constexpr float kPianoKeyboardWidth = 38.0f;

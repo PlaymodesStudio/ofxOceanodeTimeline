@@ -542,6 +542,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             laneJson["name"] = lane.name;
             laneJson["muted"] = lane.muted;
             laneJson["solo"] = lane.solo;
+            laneJson["chance"] = lane.chance;
             if(lane.drivesTrackSolo) laneJson["drivesTrackSolo"] = true;
             if(!lane.targetProbability.empty()) {
                 laneJson["targetProbability"] = ofJson::object();
@@ -996,6 +997,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                         lane.name = laneJson.value("name", std::string("Lane"));
                         lane.muted = laneJson.value("muted", false);
                         lane.solo = laneJson.value("solo", false);
+                        lane.chance = ofClamp(laneJson.value("chance", 1.0f), 0.0f, 1.0f);
                         lane.drivesTrackSolo = laneJson.value("drivesTrackSolo", false);
                         if(laneJson.contains("targetProbability") && laneJson["targetProbability"].is_object()) {
                             for(const auto& [path, probability] : laneJson["targetProbability"].items()) {

@@ -492,11 +492,13 @@ inline uint64_t lfoCurveSignature(const ofxOceanodeTimelineLane& lane, const Lfo
 }
 
 // Cycles from source beat 0 to sourceBeat.
-inline double lfoCycles(const ofxOceanodeTimelineClip& clip, double sourceBeat) {
+inline double lfoCycles(const ofxOceanodeTimelineClip& clip, double sourceBeat,
+                        const ofxOceanodeTimelinePlayContext* context = nullptr) {
     const auto* definition = lfoParameterDefinition("frequency");
     const ofxOceanodeTimelineLane* frequencyLane = nullptr;
     for(const auto& lane : clip.lanes) {
-        if(laneAudible(clip, lane) && lane.lfoParameter == "frequency") { frequencyLane = &lane; break; }
+        if(laneAudible(clip, lane) && lane.lfoParameter == "frequency" &&
+           !(context != nullptr && ofxOceanodeTimelineLaneChanceSilenced(lane, *context))) { frequencyLane = &lane; break; }
     }
     if(definition != nullptr && frequencyLane != nullptr && frequencyLane->curveInterpolation == "Value") {
         const double period = std::max<double>(kMinLfoPeriodBeats, lfoMapNormalized(definition->minimum,

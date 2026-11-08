@@ -406,11 +406,12 @@ float snapFrequencyValue(float beats, int mode) {
 
 float evaluateParameter(const ofxOceanodeTimelineClip& clip,
                         const std::string& parameter, double sourceBeat,
-                        float fallback) {
+                        float fallback, const ofxOceanodeTimelinePlayContext* context) {
     const auto* definition = lfoParameterDefinition(parameter);
     if(definition == nullptr) return fallback;
     for(const auto& lane : clip.lanes) {
-        if(!laneAudible(clip, lane) || lane.lfoParameter != parameter) continue;
+        if(!laneAudible(clip, lane) || lane.lfoParameter != parameter ||
+           (context != nullptr && ofxOceanodeTimelineLaneChanceSilenced(lane, *context))) continue;
         const float defaultNormalized = lfoUnmapValue(definition->minimum, definition->maximum,
                                                       lfoLaneIsLog(lane), definition->defaultValue);
         const float normalized = normalizedLfoLaneValue(lane, sourceBeat, defaultNormalized);
@@ -424,25 +425,25 @@ double cyclesAt(const ofxOceanodeTimelineClip& clip, double sourceBeat) {
     return lfoCycles(clip, sourceBeat);
 }
 
-float evaluate(const ofxOceanodeTimelineClip& clip, double sourceBeat) {
+float evaluate(const ofxOceanodeTimelineClip& clip, double sourceBeat, const ofxOceanodeTimelinePlayContext* context) {
     // Phase from the integrated frequency curve (see lfoCycles), wrapped in double
     // precision before handing it to the oscillator.
-    const double cycles = lfoCycles(clip, sourceBeat);
+    const double cycles = lfoCycles(clip, sourceBeat, context);
     const double phase = cycles - std::floor(cycles);
     baseOscillator oscillator;
-    oscillator.phaseOffset_Param = evaluateParameter(clip, "phaseOffset", sourceBeat, 0.0f);
-    oscillator.pow_Param = evaluateParameter(clip, "pow", sourceBeat, 0.0f);
-    oscillator.pulseWidth_Param = evaluateParameter(clip, "pw", sourceBeat, 0.5f);
+    oscillator.phaseOffset_Param = evaluateParameter(clip, "phaseOffset", sourceBeat, 0.0f, context);
+    oscillator.pow_Param = evaluateParameter(clip, "pow", sourceBeat, 0.0f, context);
+    oscillator.pulseWidth_Param = evaluateParameter(clip, "pw", sourceBeat, 0.5f, context);
     oscillator.quant_Param = 0;
-    oscillator.scale_Param = evaluateParameter(clip, "scale", sourceBeat, 1.0f);
-    oscillator.offset_Param = evaluateParameter(clip, "yOffset", sourceBeat, 0.0f);
+    oscillator.scale_Param = evaluateParameter(clip, "scale", sourceBeat, 1.0f, context);
+    oscillator.offset_Param = evaluateParameter(clip, "yOffset", sourceBeat, 0.0f, context);
     oscillator.randomAdd_Param = 0.0f;
-    oscillator.biPow_Param = evaluateParameter(clip, "bipow", sourceBeat, 0.0f);
+    oscillator.biPow_Param = evaluateParameter(clip, "bipow", sourceBeat, 0.0f, context);
     oscillator.waveSelect_Param = 0;
     oscillator.amplitude_Param = 1.0f;
     oscillator.invert_Param = 0.0f;
-    oscillator.skew_Param = evaluateParameter(clip, "skew", sourceBeat, 0.0f);
-    oscillator.roundness_Param = evaluateParameter(clip, "roundness", sourceBeat, 0.5f);
+    oscillator.skew_Param = evaluateParameter(clip, "skew", sourceBeat, 0.0f, context);
+    oscillator.roundness_Param = evaluateParameter(clip, "roundness", sourceBeat, 0.5f, context);
     return oscillator.computeFunc(static_cast<float>(phase));
 }
 } // namespace ofxOceanodeTimelineLfo
@@ -3886,7 +3887,7 @@ bool ofxOceanodeTimelineManager::applyLaneTrackSolos(double beat) {
                    !laneAudible(clip, lane)) continue;
                 driven = true;
                 // A clip its chance roll left out rests: the solo is off.
-                if(isClipChanceSilenced(clip) || lane.multiGateRows.empty()) continue;
+                if(isClipChanceSilenced(clip) || ofxOceanodeTimelineLaneChanceSilenced(lane, playContext) || lane.multiGateRows.empty()) continue;
                 const double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, beat);
                 on = on || evaluateMultiGateRow(lane.multiGateRows.front(), sourceBeat, 0.0,
                     clip.repeatContent ? ofxOceanodeTimelineClipTime::sourceDuration(clip) : 0.0);
@@ -3928,6 +3929,23 @@ bool ofxOceanodeTimelineManager::setClipChance(ofxOceanodeTimelineSequence& sequ
     if(container != nullptr) playContext = playContextFor(container->getTransportState());
     refreshPlaybackEnablement();
     return true;
+}
+
+bool ofxOceanodeTimelineManager::setLaneChance(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+        const std::string& clipId, const std::string& laneId, float chance) {
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
+    if(lane == nullptr || !std::isfinite(chance)) return false;
+    chance = ofClamp(chance, 0.0f, 1.0f);
+    if(lane->chance == chance) return false;
+    lane->chance = chance;
+    if(container != nullptr) playContext = playContextFor(container->getTransportState());
+    refreshPlaybackEnablement();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setLaneChance(const std::string& trackId, const std::string& clipId,
+        const std::string& laneId, float chance) {
+    return setLaneChance(editSequence(), trackId, clipId, laneId, chance);
 }
 
 bool ofxOceanodeTimelineManager::setClipMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, bool muted) {

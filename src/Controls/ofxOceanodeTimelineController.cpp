@@ -219,22 +219,11 @@ constexpr float kEdgePixels = 8.0f;
 // are the row's; the clip is drawn 3 px inside them.
 bool chanceKnob(float left, float right, float top, float bottom, ImVec2& center, float& radius) {
     radius = std::min(6.0f, (bottom - top - 8.0f) * 0.5f);
-    center = ImVec2(right - kEdgePixels - 1.0f - radius, top + 4.0f + radius);
+    const float titleBottom = std::min(bottom - 3.0f, top + 9.0f + ImGui::GetTextLineHeight());
+    center = ImVec2(right - kEdgePixels - 1.0f - radius, (top + 3.0f + titleBottom) * 0.5f);
     return radius >= 4.0f && right - left >= radius * 2.0f + kEdgePixels + 24.0f;
 }
 
-void drawChanceKnob(ImDrawList* dl, float clipChance, bool active, const ImVec2& center, float radius) {
-    // Ring = 100%; the filled arc shows how likely the clip is to play.
-    const float chance = ofClamp(clipChance, 0.0f, 1.0f);
-    dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, chance < 1.0f || active ? 200 : 110));
-    if(chance > 0.0f) {
-        const float a0 = -IM_PI * 0.5f;
-        dl->PathLineTo(center);
-        dl->PathArcTo(center, radius - 1.0f, a0, a0 + IM_PI * 2.0f * chance, 24);
-        dl->PathFillConvex(chance < 1.0f ? IM_COL32(255, 205, 90, 230) : IM_COL32(235, 240, 245, 120));
-    }
-    dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(235, 240, 245, 150), 20, 1.0f);
-}
 // Parameter rows are indented under their track header by half the clip
 // editor's indent (20 px), so the hierarchy reads track > row > editor.
 constexpr float kParameterRowIndent = 10.0f;
@@ -6812,7 +6801,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         // Reuse the clip miniature in the folded row, at the clip's own time.
         const float originX = rowZoneLeft - timelineScrollX;
         const float left = std::max(rowZoneLeft, originX + beatOffset(clip->startBeat));
-        const float right = std::min(rowMax.x, originX + beatOffset(clip->startBeat + clip->durationBeats));
+        const float right = std::min({rowMax.x, rowDl->GetClipRectMax().x,
+                                      originX + beatOffset(clip->startBeat + clip->durationBeats)});
         if(right > left) {
             const double cycle = ofxOceanodeTimelineClipTime::cycleDuration(*clip);
             const int first = clip->repeatContent ? std::max(0, static_cast<int>(std::floor(
@@ -6831,11 +6821,17 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 rowDl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2.0f);
             rowDl->PopClipRect();
             ImGui::SetCursorScreenPos(ImVec2(left, rowMin.y));
-            ImGui::InvisibleButton(("##collapsedLanePreview" + lane->id).c_str(), ImVec2(right - left, rowMax.y - rowMin.y));
-            if(ImGui::IsItemClicked()) focusLane();
-            if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            const auto center = laneChanceCenter(rowMin, ImVec2(right, rowMax.y));
+            const bool overChance = hoverRect(ImVec2(center.x - 8, center.y - 8), ImVec2(center.x + 8, center.y + 8));
+            if(overChance) ImGui::Dummy(ImVec2(right - left, rowMax.y - rowMin.y));
+            else ImGui::InvisibleButton(("##collapsedLanePreview" + lane->id).c_str(), ImVec2(right - left, rowMax.y - rowMin.y));
+            if(!overChance && ImGui::IsItemClicked()) focusLane();
+            if(!overChance && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 editorState.collapsedLaneIds.erase(lane->id);
         }
+        if(right - left >= 44.0f)
+            laneChanceControl(timeline, scope(timeline), track, *clip, *lane,
+                              laneChanceCenter(rowMin, ImVec2(right, rowMax.y)));
         finishAbsoluteLayout(ImVec2(rowMin.x, rowMax.y));
         continue;
     }
@@ -6857,10 +6853,18 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     const ImVec2 timelineMin(zoneLeft - timelineScrollX, editorMin.y);
     const float editorCanvasStartX = std::max(zoneLeft, timelineMin.x);
     ImGui::SetCursorScreenPos(ImVec2(editorCanvasStartX, timelineMin.y));
-    ImGui::InvisibleButton(("##clipEditorCanvas" + track.id + clip->id + lane->id).c_str(),
-                           ImVec2(std::max(1.0f, contentWidth - kLabelWidth - (editorCanvasStartX - timelineMin.x)),
-                                  std::max(1.0f, editorHeight - kLaneResizeHandleHeight)));
-    const bool editorCanvasHovered = ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
+    const float chanceLeft = std::max(zoneLeft, timelineMin.x + beatOffset(clip->startBeat));
+    const float chanceRight = std::min({editorMax.x, ImGui::GetWindowDrawList()->GetClipRectMax().x,
+                                       timelineMin.x + beatOffset(clip->startBeat + clip->durationBeats)});
+    const bool chanceVisible = chanceRight - chanceLeft >= 44.0f;
+    const auto chanceCenter = laneChanceCenter(editorMin, ImVec2(chanceRight, editorMax.y));
+    const bool overChance = chanceVisible && hoverRect(ImVec2(chanceCenter.x - 8, chanceCenter.y - 8),
+                                     ImVec2(chanceCenter.x + 8, chanceCenter.y + 8));
+    const ImVec2 canvasSize(std::max(1.0f, contentWidth - kLabelWidth - (editorCanvasStartX - timelineMin.x)),
+                           std::max(1.0f, editorHeight - kLaneResizeHandleHeight));
+    if(overChance) ImGui::Dummy(canvasSize);
+    else ImGui::InvisibleButton(("##clipEditorCanvas" + track.id + clip->id + lane->id).c_str(), canvasSize);
+    const bool editorCanvasHovered = !overChance && ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
     if(!isFocused && editorCanvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) focusLane();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
@@ -7072,6 +7076,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     const float left = std::max(zoneLeft, clipX1);
     const float right = std::min(editorMax.x, clipX2);
     if(right <= left) {
+        if(chanceVisible) laneChanceControl(timeline, scope(timeline), track, *clip, *lane, chanceCenter);
         finishAbsoluteLayout(ImVec2(editorMin.x, editorMax.y));
         continue;
     }
@@ -7086,6 +7091,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     const float playheadX = timelineMin.x + beatOffset(beatPosition);
     if(playheadX >= zoneLeft && playheadX <= editorMax.x) dl->AddLine(ImVec2(playheadX, editorMin.y), ImVec2(playheadX, editorMax.y), kPlayhead, 2.0f);
     dl->PopClipRect();
+    if(chanceVisible) laneChanceControl(timeline, scope(timeline), track, *clip, *lane, chanceCenter);
     finishAbsoluteLayout(ImVec2(editorMin.x, editorMax.y));
     } // end for(laneIndex : clip->lanes)
 }

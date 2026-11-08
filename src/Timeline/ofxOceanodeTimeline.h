@@ -440,6 +440,8 @@ struct ofxOceanodeTimelineLane {
     std::vector<std::string> bindingIds;
     bool muted = false;
     bool solo = false;
+    // Independent per-start roll, multiplied with the parent clip's chance.
+    float chance = 1.0f;
     // Toggle lanes: also drive their own track's solo -- on while a block
     // plays, off between blocks; outside the clip the solo holds.
     bool drivesTrackSolo = false;
@@ -758,6 +760,8 @@ struct ofxOceanodeTimelinePlayContext {
 // Whether a clip's chance leaves it out of this pass of this copy.
 bool ofxOceanodeTimelineClipChanceSilenced(const ofxOceanodeTimelineClip& clip,
                                            const ofxOceanodeTimelinePlayContext& context);
+bool ofxOceanodeTimelineLaneChanceSilenced(const ofxOceanodeTimelineLane& lane,
+                                           const ofxOceanodeTimelinePlayContext& context);
 
 // Curve lanes in decibels (a gain parameter): shared by the evaluator and the
 // editor so the curve always draws what it applies. Normalized 0 is silence,
@@ -797,12 +801,14 @@ namespace ofxOceanodeTimelineLfo {
 
     // Evaluates the complete LFO result in normalized 0..1 space. The shape
     // is intentionally shared by playback and the editor's result view.
-    float evaluate(const ofxOceanodeTimelineClip& clip, double sourceBeat);
+    float evaluate(const ofxOceanodeTimelineClip& clip, double sourceBeat,
+                   const ofxOceanodeTimelinePlayContext* context = nullptr);
     // Oscillator cycles accumulated from source beat 0 (integrated frequency).
     double cyclesAt(const ofxOceanodeTimelineClip& clip, double sourceBeat);
     float evaluateParameter(const ofxOceanodeTimelineClip& clip,
                             const std::string& parameter,
-                            double sourceBeat, float fallback);
+                            double sourceBeat, float fallback,
+                            const ofxOceanodeTimelinePlayContext* context = nullptr);
 }
 
 // A note group shows the parameters a piano roll drives (pitch, gate,
@@ -1818,6 +1824,8 @@ public:
     bool setLaneMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, bool muted);
     bool setLaneSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
     bool setLaneSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, bool solo);
+    bool setLaneChance(const std::string& trackId, const std::string& clipId, const std::string& laneId, float chance);
+    bool setLaneChance(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, float chance);
     bool setLaneDrivesTrackSolo(const std::string& trackId, const std::string& clipId, const std::string& laneId, bool drives);
     bool setLaneDrivesTrackSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, bool drives);
     bool setLaneTargetProbability(const std::string& trackId, const std::string& clipId, const std::string& laneId,

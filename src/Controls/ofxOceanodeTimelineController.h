@@ -240,7 +240,7 @@ private:
     void showEdgeCursor(ClipDragMode mode) const;
     std::string draggingTrackId;
     std::string draggingClipId;
-    // Chance knob at a clip's top-left: a vertical drag sets the clip chance.
+    // Chance knob at a clip's top-right: a vertical drag sets the clip chance.
     std::string chanceDragTrackId;
     std::string chanceDragClipId;
     float chanceDragStartMouseY = 0.0f;
