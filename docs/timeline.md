@@ -52,8 +52,8 @@ rows instead. A clip affecting several parameters appears on several target
 rows; these are views of the same clip, not copies. Selection highlights every
 appearance. Both views keep the same clip selection and open editor.
 
-Double-click a clip to open its editor. Shared timing is available in the
-left pad's **Timing** tab. Lane headers show user names and editor types;
+Double-click a clip to open its editor. The hamburger button before the
+track header's **+** opens a floating **Clip settings** window for shared timing. Lane headers show user names and editor types;
 **Content** contains the lane's name, editor type and settings,
 and **Targets** contains its destinations. **Add target...** searches compatible
 parameters in the current patch; selecting a new parameter
@@ -135,7 +135,7 @@ Right-click a handle to enter an exact value.
 ## Timing tools
 
 The **Right edge** tool also controls edits to **Timeline length** in the
-lane properties pad's **Clip** tab and clip context menu. The Clip tab
+floating **Clip settings** window and clip context menu. Clip settings
 contains Mute, Repeat (source), Chance, Start, Length (timeline length), Source
 (source length) and Stretch; these settings apply to every lane in the clip.
 All durations are in beats:
@@ -171,7 +171,7 @@ pass. Within one start the result holds for the whole clip, repeats included,
 and the scheduler rolls the next loop pass ahead of the wrap so the loop's
 first beat stays on time. Set it with the knob at the clip's top-right corner on
 the timeline (drag up/down, Shift for fine steps, double-click for 100%), in the
-Clip tab, or in the clip's right-click menu. A clip below 100% shows its chance
+Clip settings window, or in the clip's right-click menu. A clip below 100% shows its chance
 next to its name; during playback, a clip its roll left out is drawn dimmed.
 Chance is saved with the clip; older presets load at 100%.
 
@@ -181,13 +181,15 @@ incoming segment's settings. The same rule applies to LFO control curves.
 
 ## Lane properties pad
 
-The left column holds each open clip editor. Its header row shows the clip's
-name with **+** (add lane) and **x** (close) at the right. Each lane's pad
-starts with fold, M/S and the lane name, then a line naming the lane type and
-how many targets it drives (orange when it has none), then its tabs:
+The left column holds each open clip editor. The track header's arrow opens
+or closes its lanes, **+** adds a lane or clip, and the hamburger opens shared
+Clip settings. When a track contains several clips, the floating window has a
+clip picker. Each lane's pad starts with fold, M/S and the lane name,
+then a line naming the lane type and how many targets it drives (orange when
+it has none), then its tabs:
 **Targets** (what the lane drives), **Lane** (name, type, output range and
 the editor's own settings), **Mutate** and **Rndm** (piano rolls only, see
-below) and **Clip** (chance and timing, shared by every lane in the clip). Drag the divider in the ruler's top-left corner to make the
+below). Drag the divider in the ruler's top-left corner to make the
 column wider or narrower; double-click it for the default width. The width is
 saved with the timeline.
 

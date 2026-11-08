@@ -151,7 +151,7 @@ int main() {
         const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),
             [&](const auto& r){return r.trackId==track;});
         assert(row!=ui.clipDropRows.end());
-        const ImVec2 pos(ui.fileDropBounds.x-120,(row->top+row->bottom)*0.5f);
+        const ImVec2 pos(ui.fileDropBounds.x-180,(row->top+row->bottom)*0.5f);
         frame(1250,pos,false); frame(1250,pos,true); frame(1250,pos,false);
     };
     padClick(t);
@@ -552,11 +552,13 @@ int main() {
             return (row->minY+row->maxY)*0.5f;
         };
         auto arrow=[&]() { return ImVec2(padLeft+12,rowY()); };
-        auto plus=[&]() {   // the first button right of the name: found by hovering
+        auto plus=[&]() {   // find + specifically; the hamburger precedes it
             const float y=rowY();
             for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth;x+=2) {
                 frame(1250,ImVec2(x,y),false);
-                if(ImGui::GetCurrentContext()->HoveredId!=0) return ImVec2(x,y);
+                auto* hovered=ImGui::GetCurrentContext()->HoveredWindow;
+                if(hovered && ImGui::GetCurrentContext()->HoveredId==
+                   ImHashStr(("+##addLane"+t).c_str(),0,hovered->ID)) return ImVec2(x,y);
             }
             assert(false && "+ not found"); return ImVec2();
         };
@@ -571,6 +573,23 @@ int main() {
                    ImGui::GetCurrentContext()->OpenPopupStack.back().PopupId==ImHashStr("##addLaneTypePopup",0,viewport->ID);
         };
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorTrackId==t);
+        // The hamburger opens a separate, closeable window with a clip picker.
+        const ImGuiID settingsId=ImHashStr(("   ##clipSettings"+t).c_str(),0,viewport->ID);
+        ImVec2 settingsAt(-1,-1);
+        for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-150;
+            x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth && settingsAt.x<0;x+=2) {
+            frame(1250,ImVec2(x,rowY()),false);
+            if(ImGui::GetCurrentContext()->HoveredId==settingsId) settingsAt=ImVec2(x,rowY());
+        }
+        assert(settingsAt.x>=0);
+        const auto beforeSettings=model.toJson();
+        click(settingsAt);
+        assert(ui.clipSettingsOpen && ui.clipSettingsTrackId==t && ui.clipSettingsClipId==c);
+        auto* settings=ImGui::FindWindowByName(("###timelineClipSettings"+ofToString(ui.windowId)).c_str());
+        assert(settings && settings->Active && !(settings->Flags & ImGuiWindowFlags_ChildWindow));
+        capture("clip-settings",atlas,aw,ah);
+        assert(model.toJson()==beforeSettings);
+        ui.clipSettingsOpen=false; frame();
         const auto lanesBefore=model.getClip(t,c)->lanes.size();
         const ImVec2 plusAt=plus();
         {
@@ -910,7 +929,7 @@ int main() {
     const auto trackBefore=model.toJson()["timelines"][0]["tracks"];
     const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==t;});
     assert(row!=ui.clipDropRows.end());
-    const ImVec2 pad(ui.fileDropBounds.x-120,(row->top+row->bottom)*0.5f);
+    const ImVec2 pad(ui.fileDropBounds.x-180,(row->top+row->bottom)*0.5f);
     frame(1250,pad,false);io.AddMouseButtonEvent(1,true);frame(1250,pad,false);
     io.AddMouseButtonEvent(1,false);frame(1250,pad,false);frame();
     assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());

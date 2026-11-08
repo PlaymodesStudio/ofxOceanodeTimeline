@@ -3175,12 +3175,13 @@ void ofxOceanodeTimelineController::draw() {
         };
         const bool addLaneButton = editorClip != nullptr && !editorClip->isLfo && !track.isWaveTrack;
         const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
+        const float settingsWidth = smallButtonReserve("   ");
         // + M S and the colour swatch (sized like S) sit at the column's
         // right edge, one item spacing apart.
         const ImVec2 swatchSize(ImGui::CalcTextSize("S").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFontSize());
         const float muteX = headerMin.x + kLabelWidth - 6.0f - swatchSize.x - smallButtonReserve("S") - smallButtonReserve("M");
         const float buttonY = headerMin.y + (trackHeaderHeight - ImGui::GetFontSize()) * 0.5f;
-        const float padRight = muteX - 3.0f - addLaneWidth;
+        const float padRight = muteX - 3.0f - addLaneWidth - settingsWidth;
         const bool editorArrowHovered = editorArrow &&
             hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + 22, headerMax.y));
         // A macro track's arrow unfolds its macro's tracks under it; in the
@@ -3277,6 +3278,24 @@ void ofxOceanodeTimelineController::draw() {
             }
         }
 
+        ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth - settingsWidth, buttonY));
+        const bool settingsClicked = ImGui::SmallButton(("   ##clipSettings" + track.id).c_str());
+        const auto settingsMin = ImGui::GetItemRectMin(), settingsMax = ImGui::GetItemRectMax();
+        const ImVec2 settingsCenter((settingsMin.x + settingsMax.x) * 0.5f, (settingsMin.y + settingsMax.y) * 0.5f);
+        for(int line = -1; line <= 1; ++line)
+            dl->AddLine(ImVec2(settingsCenter.x - 4.0f, settingsCenter.y + line * 3.0f),
+                        ImVec2(settingsCenter.x + 4.0f, settingsCenter.y + line * 3.0f), labelTextColor);
+        if(settingsClicked) {
+            anyClipInteractionClaimedThisFrame = true;
+            clipSettingsOpen = true;
+            clipSettingsFocus = true;
+            clipSettingsRef = scopeRef();
+            clipSettingsTrackId = track.id;
+            clipSettingsClipId = editorClip != nullptr ? editorClip->id
+                : track.clips.empty() ? std::string() : track.clips.front().id;
+            clipSettingsAnchor = ImVec2(settingsMax.x + 12.0f, settingsMin.y);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip settings shared by all lanes");
         if(addLaneButton) {
             ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, buttonY));
             ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
@@ -5843,6 +5862,7 @@ void ofxOceanodeTimelineController::draw() {
     }
     drawClipRenamePopup(timeline);
     drawClipImportPopup(timeline);
+    drawClipSettingsWindow(timeline, endBeat);
     finishHistoryGesture(timeline);
 }
 
@@ -6350,12 +6370,44 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
 
 }
 
-void ofxOceanodeTimelineController::drawSharedClipProperties(ofxOceanodeTimelineManager& timeline,
-        const ofxOceanodeTimelineTrack& track, ofxOceanodeTimelineClip& clip,
-        float contentWidth, double endBeat) {
-    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, scope(timeline), track, clip,
-        editorView(timeline, container->getTransportState().bpm, endBeat),
-        static_cast<ofxOceanodeTimelineEndEdit>(endEditTool));
+void ofxOceanodeTimelineController::drawClipSettingsWindow(ofxOceanodeTimelineManager& timeline, double endBeat) {
+    if(!clipSettingsOpen) return;
+    if(!(clipSettingsRef == scopeRef())) { clipSettingsOpen = false; return; }
+    auto* track = timeline.getTrack(scope(timeline), clipSettingsTrackId);
+    if(track == nullptr) { clipSettingsOpen = false; return; }
+    if(clipSettingsFocus) {
+        ImGui::SetNextWindowPos(clipSettingsAnchor, ImGuiCond_Always);
+        ImGui::SetNextWindowFocus();
+        clipSettingsFocus = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+    const std::string title = "Clip settings - " + track->name + "###timelineClipSettings" + ofToString(windowId);
+    if(ImGui::Begin(title.c_str(), &clipSettingsOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
+        auto* clip = timeline.getClip(scope(timeline), track->id, clipSettingsClipId);
+        if(clip == nullptr && !track->clips.empty()) {
+            clipSettingsClipId = track->clips.front().id;
+            clip = &track->clips.front();
+        }
+        if(clip == nullptr) ImGui::TextDisabled("No clips on this track");
+        else {
+            if(track->clips.size() > 1) {
+                ImGui::SetNextItemWidth(-1.0f);
+                if(ImGui::BeginCombo("##settingsClip", clip->name.c_str())) {
+                    for(const auto& candidate : track->clips)
+                        if(ImGui::Selectable((candidate.name + "##" + candidate.id).c_str(), candidate.id == clipSettingsClipId))
+                            clipSettingsClipId = candidate.id;
+                    ImGui::EndCombo();
+                }
+                clip = timeline.getClip(scope(timeline), track->id, clipSettingsClipId);
+            } else ImGui::TextUnformatted(clip->name.c_str());
+            ImGui::TextDisabled("Applies to every lane in this clip");
+            ImGui::Separator();
+            ofxOceanodeTimelinePresentation::drawClipTiming(timeline, scope(timeline), *track, *clip,
+                editorView(timeline, container->getTransportState().bpm, endBeat),
+                static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
+        }
+    }
+    ImGui::End();
 }
 
 void ofxOceanodeTimelineController::drawTargetInspector(ofxOceanodeTimelineManager& timeline) {
@@ -6480,7 +6532,6 @@ void ofxOceanodeTimelineController::drawWaveTrackEditor(
         return;
     }
 
-    drawSharedClipProperties(timeline, track, *clip, contentWidth, endBeat);
     if(ImGui::SmallButton(("Close editor##wave" + track.id).c_str())) closeTrackEditor(track.id);
     const float editorHeight = 300.0f;
     ImGui::Dummy(ImVec2(contentWidth, editorHeight));
@@ -6672,8 +6723,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
             ImGui::EndPopup();
         }
     }
-    // Lane timing lives in the pinned properties pad, alongside Targets and Content.
-    if(clip->lanes.empty()) drawSharedClipProperties(timeline, track, *clip, contentWidth, endBeat);
 
     if(track.isWaveTrack && clip != nullptr)
         drawWaveClipProperties(timeline, track, *clip);
@@ -6759,9 +6808,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                                ImVec2(nameWidth, 0));
         }
         if(ImGui::IsItemClicked()) focusLane();
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s\n%s / %zu target(s)%s",
-            track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), laneDisplayName(*lane), lane->bindingIds.size(),
-            lane->bindingIds.empty() ? " - No target" : "");
         drawLaneMenu(false);
         // Reuse the clip miniature in the folded row, at the clip's own time.
         const float originX = rowZoneLeft - timelineScrollX;
@@ -6874,8 +6920,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         if(laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id, isFocused,
                               ImVec2(nameWidth, 0)))
             focusLane();
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Track: %s > Clip: %s > Lane: %s%s",
-            track.name.c_str(), clip->name.c_str(), laneLabel.c_str(), isFocused ? "\n(editing)" : "\nClick to edit this lane");
     }
     {
         const bool drivesSolo = lane->drivesTrackSolo && isToggleLane(*lane);
@@ -6901,7 +6945,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::TextDisabled("Track parameters this lane drives");
                 const bool toggleLane = isToggleLane(*lane) && !clip->isLfo;
                 const bool gateLane = lane->type == ofxOceanodeTimelineLaneType::MultiGate && !clip->isLfo;
                 constexpr float kChanceWidth = 64.0f;
@@ -7016,13 +7059,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 chordBank.panel();
                 ImGui::EndTabItem();
             }
-        }
-        const bool clipTab = ImGui::BeginTabItem("Clip");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip: %s\nChance and timing apply to every lane in this clip.", clip->name.c_str());
-        if(clipTab) {
-            ofxOceanodeTimelinePresentation::drawClipTiming(timeline, scope(timeline), track, *clip, view,
-                static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
-            ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
     }

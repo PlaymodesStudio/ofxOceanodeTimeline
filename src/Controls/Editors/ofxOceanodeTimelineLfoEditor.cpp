@@ -34,7 +34,6 @@ void ofxOceanodeTimelineLfoEditor::draw(
     // and every other lane editor use.
     const float rowOriginX = ImGui::GetCursorScreenPos().x;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ofxOceanodeTimelinePresentation::drawClipPropertiesPanel(timeline, sequence, track, clip, view, endEdit);
     ImGui::TextWrapped("Control envelopes shape this oscillator. Only the LFO result drives the output target.");
 
     const float graphOriginX = rowOriginX + kLabelWidth - timelineScrollX;

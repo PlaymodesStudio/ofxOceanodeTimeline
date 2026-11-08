@@ -577,9 +577,12 @@ private:
     bool targetInspectorOpen = false;
     std::string inspectedTargetPath;
     void drawTargetInspector(ofxOceanodeTimelineManager& timeline);
-    void drawSharedClipProperties(ofxOceanodeTimelineManager& timeline,
-                                  const ofxOceanodeTimelineTrack& track,
-                                  ofxOceanodeTimelineClip& clip, float contentWidth, double endBeat);
+    void drawClipSettingsWindow(ofxOceanodeTimelineManager& timeline, double endBeat);
+    bool clipSettingsOpen = false;
+    bool clipSettingsFocus = false;
+    std::string clipSettingsTrackId, clipSettingsClipId;
+    ofxOceanodeTimelineManager::TimelineRef clipSettingsRef;
+    ImVec2 clipSettingsAnchor;
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     float zoomAnchorViewportX = 0.0f;
     double zoomAnchorUntil = 0.0;
