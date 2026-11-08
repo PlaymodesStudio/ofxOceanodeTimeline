@@ -97,7 +97,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const auto interpolation = curveInterpolationMode(lane->curveInterpolation);
-    const float curveTop = editorMin.y + 8.0f, curveBottom = editorMax.y - 8.0f;
+    const float curveTop = editorMin.y + 10.0f, curveBottom = editorMax.y - 10.0f;
     const float curveValueSpan = lane->valueMax - lane->valueMin;
     const float curveRangeMin = std::min(lane->valueMin, lane->valueMax);
     const float curveRangeMax = std::max(lane->valueMin, lane->valueMax);
@@ -199,14 +199,16 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     // The point the mouse is on (within its 8px pick area), or the one being
     // dragged, is drawn lit and 3px larger.
     int litPoint = -1, litCycle = 0;
-    if(isFocused && editorCanvasHovered && !ImGui::IsPopupOpen("Curve point value") && right > left &&
-       hoverRect(ImVec2(left, curveTop), ImVec2(right, curveBottom))) {
+    if(isFocused && curveDragPointIndex >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        litPoint = curveDragPointIndex;
+        litCycle = curveDragCycle;
+    } else if(isFocused && editorCanvasHovered && !ImGui::IsPopupOpen("Curve point value") && right > left &&
+       hoverRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y))) {
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const double mouseBeat = beatAtOffset(mouse.x - timelineMin.x);
         litCycle = clip->repeatContent
-            ? std::max(0, static_cast<int>(std::floor(std::max(0.0, mouseBeat - clip->startBeat) / repeatCycleDuration))) : 0;
-        if(curveDragPointIndex >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) litPoint = curveDragPointIndex;
-        else for(int i = static_cast<int>(points.size()) - 1; i >= 0; --i) {
+            ? ofClamp(static_cast<int>(cycleIndex(*clip, mouseBeat)), 0, cycles - 1) : 0;
+        for(int i = static_cast<int>(points.size()) - 1; i >= 0; --i) {
             const float pointX = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, points[i].beat, litCycle));
             if(std::abs(mouse.x - pointX) <= 8.0f && std::abs(mouse.y - curveValueToY(points[i].value)) <= 8.0f) {
                 litPoint = i;
@@ -214,7 +216,8 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             }
         }
     }
-    dl->PushClipRect(ImVec2(left, curveTop), ImVec2(right, curveBottom), true);
+    // Keep the margin available for endpoint handles, including selection rings.
+    dl->PushClipRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y), true);
     for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         if(cycle > 0) {
             const float markerX = timelineMin.x + beatOffset(clip->startBeat + cycle * repeatCycleDuration);
@@ -272,12 +275,13 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     // passing through and creating a point underneath it.
     if(isFocused) {
     const bool curveHovered = editorCanvasHovered && !ImGui::IsPopupOpen("Curve point value") && right > left &&
-        hoverRect(ImVec2(left, curveTop), ImVec2(right, curveBottom));
+        hoverRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y));
     const ImVec2 curveMouse = ImGui::GetIO().MousePos;
     const double curveTimelineBeat = beatAtOffset(curveMouse.x - timelineMin.x);
     const double curveSourceBeat = timelineToSourceBeat(*clip, curveTimelineBeat);
     const int hoveredCycle = clip->repeatContent
-        ? std::max(0, static_cast<int>(std::floor(std::max(0.0, curveTimelineBeat - clip->startBeat) / repeatCycleDuration))) : 0;
+        ? ofClamp(static_cast<int>(cycleIndex(*clip, curveTimelineBeat)), 0, cycles - 1) : 0;
+    int hitCycle = hoveredCycle;
     float curveValue = (curveBottom - curveMouse.y) / (curveBottom - curveTop);
     if(curveDb) curveValue = ofClamp(curveValue, 0.0f, 1.0f);
     else if(lane->curveClamp && std::abs(curveValueSpan) > 1e-9f) {
@@ -292,9 +296,15 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     auto hitPoint = [&]() {
         for(int i = static_cast<int>(lane->curvePoints.size()) - 1; i >= 0; --i) {
             const auto& point = lane->curvePoints[i];
-            const float pointX = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, point.beat, hoveredCycle));
             const float pointY = curveValueToY(point.value);
-            if(std::abs(curveMouse.x - pointX) <= 8.0f && std::abs(curveMouse.y - pointY) <= 8.0f) return i;
+            // At a repeat seam the previous cycle's endpoint is still pickable.
+            for(int cycle = hoveredCycle; cycle >= std::max(0, hoveredCycle - 1); --cycle) {
+                const float pointX = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, point.beat, cycle));
+                if(std::abs(curveMouse.x - pointX) <= 8.0f && std::abs(curveMouse.y - pointY) <= 8.0f) {
+                    hitCycle = cycle;
+                    return i;
+                }
+            }
         }
         return -1;
     };
@@ -347,6 +357,11 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             });
             curveSelectedPointIndices = {curveDragPointIndex}; // the new point, as if clicked
         }
+        if(curveDragPointIndex >= 0) {
+            curveDragCycle = hitCycle;
+            curveDragSourceStartBeat = lane->curvePoints[curveDragPointIndex].beat;
+            curveDragTimelineStartBeat = sourceToTimelineBeat(*clip, curveDragSourceStartBeat, curveDragCycle);
+        }
     }
     // Once a point or a tension handle has been grabbed, keep updating
     // it for as long as the mouse button is held, even if the cursor
@@ -358,9 +373,34 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             const double minimumBeat = curveDragPointIndex > 0 ? lane->curvePoints[curveDragPointIndex - 1].beat + 1.0 / kPPQ : 0.0;
             const double maximumBeat = curveDragPointIndex + 1 < static_cast<int>(lane->curvePoints.size())
                 ? lane->curvePoints[curveDragPointIndex + 1].beat - 1.0 / kPPQ : content;
-            lane->curvePoints[curveDragPointIndex].beat = std::max(minimumBeat,
-                std::min(std::max(minimumBeat, maximumBeat), view.snapBeat(curveSourceBeat)));
+            // Playback wraps at each repeat. Editing instead follows the grabbed
+            // occurrence continuously, stopping at the clip/source/neighbour bounds.
+            const double dragTimelineBeat = ofClamp(curveTimelineBeat, clip->startBeat, clip->startBeat + clip->durationBeats);
+            const double dragSourceBeat = curveDragSourceStartBeat +
+                (dragTimelineBeat - curveDragTimelineStartBeat) / effectiveStretch(*clip);
+            const double clipMinimumBeat = curveDragSourceStartBeat +
+                (clip->startBeat - curveDragTimelineStartBeat) / effectiveStretch(*clip);
+            const double clipMaximumBeat = curveDragSourceStartBeat +
+                (clip->startBeat + clip->durationBeats - curveDragTimelineStartBeat) / effectiveStretch(*clip);
+            const double dragMinimumBeat = std::max(minimumBeat, clipMinimumBeat);
+            const double dragMaximumBeat = std::min(maximumBeat, clipMaximumBeat);
+            lane->curvePoints[curveDragPointIndex].beat = std::max(dragMinimumBeat,
+                std::min(std::max(dragMinimumBeat, dragMaximumBeat), view.snapBeat(dragSourceBeat)));
             lane->curvePoints[curveDragPointIndex].value = curveValue;
+
+            // Use the edited value (after clamping/snapping), even outside the canvas.
+            if(curveValue <= 0.0f || curveValue >= 1.0f) {
+                const float y = curveValueToY(curveValue);
+                dl->AddLine(ImVec2(left, y), ImVec2(right, y),
+                            ImGui::GetColorU32(ImGuiCol_SliderGrabActive), 2.0f);
+            }
+            ImGui::SetNextWindowPos(ImVec2(curveMouse.x + 16.0f, curveMouse.y + 8.0f));
+            ImGui::BeginTooltip();
+            if(curveDb) {
+                if(curveValue <= 0.0f) ImGui::TextUnformatted("Y: -inf dB");
+                else ImGui::Text("Y: %+.2f dB", ofxOceanodeTimelineScale::normalizedToDb(*lane, curveValue));
+            } else ImGui::Text("Y: %.6g", lane->valueMin + curveValue * curveValueSpan);
+            ImGui::EndTooltip();
         } else if(curveTensionSegment >= 0 && curveTensionSegment < static_cast<int>(lane->curveTensions.size())) {
             auto& tension = lane->curveTensions[curveTensionSegment];
             if(interpolation == CurveInterpolationMode::Sigmoid) {

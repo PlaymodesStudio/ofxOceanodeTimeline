@@ -20,6 +20,7 @@ CASES = r'''
 #include "Controls/Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include <cassert>
 #include <iostream>
 void ofxOceanodeAbstractParameter::removeAllConnections() {
@@ -239,7 +240,7 @@ int main() {
     {
         // Curve points: a click selects one, Shift+click adds or removes,
         // Delete removes the selection; clicking an empty spot still adds.
-        // Canvas x from 230 (beats through the same view), values 108 (top) .. 362 (bottom).
+        // Canvas x from 230 (beats through the same view), values 110 (top) .. 360 (bottom).
         const ofxOceanodeTimelineEditorView curveView(model, 120.0f, 8.0, true, 0.25);
         auto beatX = [&](double beat) { return 230 + curveView.beatToPixels(beat); };
         auto& curveEditor = static_cast<ofxOceanodeTimelineCurveEditor&>(editors.forType(ofxOceanodeTimelineLaneType::Curve));
@@ -249,7 +250,7 @@ int main() {
         curve().curveTensions.assign(3, {});
         auto at = [&](int i) {
             const auto& point = curve().curvePoints[i];
-            return ImVec2(beatX(point.beat), 362 - point.value * 254);
+            return ImVec2(beatX(point.beat), 360 - point.value * 250);
         };
         auto click = [&](ImVec2 position) {
             frame(curveClip, curveLane, true, position, false);
@@ -287,6 +288,76 @@ int main() {
         assert(curve().curvePoints.size() == 3);
         pressDelete();
         assert(curve().curvePoints.size() == 2);
+
+        // A drag stays with the grabbed repeat: exact cycle ends and overshoots
+        // clamp horizontally while Y keeps updating, including trimmed repeats,
+        // stretches, one-shots and rotated content.
+        struct DragCase {
+            bool repeat;
+            double duration, content, stretch, offset;
+            int cycle;
+            double initial, rightLimit, leftLimit;
+        };
+        const float previousZoom = model.getViewState().pixelsPerSecond;
+        model.getViewState().pixelsPerSecond = 70; // keep the later repeats inside the test canvas
+        for(const auto& test : std::vector<DragCase>{
+                {true, 4, 4, 1, 0, 0, 3, 4, 0},
+                {true, 10, 4, 2, 0, 0, 3, 4, 0},
+                {true, 10, 4, 2, 0, 1, 0.5, 1, 0},
+                {false, 6, 4, 0.5, 0, 0, 3, 4, 0},
+                {true, 4, 4, 1, 1, 0, 3, 4, 1}}) {
+            auto& clip = *model.getClip(trackId, curveClip);
+            clip.startBeat = 0.5;
+            clip.repeatContent = test.repeat;
+            clip.durationBeats = test.duration;
+            clip.contentDurationBeats = test.content;
+            clip.contentStretch = test.stretch;
+            clip.contentOffsetBeats = test.offset;
+            curve().curvePoints = {{test.initial, 0.5f}};
+            curve().curveTensions.clear();
+            curve().valueMin = -10; curve().valueMax = 30;
+            curve().curveClamp = true;
+            auto dragFrame = [&](double beat, float y, bool down) {
+                frame(curveClip, curveLane, true, ImVec2(beatX(beat), y), down);
+            };
+            const double start = ofxOceanodeTimelineClipTime::sourceToTimelineBeat(clip, test.initial, test.cycle);
+            dragFrame(start, 235, false); dragFrame(start, 235, true);
+            assert(curveEditor.curveDragPointIndex == 0);
+            const double endpoint = ofxOceanodeTimelineClipTime::sourceToTimelineBeat(clip, test.rightLimit, test.cycle);
+            dragFrame(endpoint, 110, true);
+            assert(std::abs(curve().curvePoints[0].beat - test.rightLimit) < 1e-6);
+            assert(curve().curvePoints[0].value == 1.0f);
+            auto boundaryHighlighted = [&](float y) {
+                float minX = 1e9f, maxX = -1e9f;
+                for(const auto* list : ImGui::GetDrawData()->CmdLists)
+                    for(const auto& vertex : list->VtxBuffer)
+                        if(vertex.col == ImGui::GetColorU32(ImGuiCol_SliderGrabActive) &&
+                           std::abs(vertex.pos.y - y) < 2.1f) {
+                            minX = std::min(minX, vertex.pos.x); maxX = std::max(maxX, vertex.pos.x);
+                        }
+                return maxX - minX > 100.0f;
+            };
+            assert(boundaryHighlighted(110));
+            bool tooltipVisible = false;
+            for(const auto* window : ImGui::GetCurrentContext()->Windows)
+                if(window->Active && (window->Flags & ImGuiWindowFlags_Tooltip)) {
+                    tooltipVisible = true;
+                    assert(window->Pos.x > beatX(endpoint));
+                }
+            assert(tooltipVisible);
+            dragFrame(clip.startBeat + clip.durationBeats + 8, 235, true);
+            assert(std::abs(curve().curvePoints[0].beat - test.rightLimit) < 1e-6);
+            assert(curve().curvePoints[0].value == 0.5f);
+            dragFrame(clip.startBeat + clip.durationBeats + 10, 380, true);
+            assert(std::abs(curve().curvePoints[0].beat - test.rightLimit) < 1e-6);
+            assert(curve().curvePoints[0].value == 0.0f && boundaryHighlighted(360));
+            dragFrame(0, 235, true);
+            assert(std::abs(curve().curvePoints[0].beat - test.leftLimit) < 1e-6);
+            dragFrame(0, 235, false);
+            for(const auto* window : ImGui::GetCurrentContext()->Windows)
+                assert(!window->Active || !(window->Flags & ImGuiWindowFlags_Tooltip));
+        }
+        model.getViewState().pixelsPerSecond = previousZoom;
     }
     const auto sliderClip = model.createClip(trackId, "Slider", 0, 4);
     const auto sliderLane = model.createLane(trackId, sliderClip, "Slider", ofxOceanodeTimelineLaneType::MultiSlider);

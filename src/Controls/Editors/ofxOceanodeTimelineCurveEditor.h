@@ -23,6 +23,9 @@ private:
     std::string curveSelectionLaneId;
     std::set<int> curveSelectedPointIndices;
     int curveDragPointIndex = -1;
+    int curveDragCycle = 0;
+    double curveDragSourceStartBeat = 0.0;
+    double curveDragTimelineStartBeat = 0.0;
     int curveValuePointIndex = -1;
     float curveNumericValue = 0.0f;
     int curveTensionSegment = -1;
