@@ -73,8 +73,9 @@ lane's left properties pad for **Duplicate lane** and **Delete lane**.
 Several tracks can keep their lane editors open together. Each open track shows
 every clip's lanes as separate rows, in clip order. Selecting a clip on an open
 track expands all of that clip's lanes and folds the other clips' lanes on the
-same track. Double-clicking a clip also opens a closed track this way. Other
-tracks retain their own expansion state. A folded lane keeps a
+same track. Double-clicking a clip opens a closed track this way; when that
+track is already open, double-clicking any of its clips folds the whole track.
+Other tracks retain their own expansion state. A folded lane keeps a
 compact data preview in the clip's color, aligned to its position in the
 arrangement. Click the preview to focus its lane; double-click to expand it.
 

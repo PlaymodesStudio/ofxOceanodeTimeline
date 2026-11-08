@@ -2871,8 +2871,8 @@ void ofxOceanodeTimelineController::draw() {
                                 if(innerTrack.isMacroTrack()) {
                                     if(auto* editTrack = timeline.getTrack(*inner, innerTrack.id)) editTrack->macroUnfolded = true;
                                 } else if(innerEditorOpen() && editorRowScope.key == placement.at.key &&
-                                          editorRowTrackId == innerTrack.id && editorRowClipId == clip->id) {
-                                    // Double-clicking the clip whose editor is open closes it again.
+                                          editorRowTrackId == innerTrack.id) {
+                                    // Any clip on this open track folds its editor again.
                                     editorState.clipEditorOpen = false;
                                 } else if(!innerTrack.isWaveTrack) {
                                     openInnerClipEditor(placement.at, innerTrack.id, clip->id, clip->lanes.empty() ? std::string() : clip->lanes.front().id);
@@ -3855,6 +3855,8 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
                     // Into the macro's own timeline (next frame: never mid-iteration).
                     requestPlacedScope(timeline, track);
+                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && scopeEditorOnTrack(track.id)) {
+                    closeTrackEditor(track.id);
                 } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     editThisClip();
                     if(singleRowTrack && targetsView) {

@@ -136,12 +136,24 @@ int main() {
     assert(!folded(a) && !folded(b) && folded(c) && folded(d) == otherFolded);
     click(clipPoint(second));
     assert(folded(a) && folded(b) && !folded(c) && folded(d) == otherFolded);
-    click(clipPoint(second)); // double-clicking the open clip keeps its lanes expanded
-    assert(ui.scopeEditorOnTrack(track) && !folded(c));
-    click(arrow(track)); assert(!ui.scopeEditorOnTrack(track));
-    click(clipPoint(first)); click(clipPoint(first));
+    auto doubleClick = [&](const std::string& clipId) {
+        const auto point = clipPoint(clipId);
+        for(int i = 0; i < 25; ++i) fullFrame(point); // separate double-click gestures
+        click(point); click(point);
+        assert(ui.scopeEditorOnTrack(other) && folded(d) == otherFolded);
+    };
+    doubleClick(second); assert(!ui.scopeEditorOnTrack(track)); // same clip closes the track
+    doubleClick(first);
     assert(ui.scopeEditorOnTrack(track) && !folded(a) && !folded(b) && folded(c));
-    assert(ui.scopeEditorOnTrack(other) && folded(d) == otherFolded);
+    doubleClick(second); assert(!ui.scopeEditorOnTrack(track)); // another clip closes it too
+    doubleClick(second);
+    assert(ui.scopeEditorOnTrack(track) && folded(a) && folded(b) && !folded(c));
+    doubleClick(first); assert(!ui.scopeEditorOnTrack(track));
+    doubleClick(first);
+    assert(ui.scopeEditorOnTrack(track) && !folded(a) && !folded(b) && folded(c));
+    doubleClick(first); assert(!ui.scopeEditorOnTrack(track));
+    doubleClick(second);
+    assert(ui.scopeEditorOnTrack(track) && folded(a) && folded(b) && !folded(c));
     fullFrame(ImVec2(-100, -100), false, "clip-focus-folding");
 
     // A vertical trackpad swipe stops at a view of [0, 2 * last clip end].
