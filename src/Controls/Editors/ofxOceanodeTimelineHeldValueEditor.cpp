@@ -45,7 +45,17 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     const double sourceBeat = timelineToSourceBeat(*clip, mouseBeat);
     const int hoveredCycle = clip->repeatContent ? std::max(0, static_cast<int>(std::floor(
         std::max(0.0, mouseBeat - clip->startBeat) / cycleLength))) : 0;
+    const bool hovered = editorCanvasHovered && !ImGui::IsPopupOpen(valuePopup) &&
+        hoverRect(ImVec2(left, top), ImVec2(right, bottom));
+    // Match the clip's title/half-bright plot palette, at half saturation.
+    ofColor dropdownColor = track.color;
+    dropdownColor.setSaturation(dropdownColor.getSaturation() * 0.5f);
+    const ImU32 dropdownColors[] = {
+        IM_COL32(dropdownColor.r, dropdownColor.g, dropdownColor.b, 102),
+        IM_COL32(dropdownColor.r / 2, dropdownColor.g / 2, dropdownColor.b / 2, 102)
+    };
     int hit = -1;
+    float hitX = 0.0f;
     for(int cycle = 0; cycle < cycles; ++cycle) {
         for(size_t i = 0; i < lane->curvePoints.size(); ++i) {
             const auto& point = lane->curvePoints[i];
@@ -53,12 +63,10 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             const float endX = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip,
                 i + 1 < lane->curvePoints.size() ? lane->curvePoints[i + 1].beat : content, cycle));
             ImU32 color = IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 65 : 30);
-            // a hue per option, so repeated choices read at a glance
+            // Alternate by region, independent of the option; odd-sized
+            // patterns continue alternating across repeat boundaries.
             if(dropdown) {
-                const int optionCount = std::max(1, static_cast<int>(options.size()));
-                const int option = std::max(0, static_cast<int>(std::lround(point.value)));
-                color = ImColor::HSV(static_cast<float>(option % optionCount) / optionCount, 0.5f, 0.75f,
-                                     cycle == 0 ? 0.4f : 0.18f);
+                color = dropdownColors[(static_cast<size_t>(cycle) * lane->curvePoints.size() + i) % 2];
             }
             dl->AddRectFilled(ImVec2(x, top), ImVec2(endX, bottom), color);
             dl->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(235, 235, 235, 210), 2.0f);
@@ -66,12 +74,16 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             const std::string label = dropdown ? dropdownOptionLabel(options, point.value) : ofToString(point.value, 6);
             dl->AddText(ImVec2(x + 6.0f, top + 6.0f), IM_COL32(245, 245, 245, 235), label.c_str());
             dl->PopClipRect();
-            if(cycle == hoveredCycle && std::abs(mouse.x - x) <= 8.0f) hit = static_cast<int>(i);
+            if(cycle == hoveredCycle && std::abs(mouse.x - x) <= 8.0f) {
+                hit = static_cast<int>(i);
+                hitX = x;
+            }
         }
     }
+    if(dropdown && hovered && hit >= 0)
+        dl->AddLine(ImVec2(hitX, top), ImVec2(hitX, bottom),
+                    ImGui::GetColorU32(ImGuiCol_SliderGrabActive), 2.0f);
     if(isFocused) {
-        const bool hovered = editorCanvasHovered && !ImGui::IsPopupOpen(valuePopup) &&
-            hoverRect(ImVec2(left, top), ImVec2(right, bottom));
         if(hovered) ImGui::SetTooltip(dropdown
             ? "Click to select an option from here on. Drag a marker to move it.\nDouble-click or right-click a marker to change it. Shift-click to delete."
             : "Click to add a number. Drag a marker to move it.\nDouble-click or right-click a marker to edit. Shift-click to delete.");
