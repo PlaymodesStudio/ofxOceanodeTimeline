@@ -200,8 +200,7 @@ The left column holds each open clip editor. The track header's arrow opens
 or closes its lanes, **+** adds a lane or clip, and the hamburger opens shared
 Clip settings. When a track contains several clips, the floating window has a
 clip picker. Each lane's pad starts with fold, M/S and the lane name,
-then a line naming the lane type and how many targets it drives (orange when
-it has none), then its tabs:
+followed directly by its tabs:
 **Targets** (what the lane drives), **Lane** (name, type, output range and
 the editor's own settings), **Mutate** and **Rndm** (piano rolls only, see
 below). Drag the divider in the ruler's top-left corner to make the

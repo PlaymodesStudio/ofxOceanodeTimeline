@@ -6919,7 +6919,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
                       shallowProperties ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None);
-    // Header: fold, M/S, name; then a one-line summary of what the lane is.
+    // Header: fold, M/S and name; the lane tabs follow directly below.
     if(foldButton(("##laneCollapse" + lane->id).c_str(), true)) editorState.collapsedLaneIds.insert(lane->id);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse lane");
     ImGui::SameLine();
@@ -6929,16 +6929,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         if(laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id, isFocused,
                               ImVec2(nameWidth, 0)))
             focusLane();
-    }
-    {
-        const bool drivesSolo = lane->drivesTrackSolo && isToggleLane(*lane);
-        std::string targets = lane->bindingIds.empty() ? std::string(drivesSolo ? "" : "No target")
-            : lane->bindingIds.size() == 1 ? std::string("1 target") : ofToString(lane->bindingIds.size()) + " targets";
-        if(drivesSolo) targets += targets.empty() ? "Track solo" : " + track solo";
-        const std::string summary = fitText(std::string(laneDisplayName(*lane)) + "  /  " + targets,
-                                            ImGui::GetContentRegionAvail().x);
-        if(lane->bindingIds.empty() && !drivesSolo) ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.35f, 1.0f), "%s", summary.c_str());
-        else ImGui::TextDisabled("%s", summary.c_str());
     }
     if(ImGui::BeginTabBar("##clipPropertyTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
         if(ImGui::BeginTabItem("Targets")) {
