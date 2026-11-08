@@ -117,12 +117,7 @@ void resetCurveTensions(ofxOceanodeTimelineLane& lane) {
 }
 
 void eraseCurvePointWithTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex) {
-    if(pointIndex >= lane.curvePoints.size()) return;
-    lane.curvePoints.erase(lane.curvePoints.begin() + pointIndex);
-    // Topology changes should not retain hidden shaping state from segments
-    // that no longer exist. The resulting curve starts from a predictable,
-    // neutral shape in every interpolation mode.
-    resetCurveTensions(lane);
+    eraseCurvePointKeepingTensions(lane, pointIndex);
 }
 
 void eraseCurvePointKeepingTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex) {
@@ -132,7 +127,8 @@ void eraseCurvePointKeepingTensions(ofxOceanodeTimelineLane& lane, size_t pointI
     lane.curvePoints.erase(lane.curvePoints.begin() + pointIndex);
     if(pointIndex < tensions.size()) tensions.erase(tensions.begin() + pointIndex);
     else if(!tensions.empty()) tensions.pop_back();
-    if(pointIndex > 0 && pointIndex - 1 < tensions.size()) tensions[pointIndex - 1] = ofxOceanodeTimelineCurveTension{};
+    // An interior deletion merges two spans. Keep the incoming segment's
+    // settings on the merged span; every other segment retains its settings.
     tensions.resize(lane.curvePoints.size() > 0 ? lane.curvePoints.size() - 1 : 0);
     lane.curveTensions = std::move(tensions);
 }

@@ -59,6 +59,25 @@ int main() {
                     std::abort();
                 }
         }
+        // Deleting a point keeps all surviving shaping settings. An interior
+        // merge inherits the incoming span, including for several selected points.
+        for(const char* mode : {"Sigmoid", "Log / Exp"}) {
+            for(size_t index=0;index<4;++index) {
+                ofxOceanodeTimelineLane curve;
+                curve.curveInterpolation=mode;
+                curve.curvePoints={{0,0},{1,0.3f},{2,0.7f},{3,1}};
+                curve.curveTensions={{0.2f,3},{0.7f,0.3f},{0.4f,5}};
+                auto expected=curve.curveTensions;
+                expected.erase(expected.begin()+std::min(index,expected.size()-1));
+                ofxOceanodeTimelineLaneEditorUi::eraseCurvePointWithTensions(curve,index);
+                assert(curve.curvePoints.size()==3 && curve.curveTensions.size()==2);
+                assert(curve.curveInterpolation==mode);
+                for(size_t segment=0;segment<expected.size();++segment) {
+                    assert(curve.curveTensions[segment].inflection==expected[segment].inflection);
+                    assert(curve.curveTensions[segment].steepness==expected[segment].steepness);
+                }
+            }
+        }
         // A gate block drawn over others joins them; blocks that only touch stay apart.
         std::vector<ofxOceanodeTimelineGateRegion> gates{{4, 2, 0.5f}, {0, 1, 1.0f}, {1, 1, 0.8f}, {5, 2, 0.3f}, {5.5, 0.5, 1.0f}};
         ofxOceanodeTimelineMergeOverlappingGates(gates);

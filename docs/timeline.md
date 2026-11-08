@@ -175,6 +175,10 @@ Clip tab, or in the clip's right-click menu. A clip below 100% shows its chance
 next to its name; during playback, a clip its roll left out is drawn dimmed.
 Chance is saved with the clip; older presets load at 100%.
 
+Deleting a Curve point preserves the Sigmoid or Log/Exp settings of all
+surviving segments. When two segments merge, the merged span keeps the
+incoming segment's settings. The same rule applies to LFO control curves.
+
 ## Lane properties pad
 
 The left column holds each open clip editor. Its header row shows the clip's
