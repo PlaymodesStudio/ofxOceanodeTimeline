@@ -6843,7 +6843,9 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         ? std::max(laneEditors.defaultHeight(lane->type), 16.0f + std::max(lane->multiRowCount, chordBank.voices) * (ImGui::GetTextLineHeight() + 7.0f))
         : laneEditors.defaultHeight(lane->type);
     const auto laneHeightIt = editorState.laneEditorHeights.find(lane->id);
-    const float editorHeight = laneHeightIt != editorState.laneEditorHeights.end() ? laneHeightIt->second : defaultEditorHeight;
+    const float editorHeight = std::max(laneEditorMinHeight(),
+        laneHeightIt != editorState.laneEditorHeights.end() ? laneHeightIt->second : defaultEditorHeight);
+    const bool compact = compactLaneHeight(editorHeight);
     // Reserve the whole dock row first, then give only the timeline half an
     // input item. This leaves the left configuration zone interactive.
     ImGui::Dummy(ImVec2(contentWidth, editorHeight));
@@ -6894,7 +6896,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         if(resizeHovered || resizeActive) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
         if(resizeActive) {
             editorState.laneEditorHeights[lane->id] = ofClamp(editorState.laneResizeStartHeight + ImGui::GetIO().MousePos.y - editorState.laneResizeStartMouseY,
-                                                  kLaneEditorMinHeight, kLaneEditorMaxHeight);
+                                                  laneEditorMinHeight(), kLaneEditorMaxHeight);
         }
         if(editorState.resizingLaneId == lane->id && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) editorState.resizingLaneId.clear();
         const float separatorY = editorMax.y - kLaneResizeHandleHeight * 0.5f;
@@ -6910,10 +6912,13 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
     const float pianoKeyboardReserve = chordLane ? ofxOceanodeTimelineRegionEditor::chordHeaderWidth()
                                                  : laneEditors.keyboardReserve(lane->type);
+    // At a shallow height keep the header in view, even if this pad was
+    // scrolled while taller. The controls become accessible as it grows.
+    if(compact) ImGui::SetNextWindowScroll(ImVec2(0, 0));
     ImGui::BeginChild(("##clipProperties" + track.id + clip->id + lane->id).c_str(),
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
-                      ImGuiWindowFlags_None);
+                      compact ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None);
     // Header: fold, M/S, name; then a one-line summary of what the lane is.
     if(foldButton(("##laneCollapse" + lane->id).c_str(), true)) editorState.collapsedLaneIds.insert(lane->id);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse lane");
@@ -7086,8 +7091,21 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     // (and, for a piano roll, its pinned keyboard strip) to its left.
     dl->PushClipRect(ImVec2(zoneLeft - pianoKeyboardReserve, editorMin.y), ImVec2(editorMax.x, editorMax.y), true);
 
-    laneEditors.forType(lane->type).drawCanvas(context, {editorMin, editorMax, timelineMin,
-                                   zoneLeft, left, right, editorCanvasHovered, beatPosition});
+    if(compact) {
+        // Full editors (notably piano rolls with velocity/probability strips)
+        // need more vertical space. A miniature fits safely down to the header.
+        const double cycle = cycleDuration(*clip);
+        const int first = clip->repeatContent ? std::max(0, static_cast<int>(std::floor(
+            (beatAtOffset(left - timelineMin.x) - clip->startBeat) / cycle))) : 0;
+        const int last = clip->repeatContent ? std::max(first, static_cast<int>(std::floor(
+            (beatAtOffset(right - timelineMin.x) - clip->startBeat) / cycle))) : 0;
+        laneEditor.drawPreview({timeline, *container, scope(timeline), track, *clip, lane, view,
+                               timelineMin, ImVec2(editorMax.x, editorMax.y - kLaneResizeHandleHeight),
+                               left, right, first, last, IM_COL32(track.color.r, track.color.g, track.color.b, 255)});
+    } else {
+        laneEditor.drawCanvas(context, {editorMin, editorMax, timelineMin,
+                                       zoneLeft, left, right, editorCanvasHovered, beatPosition});
+    }
     const float playheadX = timelineMin.x + beatOffset(beatPosition);
     if(playheadX >= zoneLeft && playheadX <= editorMax.x) dl->AddLine(ImVec2(playheadX, editorMin.y), ImVec2(playheadX, editorMax.y), kPlayhead, 2.0f);
     dl->PopClipRect();

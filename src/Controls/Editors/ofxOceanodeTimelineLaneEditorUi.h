@@ -19,7 +19,13 @@ constexpr float kPianoKeyboardWidth = 38.0f;
 constexpr float kPianoScrollbarWidth = 10.0f;
 constexpr float kPianoZoomButtonHeight = 14.0f;
 constexpr float kLaneResizeHandleHeight = 10.0f;
-constexpr float kLaneEditorMinHeight = 90.0f;
+// One header line, the pad's top/bottom inset and the bottom resize grip.
+inline float laneEditorMinHeight() {
+    return ImGui::GetTextLineHeight() + 8.0f + kLaneResizeHandleHeight;
+}
+inline bool compactLaneHeight(float height) {
+    return height < laneEditorMinHeight() + 2.0f * ImGui::GetFrameHeightWithSpacing();
+}
 constexpr float kLaneEditorMaxHeight = 640.0f;
 inline float& kLabelWidth = ofxOceanodeTimelineEditorUi::labelWidth;
 const ImU32 kGrid = ofxOceanodeTimelineEditorUi::gridColor;

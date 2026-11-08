@@ -208,6 +208,10 @@ below). Drag the divider in the ruler's top-left corner to make the
 column wider or narrower; double-click it for the default width. The width is
 saved with the timeline.
 
+Drag an expanded lane's bottom divider to reduce it to its header row (fold,
+Mute, Solo and name). Shallow lanes show a compact preview; drag the divider
+down again to regain the full editor. The minimum follows the current font size.
+
 When playback stops, piano rolls release their gates once and stop writing
 pitch, gate and velocity. The instrument's own keyboard can then play freely
 while the timeline remains stopped. The piano roll's keyboard preview still

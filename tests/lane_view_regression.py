@@ -4,6 +4,7 @@ import controller_clarity_regression as controller
 
 native = controller.native
 native.fixture.CASES = native.fixture.CASES.split('int main()')[0] + r'''
+#include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
 int main() {
     ofDisableDataPath(); ofSeedRandom();
     auto window = std::make_shared<ofAppNoWindow>(); ofGetMainLoop()->setCurrentWindow(window);
@@ -63,6 +64,31 @@ int main() {
     for(int i=0;i<ImGui::GetCurrentContext()->TabBars.GetMapSize();++i)
         if(auto* bar=ImGui::GetCurrentContext()->TabBars.TryGetMapData(i))
             for(auto& tab:bar->Tabs) assert(std::string(ImGui::TabBarGetTabName(bar,&tab))!="Clip");
+    // Drag an expanded lane down to just its header, even if its properties
+    // were scrolled. It remains expanded and can be grown from the same grip.
+    {
+        const auto before=model.toJson();
+        const auto focused=ui.editorState.editorLaneId;
+        const auto focusedClip=ui.editorState.editorClipId;
+        chancePanel->Scroll.y=60.0f;
+        const ImVec2 grip(150,80+120-5);
+        frame(grip); frame(grip,true);
+        frame(ImVec2(grip.x,grip.y-200),true); frame(ImVec2(grip.x,grip.y-200)); frame();
+        const float minimum=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+        assert(std::abs(ui.editorState.laneEditorHeights.at(a)-minimum)<0.001f && minimum<40);
+        assert(!ui.editorState.collapsedLaneIds.count(a));
+        assert(chancePanel->Scroll.y==0 && !chancePanel->ScrollbarY);
+        assert(chancePanel->Size.y>=ImGui::GetTextLineHeight());
+        frame(ImVec2(-100,-100),false,"header-height-lane");
+        const ImVec2 grow(150,80+minimum-5);
+        frame(grow); frame(grow,true);
+        frame(ImVec2(grow.x,grow.y+120-minimum),true); frame(ImVec2(grow.x,grow.y+120-minimum)); frame();
+        assert(std::abs(ui.editorState.laneEditorHeights.at(a)-120)<0.001f);
+        assert(model.toJson()==before);
+        ui.editorState.editorLaneId=focused;
+        ui.editorState.editorClipId=focusedClip;
+        frame();
+    }
     const auto saved = model.toJson();
     auto panels = [&]() {
         std::vector<const ImGuiWindow*> panels;
@@ -214,6 +240,30 @@ int main() {
     io.AddMouseWheelEvent(0, -100); fullFrame(shortZoom);
     assert(std::abs(model.getViewState().pixelsPerSecond - width / model.beatToSeconds(1, 120)) < 0.001f);
     assert(model.getViewState().scrollX == 0);
+    // Every lane kind can draw safely at the new minimum. Tall editors use
+    // their preview here; no canvas edit may leak into a neighboring row.
+    const auto tinyTrack=model.createTrack("Header-height editors");
+    const auto tinyClip=model.createClip(tinyTrack,"Tiny",0,4);
+    using LaneType=ofxOceanodeTimelineLaneType;
+    for(auto type:{LaneType::Curve,LaneType::Step,LaneType::PianoRoll,LaneType::DrumGrid,
+                  LaneType::Number,LaneType::Dropdown,LaneType::MultiSlider,LaneType::MultiValue,LaneType::MultiGate}) {
+        const auto id=model.createLane(tinyTrack,tinyClip,"Header",type);
+        ui.editorState.laneEditorHeights[id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+    }
+    const auto tinyLfo=model.createLfoClip(tinyTrack,"","Small LFO",0,4);
+    for(const auto& lane:model.getClip(tinyTrack,tinyLfo)->lanes)
+        ui.editorState.laneEditorHeights[lane.id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+    ui.editorState.laneEditorHeights["lfoResult:"+tinyLfo]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+    auto tinyFrame=[&]() {
+        io.AddMousePosEvent(-100,-100); ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(1150,800));
+        ImGui::Begin("Header-height editors",nullptr,ImGuiWindowFlags_NoDecoration);
+        ui.drawLaneEditor(model,*model.getTrack(tinyTrack),1100,16,2);
+        ImGui::End(); ImGui::Render();
+    };
+    tinyFrame(); const auto tinySaved=model.toJson(); tinyFrame();
+    assert(model.toJson()==tinySaved);
+    capture("all-header-height-editors",atlas,aw,ah);
     ImGui::DestroyContext();
     std::cout << "Lane view passed: three separate rows across two clips, focus switches, "
                  "colored folded miniatures, time alignment, independent track expansion, "
