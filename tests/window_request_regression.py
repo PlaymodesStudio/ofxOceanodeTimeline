@@ -101,7 +101,7 @@ int main() {
     model.addBindingToLane(t,c,step,gate); model.setClipStep(t,c,step,0,"1",0.25);
     const auto wt=model.createWaveTrack("Samples");
     const auto wc=model.createClip(wt,"Audio slice",4,4);
-    const auto lc=model.createLfoClip(t,cutoff,"Filter modulation",5,4);
+    const auto lc=[&]{ const auto lfoClipId=model.createClip(t,"Filter modulation",5,4); const auto lfoLaneId=model.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=cutoff; if(!lfoTarget.empty()) model.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     ImGui::CreateContext(); auto& io=ImGui::GetIO();
     io.IniFilename=nullptr; io.DisplaySize=ImVec2(1280,1000); io.DeltaTime=1.f/60;
     unsigned char* atlas; int aw,ah; io.Fonts->GetTexDataAsRGBA32(&atlas,&aw,&ah);

@@ -35,16 +35,20 @@ int main(){
     notes=model.getLane(t,c,piano);assert(notes->pianoPitchBindingId!=oldPitch);
     assert(std::find(notes->bindingIds.begin(),notes->bindingIds.end(),oldPitch)==notes->bindingIds.end());
     assert(model.getLane(t,c,l)->bindingIds[0]==bound); // other lane retains original
-    const auto lc=model.createLfoClip(t,bound,"LFO",0,4);
-    assert(model.bindClipTarget(t,lc,"",pd.getEscapedName(),Role::LfoOutput));
-    const auto* oscillator=model.getClip(t,lc);assert(oscillator->lfoOutputMin==-10&&oscillator->lfoOutputMax==10);
-    assert(model.getBinding(t,oscillator->lfoOutputBindingId)->parameterPath==pd.getEscapedName());
+    // An LFO lane's first target sets its output range to that parameter's.
+    const auto lc=model.createClip(t,"LFO",0,4);
+    const auto lfoLane=model.createLane(t,lc,"LFO",ofxOceanodeTimelineLaneType::Lfo);
+    assert(model.bindClipTarget(t,lc,lfoLane,pd.getEscapedName(),Role::Lane));
+    const auto* oscillator=model.getLane(t,lc,lfoLane);assert(oscillator->valueMin==-10&&oscillator->valueMax==10);
+    assert(oscillator->bindingIds.size()==1 && model.getBinding(t,oscillator->bindingIds[0])->parameterPath==pd.getEscapedName());
+    // Its control sublanes are not lanes a target can be bound to.
+    assert(!model.bindClipTarget(t,lc,ofxOceanodeTimelineLfoControlKey(lfoLane,"frequency"),pd.getEscapedName(),Role::Lane));
+    assert(model.getLane(t,lc,ofxOceanodeTimelineLfoControlKey(lfoLane,"frequency"))->bindingIds.empty());
     const auto stable=model.toJson();
     assert(!model.bindClipTarget(t,c,l,"missing"));
     assert(!model.bindClipTarget(t,c,l,pd.getEscapedName(),Role::Pitch));
-    assert(!model.bindClipTarget(t,c,l,pd.getEscapedName(),Role::LfoOutput));
     assert(model.toJson()==stable);
-    std::cout<<"Target routing passed: unpublished parameters, shared binding reuse, piano roles, LFO outputs, sibling isolation and undo.\n";
+    std::cout<<"Target routing passed: unpublished parameters, shared binding reuse, piano roles, LFO lane ranges, sibling isolation and undo.\n";
 }
 '''
 if __name__=='__main__':fixture.main(cases=CASES)

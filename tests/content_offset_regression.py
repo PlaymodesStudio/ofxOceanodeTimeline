@@ -105,8 +105,9 @@ int main() {
     near(model.getClip(t, c)->contentOffsetBeats, 0);
     const auto lfoTrack = model.createTrack("LFO");
     const auto lfoBinding = model.addBinding(lfoTrack, level);
-    const auto lfo = model.createLfoClip(lfoTrack, lfoBinding, "LFO", 0, 4);
-    assert(!lfo.empty() && !model.setClipContentOffset(lfoTrack, lfo, 1));
+    const auto lfo = [&]{ const auto lfoClipId=model.createClip(lfoTrack,"LFO",0,4); const auto lfoLaneId=model.createLane(lfoTrack,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lfoBinding; if(!lfoTarget.empty()) model.addBindingToLane(lfoTrack,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
+    // A clip with an LFO lane rotates like any other.
+    assert(!lfo.empty() && model.setClipContentOffset(lfoTrack, lfo, 1));
     const auto waveTrack = model.createWaveTrack("Audio");
     const auto waveClip = model.createClip(waveTrack, "Audio", 0, 4);
     if(!waveClip.empty()) assert(!model.setClipContentOffset(waveTrack, waveClip, 1));

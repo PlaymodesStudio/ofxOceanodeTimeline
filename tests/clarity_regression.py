@@ -81,9 +81,9 @@ int main() {
     // LFO controls are not direct target contributions: only its result is.
     const auto lt = model.createTrack("Oscillator");
     const auto lb = model.addBinding(lt, target);
-    const auto lc = model.createLfoClip(lt, lb, "LFO", 0, 4);
+    const auto lc = [&]{ const auto lfoClipId=model.createClip(lt,"LFO",0,4); const auto lfoLaneId=model.createLane(lt,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lb; if(!lfoTarget.empty()) model.addBindingToLane(lt,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     result = check(1.5);
-    assert(result.contributions.size() == 1 && result.contributions[0].clipId == lc && result.contributions[0].laneIds.empty());
+    assert(result.contributions.size() == 1 && result.contributions[0].clipId == lc && result.contributions[0].laneIds.size() == 1);
     model.removeTrack(lt);
     // Every blend mode keeps its exact playback semantics in the trace.
     model.getBinding(t, b)->bypass = false;

@@ -24,7 +24,7 @@ int main() {
     const auto curve=model.createLane(t,c,"Curve",ofxOceanodeTimelineLaneType::Curve);
     model.addBindingToLane(t,c,curve,gb);
     model.getLane(t,c,curve)->curvePoints={{0,0.2f},{4,0.8f}};
-    const auto lfo=model.createLfoClip(t,gb,"LFO",9,4);
+    const auto lfo=[&]{ const auto lfoClipId=model.createClip(t,"LFO",9,4); const auto lfoLaneId=model.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=gb; if(!lfoTarget.empty()) model.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     const auto originalGroup=model.groupClips({{t,c},{t,lfo}});
     model.getTrack(t)->collapsed=true;
     model.getTrack(t)->color=ofColor(15,25,35);
@@ -45,7 +45,10 @@ int main() {
     assert(copy->clips[0].lanes[0].pianoNotes[0].pitch==64);
     assert(copy->clips[0].lanes[0].pianoPitchBindingId==copy->noteGroups[0].pitchBindingId);
     assert(copy->clips[0].lanes[0].pianoGateBindingId==copy->noteGroups[0].gateBindingId);
-    assert(copy->clips[1].isLfo && copy->clips[1].lfoOutputBindingId==copy->bindings[1].id);
+    assert(copy->clips[1].lanes.front().type==ofxOceanodeTimelineLaneType::Lfo &&
+           copy->clips[1].lanes.front().bindingIds==std::vector<std::string>{copy->bindings[1].id});
+    assert(copy->clips[1].lanes.front().lfoControls.front().id==
+           ofxOceanodeTimelineLfoControlKey(copy->clips[1].lanes.front().id,"frequency"));
     for(const auto& cl:copy->clips)for(const auto& ln:cl.lanes)for(const auto& b:ln.bindingIds)
         assert(b!=pb && b!=gb && model.getBinding(copyId,b));
     const auto* clonedGroup=model.getGroupForClip(copyId,copiedClip);

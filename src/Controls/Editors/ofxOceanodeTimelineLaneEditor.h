@@ -33,7 +33,7 @@ struct ofxOceanodeTimelineLaneCanvas {
 };
 
 // Read-only content and arrangement geometry for a clip's miniature preview.
-// lane is null for self-contained LFO clips.
+// lane is null when the clip has no lane to show.
 struct ofxOceanodeTimelineClipPreview {
     ofxOceanodeTimelineManager& timeline;
     ofxOceanodeContainer& container;

@@ -259,13 +259,15 @@ int main() {
         ui.editorState.laneEditorHeights[id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
         ui.editorState.collapsedLaneIds.erase(id);
     }
-    const auto tinyLfo=model.createLfoClip(tinyTrack,"","Small LFO",0,4);
+    const auto tinyLfo=[&]{ const auto lfoClipId=model.createClip(tinyTrack,"Small LFO",0,4); const auto lfoLaneId=model.createLane(tinyTrack,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=""; if(!lfoTarget.empty()) model.addBindingToLane(tinyTrack,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     for(const auto& lane:model.getClip(tinyTrack,tinyLfo)->lanes) {
         ui.editorState.laneEditorHeights[lane.id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
         ui.editorState.collapsedLaneIds.erase(lane.id);
     }
-    ui.editorState.collapsedLaneIds.erase("lfoResult:"+tinyLfo);
-    ui.editorState.laneEditorHeights["lfoResult:"+tinyLfo]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+    for(const auto& control:model.getClip(tinyTrack,tinyLfo)->lanes.front().lfoControls) {
+        ui.editorState.laneEditorHeights[control.id]=ofxOceanodeTimelineLaneEditorUi::laneEditorMinHeight();
+        ui.editorState.expandedLfoControlKeys.insert(control.id);
+    }
     auto tinyFrame=[&]() {
         io.AddMousePosEvent(-100,-100); ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(1150,800));

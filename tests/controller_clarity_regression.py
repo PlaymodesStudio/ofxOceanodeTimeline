@@ -101,7 +101,7 @@ int main() {
     model.addBindingToLane(t,c,step,gate); model.setClipStep(t,c,step,0,"1",0.25);
     const auto wt=model.createWaveTrack("Samples");
     const auto wc=model.createClip(wt,"Audio slice",4,4);
-    const auto lc=model.createLfoClip(t,cutoff,"Filter modulation",5,4);
+    const auto lc=[&]{ const auto lfoClipId=model.createClip(t,"Filter modulation",5,4); const auto lfoLaneId=model.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=cutoff; if(!lfoTarget.empty()) model.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     ImGui::CreateContext(); auto& io=ImGui::GetIO();
     io.IniFilename=nullptr; io.DisplaySize=ImVec2(1280,1000); io.DeltaTime=1.f/60;
     unsigned char* atlas; int aw,ah; io.Fonts->GetTexDataAsRGBA32(&atlas,&aw,&ah);
@@ -1013,10 +1013,10 @@ int main() {
     assert(!model.requestParameterLane("missing",addedParameter));
     const auto lfoOnly=model.createTrack("LFO only");
     const auto lb=model.addBinding(lfoOnly,addedParameter);
-    const auto oldLfo=model.createLfoClip(lfoOnly,lb,"LFO",0,4);
+    const auto oldLfo=[&]{ const auto lfoClipId=model.createClip(lfoOnly,"LFO",0,4); const auto lfoLaneId=model.createLane(lfoOnly,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lb; if(!lfoTarget.empty()) model.addBindingToLane(lfoOnly,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     assert(model.requestParameterLane(lfoOnly,addedParameter)); frame();
-    assert(model.getClip(lfoOnly,oldLfo)->isLfo && model.getTrack(lfoOnly)->clips.size()==2);
-    assert(!model.getClip(lfoOnly,ui.editorState.editorClipId)->isLfo);
+    // A clip holding an LFO lane is an ordinary clip: the parameter goes in it.
+    assert(model.getTrack(lfoOnly)->clips.size()==1 && ui.editorState.editorClipId==oldLfo);
 
     // A parameter's "Add to Timeline" opens one dialog: New Track... names the
     // track and the clip, a track gets a new clip; Create makes it all at once

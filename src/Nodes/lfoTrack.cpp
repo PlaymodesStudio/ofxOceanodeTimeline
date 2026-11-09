@@ -10,7 +10,7 @@
 void lfoTrack::setup() {
     addTimeSourceParameter(); // which timeline's beat it follows (inspector)
     color = ofColor::red;
-    description = "Outputs the LFO clips of a timeline track. Value is the LFO as drawn (0..1), "
+    description = "Outputs the LFO of a timeline track (the first LFO lane of each clip). Value is the LFO as drawn (0..1), "
                   "Phase the raw 0..1 ramp, Cycle the whole cycles since the timeline start "
                   "(continuous across clips and repeats) and Reset fires on each wrap during playback. "
                   "Connect Phase -> Phase and Cycle -> Step of random nodes in Sync To Transport mode "

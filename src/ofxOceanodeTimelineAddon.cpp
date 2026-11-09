@@ -165,10 +165,9 @@ public:
                             // A track already driving it reads as such.
                             const std::string label = track.name + (bound ? "  (bound)" : "") + "##track" + track.id;
                             if(ImGui::BeginMenu(label.c_str())) {
-                                const bool hasClip = std::any_of(track.clips.begin(), track.clips.end(),
-                                                                 [](const auto& clip) { return !clip.isLfo; });
+                                const bool hasClip = !track.clips.empty();
                                 const bool hasLane = std::any_of(track.clips.begin(), track.clips.end(),
-                                                                 [](const auto& clip) { return !clip.isLfo && !clip.lanes.empty(); });
+                                                                 [](const auto& clip) { return !clip.lanes.empty(); });
                                 if(ImGui::MenuItem("New Target...", nullptr, false, hasLane)) requestClip(ref, canvas, track.id, Kind::Target);
                                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                                     ImGui::SetTooltip(hasLane ? "Make an existing lane of this track drive this parameter too."

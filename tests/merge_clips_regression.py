@@ -108,7 +108,7 @@ int main() {
     owner.transport->seekToBeat(13.5); model.update(); model.applyAutomation(); near(levelValue, 0.1);
 
     // Refused: LFO clips, a clip with itself, clips of different tracks.
-    const auto lfo = model.createLfoClip(t, lb, "LFO", 20, 4);
+    const auto lfo = [&]{ const auto lfoClipId=model.createClip(t,"LFO",20,4); const auto lfoLaneId=model.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lb; if(!lfoTarget.empty()) model.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     assert(model.mergeClips(t, a, lfo).empty() && model.getClip(t, lfo));
     assert(model.mergeClips(t, a, a).empty());
     // Four clips one after the other merge at once: the shared Level number
@@ -131,7 +131,7 @@ int main() {
     std::vector<std::pair<float, float>> before4;
     for(double at = 0.07; at < 8.0; at += 0.25) { read4(at); before4.push_back({levelValue.get(), cutoffValue.get()}); }
     // Refused as a whole (an LFO among them): nothing changes.
-    const auto lfo4 = model.createLfoClip(t4, l4, "LFO", 20, 4);
+    const auto lfo4 = [&]{ const auto lfoClipId=model.createClip(t4,"LFO",20,4); const auto lfoLaneId=model.createLane(t4,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=l4; if(!lfoTarget.empty()) model.addBindingToLane(t4,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     auto withLfo = four; withLfo.push_back(lfo4);
     assert(model.mergeClips(t4, withLfo).empty() && model.getTrack(t4)->clips.size() == 5);
     model.removeClip(t4, lfo4);

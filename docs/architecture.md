@@ -3,7 +3,8 @@
 The timeline separates project data and playback, arrangement interaction, and
 content editing. An automation clip can contain several lanes; lane types are
 where Curve, Step Sequencer, Piano Roll and the other automation editors live.
-An LFO is a self-contained clip with its own control lanes.
+An LFO is a lane type whose oscillator is shaped by control sublanes
+(`ofxOceanodeTimelineLane::lfoControls`), addressed as `<lane id>#<control>`.
 
 ## Ownership
 
@@ -21,7 +22,7 @@ An LFO is a self-contained clip with its own control lanes.
 | `Editors/ofxOceanodeTimelineClipEditorState.h` | Shell focus, open clip IDs, folding and row layout |
 | `Editors/ofxOceanodeTimelineLaneEditors.*` | Concrete lane editor instances and lane-type dispatch |
 | `Editors/ofxOceanodeTimelineLaneEditor.h` | Properties/canvas/preview interface and frame-local contexts |
-| `Editors/ofxOceanodeTimelineLfoEditor.*` | LFO properties, result view, control curves, point selection and clip preview |
+| `Editors/ofxOceanodeTimelineLfoEditor.*` | LFO lane properties, result canvas and preview, and its control sublane rows (drawn by the shell under the lane) with their point selection |
 | `Editors/ofxOceanodeTimelineBpmEditor.*` | Tempo editor and its drag/popup state |
 | `Editors/ofxOceanodeTimelineWaveVolumeEditor.*` | Track volume editor and its drag/popup state |
 | `Editors/ofxOceanodeTimelineEditorView.*` | Tempo-aware beat/pixel conversion, snapping and grid policy |
@@ -64,7 +65,7 @@ pointers into vectors between frames. Persistent content remains in the model,
 using the existing JSON format and playback/evaluation code.
 
 An editor can report a request to open its note-group dialog; the shell handles
-that request. LFO returns a rename request. Add/remove lane and clip operations
+that request. Add/remove lane and clip operations
 stay at the controller's deferred mutation point so drawing cannot invalidate
 track, clip or lane vectors mid-iteration. The controller forwards selection
 cleanup and track removal to the editors without accessing their private state.
@@ -172,7 +173,7 @@ identity, routing, playback precedence or the preset format.
 
 `Editors/ofxOceanodeTimelinePresentation.h` centralizes content summaries,
 terminology, clip timing and the shared properties panel. The controller uses
-it in automation/audio editors and arrangement menus; LFO uses the same panel.
+it in automation/audio editors and arrangement menus.
 Lane timing is never edited in lane properties. `drawTargets` on the editor
 interface lets Piano Roll own its role-specific routing controls separately
 from content settings (Drum Grid uses the same role bindings and draws its own

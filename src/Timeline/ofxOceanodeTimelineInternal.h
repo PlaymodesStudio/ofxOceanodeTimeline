@@ -406,7 +406,7 @@ inline double lfoMapNormalized(float minimum, float maximum, bool logScale, floa
 // Step and Linear segments are integrated in closed form; Log/Exp and
 // Sigmoid with fixed-resolution Simpson (end-clustered), so results are deterministic and
 // identical during playback, scrubbing and in the editor. Per-point running
-// totals are cached per clip and rebuilt when the curve changes.
+// totals are cached per LFO lane and rebuilt when the curve changes.
 // ---------------------------------------------------------------------------
 
 constexpr double kMinLfoPeriodBeats = 1.0 / 1024.0;
@@ -491,13 +491,20 @@ inline uint64_t lfoCurveSignature(const ofxOceanodeTimelineLane& lane, const Lfo
     return h;
 }
 
-// Cycles from source beat 0 to sourceBeat.
-inline double lfoCycles(const ofxOceanodeTimelineClip& clip, double sourceBeat,
+// A control sublane of an LFO lane takes part: not muted, and soloed when
+// one of its siblings is.
+inline bool lfoControlAudible(const ofxOceanodeTimelineLane& lfoLane, const ofxOceanodeTimelineLane& control) {
+    return !control.muted && (control.solo || std::none_of(lfoLane.lfoControls.begin(), lfoLane.lfoControls.end(),
+                                                          [](const auto& other) { return other.solo; }));
+}
+
+// Cycles of an LFO lane from source beat 0 to sourceBeat.
+inline double lfoCycles(const ofxOceanodeTimelineLane& lfoLane, double sourceBeat,
                         const ofxOceanodeTimelinePlayContext* context = nullptr) {
     const auto* definition = lfoParameterDefinition("frequency");
     const ofxOceanodeTimelineLane* frequencyLane = nullptr;
-    for(const auto& lane : clip.lanes) {
-        if(laneAudible(clip, lane) && lane.lfoParameter == "frequency" &&
+    for(const auto& lane : lfoLane.lfoControls) {
+        if(lfoControlAudible(lfoLane, lane) && lane.lfoParameter == "frequency" &&
            !(context != nullptr && ofxOceanodeTimelineLaneChanceSilenced(lane, *context))) { frequencyLane = &lane; break; }
     }
     if(definition != nullptr && frequencyLane != nullptr && frequencyLane->curveInterpolation == "Value") {
@@ -517,10 +524,10 @@ inline double lfoCycles(const ofxOceanodeTimelineClip& clip, double sourceBeat,
     const auto& points = frequencyLane->curvePoints;
     if(points.size() == 1) return sourceBeat / curve.pointPeriod(0);
 
-    // Running totals per point, cached per clip (rebuilt only when the curve changes).
+    // Running totals per point, cached per LFO lane (rebuilt only when the curve changes).
     static thread_local std::map<std::string, LfoCyclesCache> caches;
     if(caches.size() > 256) caches.clear();
-    LfoCyclesCache& cache = caches[clip.id];
+    LfoCyclesCache& cache = caches[lfoLane.id];
     const uint64_t signature = lfoCurveSignature(*frequencyLane, *definition);
     if(cache.signature != signature || cache.atPoint.size() != points.size()) {
         cache.signature = signature;

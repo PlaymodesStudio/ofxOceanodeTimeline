@@ -67,8 +67,24 @@ enum class ofxOceanodeTimelineLaneType {
     // A drum kit step sequencer: one row per kit piece (a component of the
     // instrument's Gate/Pitch vectors), see ofxOceanodeTimelineDrumRow. Uses
     // the piano roll's role bindings (pianoGateBindingId / pianoPitchBindingId).
-    DrumGrid
+    DrumGrid,
+    // An oscillator: its result (0..1, mapped through valueMin/valueMax)
+    // drives the lane's targets like a Curve does. Its shape is set by the
+    // control sublanes in lfoControls (frequency, roundness, skew...), each a
+    // Curve-like envelope over the clip's source beats.
+    Lfo
 };
+
+inline bool ofxOceanodeTimelineIsLfoLane(ofxOceanodeTimelineLaneType type) {
+    return type == ofxOceanodeTimelineLaneType::Lfo;
+}
+
+// The key an LFO control sublane is addressed by (getLane, editor folding
+// and heights): its LFO lane's id and the control it sets. Controls have no
+// ids of their own, so copying an LFO lane never leaves stale ones behind.
+inline std::string ofxOceanodeTimelineLfoControlKey(const std::string& lfoLaneId, const std::string& parameter) {
+    return lfoLaneId + "#" + parameter;
+}
 
 // Lane types that drive an instrument through the note roles (pianoPitch /
 // pianoGate / pianoVelocity binding ids) instead of plain bindingIds.
@@ -102,7 +118,7 @@ enum class ofxOceanodeTimelineTimebase {
 
 // Explicit right-edge operations, shared by numeric editing and mouse drags.
 enum class ofxOceanodeTimelineEndEdit { Repeat, Trim, Stretch };
-enum class ofxOceanodeTimelineTargetRole { Lane, Pitch, Gate, Velocity, LfoOutput, Duration, Filter, Stutter };
+enum class ofxOceanodeTimelineTargetRole { Lane, Pitch, Gate, Velocity, Duration, Filter, Stutter };
 
 // A read-only explanation of the same evaluation used by playback. Shared
 // piano lanes appear as one voice-pool contribution with all source lane IDs.
@@ -569,9 +585,15 @@ struct ofxOceanodeTimelineLane {
     std::string waveFilePath;
     float waveGain = 1.0f;
     bool isWaveVolume = false;
-    // LFO clips use ordinary Curve data for their parameter automation, but
-    // keep the semantic role here so the evaluator and editor do not have to
-    // infer it from the user-facing lane name.
+    // LFO lanes: the oscillator's control sublanes, one per control (see
+    // kLfoParameters), kept in that order. Each uses ordinary Curve data
+    // (curvePoints / curveTensions / curveInterpolation, plus the lfo* fields
+    // below) and its own muted / solo / chance, solo scoped to its siblings.
+    // Kept when the lane is switched to another type, so switching back
+    // restores them; only saved for LFO lanes.
+    std::vector<ofxOceanodeTimelineLane> lfoControls;
+    // LFO control sublanes: which control this is (kLfoParameters id), so
+    // the evaluator and editor do not infer it from the user-facing name.
     std::string lfoParameter;
     // LFO lanes also offer a "Value" mode (curveInterpolation == "Value"): the
     // control holds this constant (normalized 0..1 like curve point values)
@@ -594,6 +616,13 @@ struct ofxOceanodeTimelineLane {
     // on it. Saved as "stepFollow" in the lane's drumGrid.
     bool drumStepFollow = true;
 };
+
+// Gives an LFO lane's control sublanes the ids derived from the lane's own
+// (see ofxOceanodeTimelineLfoControlKey). Called wherever a lane gets a new id.
+inline void ofxOceanodeTimelineSyncLfoControlIds(ofxOceanodeTimelineLane& lane) {
+    for(auto& control : lane.lfoControls)
+        control.id = ofxOceanodeTimelineLfoControlKey(lane.id, control.lfoParameter);
+}
 
 // The rules a note of this mutation group follows (0 = A; a missing group
 // falls back to A).
@@ -647,7 +676,7 @@ struct ofxOceanodeTimelineClip {
     // Where in its content the clip starts playing, in source beats
     // (0 <= offset < contentDurationBeats): the content plays rotated, from
     // there to its end and on from its start. Automation clips only; Wave
-    // clips keep their file position in waveSourceStartBeat, LFOs their phase.
+    // clips keep their file position in waveSourceStartBeat.
     double contentOffsetBeats = 0.0;
     // A macro clip (on a macro track) plays its macro's timeline through its
     // own timing: content length = one pass of that timeline, stretch = its
@@ -663,17 +692,10 @@ struct ofxOceanodeTimelineClip {
     // the clip starts: each play/seek and each loop pass. The result is not
     // stored here: see ofxOceanodeTimelineClipChanceSilenced().
     float chance = 1.0f;
-    // An LFO clip is a self-contained continuous modulator. Its Curve lanes
-    // describe the oscillator controls and this binding receives the final
-    // normalized result mapped through lfoOutputMin/lfoOutputMax.
-    bool isLfo = false;
     // Created by "Capture state as curve points". A track keeps at most one
     // such clip and grows it as captures are made at new playhead positions.
     // This is persisted so the workflow continues after loading a preset.
     bool isStateCapture = false;
-    std::string lfoOutputBindingId;
-    float lfoOutputMin = 0.0f;
-    float lfoOutputMax = 1.0f;
     // Audio clips belong to a Wave track. These fields intentionally live on
     // the clip rather than on a lane: a Wave track can contain several
     // independently placed files. Volume is not here -- it belongs to the
@@ -700,6 +722,12 @@ struct ofxOceanodeTimelineClip {
     std::vector<float> waveformPeaks;
     std::vector<ofxOceanodeTimelineLane> lanes;
 };
+
+inline bool ofxOceanodeTimelineClipHasLfoLane(const ofxOceanodeTimelineClip& clip) {
+    for(const auto& lane : clip.lanes)
+        if(ofxOceanodeTimelineIsLfoLane(lane.type)) return true;
+    return false;
+}
 
 // Canonical conversion between source beats (the data stored in a clip) and
 // timeline beats (where the clip is displayed and played). Keeping this in
@@ -776,10 +804,11 @@ namespace ofxOceanodeTimelineScale {
     float gainToNormalized(const ofxOceanodeTimelineLane& lane, float gain);
 }
 
-// One LFO track sampled at a timeline beat (see ofxOceanodeTimelineManager::evaluateLfoTrack).
+// A track's LFO sampled at a timeline beat (see ofxOceanodeTimelineManager::evaluateLfoTrack):
+// the first LFO lane of each of its clips.
 struct ofxOceanodeTimelineLfoSample {
-    bool active = false;  // an LFO clip covers this beat
-    float value = 0.0f;   // shaped LFO result, normalized 0..1 (as the clip draws it)
+    bool active = false;  // a clip with an LFO lane covers this beat
+    float value = 0.0f;   // shaped LFO result, normalized 0..1 (as the lane draws it)
     float phase = 0.0f;   // raw 0..1 ramp of the current cycle, before shaping/phase offset
     double cycle = 0.0;   // whole cycles counted from the timeline start, continuous across
                           // clips and repeats; increments exactly when phase wraps
@@ -799,16 +828,27 @@ namespace ofxOceanodeTimelineLfo {
     // Label for a grid value, e.g. 1/4, 2T (triplet), 1/2. (dotted)
     std::string frequencyGridLabel(float beats, int mode = 0);
 
-    // Evaluates the complete LFO result in normalized 0..1 space. The shape
-    // is intentionally shared by playback and the editor's result view.
-    float evaluate(const ofxOceanodeTimelineClip& clip, double sourceBeat,
+    // Evaluates an LFO lane's complete result in normalized 0..1 space. The
+    // shape is intentionally shared by playback and the editor's result view.
+    float evaluate(const ofxOceanodeTimelineLane& lfoLane, double sourceBeat,
                    const ofxOceanodeTimelinePlayContext* context = nullptr);
     // Oscillator cycles accumulated from source beat 0 (integrated frequency).
-    double cyclesAt(const ofxOceanodeTimelineClip& clip, double sourceBeat);
-    float evaluateParameter(const ofxOceanodeTimelineClip& clip,
+    double cyclesAt(const ofxOceanodeTimelineLane& lfoLane, double sourceBeat,
+                    const ofxOceanodeTimelinePlayContext* context = nullptr);
+    // One control's real value (e.g. beats for frequency) at a source beat.
+    float evaluateParameter(const ofxOceanodeTimelineLane& lfoLane,
                             const std::string& parameter,
                             double sourceBeat, float fallback,
                             const ofxOceanodeTimelinePlayContext* context = nullptr);
+    // Whether a control sublane takes part: not muted, and soloed when one
+    // of its siblings is.
+    bool controlAudible(const ofxOceanodeTimelineLane& lfoLane, const ofxOceanodeTimelineLane& control);
+    // Adds any control sublane the lane is missing (a new LFO lane, a lane
+    // switched to LFO, a file from before a control existed), each at its
+    // control's default over contentDurationBeats, in kLfoParameters order.
+    void ensureControls(ofxOceanodeTimelineLane& lfoLane, double contentDurationBeats);
+    // The first LFO lane of a clip, nullptr when it has none.
+    const ofxOceanodeTimelineLane* firstLane(const ofxOceanodeTimelineClip& clip);
 }
 
 // A note group shows the parameters a piano roll drives (pitch, gate,
@@ -1278,7 +1318,7 @@ public:
 
     // Plays a clip backwards at the same speed, in place: automation clips
     // get their content mirrored, macro clips play their macro's timeline
-    // backwards, Wave clips toggle Reverse. LFO clips are refused.
+    // backwards, Wave clips toggle Reverse.
     bool reverseClip(const std::string& trackId, const std::string& clipId);
     bool reverseClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
 
@@ -1672,28 +1712,15 @@ public:
                            const std::string& requestedName = "Clip",
                            double startBeat = 0.0,
                            double durationBeats = 4.0);
-    std::string createLfoClip(const std::string& trackId,
-                              const std::string& outputBindingId = std::string(),
-                              const std::string& requestedName = "LFO",
-                              double startBeat = 0.0,
-                              double durationBeats = 4.0);
-    std::string createLfoClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
-                              const std::string& outputBindingId = std::string(),
-                              const std::string& requestedName = "LFO",
-                              double startBeat = 0.0,
-                              double durationBeats = 4.0);
-    // Samples the LFO clips of a track at a timeline beat. A pure function of the
-    // beat, so playback, scrubbing and seeking give identical results. Between or
-    // outside clips: active = false, phase 0, cycle holds the count reached so far.
+    // Samples a track's LFO (the first LFO lane of each clip) at a timeline
+    // beat. A pure function of the beat, so playback, scrubbing and seeking
+    // give identical results. Between or outside clips: active = false,
+    // phase 0, cycle holds the count reached so far.
     ofxOceanodeTimelineLfoSample evaluateLfoTrack(const std::string& trackId, double beat) const;
     ofxOceanodeTimelineLfoSample evaluateLfoTrack(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat) const;
-    // Adds any LFO control lane the clip is missing (e.g. clips saved before a
-    // control existed), initialised to the control's default.
-    void ensureLfoLanes(const std::string& trackId, const std::string& clipId);
-    void ensureLfoLanes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     bool renameClip(const std::string& trackId, const std::string& clipId, const std::string& requestedName);
     bool renameClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& requestedName);
-    // Cuts an automation or LFO clip in two at a timeline beat; the right
+    // Cuts an automation clip in two at a timeline beat; the right
     // part becomes a new clip (returned) and both halves play exactly what
     // the original played. Repeating clips are cut anywhere (the right part
     // keeps repeating from the phase it was cut at). Not for Wave clips.
@@ -1703,7 +1730,7 @@ public:
     // plays). Lanes driving the same parameters with the same kind of lane
     // become one lane; the others are kept as separate lanes holding data only
     // over their own clip's span. The earlier clip keeps its id and settings,
-    // the other is removed. Refused for Wave, LFO and state-capture clips, and
+    // the other is removed. Refused for Wave and state-capture clips, and
     // for a Drum Grid that would need a row longer than its maximum.
     // Returns the merged clip's id ("" when refused).
     std::string mergeClips(const std::string& trackId, const std::string& firstClipId, const std::string& secondClipId);
@@ -1723,8 +1750,7 @@ public:
     //    remapped to that track's binding of the same parameter; lanes with no
     //    match are dropped (nothing left: refused).
     //  - dstBindingId set: only the lane srcLaneId, now driving that binding (a
-    //    piano roll needs a note group's row and takes its pitch/gate/velocity;
-    //    an LFO clip is copied whole with its output moved there).
+    //    piano roll needs a note group's row and takes its pitch/gate/velocity).
     // Wave clips only go to Wave tracks.
     std::string duplicateClip(const std::string& srcTrackId, const std::string& clipId,
                               const std::string& dstTrackId, double newStartBeat,
@@ -1747,7 +1773,6 @@ public:
     // time in front of the content, which stays where it is on the timeline
     // (works for one-shot clips too, unlike trimClipStart, which can only grow
     // repeating content by whole cycles). Moving it later is a plain trim.
-    // LFO clips (whose phase runs from the clip start) fall back to trimClipStart.
     bool extendClipStart(const std::string& trackId, const std::string& clipId, double newStartBeat);
     bool extendClipStart(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, double newStartBeat);
     bool removeClip(const std::string& trackId, const std::string& clipId);
@@ -1763,7 +1788,7 @@ public:
                            const std::string& requestedName = "Lane",
                            ofxOceanodeTimelineLaneType type = ofxOceanodeTimelineLaneType::Step);
     // Independent content, same bindings/settings, inserted immediately after the source.
-    // Fixed-role LFO and legacy Wave lanes cannot be duplicated.
+    // Legacy Wave lanes cannot be duplicated.
     std::string duplicateLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     std::string duplicateLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId);
     bool removeLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
@@ -1867,7 +1892,7 @@ public:
         return played;
     }
     // Rotates where the clip's content starts (see contentOffsetBeats);
-    // refused for Wave and LFO clips.
+    // refused for Wave clips.
     bool setClipContentOffset(const std::string& trackId, const std::string& clipId, double offsetBeats);
     bool setClipContentOffset(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                               const std::string& clipId, double offsetBeats);

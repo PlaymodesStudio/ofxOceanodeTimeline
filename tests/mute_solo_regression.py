@@ -73,11 +73,11 @@ int main() {
     model.addBindingToLane(other,cc,cl,cb); model.setClipNumber(other,cc,cl,0,0.25f);
     model.setSchedulingEnabled(false); model.update(); near(cv,0.25);
     model.setLaneMuted(other,cc,cl,true); cv=0.9f; model.update(); near(cv,0.9);
-    const auto lfo=model.createLfoClip(other,cb,"LFO",0,4);
+    const auto lfo=[&]{ const auto lfoClipId=model.createClip(other,"LFO",0,4); const auto lfoLaneId=model.createLane(other,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=cb; if(!lfoTarget.empty()) model.addBindingToLane(other,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
 
     auto* oscillator=model.getClip(other,lfo);
     std::string frequency,scale;
-    for(auto& lane:oscillator->lanes) {
+    for(auto& lane:oscillator->lanes.front().lfoControls) {
         if(lane.lfoParameter=="frequency") {
             frequency=lane.id; lane.curveInterpolation="Value";
             lane.lfoValue=ofxOceanodeTimelineLfo::laneNormalizedFromValue(lane,1);
@@ -88,17 +88,17 @@ int main() {
         }
     }
     assert(!frequency.empty() && !scale.empty());
-    near(ofxOceanodeTimelineLfo::cyclesAt(*oscillator,1),1);
-    near(ofxOceanodeTimelineLfo::evaluateParameter(*oscillator,"scale",0,1),0.25);
+    near(ofxOceanodeTimelineLfo::cyclesAt(oscillator->lanes.front(),1),1);
+    near(ofxOceanodeTimelineLfo::evaluateParameter(oscillator->lanes.front(),"scale",0,1),0.25);
     model.setLaneMuted(other,lfo,frequency,true);
-    near(ofxOceanodeTimelineLfo::cyclesAt(*oscillator,1),0.25);
+    near(ofxOceanodeTimelineLfo::cyclesAt(oscillator->lanes.front(),1),0.25);
     model.setLaneMuted(other,lfo,frequency,false);
     model.setLaneSolo(other,lfo,frequency,true);
-    near(ofxOceanodeTimelineLfo::evaluateParameter(*oscillator,"scale",0,1),1);
+    near(ofxOceanodeTimelineLfo::evaluateParameter(oscillator->lanes.front(),"scale",0,1),1);
     model.setLaneSolo(other,lfo,scale,true);
-    near(ofxOceanodeTimelineLfo::evaluateParameter(*oscillator,"scale",0,1),0.25);
+    near(ofxOceanodeTimelineLfo::evaluateParameter(oscillator->lanes.front(),"scale",0,1),0.25);
     model.setLaneMuted(other,lfo,scale,true);
-    near(ofxOceanodeTimelineLfo::evaluateParameter(*oscillator,"scale",0,1),1);
+    near(ofxOceanodeTimelineLfo::evaluateParameter(oscillator->lanes.front(),"scale",0,1),1);
     model.setTrackMuted(other,true); model.update(); assert(!model.evaluateLfoTrack(other,0).active);
     model.setTrackMuted(other,false); assert(model.evaluateLfoTrack(other,0).active);
     AudioProbe audio; model.setWaveAudioProvider(&audio);

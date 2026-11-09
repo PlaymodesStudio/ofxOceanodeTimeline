@@ -635,7 +635,7 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
             const size_t firstOfTrack = result.size();
             double latestStart = -std::numeric_limits<double>::infinity();
             for(const auto& clip : track.clips) {
-                if(clip.muted || clip.isLfo || ofxOceanodeTimelineClipChanceSilenced(clip, outerContext)) continue;
+                if(clip.muted || ofxOceanodeTimelineClipChanceSilenced(clip, outerContext)) continue;
                 const double start = clip.startBeat;
                 const double end = start + std::max(1.0 / 24.0, clip.durationBeats);
                 if(atBeat ? (from < start - kEpsilon || from >= end - kEpsilon)
@@ -925,7 +925,7 @@ void ofxOceanodeTimelineManager::mirrorSequence(ofxOceanodeTimelineSequence& seq
             if(track.isMacroTrack()) {
                 clip.contentOffsetBeats = reversedContentOffset(clip, ofxOceanodeTimelineClipTime::contentOffset(clip));
                 clip.reversed = !clip.reversed;
-            } else if(!track.isWaveTrack && !clip.isLfo) mirrorClipContent(clip);
+            } else if(!track.isWaveTrack) mirrorClipContent(clip);
         }
 }
 
@@ -1065,13 +1065,15 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
             if(binding.hasLiveOverride) continuouslyEvaluatedPathsCache.emplace(binding.parameterPath);
         for(const auto& clip : track.clips) {
             if(clip.muted) continue;
-            if(clip.isLfo) {
-                if(const auto* binding = bindingFor(clip.lfoOutputBindingId))
-                    continuouslyEvaluatedPathsCache.emplace(binding->parameterPath);
-                continue;
-            }
             for(const auto& lane : clip.lanes) {
                 if(!laneAudible(clip, lane)) continue;
+                if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
+                    // An oscillator changes all the time, like a curve.
+                    for(const auto& bindingId : lane.bindingIds)
+                        if(const auto* binding = bindingFor(bindingId))
+                            continuouslyEvaluatedPathsCache.emplace(binding->parameterPath);
+                    continue;
+                }
                 if(lane.type == ofxOceanodeTimelineLaneType::Curve) {
                     for(const auto& bindingId : lane.bindingIds)
                         if(const auto* binding = bindingFor(bindingId)) {
@@ -1469,25 +1471,26 @@ bool ofxOceanodeTimelineManager::noteGroupInstrument(const ofxOceanodeTimelineTr
 }
 namespace {
 
-// Cycles started in the first `sourceBeats` of an LFO clip's content: a partial
+// Cycles started in the first `sourceBeats` of an LFO lane's content: a partial
 // final cycle counts as started, so the next segment begins a new cycle index.
-double lfoCyclesStarted(const ofxOceanodeTimelineClip& clip, double sourceBeats,
+double lfoCyclesStarted(const ofxOceanodeTimelineLane& lfoLane, double sourceBeats,
                         const ofxOceanodeTimelinePlayContext& context) {
     if(sourceBeats <= kEpsilon) return 0.0;
-    const double cycles = lfoCycles(clip, sourceBeats, &context);
+    const double cycles = lfoCycles(lfoLane, sourceBeats, &context);
     return cycles <= 1e-9 ? 0.0 : std::ceil(cycles - 1e-9);
 }
 
-// Cycles started over a whole clip (all its repeats, including a partial last one).
-double lfoClipCyclesStarted(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelinePlayContext& context) {
+// Cycles an LFO lane starts over its whole clip (all its repeats, including a partial last one).
+double lfoClipCyclesStarted(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lfoLane,
+                            const ofxOceanodeTimelinePlayContext& context) {
     using namespace ofxOceanodeTimelineClipTime;
     const double content = sourceDuration(clip);
-    if(!clip.repeatContent) return lfoCyclesStarted(clip, content, context);
+    if(!clip.repeatContent) return lfoCyclesStarted(lfoLane, content, context);
     const double duration = std::max(1.0 / 24.0, clip.durationBeats);
     const double repeatLength = cycleDuration(clip);
     const double fullRepeats = std::floor(duration / repeatLength + 1e-9);
     const double partialSource = (duration - fullRepeats * repeatLength) / stretch(clip);
-    return fullRepeats * lfoCyclesStarted(clip, content, context) + lfoCyclesStarted(clip, partialSource, context);
+    return fullRepeats * lfoCyclesStarted(lfoLane, content, context) + lfoCyclesStarted(lfoLane, partialSource, context);
 }
 } // namespace
 
@@ -1505,28 +1508,30 @@ ofxOceanodeTimelineLfoSample ofxOceanodeTimelineManager::evaluateLfoTrack(const 
     const auto* track = getTrack(sequence, trackId);
     if(track == nullptr || !isTrackAudible(*track)) return sample;
 
-    std::vector<const ofxOceanodeTimelineClip*> clips;
-    for(const auto& clip : track->clips) if(clip.isLfo) clips.push_back(&clip);
-    std::sort(clips.begin(), clips.end(), [](const auto* a, const auto* b) { return a->startBeat < b->startBeat; });
+    // Each clip with an LFO lane, through its first one.
+    std::vector<std::pair<const ofxOceanodeTimelineClip*, const ofxOceanodeTimelineLane*>> clips;
+    for(const auto& clip : track->clips)
+        if(const auto* lane = ofxOceanodeTimelineLfo::firstLane(clip)) clips.emplace_back(&clip, lane);
+    std::sort(clips.begin(), clips.end(), [](const auto& a, const auto& b) { return a.first->startBeat < b.first->startBeat; });
 
     double cyclesBefore = 0.0;
-    for(const auto* clip : clips) {
+    for(const auto& [clip, lane] : clips) {
         double sourceBeat = 0.0;
         if(clipSourceBeat(*clip, playContext, beat, sourceBeat)) {
             // Earlier repeats of this clip, then the position inside the current one.
             const int64_t repeat = ofxOceanodeTimelineClipTime::cycleIndex(*clip, beat);
             cyclesBefore += static_cast<double>(repeat) *
-                lfoCyclesStarted(*clip, ofxOceanodeTimelineClipTime::sourceDuration(*clip), playContext);
-            const double cycles = lfoCycles(*clip, sourceBeat, &playContext);
+                lfoCyclesStarted(*lane, ofxOceanodeTimelineClipTime::sourceDuration(*clip), playContext);
+            const double cycles = lfoCycles(*lane, sourceBeat, &playContext);
             const double whole = std::floor(cycles);
             sample.active = true;
             sample.cycle = cyclesBefore + whole;
             sample.phase = static_cast<float>(cycles - whole);
-            sample.value = ofxOceanodeTimelineLfo::evaluate(*clip, sourceBeat, &playContext);
+            sample.value = ofxOceanodeTimelineLfo::evaluate(*lane, sourceBeat, &playContext);
             return sample;
         }
         if(beat < clip->startBeat) break; // in a gap before this clip
-        cyclesBefore += lfoClipCyclesStarted(*clip, playContext);
+        cyclesBefore += lfoClipCyclesStarted(*clip, *lane, playContext);
     }
     sample.cycle = cyclesBefore;
     return sample;
@@ -1719,7 +1724,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 const bool restingOnEnd = !isPlaying && std::abs(beatPosition - endTimelineBeat) <= kEpsilon;
                 const bool endingCurve = (crossedEnd || restingOnEnd) &&
                     endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon &&
-                    !clip.isLfo && !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
+                    !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
                 if(endingCurve) {
                     sourceBeat = curveEndSourceBeat(clip, endBeat);
                     endingCurveClips[&clip] = endTimelineBeat;
@@ -1730,21 +1735,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                     // whatever the previous pass ended on through this one.
                     // Curves, numbers, dropdowns and sliders have no rest and hold,
                     // as they do between clips; piano gates already rest at 0.
-                    if(!ofxOceanodeTimelineClipChanceSilenced(clip, copyContext) || clip.muted || clip.isLfo || !clipCoversBeat(clip, beat)) continue;
+                    if(!ofxOceanodeTimelineClipChanceSilenced(clip, copyContext) || clip.muted || !clipCoversBeat(clip, beat)) continue;
                     for(const auto& lane : clip.lanes)
                         if(laneAudible(clip, lane)) contributeRest(lane);
-                    continue;
-                }
-                if(clip.isLfo) {
-                    const auto* binding = bindingFor(track, clip.lfoOutputBindingId);
-                    if(wantsBinding(binding) && !binding->bypass) {
-                        const float normalized = ofxOceanodeTimelineLfo::evaluate(clip, sourceBeat, &copyContext);
-                        const float mapped = clip.lfoOutputMin + normalized *
-                            (clip.lfoOutputMax - clip.lfoOutputMin);
-                        std::string value = binding->valueType == typeid(int).name()
-                            ? automationText::formatInt(std::lround(mapped)) : automationText::formatFloat(mapped);
-                        contribute(binding, std::move(value));
-                    }
                     continue;
                 }
                 for(const auto& sourceLane : clip.lanes) {
@@ -1782,6 +1775,19 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 if(std::find(contributionLanes.begin(), contributionLanes.end(), noteLane->id) == contributionLanes.end())
                                     contributionLanes.push_back(noteLane->id);
                         }
+                    }
+                    if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
+                        // The oscillator's 0..1 result through the lane's
+                        // output range (always linear: no dB scale).
+                        const float normalized = ofxOceanodeTimelineLfo::evaluate(lane, sourceBeat, &copyContext);
+                        const float mapped = lane.valueMin + normalized * (lane.valueMax - lane.valueMin);
+                        for(const auto& bindingId : lane.bindingIds) {
+                            const auto* binding = bindingFor(track, bindingId);
+                            if(!wantsBinding(binding) || binding->bypass) continue;
+                            contribute(binding, binding->valueType == typeid(int).name()
+                                ? automationText::formatInt(std::lround(mapped)) : automationText::formatFloat(mapped));
+                        }
+                        continue;
                     }
                     if(lane.type == ofxOceanodeTimelineLaneType::Wave) {
                         // Real audio, not automation -- never touches a
@@ -2324,6 +2330,15 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
             hash.add(step.probability); hash.add(step.ratchet); hash.add(step.duration); hash.add(step.filter); hash.add(step.stutter);
         }
     }
+    // An LFO lane's controls (kept but unused on other lane types).
+    if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
+        hash.add(lane.lfoControls.size());
+        for(const auto& control : lane.lfoControls) {
+            hash.word(lanePlaybackSignature(control));
+            hash.add(control.muted); hash.add(control.solo); hash.add(control.chance);
+            hash.add(control.lfoSnap); hash.add(control.lfoSnapMode);
+        }
+    }
     return hash.result();
 }
 
@@ -2393,8 +2408,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
             hash.add(clip.reversed); hash.add(clip.macroSnapshot);
-            hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isLfo); hash.add(clip.isStateCapture); hash.add(clip.lfoOutputBindingId);
-            hash.add(clip.lfoOutputMin); hash.add(clip.lfoOutputMax);
+            hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
             hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
@@ -2478,7 +2492,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
         for(const auto& track : placement.sequence->tracks) {
             if(track.isWaveTrack || !isTrackAudible(track)) continue; // audio, not automation
             for(const auto& clip : track.clips) {
-                if(clip.muted || clip.isLfo) continue;
+                if(clip.muted) continue;
                 if(std::none_of(clip.lanes.begin(), clip.lanes.end(),
                                 [&](const auto& lane) { return laneScheduled(track, lane); })) continue;
                 const double clipStart = clip.startBeat;
@@ -2562,6 +2576,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                     for(const auto& point : lane.curvePoints) addSourceBeat(point.beat);
                                     break;
                                 case ofxOceanodeTimelineLaneType::Curve:
+                                case ofxOceanodeTimelineLaneType::Lfo:
                                 case ofxOceanodeTimelineLaneType::Wave:
                                     // Continuous, or not automation at all.
                                     break;
@@ -2680,7 +2695,7 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
             const bool audible = isTrackAudible(track);
             const double beat = placement.map.toSequence(transport.beatPosition);
             for(const auto& clip : track.clips) {
-                if(clip.isLfo || !clipCoversBeat(clip, beat)) continue;
+                if(!clipCoversBeat(clip, beat)) continue;
                 for(const auto& lane : clip.lanes) {
                     const bool multiRow = lane.type == ofxOceanodeTimelineLaneType::MultiGate ||
                                           lane.type == ofxOceanodeTimelineLaneType::MultiValue;

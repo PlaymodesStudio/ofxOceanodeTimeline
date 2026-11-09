@@ -12,6 +12,7 @@ ofxOceanodeTimelineLaneEditor& ofxOceanodeTimelineLaneEditors::forType(ofxOceano
         case ofxOceanodeTimelineLaneType::MultiValue: return multiValue;
         case ofxOceanodeTimelineLaneType::MultiGate: return multiGate;
         case ofxOceanodeTimelineLaneType::DrumGrid: return drumGrid;
+        case ofxOceanodeTimelineLaneType::Lfo: return lfo;
         default: return step; // Legacy Wave lanes are migrated by the model.
     }
 }
@@ -23,5 +24,6 @@ float ofxOceanodeTimelineLaneEditors::keyboardReserve(ofxOceanodeTimelineLaneTyp
 }
 float ofxOceanodeTimelineLaneEditors::defaultHeight(ofxOceanodeTimelineLaneType type) {
     if(type == ofxOceanodeTimelineLaneType::DrumGrid) return 320.0f;
+    if(type == ofxOceanodeTimelineLaneType::Lfo) return 230.0f;
     return type == ofxOceanodeTimelineLaneType::PianoRoll ? 480.0f : 190.0f;
 }

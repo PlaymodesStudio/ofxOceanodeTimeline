@@ -160,8 +160,12 @@ int main() {
             assert(copies.getLane(t, c, d)->pianoNotes[0].pitch == 72);
             assert(copies.duplicateLane(t, c, "missing").empty());
         }
-        const auto lfo = copies.createLfoClip(t, "", "LFO", 0, 4);
-        assert(copies.duplicateLane(t, lfo, copies.getClip(t, lfo)->lanes.front().id).empty());
+        const auto lfo = [&]{ const auto lfoClipId=copies.createClip(t,"LFO",0,4); const auto lfoLaneId=copies.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=""; if(!lfoTarget.empty()) copies.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
+        // An LFO lane duplicates with its control sublanes, keyed by the copy.
+        const auto lfoCopy = copies.duplicateLane(t, lfo, copies.getClip(t, lfo)->lanes.front().id);
+        assert(!lfoCopy.empty() && copies.getLane(t, lfo, lfoCopy)->lfoControls.size() == 9);
+        assert(copies.getLane(t, lfo, ofxOceanodeTimelineLfoControlKey(lfoCopy, "frequency")) ==
+               &copies.getLane(t, lfo, lfoCopy)->lfoControls.front());
         assert(copies.duplicateLane("missing", "missing", "missing").empty());
     }
     // Independent bass/melody piano lanes share one set of note bindings
@@ -458,8 +462,8 @@ int main() {
     near(level.get(), 0.5);
 
     const auto lfoTrack = timeline.createTrack("LFO");
-    const auto lfo = timeline.createLfoClip(lfoTrack, "", "Modulator", 0.0, 4.0);
-    assert(!lfo.empty() && timeline.getClip(lfoTrack, lfo)->isLfo);
+    const auto lfo = [&]{ const auto lfoClipId=timeline.createClip(lfoTrack,"Modulator",0.0,4.0); const auto lfoLaneId=timeline.createLane(lfoTrack,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=""; if(!lfoTarget.empty()) timeline.addBindingToLane(lfoTrack,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
+    assert(!lfo.empty() && timeline.getClip(lfoTrack, lfo)->lanes.front().type == ofxOceanodeTimelineLaneType::Lfo);
     assert(timeline.evaluateLfoTrack(lfoTrack, 0.5).active);
     const auto waveTrack = timeline.createWaveTrack("Audio");
     assert(timeline.getTrack(waveTrack)->isWaveTrack);
@@ -479,7 +483,8 @@ int main() {
     assert(restored.getClipGroups().size() == 1 && restored.getMarkers().size() == 1);
     assert(restored.getTrack(track)->bindings.front().parameterPath == parameter.getEscapedName());
     assert(restored.getTrack(captureTrack)->clips.front().isStateCapture);
-    assert(restored.getClip(lfoTrack, lfo)->isLfo && restored.getTrack(waveTrack)->isWaveTrack);
+    assert(restored.getClip(lfoTrack, lfo)->lanes.front().type == ofxOceanodeTimelineLaneType::Lfo &&
+           restored.getClip(lfoTrack, lfo)->lanes.front().lfoControls.size() == 9 && restored.getTrack(waveTrack)->isWaveTrack);
     near(restored.getViewState().scrollX, 123.0); near(restored.getBeatsPerBar(), 3.5);
     owner.transport->seekToBeat(0.5); restored.update(); near(value.get(), 66.0);
     assert(restored.removeTrack(addTrack)); restored.update(); near(value.get(), 64.0);

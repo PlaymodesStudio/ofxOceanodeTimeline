@@ -19,18 +19,17 @@ inline const char* laneKind(const ofxOceanodeTimelineLane& lane) {
         case ofxOceanodeTimelineLaneType::MultiGate: return lane.multiRowCount <= 1 ? "Toggle" : "Multi Gate";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
+        case ofxOceanodeTimelineLaneType::Lfo: return "LFO";
         default: return "Audio";
     }
 }
 inline size_t targetCount(const ofxOceanodeTimelineClip& clip) {
     std::set<std::string> ids;
-    if(clip.isLfo && !clip.lfoOutputBindingId.empty()) ids.insert(clip.lfoOutputBindingId);
-    else for(const auto& lane : clip.lanes) ids.insert(lane.bindingIds.begin(), lane.bindingIds.end());
+    for(const auto& lane : clip.lanes) ids.insert(lane.bindingIds.begin(), lane.bindingIds.end());
     return ids.size();
 }
 inline std::string clipSummary(const ofxOceanodeTimelineClip& clip, bool audio = false) {
     if(audio || !clip.waveFilePath.empty()) return clip.waveFilePath.empty() ? "Audio / No file" : "Audio";
-    if(clip.isLfo) return clip.lfoOutputBindingId.empty() ? "LFO / No target" : "LFO / 1 target";
     if(clip.lanes.empty()) return "Empty clip";
     const std::string content = clip.lanes.size() == 1 ? laneKind(clip.lanes.front())
         : ofToString(clip.lanes.size()) + " lanes";
@@ -138,7 +137,7 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline, ofxOceanodeTime
             ? "Playback speed against the global tempo (the same setting as Stretch). Audio pitch follows."
             : "Speed against the global tempo (the same setting as Stretch): x2 plays the content twice as fast.");
     }
-    if(!track.isWaveTrack && !clip.isLfo) {
+    if(!track.isWaveTrack) {
         field("Offset (source beats)", "Offset");
         double offset = clip.contentOffsetBeats;
         if(ImGui::InputDouble("##offset", &offset, rows ? 0.0 : view.editIncrement(), 1, "%.3f") && std::isfinite(offset))

@@ -6,7 +6,6 @@
 #include "Editors/ofxOceanodeTimelineEditorView.h"
 #include "Editors/ofxOceanodeTimelineWaveVolumeEditor.h"
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
-#include "Editors/ofxOceanodeTimelineLfoEditor.h"
 #include "Timeline/ofxOceanodeTimeline.h"
 #include "imgui.h"
 #include <deque>
@@ -193,7 +192,6 @@ private:
     ofxOceanodeTimelineEditorView editorView(const ofxOceanodeTimelineManager& timeline,
                                             float fallbackBpm, double endBeat) const;
     ofxOceanodeTimelineClipEditorState editorState;
-    ofxOceanodeTimelineLfoEditor lfoEditor;
     ofxOceanodeTimelineLaneEditors laneEditors;
     ofxOceanodeTimelineBpmEditor bpmEditor;
     ofxOceanodeTimelineWaveVolumeEditor waveVolumeEditor;

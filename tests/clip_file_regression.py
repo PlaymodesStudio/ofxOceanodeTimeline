@@ -116,12 +116,14 @@ int main() {
     auto loaded=dest.readClipFile(file.string(),&error);
     assert(!loaded.is_null() && error.empty());
     auto disk=dest.importClip(loaded,"",9,mapping,&error); assert(!disk.second.empty());
-    // LFO control lanes survive; remapping changes only its final output.
-    const auto lfo=source.createLfoClip(t,fb,"Movement",0,4);
+    // An LFO lane keeps its control sublanes; remapping changes only its targets.
+    const auto lfo=[&]{ const auto lfoClipId=source.createClip(t,"Movement",0,4); const auto lfoLaneId=source.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=fb; if(!lfoTarget.empty()) source.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     auto oscillator=dest.importClip(source.exportClip(t,lfo),"",0,{{fb,nf.getEscapedName()}},&error);
     const auto* lc=dest.getClip(oscillator.first,oscillator.second);
-    assert(lc && lc->isLfo && !lc->lanes.empty() && !lc->lfoOutputBindingId.empty());
-    assert(dest.getBinding(oscillator.first,lc->lfoOutputBindingId)->parameterPath==nf.getEscapedName());
+    assert(lc && lc->lanes.size()==1 && lc->lanes[0].type==ofxOceanodeTimelineLaneType::Lfo);
+    assert(lc->lanes[0].lfoControls.size()==9 && lc->lanes[0].bindingIds.size()==1);
+    assert(lc->lanes[0].lfoControls[0].id==ofxOceanodeTimelineLfoControlKey(lc->lanes[0].id,"frequency"));
+    assert(dest.getBinding(oscillator.first,lc->lanes[0].bindingIds[0])->parameterPath==nf.getEscapedName());
     // Exported audio brings its own media copy and survives moving the bundle.
     const auto audio=folder/"sample.wav";
     {

@@ -69,6 +69,78 @@ void viewFromJson(const ofJson& json, ofxOceanodeTimelineViewState& view) {
 // Drum Grid lane data. Format 2: hits at beat positions. Files without a
 // format hold the first, index-based shape (steps x beatsPerStep), converted
 // on load so they play exactly as before.
+// An LFO lane's control sublanes: only what a control uses (its Curve data,
+// its playback switches and the lfo* settings).
+ofJson lfoControlsToJson(const ofxOceanodeTimelineLane& lane) {
+    ofJson controls = ofJson::array();
+    for(const auto& control : lane.lfoControls) {
+        ofJson json;
+        json["parameter"] = control.lfoParameter;
+        json["name"] = control.name;
+        json["muted"] = control.muted;
+        json["solo"] = control.solo;
+        json["chance"] = control.chance;
+        json["valueMin"] = control.valueMin;
+        json["valueMax"] = control.valueMax;
+        json["interpolation"] = control.curveInterpolation;
+        json["value"] = control.lfoValue;
+        json["snap"] = control.lfoSnap;
+        json["snapMode"] = control.lfoSnapMode;
+        json["valueQuantizeSteps"] = control.valueQuantizeSteps;
+        json["valueSnap"] = control.valueSnap;
+        json["points"] = ofJson::array();
+        for(const auto& point : control.curvePoints) json["points"].push_back({{"beat", point.beat}, {"value", point.value}});
+        json["tensions"] = ofJson::array();
+        for(const auto& tension : control.curveTensions)
+            json["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
+        controls.push_back(std::move(json));
+    }
+    return controls;
+}
+
+void lfoControlsFromJson(const ofJson& json, ofxOceanodeTimelineLane& lane) {
+    lane.lfoControls.clear();
+    if(!json.is_array()) return;
+    for(const auto& controlJson : json) {
+        if(!controlJson.is_object()) continue;
+        const auto* definition = lfoParameterDefinition(controlJson.value("parameter", std::string()));
+        if(definition == nullptr) continue;
+        if(std::any_of(lane.lfoControls.begin(), lane.lfoControls.end(),
+                       [&](const auto& c) { return c.lfoParameter == definition->id; })) continue;
+        ofxOceanodeTimelineLane control;
+        control.type = ofxOceanodeTimelineLaneType::Curve;
+        control.lfoParameter = definition->id;
+        control.name = controlJson.value("name", std::string(definition->name));
+        control.muted = controlJson.value("muted", false);
+        control.solo = controlJson.value("solo", false);
+        control.chance = ofClamp(controlJson.value("chance", 1.0f), 0.0f, 1.0f);
+        control.valueMin = controlJson.value("valueMin", definition->minimum);
+        control.valueMax = controlJson.value("valueMax", definition->maximum);
+        control.curveInterpolation = controlJson.value("interpolation", std::string("Linear"));
+        if(control.curveInterpolation != "Value" && control.curveInterpolation != "Step" &&
+           control.curveInterpolation != "Linear" && control.curveInterpolation != "Log / Exp" &&
+           control.curveInterpolation != "Sigmoid") control.curveInterpolation = "Linear";
+        control.lfoValue = ofClamp(controlJson.value("value", 0.5f), 0.0f, 1.0f);
+        control.lfoSnap = controlJson.value("snap", false);
+        control.lfoSnapMode = std::max(0, std::min(2, controlJson.value("snapMode", 0)));
+        control.valueQuantizeSteps = std::max(0, controlJson.value("valueQuantizeSteps", 0));
+        control.valueSnap = controlJson.value("valueSnap", false);
+        if(controlJson.contains("points") && controlJson["points"].is_array())
+            for(const auto& pointJson : controlJson["points"])
+                if(pointJson.is_object())
+                    control.curvePoints.push_back({pointJson.value("beat", 0.0), pointJson.value("value", 0.0f)});
+        std::sort(control.curvePoints.begin(), control.curvePoints.end(),
+                  [](const auto& a, const auto& b) { return a.beat < b.beat; });
+        if(controlJson.contains("tensions") && controlJson["tensions"].is_array())
+            for(const auto& tensionJson : controlJson["tensions"])
+                if(tensionJson.is_object())
+                    control.curveTensions.push_back({ofClamp(tensionJson.value("inflection", 0.5f), 0.01f, 0.99f),
+                                                     ofClamp(tensionJson.value("steepness", 1.0f), 0.1f, 10.0f)});
+        control.curveTensions.resize(control.curvePoints.empty() ? 0 : control.curvePoints.size() - 1);
+        lane.lfoControls.push_back(std::move(control));
+    }
+}
+
 ofJson drumGridToJson(const ofxOceanodeTimelineLane& lane) {
     ofJson json;
     json["format"] = 2;
@@ -262,6 +334,7 @@ std::string ofxOceanodeTimelineManager::laneTypeToString(ofxOceanodeTimelineLane
     switch(laneType) {
         case ofxOceanodeTimelineLaneType::PianoRoll: return "PianoRoll";
         case ofxOceanodeTimelineLaneType::DrumGrid: return "DrumGrid";
+        case ofxOceanodeTimelineLaneType::Lfo: return "Lfo";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
@@ -277,6 +350,7 @@ std::string ofxOceanodeTimelineManager::laneTypeToString(ofxOceanodeTimelineLane
 ofxOceanodeTimelineLaneType ofxOceanodeTimelineManager::laneTypeFromString(const std::string& laneType) {
     if(laneType == "PianoRoll") return ofxOceanodeTimelineLaneType::PianoRoll;
     if(laneType == "DrumGrid") return ofxOceanodeTimelineLaneType::DrumGrid;
+    if(laneType == "Lfo") return ofxOceanodeTimelineLaneType::Lfo;
     if(laneType == "Number") return ofxOceanodeTimelineLaneType::Number;
     if(laneType == "Dropdown") return ofxOceanodeTimelineLaneType::Dropdown;
     if(laneType == "Curve") return ofxOceanodeTimelineLaneType::Curve;
@@ -541,11 +615,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         if(clip.reversed) clipJson["reversed"] = true;
         clipJson["muted"] = clip.muted;
         clipJson["chance"] = clip.chance;
-        clipJson["isLfo"] = clip.isLfo;
         clipJson["isStateCapture"] = clip.isStateCapture;
-        clipJson["lfoOutputBindingId"] = clip.lfoOutputBindingId;
-        clipJson["lfoOutputMin"] = clip.lfoOutputMin;
-        clipJson["lfoOutputMax"] = clip.lfoOutputMax;
         clipJson["waveFilePath"] = clip.waveFilePath;
         clipJson["waveGain"] = clip.waveGain;
         clipJson["wavePlaybackRate"] = clip.wavePlaybackRate;
@@ -643,10 +713,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             laneJson["multiSliderValues"] = lane.multiSliderValues;
             laneJson["valueQuantizeSteps"] = lane.valueQuantizeSteps;
             laneJson["valueSnap"] = lane.valueSnap;
-            laneJson["lfoParameter"] = lane.lfoParameter;
-            laneJson["lfoValue"] = lane.lfoValue;
-            laneJson["lfoSnap"] = lane.lfoSnap;
-            laneJson["lfoSnapMode"] = lane.lfoSnapMode;
+            if(ofxOceanodeTimelineIsLfoLane(lane.type)) laneJson["lfoControls"] = lfoControlsToJson(lane);
             // Only Drum Grid lanes carry it, so other lanes save as before.
             if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid || !lane.drumRows.empty())
                 laneJson["drumGrid"] = drumGridToJson(lane);
@@ -986,19 +1053,12 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 clip.contentStretch = std::max(1.0 / 1024.0,
                     clipJson.value("contentStretch", clip.repeatContent
                         ? 1.0 : clip.durationBeats / clip.contentDurationBeats));
-                clip.isLfo = clipJson.value("isLfo", false);
                 // Older files have no offset: their content starts at its start.
-                clip.contentOffsetBeats = clip.isLfo || track.isWaveTrack ? 0.0 : clipJson.value("contentOffsetBeats", 0.0);
+                clip.contentOffsetBeats = track.isWaveTrack ? 0.0 : clipJson.value("contentOffsetBeats", 0.0);
                 clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 clip.macroSnapshot = clipJson.value("macroSnapshot", -1);
                 clip.reversed = clipJson.value("reversed", false);
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
-                clip.lfoOutputBindingId = mapBinding(clipJson.value("lfoOutputBindingId", std::string()));
-                if(std::none_of(track.bindings.begin(), track.bindings.end(),
-                                [&](const auto& b) { return b.id == clip.lfoOutputBindingId; }))
-                    clip.lfoOutputBindingId.clear();
-                clip.lfoOutputMin = clipJson.value("lfoOutputMin", 0.0f);
-                clip.lfoOutputMax = clipJson.value("lfoOutputMax", 1.0f);
                 clip.waveFilePath = clipJson.value("waveFilePath", std::string());
                 clip.waveGain = ofClamp(clipJson.value("waveGain", 1.0f), 0.0f, 4.0f);
                 clip.wavePlaybackRate = ofClamp(clipJson.value("wavePlaybackRate", 1.0f), 0.1f, 4.0f);
@@ -1084,14 +1144,9 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
 
                         lane.curveClamp = laneJson.value("curveClamp", true);
                         lane.isWaveVolume = laneJson.value("isWaveVolume", false);
-                        lane.lfoParameter = laneJson.value("lfoParameter", std::string());
-                        lane.lfoValue = ofClamp(laneJson.value("lfoValue", 0.5f), 0.0f, 1.0f);
-                        lane.lfoSnap = laneJson.value("lfoSnap", false);
-                        lane.lfoSnapMode = std::max(0, std::min(2, laneJson.value("lfoSnapMode", 0)));
                         lane.curveInterpolation = laneJson.value("curveInterpolation", std::string("Linear"));
                         lane.curveScale = laneJson.value("curveScale", std::string());
-                        const bool lfoValueMode = !lane.lfoParameter.empty() && lane.curveInterpolation == "Value";
-                        if(!lfoValueMode && lane.curveInterpolation != "Step" && lane.curveInterpolation != "Linear" &&
+                        if(lane.curveInterpolation != "Step" && lane.curveInterpolation != "Linear" &&
                            lane.curveInterpolation != "Log / Exp" && lane.curveInterpolation != "Sigmoid") {
                             lane.curveInterpolation = "Linear";
                         }
@@ -1209,6 +1264,11 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                         }
                         if(laneJson.contains("drumGrid") && laneJson["drumGrid"].is_object())
                             drumGridFromJson(laneJson["drumGrid"], lane);
+                        if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
+                            if(laneJson.contains("lfoControls")) lfoControlsFromJson(laneJson["lfoControls"], lane);
+                            // Any control missing (or added since) starts at its default.
+                            ofxOceanodeTimelineLfo::ensureControls(lane, clip.contentDurationBeats);
+                        }
                         lane.multiValueInteger = laneJson.value("multiValueInteger", false);
                         if(laneJson.contains("multiSliderValues") && laneJson["multiSliderValues"].is_array()) {
                             // Real values in the lane's own valueMin/valueMax
@@ -1277,7 +1337,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         // clips" there is intentionally one destination per parameter.
         // Wave/LFO clips can never participate in either form.
         for(auto& clip : track.clips) {
-            if(track.isWaveTrack || clip.isLfo) clip.isStateCapture = false;
+            if(track.isWaveTrack) clip.isStateCapture = false;
         }
         if(track.isWaveTrack && track.waveVolumePoints.empty()) {
             track.waveVolumePoints = {{0.0, track.waveVolume}, {4.0, track.waveVolume}};
@@ -1390,16 +1450,6 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
     sequence.nextGroupNumber = sequence.clipGroups.size() + 1;
     for(const auto& group : sequence.clipGroups) sequence.nextGroupNumber = nextAfter(group.id, sequence.nextGroupNumber);
 
-    // Give loaded LFO clips any control lane they are missing (collect ids first:
-    // adding lanes must not happen while iterating the clip containers).
-    std::vector<std::pair<std::string, std::string>> lfoClipIds;
-    for(const auto& track : sequence.tracks) {
-        for(const auto& clip : track.clips) {
-            if(clip.isLfo) lfoClipIds.emplace_back(track.id, clip.id);
-        }
-    }
-    for(const auto& ids : lfoClipIds) ensureLfoLanes(sequence, ids.first, ids.second);
-
     if(json.contains("play") && json["play"].is_object()) playSettingsFromJson(json["play"], sequence.play);
 }
 namespace {
@@ -1441,7 +1491,7 @@ ofJson ofxOceanodeTimelineManager::exportClip(const ofxOceanodeTimelineSequence&
     portable.clips.front().startBeat = 0.0;
     // A reusable capture must not become the destination track's live capture buffer.
     portable.clips.front().isStateCapture = false;
-    std::set<std::string> used{clip->lfoOutputBindingId};
+    std::set<std::string> used;
     for(const auto& lane : clip->lanes) {
         used.insert(lane.bindingIds.begin(), lane.bindingIds.end());
         used.insert(lane.pianoPitchBindingId);
@@ -1601,7 +1651,6 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         auto mapped = [&](const std::string& id) {
             const auto it = remap.find(id); return it == remap.end() ? std::string() : it->second;
         };
-        copy.lfoOutputBindingId = mapped(copy.lfoOutputBindingId);
         for(auto& lane : copy.lanes) {
             std::vector<std::string> ids;
             for(const auto& old : lane.bindingIds) {
@@ -1649,6 +1698,7 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         *getClip(destinationId, id) = std::move(copy);
         for(auto& lane : lanes) {
             lane.id = editSequence().makeUniqueLaneId(); ++editSequence().nextLaneNumber;
+            ofxOceanodeTimelineSyncLfoControlIds(lane);
             getClip(destinationId, id)->lanes.push_back(std::move(lane));
         }
         if(source.isWaveTrack && !audioPath.empty()) reloadWaveform(destinationId, id);

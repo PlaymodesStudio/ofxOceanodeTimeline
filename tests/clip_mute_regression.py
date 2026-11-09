@@ -110,7 +110,7 @@ int main() {
     model.update(); near(controlValue,0.25);
     model.setClipMuted(ct,cc,true); controlValue=0.9f;
     model.update(); model.applyAutomation(); near(controlValue,0.9);
-    const auto lc=model.createLfoClip(ct,cb,"LFO",0,4);
+    const auto lc=[&]{ const auto lfoClipId=model.createClip(ct,"LFO",0,4); const auto lfoLaneId=model.createLane(ct,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=cb; if(!lfoTarget.empty()) model.addBindingToLane(ct,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     model.update(); assert(model.inspectTarget(control.getEscapedName(),0,true).writesValue);
     model.setClipMuted(ct,lc,true); controlValue=0.75f;
     model.update(); model.applyAutomation(); near(controlValue,0.75);

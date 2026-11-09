@@ -586,17 +586,26 @@ int main() {
     }
     editors.clearSelection();
     editors.forgetTrack(trackId);
-    // LFO owns its selection and reports shell requests without a controller.
-    const auto lfoClip = model.createLfoClip(trackId, "", "LFO", 0, 4);
+    // An LFO lane draws its result, properties and control sublanes, and owns
+    // its point selection, without a controller.
+    const auto lfoClip = [&]{ const auto lfoClipId=model.createClip(trackId,"LFO",0,4); const auto lfoLaneId=model.createLane(trackId,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=""; if(!lfoTarget.empty()) model.addBindingToLane(trackId,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     {
         beginFrame(ImVec2(1000, 800), false);
         auto& clip = *model.getClip(trackId, lfoClip);
         const ofxOceanodeTimelineEditorView view(model, 120.0f, 8.0, true, 0.25);
-        shell.editorTrackId = trackId; shell.editorClipId = lfoClip;
-        lfoEditor.draw(model, model.editSequence(), owner, *model.getTrack(trackId), clip, view, shell, 1000, 1);
-        lfoEditor.drawPreview({model, owner, model.editSequence(), *model.getTrack(trackId), clip, nullptr, view,
+        auto& lfoLane = clip.lanes.front();
+        assert(lfoLane.type == ofxOceanodeTimelineLaneType::Lfo && lfoLane.lfoControls.size() == 9);
+        shell.editorTrackId = trackId; shell.editorClipId = lfoClip; shell.editorLaneId = lfoLane.id;
+        std::string focusedLaneId = lfoLane.id;
+        ofxOceanodeTimelineLaneEditorContext context{model, owner, model.editSequence(), *model.getTrack(trackId), clip, lfoLane, view,
+                                                    focusedLaneId, true, {}};
+        lfoEditor.drawProperties(context);
+        lfoEditor.drawCanvas(context, {ImVec2(230, 100), ImVec2(870, 330), ImVec2(230, 100), 230, 230, 870, false, 1});
+        bool focusRequested = false;
+        lfoEditor.drawControls(context, shell, 1000, 1, [&] { focusRequested = true; });
+        lfoEditor.drawPreview({model, owner, model.editSequence(), *model.getTrack(trackId), clip, &lfoLane, view,
                               ImVec2(230, 750), ImVec2(870, 800), 230, 870, 0, 2});
-        assert(!lfoEditor.hasPointSelection(lfoClip));
+        assert(!lfoEditor.hasPointSelection(lfoLane.id) && !focusRequested);
         endFrame();
     }
 

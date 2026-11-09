@@ -76,19 +76,19 @@ int main() {
     model.setLaneChance(t,c,other,0); model.update(); model.applyAutomation(); near(gateValue,0);
     model.setLaneChance(t,c,l,1); model.update(); model.applyAutomation(); near(gateValue,1);
     model.setClipChance(t,c,0); model.update(); model.applyAutomation(); near(gateValue,0);
-    // LFO control lanes fall back to the oscillator default when skipped.
-    ofxOceanodeTimelineClip lfo;
-    ofxOceanodeTimelineLane scale; scale.id="scale"; scale.lfoParameter="scale";
+    // LFO control sublanes fall back to the oscillator default when skipped.
+    ofxOceanodeTimelineLane lfo; lfo.id="lfo"; lfo.type=ofxOceanodeTimelineLaneType::Lfo;
+    ofxOceanodeTimelineLane scale; scale.id="lfo#scale"; scale.lfoParameter="scale";
     scale.curveInterpolation="Value"; scale.lfoValue=0; scale.chance=0;
-    lfo.lanes.push_back(scale);
+    lfo.lfoControls.push_back(scale);
     ofxOceanodeTimelinePlayContext context{};
     near(ofxOceanodeTimelineLfo::evaluateParameter(lfo,"scale",1,1,&context),1);
     near(ofxOceanodeTimelineLfo::evaluateParameter(lfo,"scale",1,1),0);
     // LFO Track node samples use the playing timeline's rolls too.
     const auto lt=model.createTrack("LFO chance"), lb=model.addBinding(lt,target);
-    const auto lc=model.createLfoClip(lt,lb,"LFO",0,4);
+    const auto lc=[&]{ const auto lfoClipId=model.createClip(lt,"LFO",0,4); const auto lfoLaneId=model.createLane(lt,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lb; if(!lfoTarget.empty()) model.addBindingToLane(lt,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
     std::string scaleId;
-    for(auto& lane:model.getClip(lt,lc)->lanes) if(lane.lfoParameter=="scale") {
+    for(auto& lane:model.getClip(lt,lc)->lanes.front().lfoControls) if(lane.lfoParameter=="scale") {
         scaleId=lane.id; lane.curveInterpolation="Value"; lane.lfoValue=0;
     }
     assert(!scaleId.empty()); model.setLaneChance(lt,lc,scaleId,0.5f);

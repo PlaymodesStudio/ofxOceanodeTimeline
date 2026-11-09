@@ -34,9 +34,8 @@ links clip timing and does not create a track hierarchy.
 In a parameter's **Add to Timeline Track** menu, choosing an existing track
 adds a lane to the selected clip on that track and opens its editor. An open
 clip editor is the next choice, followed by the clip at the playhead or the
-track's only ordinary clip. If none applies, a new one-bar clip is created at
-the playhead. LFO clips keep their fixed control lanes; this action creates an
-ordinary clip alongside them. A parameter already bound to the track can be
+track's only clip. If none applies, a new one-bar clip is created at
+the playhead. A parameter already bound to the track can be
 added to another clip, and a lane already using it is focused instead of
 duplicated.
 
@@ -59,7 +58,7 @@ and **Targets** contains its destinations. **Add target...** searches compatible
 parameters in the current patch; selecting a new parameter
 publishes it to the track automatically. Existing target checkboxes remove or
 restore individual connections without affecting other clips. Piano role
-choosers and the LFO output chooser also search the patch. Piano Roll targets are explicitly
+choosers also search the patch. Piano Roll targets are explicitly
 assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
 to select every note at that pitch in the piano-roll lane, including notes
 outside the visible window. Shift+right-click adds another pitch to the
@@ -84,8 +83,19 @@ an equal amount of empty space to its right. This limit uses clips from every
 track in the timeline, including hidden or muted tracks, and updates as their
 lengths change. Reaching the limit returns the view to the origin.
 
-LFO clips have oscillator **control envelopes** and one result/output target.
-Their controls do not directly automate node parameters. Audio clips contain
+An **LFO** is a lane type like Curve or Step Sequencer: a clip can hold any
+number of LFO lanes alongside its other lanes, each with its own **Targets**
+and **Lane** tabs, mute/solo, chance and output range (Min/Max, set from the
+first target's range). Its canvas shows the oscillator's result over the clip,
+following the clip's repeats, stretch and offset. Below it, indented, are its
+nine **control sublanes** (Frequency, Roundness, Skew, Pulse width, Pow,
+BiPow, Phase offset, Scale, Y offset): envelopes over the clip that shape the
+oscillator. They start folded to one line each (showing the control's value
+and a miniature of its envelope); each expands, resizes, mutes and solos
+(among its siblings) on its own, and folding the LFO lane hides them all. Controls do not drive parameters
+themselves. Switching a lane away from LFO keeps its controls for switching
+back. The **LFO Track** node follows the first LFO lane of each clip on its
+track. Clips holding an LFO lane cannot be merged. Audio clips contain
 samples; clip gain belongs to the selected sample, while the separately
 labelled track volume envelope affects every audio clip on that track. Tempo
 automation is global to the timeline. “Components” inside a Multi Value or
@@ -96,8 +106,8 @@ to replace it with one new track per lane, in lane order below the source
 track. Each new clip keeps its original timing, source mapping and lane
 content, with only that lane's targets. Other clips and targets on the source
 track remain. The source track remains available even if it becomes empty.
-The new tracks are selected and the action is undoable. LFO control envelopes
-stay together because they jointly define one oscillator.
+The new tracks are selected and the action is undoable. An LFO lane moves
+with its control sublanes, which jointly define one oscillator.
 
 ## Reusable clip files
 
@@ -114,8 +124,8 @@ start beat, and map each saved parameter to a parameter in the current
 project. The chooser lists compatible parameters in the current patch. Nothing
 connects automatically based on matching names. **Unassigned** keeps the
 lane content without a connection; use the lane's **Targets** tab later to
-assign targets and piano roles. LFO files keep their internal control lanes
-and remap their final output. Loading is one undoable edit and creates fresh
+assign targets and piano roles. LFO lanes keep their control sublanes and
+remap their targets like any lane. Loading is one undoable edit and creates fresh
 clip and lane identities.
 
 For audio, saving also creates an adjacent `<filename>.media` folder with a
@@ -607,8 +617,9 @@ still limits that part; scalar targets remain monophonic. The same allocation
 is used for playback and scheduled note events.
 
 Other ordinary automation lane types can also be duplicated, with their
-binding's existing blend mode determining the combined output. LFO control
-lanes and audio volume envelopes have fixed roles and cannot be duplicated.
+binding's existing blend mode determining the combined output. An LFO lane
+is duplicated with its control sublanes; audio volume envelopes have a fixed
+role and cannot be duplicated.
 
 ## Metronome and piano-roll grid
 

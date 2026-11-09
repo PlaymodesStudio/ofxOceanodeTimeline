@@ -17,6 +17,10 @@ struct ofxOceanodeTimelineClipEditorState {
     // this set means expanded -- most lanes are expanded most of the
     // time, so "collapsed" is the state worth tracking explicitly.
     std::set<std::string> collapsedLaneIds;
+    // LFO control sublanes are the opposite: folded unless their key
+    // (ofxOceanodeTimelineLfoControlKey) is here, so an LFO lane opens
+    // compact and only the controls being worked on take room.
+    std::set<std::string> expandedLfoControlKeys;
     // Per-lane editor height override (keyed by lane id), set by dragging
     // the resize handle at the bottom of a lane's editor row. Absence means
     // "use the type's default height" -- UI-only, not persisted with the

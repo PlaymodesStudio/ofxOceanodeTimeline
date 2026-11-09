@@ -1110,7 +1110,7 @@ bool ofxOceanodeTimelineManager::heldPlayheadBeat(const TimelineRef& given, doub
                 for(const auto& track : outer.sequence->tracks) {
                     if(!track.isMacroTrack() || !manager.isTrackAudible(track)) continue;
                     for(const auto& clip : track.clips) {
-                        if(clip.muted || clip.isLfo || ofxOceanodeTimelineClipChanceSilenced(clip, outerContext)) continue;
+                        if(clip.muted || ofxOceanodeTimelineClipChanceSilenced(clip, outerContext)) continue;
                         const double end = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
                         if(end > at + 1e-9 || end <= latestEnd) continue;
                         const auto* played = manager.playedMacroAt(track, clip.reversed);

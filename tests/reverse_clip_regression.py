@@ -118,13 +118,13 @@ int main() {
     check("repeating, partial last repeat, offset", 4, 7, 3, true, 0.75, 1);
     check("partial step pattern", 4, 3, 3, false, 0, 2);
 
-    // LFO clips are refused.
+    // A clip with an LFO lane reverses (its control envelopes are mirrored).
     const auto t = model.createTrack("LFO");
     const auto lb = model.addBinding(t, parameters[0]);
-    const auto lfo = model.createLfoClip(t, lb, "LFO", 0, 4);
-    assert(!model.reverseClip(t, lfo));
+    const auto lfo = [&]{ const auto lfoClipId=model.createClip(t,"LFO",0,4); const auto lfoLaneId=model.createLane(t,lfoClipId,"LFO",ofxOceanodeTimelineLaneType::Lfo); const std::string lfoTarget=lb; if(!lfoTarget.empty()) model.addBindingToLane(t,lfoClipId,lfoLaneId,lfoTarget); return lfoClipId; }();
+    assert(model.reverseClip(t, lfo));
     std::cout << "Reverse clip passed: curves (sigmoid, linear with a jump, Log / Exp), held numbers, steps, toggles, regions, "
-                 "multi slider, piano gates; one-shot, stretched, repeating with offset, partial pattern; twice; LFO refused.\n";
+                 "multi slider, piano gates; one-shot, stretched, repeating with offset, partial pattern; twice; LFO lane.\n";
 }
 '''
 if __name__ == '__main__':

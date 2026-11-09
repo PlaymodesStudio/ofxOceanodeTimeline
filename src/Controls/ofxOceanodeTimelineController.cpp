@@ -307,8 +307,6 @@ double adaptiveSnapDivision(double baseBeats, double beatsPerBar,
 }
 
 const ofxOceanodeTimelineLane* laneForBinding(const ofxOceanodeTimelineClip& clip, const std::string& bindingId) {
-    if(clip.isLfo && clip.lfoOutputBindingId == bindingId)
-        return clip.lanes.empty() ? nullptr : &clip.lanes.front();
     for(const auto& lane : clip.lanes) {
         if(std::find(lane.bindingIds.begin(), lane.bindingIds.end(), bindingId) != lane.bindingIds.end()) return &lane;
     }
@@ -326,6 +324,7 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::MultiSlider: return "Multi Slider";
         case ofxOceanodeTimelineLaneType::MultiGate: return "Multi Gate";
         case ofxOceanodeTimelineLaneType::Wave: return "Wave";
+        case ofxOceanodeTimelineLaneType::Lfo: return "LFO";
         default: return "Step Sequencer";
     }
 }
@@ -334,14 +333,9 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
 // little index ints those sites use mapped to/from it in one place instead
 // of a hand-maintained ternary chain per site.
 //
-// Two counts, one table. Wave is absent from both: it is a track type whose
-// clips carry audio files, and a Wave *lane* no longer exists at all. LFO is only
-// reachable through kClipCreationOptionCount, i.e. only where a whole clip
-// is being created -- an LFO is a self-contained modulator clip with its own
-// oscillator-control lanes, so it is a kind of clip to create (alongside a
-// Curve or Step Sequencer one, which is how it reads to the user) rather
-// than a type an individual lane can be switched to. Selectors that change
-// or add a lane pass kLaneTypeOptionCount and so never offer it.
+// Wave is absent: it is a track type whose clips carry audio files, and a
+// Wave *lane* no longer exists at all. LFO is a lane type like any other: an
+// oscillator whose control sublanes shape it.
 // Toggle is a Multi Gate with one row: on / off blocks for a single value
 // (mute, solo, an effect's on), the default for a bool parameter's clips.
 // Dropdown is the default for a dropdown parameter's clips.
@@ -351,9 +345,8 @@ constexpr const char* kLaneTypeOptions[] = {
 };
 constexpr int kToggleOptionIndex = 6;
 constexpr int kDrumGridOptionIndex = 9;
-constexpr int kClipCreationOptionCount = static_cast<int>(sizeof(kLaneTypeOptions) / sizeof(kLaneTypeOptions[0]));
-constexpr int kLaneTypeOptionCount = kClipCreationOptionCount - 1;
-constexpr int kLfoClipOptionIndex = kClipCreationOptionCount - 1;
+constexpr int kLfoOptionIndex = 10;
+constexpr int kLaneTypeOptionCount = static_cast<int>(sizeof(kLaneTypeOptions) / sizeof(kLaneTypeOptions[0]));
 
 const char* contentDescription(int option) {
     static const char* descriptions[] = {
@@ -367,9 +360,9 @@ const char* contentDescription(int option) {
         "Absolute numeric values held until the next change.",
         "Named parameter options held until the next change.",
         "A drum kit step grid: one row per kit piece, with per-step velocity, pitch, probability, ratchet and nudge.",
-        "An oscillator with control envelopes and one output target."
+        "An oscillator mapped through the lane's output range; its control sublanes shape it over time."
     };
-    return descriptions[std::max(0, std::min(option, kClipCreationOptionCount - 1))];
+    return descriptions[std::max(0, std::min(option, kLaneTypeOptionCount - 1))];
 }
 
 ofxOceanodeTimelineLaneType laneTypeFromOptionIndex(int index) {
@@ -382,6 +375,7 @@ ofxOceanodeTimelineLaneType laneTypeFromOptionIndex(int index) {
         case 7: return ofxOceanodeTimelineLaneType::Number;
         case 8: return ofxOceanodeTimelineLaneType::Dropdown;
         case kDrumGridOptionIndex: return ofxOceanodeTimelineLaneType::DrumGrid;
+        case kLfoOptionIndex: return ofxOceanodeTimelineLaneType::Lfo;
         case kToggleOptionIndex: return ofxOceanodeTimelineLaneType::MultiGate;
         default: return ofxOceanodeTimelineLaneType::Step;
     }
@@ -409,6 +403,7 @@ int optionIndexForLaneType(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::MultiSlider: return 4;
         case ofxOceanodeTimelineLaneType::MultiGate: return 5;
         case ofxOceanodeTimelineLaneType::DrumGrid: return kDrumGridOptionIndex;
+        case ofxOceanodeTimelineLaneType::Lfo: return kLfoOptionIndex;
         default: return 0;
     }
 }
@@ -1160,7 +1155,6 @@ void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& t
     laneEditors = {};
     bpmEditor = {};
     waveVolumeEditor = {};
-    lfoEditor = {};
     selectedClips.clear();
     selectedTracks.clear();
     clipDragMode = ClipDragMode::None;
@@ -1176,7 +1170,6 @@ void ofxOceanodeTimelineController::resetEditorForScope() {
     laneEditors = {};
     bpmEditor = {};
     waveVolumeEditor = {};
-    lfoEditor = {};
     selectedClips.clear();
     selectedTracks.clear();
     clipDragMode = ClipDragMode::None;
@@ -1207,11 +1200,6 @@ void ofxOceanodeTimelineController::expandClipLanes(const ofxOceanodeTimelineTra
         for(const auto& lane : clip.lanes) {
             if(expand) editorState.collapsedLaneIds.erase(lane.id);
             else editorState.collapsedLaneIds.insert(lane.id);
-        }
-        if(clip.isLfo) {
-            const auto key = "lfoResult:" + clip.id;
-            if(expand) editorState.collapsedLaneIds.erase(key);
-            else editorState.collapsedLaneIds.insert(key);
         }
     }
 }
@@ -1319,7 +1307,6 @@ void ofxOceanodeTimelineController::drawSynthNavigation(ofxOceanodeTimelineManag
     if(clip == nullptr) {
         for(const auto& binding : track.bindings) bindingIds.insert(binding.id);
     } else {
-        bindingIds.insert(clip->lfoOutputBindingId);
         for(const auto& lane : clip->lanes) {
             bindingIds.insert(lane.bindingIds.begin(), lane.bindingIds.end());
             bindingIds.insert(lane.pianoPitchBindingId);
@@ -2269,7 +2256,7 @@ void ofxOceanodeTimelineController::draw() {
        !selectedClips.empty() && !lastClickInEditor && // in the editor, Delete edits the clip's content
        !(editorState.clipEditorOpen && laneEditors.hasNoteSelection(editorState.editorLaneId)) &&
        !(editorState.clipEditorOpen && laneEditors.hasCurvePointSelection(editorState.editorLaneId)) && // Delete removes the selected curve points instead
-       !(editorState.clipEditorOpen && lfoEditor.hasPointSelection(editorState.editorClipId)) && // Delete removes the selected LFO point instead
+       !(editorState.clipEditorOpen && laneEditors.hasLfoPointSelection(editorState.editorLaneId)) && // Delete removes the selected LFO control point instead
 
        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
         keyboardClipDeletionRequests.assign(selectedClips.begin(), selectedClips.end());
@@ -2614,11 +2601,6 @@ void ofxOceanodeTimelineController::draw() {
             // A macro inside: a bar (its own content is a click away).
             dl->AddRectFilled(ImVec2(x1, contentTop), ImVec2(x2, y2),
                 IM_COL32(color.r, color.g, color.b, innerClip.muted ? 50 : 160));
-        } else if(placed.isLfo) {
-            const ofxOceanodeTimelineClipPreview preview{timeline, *container, shown, innerTrack, placed,
-                placed.lanes.empty() ? nullptr : &placed.lanes.front(), previewView,
-                ImVec2(originX, contentTop), ImVec2(right, y2), x1, x2, innerFirst, innerLast};
-            lfoEditor.drawPreview(preview);
         } else {
             // Its lanes in bands, as many as fit (at least the first).
             std::vector<const ofxOceanodeTimelineLane*> shownLanes;
@@ -3162,7 +3144,7 @@ void ofxOceanodeTimelineController::draw() {
             editorState.lastClipForTrack[track.id] = editorClip->id;
             expandClipLanes(track, editorClip->id);
         };
-        const bool addLaneButton = editorClip != nullptr && !editorClip->isLfo && !track.isWaveTrack;
+        const bool addLaneButton = editorClip != nullptr && !track.isWaveTrack;
         const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
         const float settingsWidth = smallButtonReserve("   ");
         // + M S and the colour swatch (sized like S) sit at the column's
@@ -3733,7 +3715,10 @@ void ofxOceanodeTimelineController::draw() {
             ofxOceanodeTimelineClip played;
             const ofxOceanodeTimelineClip* shownClip = &clip;
             const ofxOceanodeTimelineLane* shownLane = lane;
-            if(ofxOceanodeTimelineClipTime::contentOffset(clip) > 0.0) {
+            // An LFO lane follows the offset itself (baking it would restart
+            // its phase wrongly after the content wraps).
+            if(ofxOceanodeTimelineClipTime::contentOffset(clip) > 0.0 &&
+               !(lane != nullptr && ofxOceanodeTimelineIsLfoLane(lane->type))) {
                 played = timeline.clipAsPlayed(clip);
                 shownClip = &played;
                 if(lane != nullptr)
@@ -3741,8 +3726,7 @@ void ofxOceanodeTimelineController::draw() {
             }
             const ofxOceanodeTimelineClipPreview preview{timeline, *container, scope(timeline), track, *shownClip, shownLane,
                 previewView, min, max, left, right, firstVisibleCycle, lastVisibleCycle, clipInk(clip, 255)};
-            if(clip.isLfo) lfoEditor.drawPreview(preview);
-            else if(shownLane != nullptr) laneEditors.forType(shownLane->type).drawPreview(preview);
+            if(shownLane != nullptr) laneEditors.forType(shownLane->type).drawPreview(preview);
 
         };
 
@@ -3791,7 +3775,7 @@ void ofxOceanodeTimelineController::draw() {
             if(clipDragMode == ClipDragMode::None) {
                 const auto count = ofxOceanodeTimelinePresentation::targetCount(clip);
                 std::string projection;
-                if(targetsView && !currentRowBindingId.empty() && !clip.isLfo) {
+                if(targetsView && !currentRowBindingId.empty()) {
                     const auto sources = std::count_if(clip.lanes.begin(), clip.lanes.end(), [&](const auto& source) {
                         return std::find(source.bindingIds.begin(), source.bindingIds.end(), currentRowBindingId) != source.bindingIds.end();
                     });
@@ -3981,7 +3965,7 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(scope(timeline), track.id, clip.id, !clip.muted);
-            if(!clip.isLfo && !track.isWaveTrack) { // Wave clips have their own Reverse
+            if(!track.isWaveTrack) { // Wave clips have their own Reverse
                 if(ImGui::MenuItem("Reverse", nullptr, track.isMacroTrack() && clip.reversed))
                     timeline.reverseClip(scope(timeline), track.id, clip.id);
                 if(ImGui::IsItemHovered())
@@ -4022,7 +4006,7 @@ void ofxOceanodeTimelineController::draw() {
                     editorView(timeline, transportState.bpm, endBeat),
                     static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
                 contextMenuSection("Content");
-                if(!track.isWaveTrack && !clip.isLfo) {
+                if(!track.isWaveTrack) {
                     if(ImGui::MenuItem("Break lanes into tracks", nullptr, false, clip.lanes.size() > 1))
                         breakClipLanesRequest = {track.id, clip.id};
                     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -4101,15 +4085,6 @@ void ofxOceanodeTimelineController::draw() {
                     editorRowScope = {};
                     editorState.clipEditorOpen = true;
                 }
-            } else if(clip.isLfo) {
-                // An LFO clip's lanes are its oscillator controls (frequency,
-                // skew, pulse width, ...), not automation lanes the user
-                // points at a parameter. Retyping one, or adding a sibling to
-                // it, would quietly break the clip, so this menu offers none
-                // of that -- the LFO editor (double-click the clip) is where
-                // it is edited.
-                contextMenuSection("Editor");
-                ImGui::TextDisabled("LFO clip -- double-click to edit");
             } else {
                 contextMenuSection("Lane");
                 const auto selectedType = selectedLane == nullptr ? ofxOceanodeTimelineLaneType::Step : selectedLane->type;
@@ -4127,7 +4102,7 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::EndMenu();
                 }
             }
-            if(selectedLane != nullptr && !clip.isLfo && !ofxOceanodeTimelineLaneUsesNoteRoles(selectedLane->type) && !track.bindings.empty() && ImGui::BeginMenu("Lane targets")) {
+            if(selectedLane != nullptr && !ofxOceanodeTimelineLaneUsesNoteRoles(selectedLane->type) && !track.bindings.empty() && ImGui::BeginMenu("Lane targets")) {
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(selectedLane->bindingIds.begin(), selectedLane->bindingIds.end(), candidate.id) != selectedLane->bindingIds.end();
                     if(ImGui::MenuItem(candidate.parameterPath.c_str(), nullptr, assigned, true)) {
@@ -4137,7 +4112,7 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 ImGui::EndMenu();
             }
-            if(!clip.isLfo && !track.bindings.empty() && ImGui::BeginMenu("New lane")) {
+            if(!track.bindings.empty() && ImGui::BeginMenu("New lane")) {
                 for(const auto& candidate : track.bindings) {
                     const std::string label = compactParameterName(candidate.parameterPath);
                     if(ImGui::MenuItem(label.c_str())) {
@@ -4186,7 +4161,7 @@ void ofxOceanodeTimelineController::draw() {
                 const bool mergeable = !track.isWaveTrack && !track.isMacroTrack() &&
                     std::all_of(mergeCandidates.begin(), mergeCandidates.end(), [&](const auto& key) {
                         const auto* selected = timeline.getClip(scope(timeline), track.id, key.second);
-                        return selected != nullptr && !selected->isLfo && !selected->isStateCapture;
+                        return selected != nullptr && !ofxOceanodeTimelineClipHasLfoLane(*selected) && !selected->isStateCapture;
                     });
                 const std::string mergeLabel = "Merge " + ofToString(mergeCandidates.size()) + " clips";
                 if(ImGui::MenuItem(mergeLabel.c_str(), nullptr, false, mergeable)) {
@@ -4198,7 +4173,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", mergeable
                         ? "One clip spanning them all. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
-                        : "Wave, LFO, state-capture and macro clips cannot be merged.");
+                        : "Wave, state-capture and macro clips, and clips with an LFO lane, cannot be merged.");
             }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete clip")) {
@@ -4221,10 +4196,7 @@ void ofxOceanodeTimelineController::draw() {
                 drawClip(clip, clip.lanes.empty() ? nullptr : &clip.lanes.front(), laneMin, max, true, false);
             }
             for(const auto& clip : track.clips) {
-                if(clip.lanes.empty() || clip.isLfo || track.isWaveTrack) {
-                    // An LFO clip's lanes are its oscillator controls, not
-                    // separate curves: its waveform is drawn once (drawing it
-                    // per lane stacked it into a brighter, thicker line).
+                if(clip.lanes.empty() || track.isWaveTrack) {
                     drawClip(clip, clip.lanes.empty() ? nullptr : &clip.lanes.front(), laneMin, max, false, true);
                 } else {
                     const size_t bands = std::min<size_t>(3, clip.lanes.size());
@@ -5508,7 +5480,7 @@ void ofxOceanodeTimelineController::draw() {
             // Repeating automation can grow to the left (its content repeats);
             // Shift extends any (non-Wave, non-LFO) clip with empty time.
             const bool canGrow = dragTrack != nullptr && !dragTrack->isWaveTrack &&
-                (initial.repeatContent || (innerDrag.extend && !initial.isLfo));
+                (initial.repeatContent || innerDrag.extend);
             const double trimBeat = ofClamp(snapBeat(mouseBeat), canGrow ? 0.0 : initial.startBeat,
                                             initial.startBeat + initial.durationBeats - 1.0 / kPPQ);
             if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -5634,7 +5606,7 @@ void ofxOceanodeTimelineController::draw() {
                     // one-shot and Wave clips can only be shortened.
                     // Shift extends any (non-Wave, non-LFO) clip with empty time.
                     const bool canGrow = trimTrack != nullptr && !trimTrack->isWaveTrack &&
-                        (clip->repeatContent || (trimExtends && !clip->isLfo));
+                        (clip->repeatContent || trimExtends);
                     const double lowest = canGrow ? 0.0 : clip->startBeat;
                     const double highest = clip->startBeat + clip->durationBeats - 1.0 / kPPQ;
                     trimPreviewBeat = ofClamp(snapBeat(mouseBeat), lowest, highest);
@@ -5706,7 +5678,7 @@ void ofxOceanodeTimelineController::draw() {
                                 timeline.resizeClipEnd(scope(timeline), entry.trackId, entry.clipId, newMemberDuration, operation);
                             }
                         }
-                    } else if(clipDragMode == ClipDragMode::Stretch && !dragInitialClip.isLfo &&
+                    } else if(clipDragMode == ClipDragMode::Stretch &&
                               snapBeat(mouseBeat) < dragInitialClip.startBeat - 1.0 / kPPQ) {
                         // Stretched back past its start: the clip flips and
                         // plays backwards, stretched over what is left of its start.
@@ -5933,7 +5905,6 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
             ImGui::TextWrapped("%s", label.c_str());
             // Make the saved pitch/gate/velocity meaning visible even when node names change.
             std::set<std::string> uses;
-            if(clip.value("lfoOutputBindingId", std::string()) == id) uses.insert("LFO output");
             if(clip.contains("lanes")) for(const auto& lane : clip["lanes"]) {
                 const auto laneName = lane.value("name", std::string("Lane"));
                 if(lane.value("pianoPitchBindingId", std::string()) == id) uses.insert(laneName + ": pitch");
@@ -6007,7 +5978,7 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         if(track == nullptr || track->isWaveTrack || binding == nullptr) continue;
         auto usable = [&](const std::string& id) {
             const auto* clip = timeline.getClip(scope(timeline), request.first, id);
-            return clip != nullptr && !clip->isLfo;
+            return clip != nullptr;
         };
         std::string clipId;
         // A selected clip takes priority over a different open editor.
@@ -6021,7 +5992,6 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
             const ofxOceanodeTimelineClip* onlyClip = nullptr;
             size_t count = 0;
             for(const auto& clip : track->clips) {
-                if(clip.isLfo) continue;
                 onlyClip = &clip; ++count;
                 if(beat >= clip.startBeat && beat < clip.startBeat + clip.durationBeats &&
                    (atPlayhead == nullptr || clip.startBeat >= atPlayhead->startBeat)) atPlayhead = &clip;
@@ -6597,15 +6567,6 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     auto* clip = &shownClip;
     const ScheduledContentEditGuard scheduledEdits(timeline, scope(timeline), track.id, clip->id);
     const bool focusedTrack = editorState.editorTrackId == track.id && &editorSequence(timeline) == &scope(timeline);
-    if(clip->isLfo) {
-        lfoEditor.setTargetPaths(patchTargetPaths());
-        lfoEditor.draw(timeline, scope(timeline), *container, track, *clip,
-                       editorView(timeline, container->getTransportState().bpm, endBeat),
-                       editorState, contentWidth, beatPosition, static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), focusedTrack);
-        const auto path = lfoEditor.consumeOutputTargetRequest();
-        if(!path.empty()) pendingTargetAssignment = {track.id, clip->id, {}, path, ofxOceanodeTimelineTargetRole::LfoOutput, &scope(timeline)};
-        return;
-    }
     if(focusedTrack && clip->id == editorState.editorClipId && !clip->lanes.empty() &&
        timeline.getLane(scope(timeline), track.id, clip->id, editorState.editorLaneId) == nullptr) {
         editorState.editorLaneId = clip->lanes.front().id;
@@ -6678,8 +6639,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 if(ImGui::BeginTabItem("New Clip")) {
                     ImGui::TextUnformatted("New clip on this track");
                     ImGui::InputText("Name", pendingClipName, sizeof(pendingClipName));
-                    ImGui::Combo("Start with", &pendingClipLaneType, kLaneTypeOptions, kClipCreationOptionCount);
-                    const bool isLfoClip = pendingClipLaneType == kLfoClipOptionIndex;
+                    ImGui::Combo("Start with", &pendingClipLaneType, kLaneTypeOptions, kLaneTypeOptionCount);
+                    const bool lfoChoice = pendingClipLaneType == kLfoOptionIndex;
                     ImGui::TextWrapped("%s", contentDescription(pendingClipLaneType));
                     const auto* target = timeline.getBinding(scope(timeline), track.id, pendingClipBindingId);
                     if(ImGui::BeginCombo("Target", target == nullptr ? "No target" : compactParameterName(target->parameterPath).c_str())) {
@@ -6687,7 +6648,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                             if(ImGui::Selectable(compactParameterName(binding.parameterPath).c_str(), binding.id == pendingClipBindingId)) {
                                 pendingClipBindingId = binding.id;
                                 // Its usual type, never over an explicit LFO choice.
-                                if(!isLfoClip) pendingClipLaneType = optionIndexForBinding(binding);
+                                if(!lfoChoice) pendingClipLaneType = optionIndexForBinding(binding);
                             }
                             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", binding.parameterPath.c_str());
                         }
@@ -6695,8 +6656,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     }
                     ImGui::InputDouble("Start beat", &pendingStartBeat, editIncrement(), 1.0, "%.4f");
                     ImGui::InputDouble("Duration", &pendingDurationBeats, editIncrement(), 1.0, "%.4f");
-                    const bool drumGridClip = !isLfoClip && pendingClipLaneType == kDrumGridOptionIndex;
-                    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+                    const bool drumGridClip = !lfoChoice && pendingClipLaneType == kDrumGridOptionIndex;
+                    const bool pianoRollClip = !lfoChoice && (drumGridClip ||
                         laneTypeFromOptionIndex(pendingClipLaneType) == ofxOceanodeTimelineLaneType::PianoRoll);
                     if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
                                                                        : "Next: choose the pitch, gate and velocity parameters");
@@ -6766,6 +6727,36 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 requestRemoveLane = true;
                 pendingRemoveLaneId = lane->id;
             }
+            // The node a target belongs to, on its canvas (opening the macro
+            // it is in) and centred there. One target: an item; several: a
+            // submenu of them; none: disabled.
+            ImGui::Separator();
+            std::vector<std::pair<std::string, ofxOceanodeAbstractParameter*>> laneTargets;
+            const auto resolver = timeline.resolverFor(scope(timeline));
+            for(const auto& bindingId : lane->bindingIds)
+                if(const auto* binding = timeline.getBinding(scope(timeline), track.id, bindingId))
+                    laneTargets.emplace_back(binding->parameterPath, resolver.find(binding->parameterPath));
+            if(laneTargets.size() == 1) {
+                if(ImGui::MenuItem("Show in canvas", nullptr, false, laneTargets.front().second != nullptr))
+                    container->showParameterInCanvas(*laneTargets.front().second);
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip(laneTargets.front().second != nullptr ? "Show %s's node in its canvas"
+                                                                            : "%s is not in the patch", laneTargets.front().first.c_str());
+            } else if(laneTargets.size() > 1) {
+                if(ImGui::BeginMenu("Show in canvas")) {
+                    for(size_t i = 0; i < laneTargets.size(); ++i) {
+                        ImGui::PushID(static_cast<int>(i));
+                        if(ImGui::MenuItem(compactParameterName(laneTargets[i].first).c_str(), nullptr, false, laneTargets[i].second != nullptr))
+                            container->showParameterInCanvas(*laneTargets[i].second);
+                        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", laneTargets[i].first.c_str());
+                        ImGui::PopID();
+                    }
+                    ImGui::EndMenu();
+                }
+            } else {
+                ImGui::MenuItem("Show in canvas", nullptr, false, false);
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("This lane has no target yet");
+            }
             ImGui::EndPopup();
         }
     };
@@ -6776,6 +6767,12 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         if(playbackToggle("laneSolo" + lane->id, "S", lane->solo, "Solo lane within this clip (multiple solos allowed)"))
             timeline.setLaneSolo(scope(timeline), track.id, clip->id, lane->id, !lane->solo);
         ImGui::SameLine();
+    };
+    // An LFO lane's control sublanes, as rows under its own (hidden with it
+    // when it is folded).
+    auto drawLfoControls = [&]() {
+        if(!ofxOceanodeTimelineIsLfoLane(lane->type)) return;
+        laneEditors.lfoEditor().drawControls(context, editorState, contentWidth, beatPosition, focusLane);
     };
     const std::string laneLabel = (track.clips.size() > 1 ? clip->name + " / " : std::string()) +
                                  (lane->name.empty() ? laneDisplayName(*lane) : lane->name);
@@ -6944,8 +6941,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     }
                     ImGui::EndCombo();
                 }
-                const bool toggleLane = isToggleLane(*lane) && !clip->isLfo;
-                const bool gateLane = lane->type == ofxOceanodeTimelineLaneType::MultiGate && !clip->isLfo;
+                const bool toggleLane = isToggleLane(*lane);
+                const bool gateLane = lane->type == ofxOceanodeTimelineLaneType::MultiGate;
                 constexpr float kChanceWidth = 64.0f;
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(lane->bindingIds.begin(), lane->bindingIds.end(), candidate.id) != lane->bindingIds.end();
@@ -7073,6 +7070,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     if(right <= left) {
         if(chanceVisible) laneChanceControl(timeline, scope(timeline), track, *clip, *lane, chanceCenter);
         finishAbsoluteLayout(ImVec2(editorMin.x, editorMax.y));
+        drawLfoControls();
         continue;
     }
 
@@ -7090,6 +7088,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     dl->PopClipRect();
     if(chanceVisible) laneChanceControl(timeline, scope(timeline), track, *clip, *lane, chanceCenter);
     finishAbsoluteLayout(ImVec2(editorMin.x, editorMax.y));
+    drawLfoControls();
     } // end for(laneIndex : clip->lanes)
 }
 
@@ -7568,15 +7567,11 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
     centerNextModal();
     if(!ImGui::BeginPopupModal("New Timeline Clip", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::InputText("Name", pendingClipName, sizeof(pendingClipName));
-    // One list, LFO included. This used to be two combos -- an "Automation
-    // clip / LFO clip" question here and an "Automation type" one below --
-    // which asked twice for a single decision and made the LFO look like a
-    // different category of thing rather than another kind of clip.
-    ImGui::Combo("Start with", &pendingClipLaneType, kLaneTypeOptions, kClipCreationOptionCount);
-    const bool isLfoClip = pendingClipLaneType == kLfoClipOptionIndex;
+    // One list of lane types, LFO included.
+    ImGui::Combo("Start with", &pendingClipLaneType, kLaneTypeOptions, kLaneTypeOptionCount);
+    const bool lfoChoice = pendingClipLaneType == kLfoOptionIndex;
     ImGui::TextWrapped("%s", contentDescription(pendingClipLaneType));
-    ImGui::TextWrapped(isLfoClip ? "LFO clip: control envelopes shape an oscillator that drives the output target."
-        : "Creates one content lane inside a clip. Add more lanes later; all share the clip timing.");
+    ImGui::TextWrapped("Creates one content lane inside a clip. Add more lanes later; all share the clip timing.");
     if(const auto* track = timeline.getTrack(scope(timeline), pendingTrackId)) {
         const auto* selectedBinding = pendingClipBindingId.empty()
             ? nullptr : timeline.getBinding(scope(timeline), pendingTrackId, pendingClipBindingId);
@@ -7590,7 +7585,7 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
                     // Picking a parameter pre-selects the type it is bound
                     // with -- but never over an explicit LFO choice, which
                     // is not a lane type and must not be silently undone.
-                    if(!isLfoClip) pendingClipLaneType = optionIndexForBinding(binding);
+                    if(!lfoChoice) pendingClipLaneType = optionIndexForBinding(binding);
                 }
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", binding.parameterPath.c_str());
             }
@@ -7599,8 +7594,8 @@ void ofxOceanodeTimelineController::drawClipPopup(ofxOceanodeTimelineManager& ti
     }
     ImGui::InputDouble("Start beat", &pendingStartBeat, editIncrement(), 1.0, "%.4f");
     ImGui::InputDouble("Duration", &pendingDurationBeats, editIncrement(), 1.0, "%.4f");
-    const bool drumGridClip = !isLfoClip && pendingClipLaneType == kDrumGridOptionIndex;
-    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+    const bool drumGridClip = !lfoChoice && pendingClipLaneType == kDrumGridOptionIndex;
+    const bool pianoRollClip = !lfoChoice && (drumGridClip ||
         laneTypeFromOptionIndex(pendingClipLaneType) == ofxOceanodeTimelineLaneType::PianoRoll);
     if(pianoRollClip) ImGui::TextDisabled(drumGridClip ? "Next: choose the instrument (its gate and pitch)"
                                                        : "Next: choose the pitch, gate and velocity parameters");
@@ -7628,9 +7623,8 @@ ofxOceanodeTimelineController::NewClip ofxOceanodeTimelineController::createNewC
     int typeIndex, const std::string& name, double startBeat, double durationBeats) {
     NewClip created;
     auto& sequence = scope(timeline);
-    const bool isLfoClip = typeIndex == kLfoClipOptionIndex;
-    const bool drumGridClip = !isLfoClip && typeIndex == kDrumGridOptionIndex;
-    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+    const bool drumGridClip = typeIndex == kDrumGridOptionIndex;
+    const bool pianoRollClip = (drumGridClip ||
         laneTypeFromOptionIndex(typeIndex) == ofxOceanodeTimelineLaneType::PianoRoll);
     const auto* binding = timeline.getBinding(sequence, trackId, bindingId);
     if(pianoRollClip) {
@@ -7656,10 +7650,8 @@ ofxOceanodeTimelineController::NewClip ofxOceanodeTimelineController::createNewC
         }
         return created;
     }
-    created.clipId = isLfoClip
-        ? timeline.createLfoClip(sequence, trackId, bindingId, name.empty() ? "LFO" : name, startBeat, durationBeats)
-        : timeline.createClip(sequence, trackId, name.empty() ? "Clip" : name, startBeat, durationBeats);
-    if(isLfoClip || binding == nullptr || created.clipId.empty()) return created;
+    created.clipId = timeline.createClip(sequence, trackId, name.empty() ? "Clip" : name, startBeat, durationBeats);
+    if(binding == nullptr || created.clipId.empty()) return created;
     created.laneId = addBoundLane(timeline, trackId, created.clipId, *binding, typeIndex, binding->parameterPath);
     return created;
 }
@@ -7724,7 +7716,7 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
         // edited, else the one at the playhead, else its first.
         const auto* track = timeline.getTrack(*sequence, request.trackId);
         if(track == nullptr) return;
-        auto usable = [&](const ofxOceanodeTimelineClip& clip) { return !clip.isLfo; };
+        auto usable = [&](const ofxOceanodeTimelineClip&) { return true; };
         parameterLaneClipId.clear();
         for(const auto& clip : track->clips)
             if(parameterLaneClipId.empty() && usable(clip) && selectedClips.count({track->id, clip.id})) parameterLaneClipId = clip.id;
@@ -7801,11 +7793,10 @@ void ofxOceanodeTimelineController::drawParameterClipPopup(ofxOceanodeTimelineMa
     field("New Clip Name");
     ImGui::InputText("##parameterClipName", parameterClipName, sizeof(parameterClipName), ImGuiInputTextFlags_AutoSelectAll);
     field("Clip Type");
-    ImGui::Combo("##parameterClipType", &parameterClipType, kLaneTypeOptions, kClipCreationOptionCount);
+    ImGui::Combo("##parameterClipType", &parameterClipType, kLaneTypeOptions, kLaneTypeOptionCount);
     ImGui::Separator();
-    const bool isLfoClip = parameterClipType == kLfoClipOptionIndex;
-    const bool drumGridClip = !isLfoClip && parameterClipType == kDrumGridOptionIndex;
-    const bool pianoRollClip = !isLfoClip && (drumGridClip ||
+    const bool drumGridClip = parameterClipType == kDrumGridOptionIndex;
+    const bool pianoRollClip = (drumGridClip ||
         laneTypeFromOptionIndex(parameterClipType) == ofxOceanodeTimelineLaneType::PianoRoll);
     ImGui::PushTextWrapPos(column + 260.0f);
     ImGui::TextWrapped("%s", contentDescription(parameterClipType));
@@ -7883,7 +7874,6 @@ void ofxOceanodeTimelineController::drawParameterLanePopup(ofxOceanodeTimelineMa
     const auto* chosen = timeline.getClip(*timeline.timelineFor(parameterClip.timeline), track.id, parameterLaneClipId);
     if(ImGui::BeginCombo("##parameterLaneClip", chosen == nullptr ? "" : chosen->name.c_str())) {
         for(const auto& clip : track.clips) {
-            if(clip.isLfo) continue;
             if(ImGui::Selectable((clip.name + "##" + clip.id).c_str(), clip.id == parameterLaneClipId)) parameterLaneClipId = clip.id;
         }
         ImGui::EndCombo();
@@ -7959,7 +7949,6 @@ void ofxOceanodeTimelineController::drawParameterTargetPopup(ofxOceanodeTimeline
     const auto* clip = timeline.getClip(*timeline.timelineFor(parameterClip.timeline), track.id, parameterLaneClipId);
     if(ImGui::BeginCombo("##parameterTargetClip", clip == nullptr ? "" : clip->name.c_str())) {
         for(const auto& candidate : track.clips) {
-            if(candidate.isLfo) continue;
             if(ImGui::Selectable((candidate.name + "##" + candidate.id).c_str(), candidate.id == parameterLaneClipId)) {
                 parameterLaneClipId = candidate.id;
                 parameterTargetLaneId = candidate.lanes.empty() ? std::string() : candidate.lanes.front().id;
