@@ -441,6 +441,23 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     return json;
 }
 
+ofJson ofxOceanodeTimelineManager::presetEditState() const {
+    auto state = toJson();
+    state.erase("view");
+    state.erase("windows");
+    state.erase("nextTimelineNumber");
+    // Sequence content carries authored play settings, never the playhead.
+    state["macros"] = ofJson::object();
+    for(const auto& entry : sequenceEntries()) {
+        auto owner = entry.container.lock();
+        if(!owner || !entry.timelines || entry.timelines->timelines.empty()) continue;
+        auto data = canvasToJson(*entry.timelines);
+        data.erase("nextTimelineNumber");
+        state["macros"][owner->getCanvasID()] = std::move(data);
+    }
+    return state;
+}
+
 // One track as timeline.json keeps it.
 ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& track) const {
     ofJson trackJson;

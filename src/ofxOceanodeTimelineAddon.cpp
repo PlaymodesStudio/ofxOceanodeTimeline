@@ -12,9 +12,14 @@
 namespace {
 class TimelineExtension : public ofxOceanodeAutomationExtension {
 public:
-    explicit TimelineExtension(ofxOceanodeContainer* owner) : host(owner), manager(owner) {}
+    explicit TimelineExtension(ofxOceanodeContainer* owner) : host(owner), manager(owner), initialEditState(manager.presetEditState()) {}
+    ofJson presetEditState() const override {
+        auto state = manager.presetEditState();
+        return state == initialEditState ? ofJson() : state;
+    }
     ofxOceanodeContainer* host;
     ofxOceanodeTimelineManager manager;
+    ofJson initialEditState;
     void clear() override { manager.clear(); }
     void beginParameterCache() override { manager.beginParameterCache(); }
     void evaluateAutomation() override { manager.evaluateAutomation(); }

@@ -2098,6 +2098,8 @@ public:
 
     ofJson toJson() const;
     void fromJson(const ofJson& json);
+    // Authored root and macro timelines, without running clocks or editor views.
+    ofJson presetEditState() const;
     // Portable clip documents contain one clip and only its target descriptors.
     // Map saved binding IDs to parameter paths in the destination project.
     // Missing mappings leave content intact and unassigned. Empty trackId creates a track.
