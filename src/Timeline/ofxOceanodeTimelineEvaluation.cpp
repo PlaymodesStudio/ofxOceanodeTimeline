@@ -1707,8 +1707,17 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 const double endBeat = std::min(clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats),
                                                 placement.map.toSequence(placement.windowTo));
                 const double endTimelineBeat = placement.map.toTimeline(endBeat);
-                const bool endingCurve = std::isfinite(previousBeat) &&
-                    previousBeat < endTimelineBeat - kEpsilon && beatPosition >= endTimelineBeat - kEpsilon &&
+                // The clip's last value: written once when playback crosses
+                // its end (manual control resumes after), and held while a
+                // stopped playhead rests exactly on it, as a stopped playhead
+                // inside the clip holds that beat's value. The half-open clip
+                // range leaves the end beat uncovered, so without this sample
+                // the parameter would keep whatever it last had. A clip
+                // starting on the same beat still wins (winner ordering below).
+                const bool crossedEnd = std::isfinite(previousBeat) &&
+                    previousBeat < endTimelineBeat - kEpsilon && beatPosition >= endTimelineBeat - kEpsilon;
+                const bool restingOnEnd = !isPlaying && std::abs(beatPosition - endTimelineBeat) <= kEpsilon;
+                const bool endingCurve = (crossedEnd || restingOnEnd) &&
                     endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon &&
                     !clip.isLfo && !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
                 if(endingCurve) {
