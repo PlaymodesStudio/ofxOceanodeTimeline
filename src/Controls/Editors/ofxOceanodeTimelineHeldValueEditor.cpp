@@ -126,7 +126,8 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                     const int current = static_cast<int>(std::lround(point.value));
                     for(int option = 0; option < static_cast<int>(options.size()); ++option) {
                         ImGui::PushID(option);
-                        if(ImGui::Selectable(options[option].c_str(), option == current)) {
+                        const auto label = dropdownOptionLabel(options, static_cast<float>(option));
+                        if(ImGui::Selectable(label.c_str(), option == current)) {
                             point.value = static_cast<float>(option);
                             timeline.invalidateSchedule();
                             ImGui::CloseCurrentPopup();

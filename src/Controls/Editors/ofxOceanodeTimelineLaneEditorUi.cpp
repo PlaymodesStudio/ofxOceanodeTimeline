@@ -130,7 +130,11 @@ std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timelin
 
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value) {
     const int index = static_cast<int>(std::lround(value));
-    return index >= 0 && index < static_cast<int>(options.size()) ? options[index] : ofToString(index);
+    if(index < 0 || index >= static_cast<int>(options.size())) return ofToString(index);
+    const auto& label = options[index];
+    // Some sources include the option index in their labels (e.g. "0: Name").
+    const std::string prefix = ofToString(index) + ": ";
+    return label.compare(0, prefix.size(), prefix) == 0 ? label.substr(prefix.size()) : label;
 }
 
 int insertCurvePoint(ofxOceanodeTimelineLane& lane,
