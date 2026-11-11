@@ -3656,19 +3656,59 @@ void ofxOceanodeTimelineController::draw() {
                 const double clipEnd = clip.startBeat + clip.durationBeats;
                 const bool draggingHere = projectKeyDragIndex >= 0 && projectKeyEditTrackId == track.id && projectKeyEditClipId == clip.id;
                 dl->PushClipRect(ImVec2(left, min.y + 3.0f), ImVec2(right, bottom), true);
+                // Keyframes alternate between the bottom and the top of the
+                // row, only so the curve between two of them shows the easing
+                // of that transition: the levels mean nothing else.
+                const float low = bottom - radius - 1.0f, high = std::min(low, top + radius + 1.0f);
+                auto levelY = [&](size_t index) { return index % 2 == 0 ? low : high; };
+                const bool easingHere = projectEaseDragIndex >= 0 && projectKeyEditTrackId == track.id && projectKeyEditClipId == clip.id;
+                const size_t keyCount = clip.projectKeyframes.size();
                 for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
-                    for(size_t index = 0; index < clip.projectKeyframes.size(); ++index) {
-                        const double beat = sourceToTimelineBeat(clip, clip.projectKeyframes[index].beat, cycle);
-                        if(beat < clip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue;
+                    for(size_t index = 0; index < keyCount; ++index) {
+                        const auto& keyframe = clip.projectKeyframes[index];
+                        const double beat = sourceToTimelineBeat(clip, keyframe.beat, cycle);
                         const float x = min.x + beatOffset(beat);
+                        const ImU32 curveInk = clipInk(clip, 255);
+                        if(index + 1 < keyCount) {
+                            const double nextBeat = sourceToTimelineBeat(clip, clip.projectKeyframes[index + 1].beat, cycle);
+                            const float xa = x, xb = min.x + beatOffset(nextBeat);
+                            if(xb > xa + 1.0f && xb >= left && xa <= right && beat >= clip.startBeat - 1e-6 && beat <= clipEnd + 1e-6) {
+                                // Only the part on screen, a point every few pixels.
+                                const float width = xb - xa;
+                                const float from = ofClamp((left - xa) / width, 0.0f, 1.0f), to = ofClamp((right - xa) / width, 0.0f, 1.0f);
+                                const int steps = ofClamp(static_cast<int>((to - from) * width / 3.0f), 2, 256);
+                                const float ya = levelY(index), yb = levelY(index + 1);
+                                auto pointAt = [&](float t) {
+                                    const float shaped = ofxOceanodeTimelineCurve::sigmoidFlex(t, keyframe.ease.inflection, keyframe.ease.steepness);
+                                    return ImVec2(xa + width * t, ya + (yb - ya) * shaped);
+                                };
+                                ImVec2 previous = pointAt(from);
+                                for(int step = 1; step <= steps; ++step) {
+                                    const ImVec2 point = pointAt(from + (to - from) * step / steps);
+                                    dl->AddLine(previous, point, curveInk, 1.5f);
+                                    previous = point;
+                                }
+                                // Its handle, where the transition is half way.
+                                if(width >= 16.0f) {
+                                    const ImVec2 handle(xa + width * ofClamp(keyframe.ease.inflection, 0.01f, 0.99f), (low + high) * 0.5f);
+                                    const bool neutral = std::abs(keyframe.ease.inflection - 0.5f) < 1e-4f && std::abs(keyframe.ease.steepness - 1.0f) < 1e-4f;
+                                    const bool dragged = easingHere && static_cast<int>(index) == projectEaseDragIndex;
+                                    dl->AddCircleFilled(handle, 3.5f, dragged ? IM_COL32(255, 255, 255, 255)
+                                                                     : neutral ? IM_COL32(20, 20, 20, 230) : curveInk);
+                                    dl->AddCircle(handle, 3.5f, neutral ? curveInk : IM_COL32(20, 20, 20, 230), 0, 1.0f);
+                                }
+                            }
+                        }
+                        if(beat < clip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue;
                         if(x < left - radius || x > right + radius) continue;
                         const bool active = draggingHere && static_cast<int>(index) == projectKeyDragIndex;
-                        const ImU32 ink = active ? IM_COL32(255, 255, 255, 255) : clipInk(clip, 255);
+                        const ImU32 ink = active ? IM_COL32(255, 255, 255, 255) : curveInk;
+                        const float y = levelY(index);
                         dl->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(255, 255, 255, 60), 1.0f);
-                        dl->AddQuadFilled(ImVec2(x, midY - radius), ImVec2(x + radius, midY), ImVec2(x, midY + radius),
-                                          ImVec2(x - radius, midY), ink);
-                        dl->AddQuad(ImVec2(x, midY - radius), ImVec2(x + radius, midY), ImVec2(x, midY + radius),
-                                    ImVec2(x - radius, midY), IM_COL32(20, 20, 20, 220), 1.0f);
+                        dl->AddQuadFilled(ImVec2(x, y - radius), ImVec2(x + radius, y), ImVec2(x, y + radius),
+                                          ImVec2(x - radius, y), ink);
+                        dl->AddQuad(ImVec2(x, y - radius), ImVec2(x + radius, y), ImVec2(x, y + radius),
+                                    ImVec2(x - radius, y), IM_COL32(20, 20, 20, 220), 1.0f);
                     }
                 }
                 dl->PopClipRect();
@@ -3805,7 +3845,8 @@ void ofxOceanodeTimelineController::draw() {
             // A Project Track keyframe under the mouse: drag to move it,
             // double-click to go there; a right-click opens the clip menu on it.
             int projectKeyHit = -1;
-            if(track.isProjectTrack && clipDragMode == ClipDragMode::None && projectKeyDragIndex < 0) {
+            if(track.isProjectTrack && (projectKeyDragIndex >= 0 || projectEaseDragIndex >= 0)) return;
+            if(track.isProjectTrack && clipDragMode == ClipDragMode::None) {
                 float nearest = 7.0f;
                 double hitBeat = 0.0;
                 const int cycles = clip.repeatContent
@@ -3835,6 +3876,53 @@ void ofxOceanodeTimelineController::draw() {
                         return;
                     }
                     if(!ImGui::IsMouseClicked(ImGuiMouseButton_Right)) return;
+                } else if(clip.projectKeyframes.size() > 1) {
+                    // A transition's easing handle (or Alt anywhere on the
+                    // transition, as on a Curve lane's segment).
+                    const float top = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
+                    const float bottom = max.y - 3.0f;
+                    const float radius = ofClamp((bottom - top) * 0.3f, 3.0f, 6.0f);
+                    const float low = bottom - radius - 1.0f, high = std::min(low, top + radius + 1.0f);
+                    const float handleY = (low + high) * 0.5f;
+                    int easeHit = -1;
+                    float easeWidth = 1.0f;
+                    for(int cycle = 0; cycle < std::min(cycles, 4096) && easeHit < 0; ++cycle)
+                        for(size_t index = 0; index + 1 < clip.projectKeyframes.size(); ++index) {
+                            const auto& keyframe = clip.projectKeyframes[index];
+                            const float xa = min.x + beatOffset(sourceToTimelineBeat(clip, keyframe.beat, cycle));
+                            const float xb = min.x + beatOffset(sourceToTimelineBeat(clip, clip.projectKeyframes[index + 1].beat, cycle));
+                            if(xb - xa < 16.0f) continue;
+                            const float handleX = xa + (xb - xa) * ofClamp(keyframe.ease.inflection, 0.01f, 0.99f);
+                            const bool onHandle = std::abs(mouse.x - handleX) <= 7.0f && std::abs(mouse.y - handleY) <= 7.0f;
+                            const bool withAlt = ImGui::GetIO().KeyAlt && mouse.x > xa && mouse.x < xb;
+                            if(!onHandle && !withAlt) continue;
+                            easeHit = static_cast<int>(index);
+                            easeWidth = xb - xa;
+                            break;
+                        }
+                    if(easeHit >= 0) {
+                        const auto& ease = clip.projectKeyframes[static_cast<size_t>(easeHit)].ease;
+                        ImGui::SetTooltip("Easing from keyframe %d to %d (bend at %d%%, steepness %.2f)\n"
+                                          "Drag sideways: where it bends. Up / down: how sharply.\nDouble-click: linear.",
+                                          easeHit + 1, easeHit + 2, static_cast<int>(std::round(ease.inflection * 100.0f)), ease.steepness);
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+                        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
+                            clipInteractionClaimedThisFrame = true;
+                            anyClipInteractionClaimedThisFrame = true;
+                            selectedClips = {memberKey};
+                            projectKeyEditTrackId = track.id;
+                            projectKeyEditClipId = clip.id;
+                            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) projectEaseResetIndex = easeHit;
+                            else {
+                                projectEaseDragIndex = easeHit;
+                                projectEaseDragStart = mouse;
+                                projectEaseDragWidth = easeWidth;
+                                projectEaseDragInitial = ease;
+                            }
+                            return;
+                        }
+                        if(!ImGui::IsMouseClicked(ImGuiMouseButton_Right)) return;
+                    }
                 }
             }
             {
@@ -5477,6 +5565,26 @@ void ofxOceanodeTimelineController::draw() {
                                                            static_cast<size_t>(projectKeyDragIndex), beat);
             if(moved < 0) projectKeyDragIndex = -1;
             else projectKeyDragIndex = moved;
+        }
+    }
+    if(projectEaseResetIndex >= 0) {
+        timeline.setProjectKeyframeEase(scope(timeline), projectKeyEditTrackId, projectKeyEditClipId,
+                                        static_cast<size_t>(projectEaseResetIndex), ofxOceanodeTimelineCurveTension{});
+        projectEaseResetIndex = -1;
+        projectEaseDragIndex = -1;
+    }
+    if(projectEaseDragIndex >= 0) {
+        if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) projectEaseDragIndex = -1;
+        else if(ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+            // As a Curve lane's sigmoid segment: sideways moves the bend, up steepens it.
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            ofxOceanodeTimelineCurveTension ease;
+            ease.inflection = ofClamp(projectEaseDragInitial.inflection +
+                (mouse.x - projectEaseDragStart.x) / std::max(1.0f, projectEaseDragWidth), 0.01f, 0.99f);
+            ease.steepness = ofClamp(projectEaseDragInitial.steepness *
+                std::exp(-(mouse.y - projectEaseDragStart.y) / 40.0f * 0.5f), 0.1f, 10.0f);
+            timeline.setProjectKeyframeEase(scope(timeline), projectKeyEditTrackId, projectKeyEditClipId,
+                                            static_cast<size_t>(projectEaseDragIndex), ease);
         }
     }
     if(requestClipSplit) {

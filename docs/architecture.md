@@ -89,6 +89,13 @@ keyframe (`rebuildProjectChannels`, with the evaluation indexes); the others
 are never written. Floats, ints and numeric vectors of one size interpolate
 linearly between the keyframes around the playhead; dropdowns, booleans,
 strings, colours and vectors that change size hold the keyframe before it.
+Each keyframe carries the easing of the transition to the next one (`ease`,
+a sigmoid tension like a Curve segment's, neutral: linear), which shapes how
+far along the way every interpolated parameter is. The clip draws the
+keyframes alternately low and high so the line between two of them shows
+that easing (the levels mean nothing else), with a handle per transition:
+dragged sideways it moves the bend, up or down it changes the steepness,
+double-clicked it goes back to linear (`setProjectKeyframeEase`).
 A value is written only when it differs from what the track last computed
 for that path (`projectLastApplied`), not when the parameter differs: where
 the track's value holds still (stopped, or between equal keyframes) the

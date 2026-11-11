@@ -628,7 +628,10 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             for(const auto& keyframe : clip.projectKeyframes) {
                 ofJson values = ofJson::object();
                 if(keyframe.values) for(const auto& [path, value] : *keyframe.values) values[path] = value;
-                clipJson["projectKeyframes"].push_back({{"beat", keyframe.beat}, {"values", std::move(values)}});
+                ofJson keyframeJson = {{"beat", keyframe.beat}, {"values", std::move(values)}};
+                if(keyframe.ease.inflection != 0.5f || keyframe.ease.steepness != 1.0f)
+                    keyframeJson["ease"] = {{"inflection", keyframe.ease.inflection}, {"steepness", keyframe.ease.steepness}};
+                clipJson["projectKeyframes"].push_back(std::move(keyframeJson));
             }
         }
         clipJson["lanes"] = ofJson::array();
@@ -1085,6 +1088,10 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                             for(auto it = keyframeJson["values"].begin(); it != keyframeJson["values"].end(); ++it)
                                 if(it.value().is_string()) (*values)[it.key()] = it.value().get<std::string>();
                         keyframe.values = std::move(values);
+                        if(keyframeJson.contains("ease") && keyframeJson["ease"].is_object()) {
+                            keyframe.ease.inflection = ofClamp(keyframeJson["ease"].value("inflection", 0.5f), 0.01f, 0.99f);
+                            keyframe.ease.steepness = ofClamp(keyframeJson["ease"].value("steepness", 1.0f), 0.1f, 10.0f);
+                        }
                         keyframe.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
                         clip.projectKeyframes.push_back(std::move(keyframe));
                     }

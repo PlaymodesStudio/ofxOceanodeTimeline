@@ -2684,6 +2684,14 @@ void ofxOceanodeTimelineManager::mirrorClipContent(ofxOceanodeTimelineClip& clip
     const double length = ofxOceanodeTimelineClipTime::sourceDuration(clip);
     for(auto& keyframe : clip.projectKeyframes) keyframe.beat = std::max(0.0, length - keyframe.beat);
     std::reverse(clip.projectKeyframes.begin(), clip.projectKeyframes.end());
+    // Each transition's easing stays with it, read backwards: it was kept by
+    // the keyframe that is now the transition's end.
+    for(size_t index = 0; index + 1 < clip.projectKeyframes.size(); ++index) {
+        auto ease = clip.projectKeyframes[index + 1].ease;
+        ease.inflection = 1.0f - ease.inflection;
+        clip.projectKeyframes[index].ease = ease;
+    }
+    if(!clip.projectKeyframes.empty()) clip.projectKeyframes.back().ease = {};
     for(auto& lane : clip.lanes) {
         if(!lane.curvePoints.empty() && lane.curveInterpolation != "Value") mirrorCurve(lane, length);
         mirrorEvents(lane.pianoNotes, length);
@@ -5160,7 +5168,10 @@ int ofxOceanodeTimelineManager::addProjectKeyframe(ofxOceanodeTimelineSequence& 
     const auto existing = std::find_if(keyframes.begin(), keyframes.end(), [&](const auto& other) {
         return std::abs(other.beat - sourceBeat) < 1.0 / 960.0;
     });
-    if(existing != keyframes.end()) *existing = std::move(keyframe);
+    if(existing != keyframes.end()) {
+        keyframe.ease = existing->ease; // the same place: its easing stays
+        *existing = std::move(keyframe);
+    }
     else keyframes.insert(std::upper_bound(keyframes.begin(), keyframes.end(), sourceBeat,
                               [](double beat, const auto& other) { return beat < other.beat; }), std::move(keyframe));
     invalidateEvaluationIndexes();
@@ -5172,6 +5183,22 @@ bool ofxOceanodeTimelineManager::removeProjectKeyframe(ofxOceanodeTimelineSequen
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr || index >= clip->projectKeyframes.size()) return false;
     clip->projectKeyframes.erase(clip->projectKeyframes.begin() + static_cast<std::ptrdiff_t>(index));
+    invalidateEvaluationIndexes();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setProjectKeyframeEase(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                        const std::string& clipId, size_t index,
+                                                        const ofxOceanodeTimelineCurveTension& ease) {
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr || index >= clip->projectKeyframes.size()) return false;
+    auto& keyframe = clip->projectKeyframes[index];
+    ofxOceanodeTimelineCurveTension next;
+    next.inflection = std::isfinite(ease.inflection) ? ofClamp(ease.inflection, 0.01f, 0.99f) : 0.5f;
+    next.steepness = std::isfinite(ease.steepness) ? ofClamp(ease.steepness, 0.1f, 10.0f) : 1.0f;
+    if(keyframe.ease.inflection == next.inflection && keyframe.ease.steepness == next.steepness) return false;
+    keyframe.ease = next;
+    keyframe.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
     invalidateEvaluationIndexes();
     return true;
 }
@@ -5218,6 +5245,7 @@ void ofxOceanodeTimelineManager::rebuildProjectChannels() {
             for(size_t index = 0; index < count; ++index) {
                 const auto& keyframe = clip.projectKeyframes[index];
                 entry.beats.push_back(keyframe.beat);
+                entry.eases.push_back(keyframe.ease);
                 if(!keyframe.values) continue;
                 for(const auto& value : *keyframe.values) {
                     auto& texts = byPath[value.first];
@@ -5261,6 +5289,15 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
         // The keyframes around the playhead: before <= playhead < after.
         const int after = static_cast<int>(std::upper_bound(beats.begin(), beats.end(), sourceBeat) - beats.begin());
         const int before = after - 1;
+        // How far along the transition between them, shaped by its easing.
+        float eased = 0.0f;
+        if(before >= 0 && after < count) {
+            const double span = beats[static_cast<size_t>(after)] - beats[static_cast<size_t>(before)];
+            const float linear = span <= kEpsilon ? 0.0f
+                : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(before)]) / span)));
+            const auto& ease = entry.eases[static_cast<size_t>(before)];
+            eased = ofxOceanodeTimelineCurve::sigmoidFlex(linear, ease.inflection, ease.steepness);
+        }
         for(auto& channel : entry.channels) {
             // Explicit automation wins, on this timeline or an outer one.
             if(bindingsByPathCache.count(channel.path) > 0) continue;
@@ -5302,7 +5339,9 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
                 const auto& from = channel.numbers[static_cast<size_t>(a)];
                 const auto& to = channel.numbers[static_cast<size_t>(b)];
                 const double span = beats[static_cast<size_t>(b)] - beats[static_cast<size_t>(a)];
+                // (A parameter some keyframes in between lack crosses them in a straight line.)
                 const float t = a == b || span <= kEpsilon ? 0.0f
+                    : a == before && b == after ? eased
                     : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(a)]) / span)));
                 std::vector<float> value(from.size());
                 for(size_t i = 0; i < from.size(); ++i) value[i] = from[i] + (to[i] - from[i]) * t;

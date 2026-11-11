@@ -629,6 +629,14 @@ private:
     int projectKeyRemoveIndex = -1;
     int projectKeyDragIndex = -1;
     float projectKeyDragOriginX = 0.0f;
+    // The easing of the transition after keyframe projectEaseDragIndex,
+    // dragged by its handle (sideways: where it bends; up/down: how sharply),
+    // or reset to linear (projectEaseResetIndex).
+    int projectEaseDragIndex = -1;
+    int projectEaseResetIndex = -1;
+    ImVec2 projectEaseDragStart;
+    float projectEaseDragWidth = 1.0f;
+    ofxOceanodeTimelineCurveTension projectEaseDragInitial;
     std::string clipSplitTrackId;
     std::string clipSplitClipId;
     std::string waveSplitTrackId;

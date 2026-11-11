@@ -670,6 +670,10 @@ inline void ofxOceanodeTimelineRemoveMutationGroup(ofxOceanodeTimelineLane& lane
 struct ofxOceanodeTimelineProjectKeyframe {
     double beat = 0.0; // the clip's source beats
     std::shared_ptr<const std::map<std::string, std::string>> values;
+    // The easing of the transition from this keyframe to the next: a
+    // sigmoid like a Curve lane's segment (neutral: linear). It shapes how
+    // far along the way every interpolated parameter is.
+    ofxOceanodeTimelineCurveTension ease;
     uint64_t stamp = 0;
     static uint64_t nextStamp() {
         static std::atomic<uint64_t> counter{0};
@@ -1291,6 +1295,9 @@ public:
                            const std::string& clipId, double timelineBeat);
     bool removeProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                const std::string& clipId, size_t index);
+    // The easing from keyframe `index` to the next one (see ofxOceanodeTimelineProjectKeyframe::ease).
+    bool setProjectKeyframeEase(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                const std::string& clipId, size_t index, const ofxOceanodeTimelineCurveTension& ease);
     // Moves a keyframe to a timeline beat inside its clip; returns its new index (-1: not moved).
     int moveProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                             const std::string& clipId, size_t index, double timelineBeat);
@@ -2775,6 +2782,7 @@ private:
         const ofxOceanodeTimelineTrack* track = nullptr;
         const ofxOceanodeTimelineClip* clip = nullptr;
         std::vector<double> beats;
+        std::vector<ofxOceanodeTimelineCurveTension> eases; // per keyframe: to the next one
         std::vector<ProjectChannel> channels;
     };
     std::vector<ProjectClipChannels> projectChannelsCache;
