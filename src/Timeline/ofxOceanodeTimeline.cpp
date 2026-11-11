@@ -1317,8 +1317,8 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
                                                    ofxOceanodeAbstractParameter& parameter,
                                                    ofxOceanodeTimelineAutomationMode mode) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || track->isFolder || track->isMacroTrack() || container == nullptr ||
-       !isStepLaneCompatible(parameter)) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isProjectTrack || track->isFolder || track->isMacroTrack() ||
+       container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
     // A gated macro's Active belongs to its macro track.
     if(isGatedMacroActive(parameter)) return std::string();
@@ -1859,6 +1859,25 @@ int ofxOceanodeTimelineManager::retargetParameterPaths(ofxOceanodeTimelineSequen
             binding.parameterPath = it->second;
             binding.missingTarget = false;
             changed++;
+        }
+        // A Project Track's keyframes keep their values under the new paths.
+        for(auto& clip : track.clips) for(auto& keyframe : clip.projectKeyframes) {
+            if(!keyframe.values) continue;
+            bool any = false;
+            for(const auto& entry : *keyframe.values) {
+                const auto it = oldToNew.find(entry.first);
+                if(it != oldToNew.end() && !it->second.empty() && it->second != it->first) { any = true; break; }
+            }
+            if(!any) continue;
+            auto moved = std::make_shared<std::map<std::string, std::string>>();
+            for(const auto& entry : *keyframe.values) {
+                const auto it = oldToNew.find(entry.first);
+                const bool renamed = it != oldToNew.end() && !it->second.empty() && it->second != it->first;
+                (*moved)[renamed ? it->second : entry.first] = entry.second;
+                if(renamed) changed++;
+            }
+            keyframe.values = std::move(moved);
+            keyframe.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
         }
     }
     // Macro tracks follow a moved macro: its canvas id changed as its
@@ -2463,6 +2482,21 @@ void ofxOceanodeTimelineManager::cutClipContent(const ofxOceanodeTimelineClip& o
                         rightLane.multiSliderValues.end());
         }
     }
+    // A Project Track's keyframes: each goes to the part its beat is in (the
+    // right part's rotated like the rest of its content when repeating).
+    if(!original.projectKeyframes.empty()) {
+        right.projectKeyframes.clear();
+        if(!repeating) left.projectKeyframes.clear();
+        for(const auto& keyframe : original.projectKeyframes) {
+            auto moved = keyframe;
+            if(keyframe.beat >= cut - kEpsilon) moved.beat = std::max(0.0, keyframe.beat - cut);
+            else if(repeating) moved.beat = keyframe.beat + content - cut;
+            else { left.projectKeyframes.push_back(keyframe); continue; }
+            right.projectKeyframes.push_back(moved);
+        }
+        std::stable_sort(right.projectKeyframes.begin(), right.projectKeyframes.end(),
+                         [](const auto& a, const auto& b) { return a.beat < b.beat; });
+    }
 }
 
 void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip) const {
@@ -2474,6 +2508,7 @@ void ofxOceanodeTimelineManager::bakeContentOffset(ofxOceanodeTimelineClip& clip
     ofxOceanodeTimelineClip left = clip, rotated = clip;
     cutClipContent(clip, offset, true, left, rotated);
     clip.lanes = std::move(rotated.lanes);
+    clip.projectKeyframes = std::move(rotated.projectKeyframes);
 }
 
 namespace {
@@ -2647,6 +2682,8 @@ void ofxOceanodeTimelineManager::mirrorClipContent(ofxOceanodeTimelineClip& clip
     // The content is mirrored as written; the offset says where it is read from.
     const double offset = ofxOceanodeTimelineClipTime::contentOffset(clip);
     const double length = ofxOceanodeTimelineClipTime::sourceDuration(clip);
+    for(auto& keyframe : clip.projectKeyframes) keyframe.beat = std::max(0.0, length - keyframe.beat);
+    std::reverse(clip.projectKeyframes.begin(), clip.projectKeyframes.end());
     for(auto& lane : clip.lanes) {
         if(!lane.curvePoints.empty() && lane.curveInterpolation != "Value") mirrorCurve(lane, length);
         mirrorEvents(lane.pianoNotes, length);
@@ -4999,6 +5036,8 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         if(stateCapturePathsCache.count(path) > 0)
             stateCaptureLastAppliedValues[path] = parameterValueForAutomation(*parameter);
     }
+    // Project Tracks last, and only where no binding above drives the path.
+    if(isEngine()) applyProjectTracks();
     // The primary applies through its engines (the host calls this again
     // after the nodes ran, to assert the values over what they wrote). A
     // dependent timeline previewing (played by hand) is heard over the
@@ -5024,6 +5063,278 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         if(parameter == nullptr) continue;
         const std::string type = parameter->valueType();
         applyAutomationValue(*parameter, broadcastScalarNumericVectorValue(*parameter, "0", type), type);
+    }
+}
+
+// ---- Project Track ---------------------------------------------------------
+
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::projectTrackOf(const ofxOceanodeTimelineSequence& sequence) {
+    for(const auto& track : sequence.tracks)
+        if(track.isProjectTrack) return &track;
+    return nullptr;
+}
+
+std::string ofxOceanodeTimelineManager::createProjectTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    if(!isLiveSequence(sequence)) return std::string();
+    if(const auto* existing = projectTrackOf(sequence)) return existing->id;
+    const auto trackId = createTrack(sequence, requestedName);
+    auto* track = getTrack(sequence, trackId);
+    if(track == nullptr) return std::string();
+    track->isProjectTrack = true;
+    track->color = ofColor(236, 196, 72, 255);
+    // One clip, played once: it grows as keyframes are added past its end.
+    const auto clipId = createClip(sequence, trackId, "Project", 0.0, 16.0);
+    if(auto* clip = getClip(sequence, trackId, clipId)) clip->repeatContent = false;
+    return trackId;
+}
+
+int ofxOceanodeTimelineManager::addProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                   const std::string& clipId, double timelineBeat) {
+    auto* track = getTrack(sequence, trackId);
+    auto* base = resolverFor(sequence).base;
+    if(track == nullptr || !track->isProjectTrack || base == nullptr || !isLiveSequence(sequence) ||
+       !std::isfinite(timelineBeat)) return 0;
+    timelineBeat = std::max(0.0, timelineBeat);
+
+    // The clip: the one asked for, else the one at the beat, else the nearest.
+    ofxOceanodeTimelineClip* clip = clipId.empty() ? nullptr : getClip(sequence, trackId, clipId);
+    if(clip == nullptr) {
+        double nearest = std::numeric_limits<double>::max();
+        for(auto& candidate : track->clips) {
+            const double end = candidate.startBeat + candidate.durationBeats;
+            const double distance = timelineBeat < candidate.startBeat ? candidate.startBeat - timelineBeat
+                                  : timelineBeat > end ? timelineBeat - end : 0.0;
+            if(distance < nearest) { nearest = distance; clip = &candidate; }
+        }
+    }
+    if(clip == nullptr) {
+        const auto made = createClip(sequence, trackId, "Project", timelineBeat, 16.0);
+        clip = getClip(sequence, trackId, made);
+        if(clip == nullptr) return 0;
+        clip->repeatContent = false;
+    }
+
+    // Where in the clip's content. A clip playing its content once, as
+    // written, grows to a beat outside it; a stretched, repeated or offset
+    // one only takes keyframes inside it.
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+    const bool plain = !isClipStretched(*clip) && !clip->reversed &&
+                       ofxOceanodeTimelineClipTime::contentOffset(*clip) <= 0.0 &&
+                       clip->durationBeats <= content + 1e-6;
+    double sourceBeat = 0.0;
+    if(plain) {
+        sourceBeat = timelineBeat - clip->startBeat;
+        if(sourceBeat < 0.0) {
+            const double shift = -sourceBeat;
+            clip->startBeat = timelineBeat;
+            clip->durationBeats += shift;
+            clip->contentDurationBeats = content + shift;
+            for(auto& keyframe : clip->projectKeyframes) keyframe.beat += shift;
+            sourceBeat = 0.0;
+        } else if(sourceBeat > clip->durationBeats) {
+            clip->durationBeats = sourceBeat;
+            clip->contentDurationBeats = std::max(content, sourceBeat);
+            if(!clip->repeatContent) clip->contentDurationBeats = clip->durationBeats;
+        }
+    } else {
+        if(timelineBeat < clip->startBeat - kEpsilon || timelineBeat >= clip->startBeat + clip->durationBeats) return 0;
+        sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(*clip, timelineBeat);
+    }
+
+    // Every parameter a snapshot can hold, in this canvas and the macros in
+    // it, except those something else already decides: an incoming
+    // connection, or a track of any timeline.
+    auto values = std::make_shared<std::map<std::string, std::string>>();
+    std::unordered_set<ofxOceanodeAbstractParameter*> bound;
+    collectBoundParameters(bound);
+    captureProjectValues(*base, bound, *values);
+    if(values->empty()) return 0;
+    const int captured = static_cast<int>(values->size());
+
+    // A keyframe already there is overwritten.
+    ofxOceanodeTimelineProjectKeyframe keyframe;
+    keyframe.beat = sourceBeat;
+    keyframe.values = std::move(values);
+    keyframe.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
+    auto& keyframes = clip->projectKeyframes;
+    const auto existing = std::find_if(keyframes.begin(), keyframes.end(), [&](const auto& other) {
+        return std::abs(other.beat - sourceBeat) < 1.0 / 960.0;
+    });
+    if(existing != keyframes.end()) *existing = std::move(keyframe);
+    else keyframes.insert(std::upper_bound(keyframes.begin(), keyframes.end(), sourceBeat,
+                              [](double beat, const auto& other) { return beat < other.beat; }), std::move(keyframe));
+    invalidateEvaluationIndexes();
+    return captured;
+}
+
+bool ofxOceanodeTimelineManager::removeProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                       const std::string& clipId, size_t index) {
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr || index >= clip->projectKeyframes.size()) return false;
+    clip->projectKeyframes.erase(clip->projectKeyframes.begin() + static_cast<std::ptrdiff_t>(index));
+    invalidateEvaluationIndexes();
+    return true;
+}
+
+int ofxOceanodeTimelineManager::moveProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                    const std::string& clipId, size_t index, double timelineBeat) {
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr || index >= clip->projectKeyframes.size() || !std::isfinite(timelineBeat)) return -1;
+    const double end = clip->startBeat + clip->durationBeats;
+    timelineBeat = std::max(clip->startBeat, std::min(timelineBeat, end));
+    // The clip's end is its content's end when it plays once; a repeating
+    // clip's wraps to its start, so stay just inside.
+    double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(*clip, std::min(timelineBeat, end - 1e-6));
+    if(timelineBeat >= end - 1e-6 && !clip->repeatContent && ofxOceanodeTimelineClipTime::contentOffset(*clip) <= 0.0)
+        sourceBeat = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+    auto& keyframes = clip->projectKeyframes;
+    auto moved = keyframes[index];
+    if(std::abs(moved.beat - sourceBeat) < 1e-9) return static_cast<int>(index);
+    moved.beat = sourceBeat;
+    moved.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
+    keyframes.erase(keyframes.begin() + static_cast<std::ptrdiff_t>(index));
+    const auto at = std::upper_bound(keyframes.begin(), keyframes.end(), sourceBeat,
+                                     [](double beat, const auto& other) { return beat < other.beat; });
+    const int newIndex = static_cast<int>(at - keyframes.begin());
+    keyframes.insert(at, std::move(moved));
+    invalidateEvaluationIndexes();
+    return newIndex;
+}
+
+// One channel per path whose value is not the same in every keyframe of a
+// project clip that has it: the others are never written.
+void ofxOceanodeTimelineManager::rebuildProjectChannels() {
+    projectChannelsCache.clear();
+    projectChannelsValid = true;
+    for(const auto& track : playedSequence.tracks) {
+        if(!track.isProjectTrack) continue;
+        for(const auto& clip : track.clips) {
+            const size_t count = clip.projectKeyframes.size();
+            if(count < 2) continue;
+            ProjectClipChannels entry;
+            entry.track = &track;
+            entry.clip = &clip;
+            std::map<std::string, std::vector<const std::string*>> byPath;
+            for(size_t index = 0; index < count; ++index) {
+                const auto& keyframe = clip.projectKeyframes[index];
+                entry.beats.push_back(keyframe.beat);
+                if(!keyframe.values) continue;
+                for(const auto& value : *keyframe.values) {
+                    auto& texts = byPath[value.first];
+                    if(texts.empty()) texts.assign(count, nullptr);
+                    texts[index] = &value.second;
+                }
+            }
+            for(auto& path : byPath) {
+                const std::string* first = nullptr;
+                bool differs = false;
+                for(const auto* text : path.second) {
+                    if(text == nullptr) continue;
+                    if(first == nullptr) first = text;
+                    else if(*text != *first) { differs = true; break; }
+                }
+                if(!differs) continue;
+                ProjectChannel channel;
+                channel.path = path.first;
+                channel.texts = std::move(path.second);
+                entry.channels.push_back(std::move(channel));
+            }
+            if(!entry.channels.empty()) projectChannelsCache.push_back(std::move(entry));
+        }
+    }
+}
+
+void ofxOceanodeTimelineManager::applyProjectTracks() {
+    if(container == nullptr) return;
+    if(!projectChannelsValid) rebuildProjectChannels();
+    if(projectChannelsCache.empty()) return;
+    const double beat = playState().beatPosition;
+    static const std::string floatType = typeid(float).name(), intType = typeid(int).name();
+    static const std::string floatVectorType = typeid(std::vector<float>).name(), intVectorType = typeid(std::vector<int>).name();
+    for(auto& entry : projectChannelsCache) {
+        const auto& clip = *entry.clip;
+        if(clip.muted || !isTrackAudible(*entry.track)) continue;
+        if(beat < clip.startBeat - kEpsilon || beat >= clip.startBeat + clip.durationBeats) continue;
+        const double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, beat);
+        const auto& beats = entry.beats;
+        const int count = static_cast<int>(beats.size());
+        // The keyframes around the playhead: before <= playhead < after.
+        const int after = static_cast<int>(std::upper_bound(beats.begin(), beats.end(), sourceBeat) - beats.begin());
+        const int before = after - 1;
+        for(auto& channel : entry.channels) {
+            // Explicit automation wins, on this timeline or an outer one.
+            if(bindingsByPathCache.count(channel.path) > 0) continue;
+            if(pathDrivenElsewhere && pathDrivenElsewhere(channel.path)) continue;
+            auto* parameter = findParameterCached(channel.path);
+            if(parameter == nullptr || parameter->hasInConnection()) continue;
+            const std::string type = parameter->valueType();
+            if(channel.kind == 0) {
+                // Numbers interpolate when every keyframe holds as many of
+                // them; a dropdown's options, and everything else, switch.
+                const bool scalar = type == floatType || type == intType;
+                bool numeric = (scalar || type == floatVectorType || type == intVectorType) &&
+                               ofxOceanodeTimelineDropdownOptions(*parameter).empty();
+                if(numeric) {
+                    channel.numbers.assign(channel.texts.size(), {});
+                    size_t size = 0;
+                    for(size_t index = 0; index < channel.texts.size() && numeric; ++index) {
+                        if(channel.texts[index] == nullptr) continue;
+                        auto& numbers = channel.numbers[index];
+                        automationText::forEachToken(*channel.texts[index], [&](const char* begin, const char* end) {
+                            numbers.push_back(static_cast<float>(automationText::parse(begin, end)));
+                        });
+                        if(numbers.empty() || (size != 0 && numbers.size() != size)) numeric = false;
+                        size = numbers.size();
+                    }
+                }
+                if(!numeric) channel.numbers.clear();
+                channel.kind = numeric ? 1 : 2;
+            }
+            // The nearest keyframes holding this parameter, each side.
+            int a = std::min(before, count - 1), b = std::max(after, 0);
+            while(a >= 0 && channel.texts[static_cast<size_t>(a)] == nullptr) --a;
+            while(b < count && channel.texts[static_cast<size_t>(b)] == nullptr) ++b;
+            if(a < 0 && b >= count) continue;
+            if(a < 0) a = b;       // before its first keyframe: held
+            if(b >= count) b = a;  // after its last
+            auto& last = projectLastApplied[channel.path];
+            if(channel.kind == 1) {
+                const auto& from = channel.numbers[static_cast<size_t>(a)];
+                const auto& to = channel.numbers[static_cast<size_t>(b)];
+                const double span = beats[static_cast<size_t>(b)] - beats[static_cast<size_t>(a)];
+                const float t = a == b || span <= kEpsilon ? 0.0f
+                    : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(a)]) / span)));
+                std::vector<float> value(from.size());
+                for(size_t i = 0; i < from.size(); ++i) value[i] = from[i] + (to[i] - from[i]) * t;
+                if(last.numbers == value) continue;
+                ofxOceanodeAbstractParameter::AutomationWriteScope writing(*parameter);
+                if(type == floatType) {
+                    auto& target = parameter->cast<float>().getParameter();
+                    if(target.get() != value[0]) target.set(value[0]);
+                } else if(type == intType) {
+                    auto& target = parameter->cast<int>().getParameter();
+                    const int next = static_cast<int>(std::lround(value[0]));
+                    if(target.get() != next) target.set(next);
+                } else if(type == floatVectorType) {
+                    auto& target = parameter->cast<std::vector<float>>().getParameter();
+                    if(target.get() != value) target.set(value);
+                } else {
+                    auto& target = parameter->cast<std::vector<int>>().getParameter();
+                    std::vector<int> next(value.size());
+                    for(size_t i = 0; i < value.size(); ++i) next[i] = static_cast<int>(std::lround(value[i]));
+                    if(target.get() != next) target.set(next);
+                }
+                last.numbers = std::move(value);
+                last.text.clear();
+            } else {
+                // Held: the keyframe before the playhead (the first one, ahead of it).
+                const std::string& text = *channel.texts[static_cast<size_t>(a)];
+                if(last.numbers.empty() && last.text == text) continue;
+                applyAutomationValue(*parameter, text, type);
+                last.numbers.clear();
+                last.text = text;
+            }
+        }
     }
 }
 

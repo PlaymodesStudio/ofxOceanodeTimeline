@@ -268,6 +268,7 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
     if(duplicate) ImGui::TextDisabled("A copy of %s", timeline.timelineName(newTimelineRequest.duplicateOf).c_str());
     else if(newTimelineRequest.parameter != nullptr)
         ImGui::TextDisabled("With %s on its first track", newTimelineRequest.parameter->getName().c_str());
+    else if(newTimelineRequest.projectTrack) ImGui::TextDisabled("With a Project Track");
     const float fieldWidth = 320.0f;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(fieldWidth);
@@ -336,6 +337,8 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
                     const auto track = timeline.createTrack(*sequence, parameter->getName());
                     timeline.addBinding(*sequence, track, *parameter);
                 }
+            if(newTimelineRequest.projectTrack && !duplicate)
+                if(auto* sequence = timeline.timelineFor(made)) timeline.createProjectTrack(*sequence);
             // In a window of its own, brought forward: the one it was asked
             // from while that shows no timeline (a canvas's empty state), else a new one.
             const auto* asking = timeline.findTimelineWindow(newTimelineRequest.window);

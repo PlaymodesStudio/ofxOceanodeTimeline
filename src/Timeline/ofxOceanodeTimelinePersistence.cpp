@@ -541,6 +541,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
     trackJson["muted"] = track.muted;
     trackJson["solo"] = track.solo;
     trackJson["isWaveTrack"] = track.isWaveTrack;
+    if(track.isProjectTrack) trackJson["isProjectTrack"] = true;
     if(track.isWaveTrack) trackJson["waveTrackHeight"] = track.waveTrackHeight;
     trackJson["waveVolume"] = track.waveVolume;
     trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
@@ -622,6 +623,14 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         clipJson["waveSourceStartBeat"] = clip.waveSourceStartBeat;
         clipJson["waveFileDurationBeats"] = clip.waveFileDurationBeats;
         clipJson["waveReverse"] = clip.waveReverse;
+        if(!clip.projectKeyframes.empty()) {
+            clipJson["projectKeyframes"] = ofJson::array();
+            for(const auto& keyframe : clip.projectKeyframes) {
+                ofJson values = ofJson::object();
+                if(keyframe.values) for(const auto& [path, value] : *keyframe.values) values[path] = value;
+                clipJson["projectKeyframes"].push_back({{"beat", keyframe.beat}, {"values", std::move(values)}});
+            }
+        }
         clipJson["lanes"] = ofJson::array();
         for(const auto& lane : clip.lanes) {
             ofJson laneJson;
@@ -957,6 +966,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
         track.isWaveTrack = trackJson.value("isWaveTrack", false);
+        track.isProjectTrack = !track.isWaveTrack && trackJson.value("isProjectTrack", false);
         track.waveTrackHeight = trackJson.value("waveTrackHeight", 96.0f);
         track.waveVolume = ofClamp(trackJson.value("waveVolume", 1.0f), 0.0f, 4.0f);
         // Track automation is always present for Wave Tracks. The old flag is
@@ -1065,6 +1075,22 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 clip.waveSourceStartBeat = std::max(0.0, clipJson.value("waveSourceStartBeat", 0.0));
                 clip.waveFileDurationBeats = std::max(0.0, clipJson.value("waveFileDurationBeats", 0.0));
                 clip.waveReverse = clipJson.value("waveReverse", false);
+                if(track.isProjectTrack && clipJson.contains("projectKeyframes") && clipJson["projectKeyframes"].is_array()) {
+                    for(const auto& keyframeJson : clipJson["projectKeyframes"]) {
+                        if(!keyframeJson.is_object()) continue;
+                        ofxOceanodeTimelineProjectKeyframe keyframe;
+                        keyframe.beat = std::max(0.0, keyframeJson.value("beat", 0.0));
+                        auto values = std::make_shared<std::map<std::string, std::string>>();
+                        if(keyframeJson.contains("values") && keyframeJson["values"].is_object())
+                            for(auto it = keyframeJson["values"].begin(); it != keyframeJson["values"].end(); ++it)
+                                if(it.value().is_string()) (*values)[it.key()] = it.value().get<std::string>();
+                        keyframe.values = std::move(values);
+                        keyframe.stamp = ofxOceanodeTimelineProjectKeyframe::nextStamp();
+                        clip.projectKeyframes.push_back(std::move(keyframe));
+                    }
+                    std::stable_sort(clip.projectKeyframes.begin(), clip.projectKeyframes.end(),
+                                     [](const auto& a, const auto& b) { return a.beat < b.beat; });
+                }
                 if(clipJson.contains("lanes") && clipJson["lanes"].is_array()) {
                     for(const auto& laneJson : clipJson["lanes"]) {
                         if(!laneJson.is_object()) continue;
@@ -1487,6 +1513,7 @@ ofJson ofxOceanodeTimelineManager::exportClip(const ofxOceanodeTimelineSequence&
     portable.name = track->name;
     portable.color = track->color;
     portable.isWaveTrack = track->isWaveTrack;
+    portable.isProjectTrack = track->isProjectTrack;
     portable.clips.push_back(*clip);
     portable.clips.front().startBeat = 0.0;
     // A reusable capture must not become the destination track's live capture buffer.

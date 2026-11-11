@@ -4,7 +4,9 @@
 #include "Timeline/ofxOceanodeTimeline.h"
 
 #include "Managers/ofxOceanodeContainer.h"
+#include "Nodes/ofxOceanodeNode.h"
 #include "Nodes/ofxOceanodeNodeMacro.h"
+#include "Timeline/ofxOceanodeTimelineInternal.h"
 
 #include <filesystem>
 #include <functional>
@@ -512,7 +514,28 @@ std::vector<std::string> ofxOceanodeTimelineManager::allCanvases() const {
     return canvases;
 }
 
-
-
-
-
+// Here rather than with the rest of the Project Track: walking nodes and
+// macros needs the core's node headers, which this file already takes.
+void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer& base,
+                                                      const std::unordered_set<ofxOceanodeAbstractParameter*>& bound,
+                                                      std::map<std::string, std::string>& values) const {
+    std::function<void(ofxOceanodeContainer&)> collect = [&](ofxOceanodeContainer& canvas) {
+        for(auto* node : canvas.getAllModules()) {
+            if(node == nullptr) continue;
+            auto& model = node->getNodeModel();
+            for(auto& abstract : node->getParameters()) {
+                auto* parameter = dynamic_cast<ofxOceanodeAbstractParameter*>(abstract.get());
+                if(parameter == nullptr || !ofxOceanodeNode::canSnapshotParameter(*parameter)) continue;
+                if(parameter->hasInConnection() || bound.count(parameter) > 0) continue;
+                const auto hint = model.morphHint(*parameter);
+                if(hint == ofxOceanodeNodeModel::MorphHint::Skip || hint == ofxOceanodeNodeModel::MorphHint::Structural) continue;
+                const std::string path = base.getTimelineParameterPath(*parameter, base);
+                if(path.empty()) continue;
+                values[path] = ofxOceanodeTimelineDetail::parameterValueForAutomation(*parameter);
+            }
+            if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&model))
+                if(auto inner = macro->getContainer()) collect(*inner);
+        }
+    };
+    collect(base);
+}

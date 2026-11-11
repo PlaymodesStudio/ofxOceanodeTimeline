@@ -70,6 +70,40 @@ stay at the controller's deferred mutation point so drawing cannot invalidate
 track, clip or lane vectors mid-iteration. The controller forwards selection
 cleanup and track removal to the editors without accessing their private state.
 
+## Project Track
+
+A Project Track (`ofxOceanodeTimelineTrack::isProjectTrack`, one per
+timeline, made from the canvas menu's Create Project Track) has no bindings
+and its clips no lanes: a clip holds keyframes of the whole patch
+(`projectKeyframes`, in the clip's source beats, so clip timing applies to
+them as to any content). `addProjectKeyframe` stores the automation text of
+every parameter a Node Snapshot can hold (`ofxOceanodeNode::canSnapshotParameter`)
+in the sequence's canvas and the macros in it, by path, leaving out
+parameters with an incoming connection, parameters a track of any timeline
+drives, and those a node marks `MorphHint::Skip` or `Structural`. A beat
+outside an unstretched clip grows the clip to it.
+
+Playback is an engine's last apply step (`applyProjectTracks`). Per project
+clip it keeps one channel for each path whose value is not the same in every
+keyframe (`rebuildProjectChannels`, with the evaluation indexes); the others
+are never written. Floats, ints and numeric vectors of one size interpolate
+linearly between the keyframes around the playhead; dropdowns, booleans,
+strings, colours and vectors that change size hold the keyframe before it.
+A value is written only when it differs from what the track last computed
+for that path (`projectLastApplied`), not when the parameter differs: where
+the track's value holds still (stopped, or between equal keyframes) the
+parameter stays editable by hand, which is how the next keyframe is set up.
+A path with a binding, or driven by an outer timeline, is left to it. Only
+the played timeline's own Project Track plays: one inside a macro timeline
+placed by a macro clip does not yet.
+
+A keyframe's values are a shared, never-edited map with a stamp that changes
+with them, so engine copies and undo snapshots share the data and
+`sequenceSignature` hashes beats and stamps only. The controller draws the
+keyframes on the clip, serves "+ Key" (track header) and the clip menu's
+keyframe actions at its deferred edit point, and drags a keyframe along its
+clip there.
+
 ## Arrangement and scope presentation
 
 Track folders are tracks with `isFolder` (no bindings or clips); a track's

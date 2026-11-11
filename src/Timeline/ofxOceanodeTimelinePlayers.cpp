@@ -129,13 +129,21 @@ void ofxOceanodeTimelineManager::makeAbsolute(ofxOceanodeTimelineSequence& seque
     for(auto& track : sequence.tracks) {
         for(auto& binding : track.bindings) binding.parameterPath = absolute(binding.parameterPath);
         if(track.isMacroTrack()) track.macroCanvas = track.macroCanvas == "." ? canvas : canvas + " / " + track.macroCanvas;
-        for(auto& clip : track.clips)
+        for(auto& clip : track.clips) {
             for(auto& lane : clip.lanes) {
                 if(lane.targetProbability.empty()) continue;
                 std::decay_t<decltype(lane.targetProbability)> moved;
                 for(const auto& [path, chance] : lane.targetProbability) moved[absolute(path)] = chance;
                 lane.targetProbability = std::move(moved);
             }
+            // (The copy's own maps: the source keeps its relative paths.)
+            for(auto& keyframe : clip.projectKeyframes) {
+                if(!keyframe.values) continue;
+                auto moved = std::make_shared<std::map<std::string, std::string>>();
+                for(const auto& [path, value] : *keyframe.values) (*moved)[absolute(path)] = value;
+                keyframe.values = std::move(moved);
+            }
+        }
     }
 }
 

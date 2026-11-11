@@ -10,6 +10,7 @@
 #include "ofxOceanodeTimelineMetronome.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -660,6 +661,22 @@ inline void ofxOceanodeTimelineRemoveMutationGroup(ofxOceanodeTimelineLane& lane
     }
 }
 
+// A Project Track keyframe: the patch's state at one position of its clip.
+// Values are the parameters' automation texts (parameterValueForAutomation)
+// by path, relative to the sequence's canvas like a binding's path. The map
+// is shared between copies (an engine's played copy, undo snapshots) and
+// never edited in place: a change makes a new map and a new stamp, so the
+// stamp alone tells whether the content changed (see sequenceSignature).
+struct ofxOceanodeTimelineProjectKeyframe {
+    double beat = 0.0; // the clip's source beats
+    std::shared_ptr<const std::map<std::string, std::string>> values;
+    uint64_t stamp = 0;
+    static uint64_t nextStamp() {
+        static std::atomic<uint64_t> counter{0};
+        return ++counter;
+    }
+};
+
 struct ofxOceanodeTimelineClip {
     std::string id;
     std::string name;
@@ -721,6 +738,9 @@ struct ofxOceanodeTimelineClip {
     double waveFileDurationMs = 0.0;
     std::vector<float> waveformPeaks;
     std::vector<ofxOceanodeTimelineLane> lanes;
+    // A Project Track's clip: the patch states it interpolates between,
+    // sorted by beat. No lanes.
+    std::vector<ofxOceanodeTimelineProjectKeyframe> projectKeyframes;
 };
 
 inline bool ofxOceanodeTimelineClipHasLfoLane(const ofxOceanodeTimelineClip& clip) {
@@ -934,6 +954,12 @@ struct ofxOceanodeTimelineTrack {
     // (there's nothing to expand into per-binding rows) and to skip the
     // usual parameter-picking step when creating a clip on it.
     bool isWaveTrack = false;
+    // A Project Track (createProjectTrack) has no bindings either: its clips
+    // hold keyframes of the whole patch (ofxOceanodeTimelineProjectKeyframe)
+    // and playback interpolates every parameter that differs between them.
+    // A parameter another track automates, or one with an incoming
+    // connection, is left alone.
+    bool isProjectTrack = false;
     // Height of the single Wave Track row in the timeline. Not persisted:
     // editor layout (lane heights, collapsed lanes, zoom, snap) is session
     // state everywhere else in the timeline, and this was the one exception.
@@ -1251,6 +1277,23 @@ public:
     // usual id/uniqueness/list bookkeeping and just marks the result.
     std::string createWaveTrack(const std::string& requestedName = "Wave Track");
     std::string createWaveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Wave Track");
+    // ---- Project Track (see ofxOceanodeTimelineTrack::isProjectTrack) ----
+    // One per timeline: returns the existing one's id when there is one.
+    // It is made with one empty clip, which grows as keyframes are added.
+    std::string createProjectTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Project Track");
+    static const ofxOceanodeTimelineTrack* projectTrackOf(const ofxOceanodeTimelineSequence& sequence);
+    // Captures every storable parameter of the sequence's canvas (and the
+    // macros inside it) at a timeline beat: a new keyframe, or the one
+    // already there overwritten. A beat outside the clip grows the clip to
+    // it (an unstretched clip only). clipId empty: the clip at the beat, or
+    // the nearest one. Returns how many parameters were captured (0: none).
+    int addProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                           const std::string& clipId, double timelineBeat);
+    bool removeProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                               const std::string& clipId, size_t index);
+    // Moves a keyframe to a timeline beat inside its clip; returns its new index (-1: not moved).
+    int moveProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                            const std::string& clipId, size_t index, double timelineBeat);
     // Independent copy immediately below the source, with fresh routing/content IDs.
     std::string duplicateTrack(const std::string& trackId);
     std::string duplicateTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId);
@@ -1384,6 +1427,7 @@ public:
         std::string canvas;                  // the owner preselected ("" the root)
         std::vector<std::string> canvases;   // the owners offered; empty: every canvas
         ofxOceanodeAbstractParameter* parameter = nullptr; // put on its first track
+        bool projectTrack = false;           // made with a Project Track
         TimelineRef duplicateOf;             // a copy of this one (its canvas only)
         bool duplicate = false;
         int window = 0;                      // the Timeline window to show it in
@@ -2258,6 +2302,12 @@ private:
     // Drops entries of deleted macros and keeps each shared list's base on
     // a live copy's container.
     void pruneMacroSequences() const;
+    // A Project Track keyframe's values: every parameter of `base` and the
+    // macros in it that a snapshot can hold, skipping connected ones and
+    // those in `bound`. Paths are relative to `base`.
+    void captureProjectValues(ofxOceanodeContainer& base,
+                              const std::unordered_set<ofxOceanodeAbstractParameter*>& bound,
+                              std::map<std::string, std::string>& values) const;
     struct SequenceHistory {
         std::unique_ptr<SequenceSnapshot> pending;
         std::deque<std::pair<SequenceSnapshot, SequenceSnapshot>> undo, redo; // (before, after)
@@ -2711,6 +2761,32 @@ private:
     // GUI: an external parameter edit becomes a temporary live override until
     // the next capture commits it as a point (or playback resumes).
     std::unordered_map<std::string, std::string> stateCaptureLastAppliedValues;
+    // Project Tracks (an engine's): one channel per parameter whose value
+    // differs between the keyframes of a project clip, rebuilt with the
+    // evaluation indexes. Numeric channels interpolate; the others hold the
+    // keyframe before the playhead.
+    struct ProjectChannel {
+        std::string path;                        // absolute
+        int kind = 0;                            // 0: not resolved yet, 1: interpolated, 2: held
+        std::vector<std::vector<float>> numbers; // per keyframe (interpolated; empty where absent)
+        std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
+    };
+    struct ProjectClipChannels {
+        const ofxOceanodeTimelineTrack* track = nullptr;
+        const ofxOceanodeTimelineClip* clip = nullptr;
+        std::vector<double> beats;
+        std::vector<ProjectChannel> channels;
+    };
+    std::vector<ProjectClipChannels> projectChannelsCache;
+    bool projectChannelsValid = false;
+    // What a Project Track last computed for a path. A value is written only
+    // when it differs from this, never because the parameter does: a
+    // parameter stays editable by hand wherever the track's value holds
+    // still (stopped, or between two equal keyframes).
+    struct ProjectApplied { std::vector<float> numbers; std::string text; };
+    std::unordered_map<std::string, ProjectApplied> projectLastApplied;
+    void rebuildProjectChannels();
+    void applyProjectTracks();
     // Paths bound by curve lanes of state-capture clips (the only readers of the map above).
     std::unordered_set<std::string> stateCapturePathsCache;
     uint64_t evaluationIndexesSignature = 0;

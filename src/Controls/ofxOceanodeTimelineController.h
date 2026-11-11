@@ -615,6 +615,20 @@ private:
     double clipMenuBeat = 0.0;         // beat under the right-click that opened a clip menu
     double clipSplitBeat = 0.0;
     bool requestClipSplit = false;
+    // Project Track keyframes: asked for while the tracks are drawn, served
+    // at the deferred edit point (adding one can make or grow a clip).
+    bool requestProjectKeyframe = false;
+    std::string projectKeyTrackId;
+    std::string projectKeyClipId;      // empty: the clip at the beat, or the nearest
+    double projectKeyBeat = 0.0;
+    // The keyframe a clip menu was opened on (-1: none), one to remove, and
+    // the one being dragged along its clip.
+    int clipMenuProjectKey = -1;
+    std::string projectKeyEditTrackId;
+    std::string projectKeyEditClipId;
+    int projectKeyRemoveIndex = -1;
+    int projectKeyDragIndex = -1;
+    float projectKeyDragOriginX = 0.0f;
     std::string clipSplitTrackId;
     std::string clipSplitClipId;
     std::string waveSplitTrackId;

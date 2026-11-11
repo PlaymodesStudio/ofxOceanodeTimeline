@@ -532,6 +532,9 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
             # Canvases: only the root exists here, and no macro has timelines.
             'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
+            # A Project Track keyframe walks real nodes: nothing to capture here.
+            'void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer&, '
+            'const std::unordered_set<ofxOceanodeAbstractParameter*>&, std::map<std::string, std::string>&) const {}\n'
             'bool ofxOceanodeTimelineManager::macrosActive(Player&) const { return true; }\n'
             'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
             '{ return canvas.empty() || canvas == "Canvas" || canvas == "0" ? container : nullptr; }\n'

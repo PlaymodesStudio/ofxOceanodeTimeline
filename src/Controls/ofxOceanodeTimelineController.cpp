@@ -3078,7 +3078,7 @@ void ofxOceanodeTimelineController::draw() {
         // ofxOceanodeTimelineTrack::isWaveTrack) -- it always renders as the
         // same single always-visible clip row a collapsed track would use,
         // regardless of its own collapsed flag.
-        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isMacroTrack();
+        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isProjectTrack || track.isMacroTrack();
         const float trackHeaderHeight = track.isWaveTrack
             ? ofClamp(track.waveTrackHeight, kWaveTrackMinHeight, kWaveTrackMaxHeight)
             : (singleRowTrack ? (!targetsView ? ofClamp(timeline.getViewState().trackHeight, kMinTrackHeight, kMaxTrackHeight)
@@ -3112,7 +3112,7 @@ void ofxOceanodeTimelineController::draw() {
         // In the Clips view a track's arrow opens and closes its clip editor,
         // as double-clicking a clip does, and + adds a lane to the clip the
         // editor shows (opening it first when it is closed).
-        const bool editorArrow = !targetsView && !track.isMacroTrack() && !track.clips.empty();
+        const bool editorArrow = !targetsView && !track.isMacroTrack() && !track.isProjectTrack && !track.clips.empty();
         const bool editorOpenHere = scopeEditorOnTrack(track.id);
         // The clip the editor shows, or would open on: the selected clip of
         // this track, else the one it last edited, else its first.
@@ -3145,7 +3145,9 @@ void ofxOceanodeTimelineController::draw() {
             expandClipLanes(track, editorClip->id);
         };
         const bool addLaneButton = editorClip != nullptr && !track.isWaveTrack;
-        const float addLaneWidth = addLaneButton ? smallButtonReserve("+") : 0.0f;
+        // A Project Track has "+ Key" there: a keyframe at the playhead.
+        const float addLaneWidth = track.isProjectTrack ? smallButtonReserve("+ Key")
+                                 : addLaneButton ? smallButtonReserve("+") : 0.0f;
         const float settingsWidth = smallButtonReserve("   ");
         // + M S and the colour swatch (sized like S) sit at the column's
         // right edge, one item spacing apart.
@@ -3160,7 +3162,7 @@ void ofxOceanodeTimelineController::draw() {
         // nothing to fold, so it gets no arrow.
         const ImVec2 arrowAt(headerMin.x + folderIndent + 5, headerTextY);
         if(track.isMacroTrack()) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
-        else if(targetsView && !track.isWaveTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
+        else if(targetsView && !track.isWaveTrack && !track.isProjectTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
         else if(editorArrow) drawFoldArrow(dl, arrowAt, editorOpenHere, editorArrowHovered ? IM_COL32(255, 255, 255, 255) : labelTextColor);
         if(editorArrowHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip(editorOpenHere ? "Close the clip editor" : "Open the clip editor");
@@ -3240,7 +3242,7 @@ void ofxOceanodeTimelineController::draw() {
                 requestRenamePopup = true;
             } else if(track.isMacroTrack() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
-            } else if(targetsView && !track.isWaveTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
+            } else if(targetsView && !track.isWaveTrack && !track.isProjectTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
             } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 pendingTrackId = track.id;
@@ -3280,6 +3282,23 @@ void ofxOceanodeTimelineController::draw() {
                 requestAddLanePopup = true;   // opened by the clip editor below
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to %s", editorClip->name.c_str());
+        }
+        if(track.isProjectTrack) {
+            ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, buttonY));
+            ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+            const bool addKey = ImGui::SmallButton(("+ Key##addProjectKey" + track.id).c_str());
+            ImGui::PopStyleColor();
+            if(addKey) {
+                anyClipInteractionClaimedThisFrame = true;
+                requestProjectKeyframe = true;
+                projectKeyTrackId = track.id;
+                projectKeyClipId.clear();
+                projectKeyBeat = std::max(0.0, transportState.beatPosition);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Add keyframe: store every parameter of the patch at the playhead.\n"
+                                  "A keyframe already there is overwritten. Playback interpolates\n"
+                                  "the parameters that differ between keyframes.");
         }
         ImGui::SetCursorScreenPos(ImVec2(muteX, buttonY));
         if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
@@ -3617,6 +3636,44 @@ void ofxOceanodeTimelineController::draw() {
                 firstVisibleCycle = std::max(0, static_cast<int>(std::floor(visibleFrom / cycleLength)));
                 lastVisibleCycle = static_cast<int>(std::min(1e9, std::ceil(visibleTo / cycleLength)));
             }
+            if(track.isProjectTrack) {
+                // Its keyframes: a line and a diamond each, where they play.
+                const float top = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
+                const float bottom = max.y - 3.0f;
+                const float midY = (top + bottom) * 0.5f;
+                const float radius = ofClamp((bottom - top) * 0.3f, 3.0f, 6.0f);
+                if(clip.projectKeyframes.empty()) {
+                    if(bottom - top >= ImGui::GetTextLineHeight()) {
+                        dl->PushClipRect(ImVec2(left + 4.0f, top), ImVec2(right - 2.0f, bottom), true);
+                        dl->AddText(ImVec2(left + 6.0f, midY - ImGui::GetTextLineHeight() * 0.5f), IM_COL32(255, 255, 255, 120),
+                                    "No keyframes yet: + Key stores the patch at the playhead");
+                        dl->PopClipRect();
+                    }
+                    return;
+                }
+                const int cycles = clip.repeatContent
+                    ? std::max(1, static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycleDuration(clip))))) : 1;
+                const double clipEnd = clip.startBeat + clip.durationBeats;
+                const bool draggingHere = projectKeyDragIndex >= 0 && projectKeyEditTrackId == track.id && projectKeyEditClipId == clip.id;
+                dl->PushClipRect(ImVec2(left, min.y + 3.0f), ImVec2(right, bottom), true);
+                for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
+                    for(size_t index = 0; index < clip.projectKeyframes.size(); ++index) {
+                        const double beat = sourceToTimelineBeat(clip, clip.projectKeyframes[index].beat, cycle);
+                        if(beat < clip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue;
+                        const float x = min.x + beatOffset(beat);
+                        if(x < left - radius || x > right + radius) continue;
+                        const bool active = draggingHere && static_cast<int>(index) == projectKeyDragIndex;
+                        const ImU32 ink = active ? IM_COL32(255, 255, 255, 255) : clipInk(clip, 255);
+                        dl->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(255, 255, 255, 60), 1.0f);
+                        dl->AddQuadFilled(ImVec2(x, midY - radius), ImVec2(x + radius, midY), ImVec2(x, midY + radius),
+                                          ImVec2(x - radius, midY), ink);
+                        dl->AddQuad(ImVec2(x, midY - radius), ImVec2(x + radius, midY), ImVec2(x, midY + radius),
+                                    ImVec2(x - radius, midY), IM_COL32(20, 20, 20, 220), 1.0f);
+                    }
+                }
+                dl->PopClipRect();
+                return;
+            }
             if(track.isMacroTrack()) {
                 // What the macro's timeline holds, one row per track, drawn
                 // as this clip plays it (repeats, tempo ratio, offset,
@@ -3745,6 +3802,41 @@ void ofxOceanodeTimelineController::draw() {
                 selectedTracks.clear();
             const std::string menuId = "##clipMenu" + track.id + "_" + clip.id;
             const std::pair<std::string, std::string> memberKey(track.id, clip.id);
+            // A Project Track keyframe under the mouse: drag to move it,
+            // double-click to go there; a right-click opens the clip menu on it.
+            int projectKeyHit = -1;
+            if(track.isProjectTrack && clipDragMode == ClipDragMode::None && projectKeyDragIndex < 0) {
+                float nearest = 7.0f;
+                double hitBeat = 0.0;
+                const int cycles = clip.repeatContent
+                    ? std::max(1, static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycleDuration(clip))))) : 1;
+                for(int cycle = 0; cycle < std::min(cycles, 4096); ++cycle)
+                    for(size_t index = 0; index < clip.projectKeyframes.size(); ++index) {
+                        const double beat = sourceToTimelineBeat(clip, clip.projectKeyframes[index].beat, cycle);
+                        const float distance = std::abs(mouse.x - (min.x + beatOffset(beat)));
+                        if(distance < nearest) { nearest = distance; projectKeyHit = static_cast<int>(index); hitBeat = beat; }
+                    }
+                if(projectKeyHit >= 0) {
+                    const auto& keyframe = clip.projectKeyframes[static_cast<size_t>(projectKeyHit)];
+                    ImGui::SetTooltip("Keyframe %d of %zu: %zu parameters\nDrag to move. Double-click: playhead here. Right-click: delete.",
+                                      projectKeyHit + 1, clip.projectKeyframes.size(), keyframe.values ? keyframe.values->size() : size_t(0));
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                    if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
+                        clipInteractionClaimedThisFrame = true;
+                        anyClipInteractionClaimedThisFrame = true;
+                        selectedClips = {memberKey};
+                        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) seekShownTimeline(timeline, hitBeat);
+                        else {
+                            projectKeyEditTrackId = track.id;
+                            projectKeyEditClipId = clip.id;
+                            projectKeyDragIndex = projectKeyHit;
+                            projectKeyDragOriginX = min.x;
+                        }
+                        return;
+                    }
+                    if(!ImGui::IsMouseClicked(ImGuiMouseButton_Right)) return;
+                }
+            }
             {
                 ImVec2 knobCenter;
                 float knobRadius = 0.0f;
@@ -3798,6 +3890,7 @@ void ofxOceanodeTimelineController::draw() {
                 pendingLaneId = lane != nullptr ? lane->id : (clip.lanes.empty() ? "" : clip.lanes.front().id);
                 clipMenuHitBeat = beatAtOffset(mouse.x - min.x);
                 clipMenuBeat = snapBeat(clipMenuHitBeat); // "Split here"
+                clipMenuProjectKey = projectKeyHit;
                 // Right-clicking a clip that's part of the current multi-
                 // selection keeps that whole selection (so the popup's
                 // "Group" action groups all of it); right-clicking outside
@@ -3849,7 +3942,7 @@ void ofxOceanodeTimelineController::draw() {
                     requestPlacedScope(timeline, track);
                 } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && scopeEditorOnTrack(track.id)) {
                     closeTrackEditor(track.id);
-                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !track.isProjectTrack) {
                     editThisClip();
                     if(singleRowTrack && targetsView) {
                         // Layout stays single-row for the rest of this frame,
@@ -3936,6 +4029,30 @@ void ofxOceanodeTimelineController::draw() {
             if(!ImGui::BeginPopup(menuId.c_str())) return;
             ImGui::TextUnformatted(clip.name.c_str());
             drawSynthNavigation(timeline, track, &clip);
+            if(track.isProjectTrack) {
+                contextMenuSection("Keyframes");
+                auto requestKey = [&](double beat) {
+                    requestProjectKeyframe = true;
+                    projectKeyTrackId = track.id;
+                    projectKeyClipId = clip.id;
+                    projectKeyBeat = std::max(0.0, beat);
+                };
+                if(ImGui::MenuItem("Add keyframe at playhead")) requestKey(transportState.beatPosition);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Store every parameter of the patch at the playhead.\nA keyframe already there is overwritten.");
+                if(ImGui::MenuItem("Add keyframe here")) requestKey(clipMenuBeat);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Store the patch as it is now at this position of the clip.");
+                const bool onKey = clipMenuProjectKey >= 0 && clipMenuProjectKey < static_cast<int>(clip.projectKeyframes.size());
+                if(ImGui::MenuItem("Delete keyframe", nullptr, false, onKey)) {
+                    projectKeyEditTrackId = track.id;
+                    projectKeyEditClipId = clip.id;
+                    projectKeyRemoveIndex = clipMenuProjectKey;
+                    clipMenuProjectKey = -1;
+                }
+                if(!onKey && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Right-click a keyframe to delete it.");
+            }
             contextMenuSection("Clip");
             if(track.isMacroTrack()) {
                 if(ImGui::MenuItem("Open its timeline")) {
@@ -5342,6 +5459,26 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
 
+    if(requestProjectKeyframe) {
+        requestProjectKeyframe = false;
+        timeline.addProjectKeyframe(scope(timeline), projectKeyTrackId, projectKeyClipId, projectKeyBeat);
+    }
+    if(projectKeyRemoveIndex >= 0) {
+        timeline.removeProjectKeyframe(scope(timeline), projectKeyEditTrackId, projectKeyEditClipId,
+                                       static_cast<size_t>(projectKeyRemoveIndex));
+        projectKeyRemoveIndex = -1;
+    }
+    if(projectKeyDragIndex >= 0) {
+        if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) projectKeyDragIndex = -1;
+        else if(ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+            // The keyframe follows the mouse along its clip, snapped like a clip.
+            const double beat = snapBeat(std::max(0.0, beatAtOffset(ImGui::GetIO().MousePos.x - projectKeyDragOriginX)));
+            const int moved = timeline.moveProjectKeyframe(scope(timeline), projectKeyEditTrackId, projectKeyEditClipId,
+                                                           static_cast<size_t>(projectKeyDragIndex), beat);
+            if(moved < 0) projectKeyDragIndex = -1;
+            else projectKeyDragIndex = moved;
+        }
+    }
     if(requestClipSplit) {
         requestClipSplit = false;
         timeline.splitClip(scope(timeline), clipSplitTrackId, clipSplitClipId, clipSplitBeat);

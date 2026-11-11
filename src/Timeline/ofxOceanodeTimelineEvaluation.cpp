@@ -990,6 +990,8 @@ void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     zeroWhenInactiveBindingsCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     stateCapturePathsCache.clear();
+    projectChannelsCache.clear();
+    projectChannelsValid = false;
     playback.clearRolls();
     parameterTrackColorCache.clear();
     parameterTrackColorCacheFrame = std::numeric_limits<uint64_t>::max();
@@ -2379,7 +2381,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
     }
     hash.add(sequence.tracks.data()); hash.add(sequence.tracks.size());
     for(const auto& track : sequence.tracks) {
-        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.muted);
+        hash.add(track.id); hash.add(track.macroCanvas); hash.add(track.macroTimeline); hash.add(track.latencyOffsetMs); hash.add(track.isWaveTrack); hash.add(track.isProjectTrack); hash.add(track.muted);
         // (A solo a Toggle lane drives is an engine's playback state, not
         // the content the primary hands it.)
         hash.add(isEngine() ? isTrackSoloed(track) : track.solo);
@@ -2411,6 +2413,9 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
             hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
+            // (A keyframe's stamp changes whenever its values do.)
+            hash.add(clip.projectKeyframes.size());
+            for(const auto& keyframe : clip.projectKeyframes) { hash.add(keyframe.beat); hash.add(keyframe.stamp); }
             hash.add(clip.lanes.data()); hash.add(clip.lanes.size());
             for(const auto& lane : clip.lanes) {
                 hash.word(lanePlaybackSignature(lane));
