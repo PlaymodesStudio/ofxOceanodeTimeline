@@ -2376,6 +2376,10 @@ private:
         // A dependent timeline's preview ran last frame (one more pass after
         // it stops releases what it held).
         bool ranLastFrame = false;
+        // Its timeline was replaced by a load: the engine still holds the
+        // previous content, and writes nothing until it has the new one
+        // (syncPlayer).
+        bool awaitingSync = false;
         // Play on load: armed by a preset load, it starts once its macro is active.
         bool startArmed = false;
         int wasActive = -1; // -1: not watched (not set to play on load)

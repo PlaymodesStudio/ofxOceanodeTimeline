@@ -112,6 +112,13 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
         std::vector<TimelineRef> refs;
         for(const auto& timeline : previous->timelines->timelines) refs.push_back({canvas, timeline->timelineId});
         for(const auto& ref : refs) {
+            // A timeline of the same id in the loaded sequence keeps this
+            // one's engine, which holds this one's content until its next
+            // update: rewound below, it would write this one's start (a
+            // Project Track's first keyframe) over the values of now, and
+            // what the loaded timeline does not drive would stay there.
+            for(auto& player : players)
+                if(player->ref.canvas == ref.canvas && player->ref.timeline == ref.timeline) player->awaitingSync = true;
             // Its own transport only: the global one is not the macro's to stop.
             if(auto transport = transportFor(ref); transport != nullptr && transport->isDerived()) {
                 transport->cancelPendingActions();

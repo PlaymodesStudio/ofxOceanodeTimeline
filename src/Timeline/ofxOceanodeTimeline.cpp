@@ -5053,10 +5053,10 @@ void ofxOceanodeTimelineManager::applyAutomation() {
     // land after theirs.
     if(!isEngine()) {
         for(auto& player : players)
-            if(player->source != ClockSource::Dependent && player->ranLastFrame && player->engine != nullptr)
+            if(player->source != ClockSource::Dependent && player->ranLastFrame && !player->awaitingSync && player->engine != nullptr)
                 player->engine->applyAutomation();
         for(auto& player : players)
-            if(player->source == ClockSource::Dependent && player->ranLastFrame && player->engine != nullptr)
+            if(player->source == ClockSource::Dependent && player->ranLastFrame && !player->awaitingSync && player->engine != nullptr)
                 player->engine->applyAutomation();
     }
     // A gate released this frame whose binding is no longer active -- bypassed,
@@ -5554,6 +5554,10 @@ void ofxOceanodeTimelineManager::clear() {
     lastDriverForPath.clear();
     endParameterCache();
     // The root canvas's timelines (an engine: its copy); the macros' stay.
+    // Their engines hold the content going away until their next update:
+    // they write nothing more of it (over what a preset load just set).
+    for(auto& player : players)
+        if(player->ref.canvas.empty()) player->awaitingSync = true;
     rootTimelines = {};
     playedSequence.tracks.clear();
     invalidateEvaluationIndexes();
