@@ -2311,6 +2311,12 @@ void ofxOceanodeTimelineController::draw() {
     const double maximumViewSeconds = std::max(0.001, 2.0 * timeline.beatToSeconds(lastClipBeat, transportState.bpm));
     const float minimumZoomScale = std::max(kMinPixelsPerSecond, static_cast<float>(visibleWidth / maximumViewSeconds));
     const float maximumZoomScale = std::max(kMaxPixelsPerSecond, minimumZoomScale);
+    // A timeline shown for the first time since it was loaded opens fitted,
+    // whatever zoom its file kept.
+    if(const uint64_t stamp = scope(timeline).loadStamp; stamp > fittedLoadStamp) {
+        fittedLoadStamp = stamp;
+        requestZoomToFit = true;
+    }
     const bool fittingTimeline = requestZoomToFit;
     if(requestZoomToFit) {
         requestZoomToFit = false;

@@ -151,6 +151,7 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
         const bool macroFile = ofFile::doesFileExist(file);
         if(!macroFile) file = ofFilePath::join(folder, "timeline.json");
         if(ofFile::doesFileExist(file)) canvasFromJson(*entry.timelines, upgradeTimelineDocument(ofLoadJson(file), macroFile));
+        for(auto& timeline : entry.timelines->timelines) timeline->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp();
     }
     macroSequences.push_back(entry);
     // Older project files kept which timelines played free, and whose clips

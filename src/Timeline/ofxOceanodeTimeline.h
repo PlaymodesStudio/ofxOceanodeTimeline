@@ -1155,6 +1155,12 @@ public:
     // The container its binding paths are relative to (not saved; nullptr:
     // the root canvas, absolute paths).
     ofxOceanodeContainer* base = nullptr;
+    // Set when the timeline is read from a file (a preset, a Macro's or a
+    // MacroMixer source's folder), later loads higher; 0: made here. Not
+    // saved. The editor fits its view to a timeline it has not shown since
+    // that load.
+    uint64_t loadStamp = 0;
+    static uint64_t nextLoadStamp() { static uint64_t stamp = 0; return ++stamp; }
     // First number tried for each kind of new id.
     uint64_t nextTrackNumber = 1;
     uint64_t nextBindingNumber = 1;
