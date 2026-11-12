@@ -966,7 +966,8 @@ int main() {
     for(auto* window:ImGui::GetCurrentContext()->Windows)
         if(window->Active && std::string(window->Name).find(targetPanelKey)!=std::string::npos)targetPanel=window;
     assert(targetPanel);
-    const ImVec2 addTargetPoint(targetPanel->Pos.x+40,targetPanel->Pos.y+66);
+    // (The lane's summary line above the tabs is gone: one text line higher.)
+    const ImVec2 addTargetPoint(targetPanel->Pos.x+40,targetPanel->Pos.y+66-ImGui::GetTextLineHeightWithSpacing());
     frame(1250,addTargetPoint,false);frame(1250,addTargetPoint,true);frame(1250,addTargetPoint,false);
     frame(1250,ImVec2(-100,-100),false,"patch-targets");
     assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
@@ -1390,6 +1391,7 @@ int main() {
         // The core's own save and load of the macro's folder reach it too.
         std::filesystem::remove(folder/"sequence.json");
         assert(inside->savePreset(folder.string()) && std::filesystem::exists(folder/"sequence.json"));
+        const float zoomBeforeLoad=model.getViewState().pixelsPerSecond, scrollBeforeLoad=model.getViewState().scrollX;
         model.loadMacroSequence(*inside,folder.string());
         auto* reloaded=macroTimelineOf(*inside);
         assert(reloaded && reloaded->tracks.size()==1 && reloaded->tracks[0].clips.size()==1);
@@ -1399,6 +1401,11 @@ int main() {
         assert(reloaded && reloaded->tracks.size()==1 && std::abs(reloaded->tracks[0].clips[0].startBeat-2.0)<1e-6);
         frame(); frame(); // the old scope's sequence was replaced: the macro's reloaded timeline is shown
         assert(ui.inMacroScope() && &ui.scope(model)==reloaded);
+        // A timeline read from a file opens fitted, once: the view was fitted
+        // to this load. (What follows keeps the zoom the test had.)
+        assert(reloaded->loadStamp>0 && ui.fittedLoadStamp==reloaded->loadStamp && !ui.requestZoomToFit);
+        model.getViewState().pixelsPerSecond=zoomBeforeLoad; model.getViewState().scrollX=scrollBeforeLoad;
+        frame(); assert(model.getViewState().pixelsPerSecond==zoomBeforeLoad);
         // A timeline with no tracks is still a timeline: the file stays; a removed one leaves no file behind.
         model.removeTrack(*reloaded,reloaded->tracks[0].id);
         assert(model.saveMacroSequence(*inside,folder.string()) && std::filesystem::exists(folder/"sequence.json"));

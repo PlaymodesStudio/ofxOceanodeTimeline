@@ -86,7 +86,8 @@ int main() {
     auto closePopup=[&](){io.AddKeyEvent(ImGuiKey_Escape,true);frame();io.AddKeyEvent(ImGuiKey_Escape,false);frame();};
     auto openMenu=[&](bool clip) {
         const auto row=ui.clipDropRows.front();
-        const ImVec2 point(clip ? ui.fileDropBounds.x+50 : ui.fileDropBounds.x-120,(row.top+row.bottom)*0.5f);
+        // (The header's own buttons take its right side: well left of them.)
+        const ImVec2 point(clip ? ui.fileDropBounds.x+50 : ui.fileDropBounds.x-180,(row.top+row.bottom)*0.5f);
         frame(point); io.AddMouseButtonEvent(1,true);frame(point);
         io.AddMouseButtonEvent(1,false);frame(point);frame();
         assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
