@@ -59,6 +59,21 @@ ofxOceanodeTransportState ofxOceanodeTimelineManager::playState() const {
 void ofxOceanodeTimelineManager::preserveLoopPlayhead() {
     if(!engineSharesRoot || !hasAdoptedPlaySettings || engineTransport == nullptr) return;
     const auto clock = engineTransport->getState();
+    // The engine adopts an edit on its next pass. A seek in between (not a
+    // mere play/pause) means the playhead it would keep is no longer the one
+    // the edit was made at: the new position enters the new loop as any
+    // seek does.
+    if(hasPreviousLoopClock && clock.generation != previousLoopClock.generation) {
+        const double expected = previousLoopClock.beatPosition + (previousLoopClock.isPlaying
+            ? (clock.clockSeconds - previousLoopClock.clockSeconds) * previousLoopClock.bpm / 60.0 : 0.0);
+        const bool toggled = clock.isPlaying != previousLoopClock.isPlaying && std::abs(clock.beatPosition - expected) < 1e-5;
+        if(!toggled) {
+            // (The clock it last read stays: an edit of both the switch and
+            // the range asks twice.)
+            loopPositionAnchor.valid = false;
+            return;
+        }
+    }
     const auto local = loopedState(clock);
     loopPositionAnchor = {true, clock.beatPosition, local.beatPosition, local.loopCount, clock.generation};
 }
