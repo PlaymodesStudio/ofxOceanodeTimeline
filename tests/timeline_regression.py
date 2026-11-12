@@ -535,6 +535,17 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             # A Project Track keyframe walks real nodes: nothing to capture here.
             'void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer&, '
             'const std::unordered_set<ofxOceanodeAbstractParameter*>&, std::map<std::string, std::string>&) const {}\n'
+            # The core's morph rules need real nodes: here every parameter is
+            # a control, and numbers blend linearly.
+            'ofxOceanodeTimelineManager::ProjectControl ofxOceanodeTimelineManager::projectControlOf('
+            'ofxOceanodeAbstractParameter&) const { return {}; }\n'
+            'std::vector<float> ofxOceanodeTimelineManager::blendProjectNumbers(const std::vector<float>& from, '
+            'const std::vector<float>& to, float t, bool, bool) {\n'
+            '    if(from.size() != to.size()) return t < 0.5f ? from : to;\n'
+            '    std::vector<float> value(from.size());\n'
+            '    for(size_t i = 0; i < from.size(); ++i) value[i] = from[i] + (to[i] - from[i]) * t;\n'
+            '    return value;\n'
+            '}\n'
             'bool ofxOceanodeTimelineManager::macrosActive(Player&) const { return true; }\n'
             'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
             '{ return canvas.empty() || canvas == "Canvas" || canvas == "0" ? container : nullptr; }\n'

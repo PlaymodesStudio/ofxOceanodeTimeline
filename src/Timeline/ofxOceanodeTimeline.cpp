@@ -5275,6 +5275,13 @@ void ofxOceanodeTimelineManager::rebuildProjectChannels() {
 void ofxOceanodeTimelineManager::applyProjectTracks() {
     if(container == nullptr) return;
     if(!projectChannelsValid) rebuildProjectChannels();
+    // The engine outlives a preset load when the next preset's timeline has
+    // the same id: what it last wrote says nothing about the loaded values.
+    const uint64_t loads = ofxOceanodeTimelineProjectKeyframe::loadCount().load();
+    if(loads != projectLoadCountSeen) {
+        projectLastApplied.clear();
+        projectLoadCountSeen = loads;
+    }
     if(projectChannelsCache.empty()) return;
     const double beat = playState().beatPosition;
     static const std::string floatType = typeid(float).name(), intType = typeid(int).name();
@@ -5306,27 +5313,32 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
             if(parameter == nullptr || parameter->hasInConnection()) continue;
             const std::string type = parameter->valueType();
             if(channel.kind == 0) {
-                // Numbers interpolate when every keyframe holds as many of
-                // them; a dropdown's options, and everything else, switch.
+                // Only controls are written: a keyframe made before the
+                // capture followed this rule may hold other values.
+                const auto control = projectControlOf(*parameter);
+                // Numbers interpolate, lists of any length included; a
+                // dropdown's options, a parameter its node switches, and
+                // everything else, hold.
                 const bool scalar = type == floatType || type == intType;
-                bool numeric = (scalar || type == floatVectorType || type == intVectorType) &&
+                bool numeric = control.control && !control.discrete &&
+                               (scalar || type == floatVectorType || type == intVectorType) &&
                                ofxOceanodeTimelineDropdownOptions(*parameter).empty();
                 if(numeric) {
                     channel.numbers.assign(channel.texts.size(), {});
-                    size_t size = 0;
                     for(size_t index = 0; index < channel.texts.size() && numeric; ++index) {
                         if(channel.texts[index] == nullptr) continue;
                         auto& numbers = channel.numbers[index];
                         automationText::forEachToken(*channel.texts[index], [&](const char* begin, const char* end) {
                             numbers.push_back(static_cast<float>(automationText::parse(begin, end)));
                         });
-                        if(numbers.empty() || (size != 0 && numbers.size() != size)) numeric = false;
-                        size = numbers.size();
+                        if(numbers.empty()) numeric = false;
                     }
                 }
                 if(!numeric) channel.numbers.clear();
-                channel.kind = numeric ? 1 : 2;
+                channel.logarithmic = control.logarithmic;
+                channel.kind = !control.control ? 3 : numeric ? 1 : 2;
             }
+            if(channel.kind == 3) continue;
             // The nearest keyframes holding this parameter, each side.
             int a = std::min(before, count - 1), b = std::max(after, 0);
             while(a >= 0 && channel.texts[static_cast<size_t>(a)] == nullptr) --a;
@@ -5343,28 +5355,43 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
                 const float t = a == b || span <= kEpsilon ? 0.0f
                     : a == before && b == after ? eased
                     : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(a)]) / span)));
-                std::vector<float> value(from.size());
-                for(size_t i = 0; i < from.size(); ++i) value[i] = from[i] + (to[i] - from[i]) * t;
-                if(last.numbers == value) continue;
+                std::vector<float> value = t <= 0.0f ? from
+                    : blendProjectNumbers(from, to, t, type == intType || type == intVectorType, channel.logarithmic);
+                if(value.empty()) continue;
+                // A MacroMixer morph blends the track in through the
+                // parameter's automation filter: what the filter returns
+                // moves with the morph, so the track writes on every pass
+                // while one is set, and once more after it is gone to land
+                // on its own value.
+                const bool blending = parameter->hasAutomationFilter();
+                if(!blending && !last.blended && last.numbers == value) continue;
                 ofxOceanodeAbstractParameter::AutomationWriteScope writing(*parameter);
                 if(type == floatType) {
-                    auto& target = parameter->cast<float>().getParameter();
-                    if(target.get() != value[0]) target.set(value[0]);
+                    auto& typed = parameter->cast<float>();
+                    auto& target = typed.getParameter();
+                    const float next = typed.filterAutomationValue(value[0]);
+                    if(target.get() != next) target.set(next);
                 } else if(type == intType) {
-                    auto& target = parameter->cast<int>().getParameter();
-                    const int next = static_cast<int>(std::lround(value[0]));
+                    auto& typed = parameter->cast<int>();
+                    auto& target = typed.getParameter();
+                    const int next = typed.filterAutomationValue(static_cast<int>(std::lround(value[0])));
                     if(target.get() != next) target.set(next);
                 } else if(type == floatVectorType) {
-                    auto& target = parameter->cast<std::vector<float>>().getParameter();
-                    if(target.get() != value) target.set(value);
+                    auto& typed = parameter->cast<std::vector<float>>();
+                    auto& target = typed.getParameter();
+                    const auto next = typed.filterAutomationValue(value);
+                    if(target.get() != next) target.set(next);
                 } else {
-                    auto& target = parameter->cast<std::vector<int>>().getParameter();
-                    std::vector<int> next(value.size());
-                    for(size_t i = 0; i < value.size(); ++i) next[i] = static_cast<int>(std::lround(value[i]));
+                    auto& typed = parameter->cast<std::vector<int>>();
+                    auto& target = typed.getParameter();
+                    std::vector<int> rounded(value.size());
+                    for(size_t i = 0; i < value.size(); ++i) rounded[i] = static_cast<int>(std::lround(value[i]));
+                    const auto next = typed.filterAutomationValue(rounded);
                     if(target.get() != next) target.set(next);
                 }
                 last.numbers = std::move(value);
                 last.text.clear();
+                last.blended = blending;
             } else {
                 // Held: the keyframe before the playhead (the first one, ahead of it).
                 const std::string& text = *channel.texts[static_cast<size_t>(a)];
@@ -5372,6 +5399,7 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
                 applyAutomationValue(*parameter, text, type);
                 last.numbers.clear();
                 last.text = text;
+                last.blended = false;
             }
         }
     }

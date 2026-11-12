@@ -679,6 +679,13 @@ struct ofxOceanodeTimelineProjectKeyframe {
         static std::atomic<uint64_t> counter{0};
         return ++counter;
     }
+    // Counts the loads of keyframes from a file. A preset load sets the
+    // parameters to their saved values behind a playing track's back, so
+    // every track writes its values again after one.
+    static std::atomic<uint64_t>& loadCount() {
+        static std::atomic<uint64_t> counter{0};
+        return counter;
+    }
 };
 
 struct ofxOceanodeTimelineClip {
@@ -1387,6 +1394,10 @@ public:
                              const std::map<std::string, std::string>& oldToNew, const ofJson& record, bool backwards);
     // Every parameter any timeline drives.
     void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
+    // The parameters Project Tracks move: those whose value differs between
+    // the keyframes of a clip. Not bindings (they stay hand-editable); a
+    // MacroMixer morph asks, to leave them to the track.
+    void collectProjectDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
     // Drops the parameter's bindings from every timeline (a node going away).
     void removeBindingsOf(ofxOceanodeAbstractParameter& parameter);
 
@@ -2309,12 +2320,26 @@ private:
     // Drops entries of deleted macros and keeps each shared list's base on
     // a live copy's container.
     void pruneMacroSequences() const;
-    // A Project Track keyframe's values: every parameter of `base` and the
-    // macros in it that a snapshot can hold, skipping connected ones and
+    // A Project Track keyframe's values: every control (projectControlOf)
+    // of `base` and the macros in it that a snapshot can hold, skipping
     // those in `bound`. Paths are relative to `base`.
     void captureProjectValues(ofxOceanodeContainer& base,
                               const std::unordered_set<ofxOceanodeAbstractParameter*>& bound,
                               std::map<std::string, std::string>& values) const;
+    // What a Project Track does with a parameter, by the rules a MacroMixer
+    // morph follows (the core's ofxOceanodeMorph). control: a value the
+    // user sets; false for what something else produces (Portals, a Macro's
+    // pins, routers fed through their Macro's pin, cabled or read-only
+    // parameters) and for node configuration, which no keyframe stores and
+    // no track writes.
+    struct ProjectControl { bool control = true; bool discrete = false; bool logarithmic = false; };
+    ProjectControl projectControlOf(ofxOceanodeAbstractParameter& parameter) const;
+    // A numeric control's value between two keyframes (t in 0..1), by the
+    // MacroMixer's interpolation: lists of different lengths are resampled
+    // into each other, integers round, a logarithmic control glides
+    // geometrically while all its values are positive.
+    static std::vector<float> blendProjectNumbers(const std::vector<float>& from, const std::vector<float>& to,
+                                                  float t, bool integers, bool logarithmic);
     struct SequenceHistory {
         std::unique_ptr<SequenceSnapshot> pending;
         std::deque<std::pair<SequenceSnapshot, SequenceSnapshot>> undo, redo; // (before, after)
@@ -2771,10 +2796,12 @@ private:
     // Project Tracks (an engine's): one channel per parameter whose value
     // differs between the keyframes of a project clip, rebuilt with the
     // evaluation indexes. Numeric channels interpolate; the others hold the
-    // keyframe before the playhead.
+    // keyframe before the playhead. A path that is not a control
+    // (projectControlOf; older keyframes stored some) is never written.
     struct ProjectChannel {
         std::string path;                        // absolute
-        int kind = 0;                            // 0: not resolved yet, 1: interpolated, 2: held
+        int kind = 0;                            // 0: not resolved yet, 1: interpolated, 2: held, 3: not a control
+        bool logarithmic = false;                // interpolated: geometric glide
         std::vector<std::vector<float>> numbers; // per keyframe (interpolated; empty where absent)
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
     };
@@ -2791,8 +2818,12 @@ private:
     // when it differs from this, never because the parameter does: a
     // parameter stays editable by hand wherever the track's value holds
     // still (stopped, or between two equal keyframes).
-    struct ProjectApplied { std::vector<float> numbers; std::string text; };
+    // blended: the last write went through the parameter's automation filter
+    // (a MacroMixer morph blending the track in), so it was not the track's
+    // own value and the next write is due whatever the track computes.
+    struct ProjectApplied { std::vector<float> numbers; std::string text; bool blended = false; };
     std::unordered_map<std::string, ProjectApplied> projectLastApplied;
+    uint64_t projectLoadCountSeen = 0;
     void rebuildProjectChannels();
     void applyProjectTracks();
     // Paths bound by curve lanes of state-capture clips (the only readers of the map above).

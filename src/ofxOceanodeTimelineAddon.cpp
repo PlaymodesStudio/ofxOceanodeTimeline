@@ -39,6 +39,9 @@ public:
     void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const override {
         manager.collectBoundParameters(result);
     }
+    void collectStateDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const override {
+        manager.collectProjectDrivenParameters(result);
+    }
     void retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) override {
         manager.retargetAllParameterPaths(oldToNew);
     }

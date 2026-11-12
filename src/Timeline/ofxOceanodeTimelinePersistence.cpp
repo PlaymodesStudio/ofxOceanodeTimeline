@@ -1097,6 +1097,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                     }
                     std::stable_sort(clip.projectKeyframes.begin(), clip.projectKeyframes.end(),
                                      [](const auto& a, const auto& b) { return a.beat < b.beat; });
+                    if(!clip.projectKeyframes.empty()) ++ofxOceanodeTimelineProjectKeyframe::loadCount();
                 }
                 if(clipJson.contains("lanes") && clipJson["lanes"].is_array()) {
                     for(const auto& laneJson : clipJson["lanes"]) {
