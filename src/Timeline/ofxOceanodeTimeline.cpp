@@ -1446,8 +1446,17 @@ bool ofxOceanodeTimelineManager::getParameterTrackColor(const ofxOceanodeAbstrac
     if(parameterTrackColorCacheFrame != static_cast<uint64_t>(ofGetFrameNum()))
         rebuildParameterTrackColorCache();
     const auto it = parameterTrackColorCache.find(path);
-    if(it == parameterTrackColorCache.end()) return false;
-    color = it->second;
+    if(it != parameterTrackColorCache.end()) {
+        color = it->second;
+        return true;
+    }
+    // What a Project Track is moving right now (noted this frame, or the
+    // one before when the GUI draws ahead of the engines' pass).
+    const uint64_t frame = static_cast<uint64_t>(ofGetFrameNum());
+    if(projectMovingColors.empty() || (projectMovingFrame != frame && projectMovingFrame + 1 != frame)) return false;
+    const auto moving = projectMovingColors.find(path);
+    if(moving == projectMovingColors.end()) return false;
+    color = moving->second;
     return true;
 }
 
@@ -5272,6 +5281,15 @@ void ofxOceanodeTimelineManager::rebuildProjectChannels() {
     }
 }
 
+void ofxOceanodeTimelineManager::noteProjectMoving(const std::string& path, const ofColor& color) {
+    const uint64_t frame = static_cast<uint64_t>(ofGetFrameNum());
+    if(projectMovingFrame != frame) {
+        projectMovingColors.clear();
+        projectMovingFrame = frame;
+    }
+    projectMovingColors.emplace(path, color);
+}
+
 void ofxOceanodeTimelineManager::applyProjectTracks() {
     if(container == nullptr) return;
     if(!projectChannelsValid) rebuildProjectChannels();
@@ -5305,6 +5323,8 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
             const auto& ease = entry.eases[static_cast<size_t>(before)];
             eased = ofxOceanodeTimelineCurve::sigmoidFlex(linear, ease.inflection, ease.steepness);
         }
+        bool colorResolved = false;
+        ofColor movingColor;
         for(auto& channel : entry.channels) {
             // Explicit automation wins, on this timeline or an outer one.
             if(bindingsByPathCache.count(channel.path) > 0) continue;
@@ -5355,6 +5375,19 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
                 const float t = a == b || span <= kEpsilon ? 0.0f
                     : a == before && b == after ? eased
                     : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(a)]) / span)));
+                // Between two keyframes that differ for it: shown on its node.
+                if(primary != nullptr && t > 0.0f && t < 1.0f && from != to) {
+                    // In the colour the track has now: this copy's is the one
+                    // it had when last rebuilt (a colour is not content).
+                    if(!colorResolved) {
+                        colorResolved = true;
+                        movingColor = entry.track->color;
+                        if(const auto* source = primary->timelineFor(engineRef))
+                            for(const auto& track : source->tracks)
+                                if(track.id == entry.track->id) { movingColor = track.color; break; }
+                    }
+                    primary->noteProjectMoving(channel.path, movingColor);
+                }
                 std::vector<float> value = t <= 0.0f ? from
                     : blendProjectNumbers(from, to, t, type == intType || type == intVectorType, channel.logarithmic);
                 if(value.empty()) continue;

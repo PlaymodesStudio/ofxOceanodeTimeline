@@ -2828,6 +2828,13 @@ private:
     struct ProjectApplied { std::vector<float> numbers; std::string text; bool blended = false; };
     std::unordered_map<std::string, ProjectApplied> projectLastApplied;
     uint64_t projectLoadCountSeen = 0;
+    // The parameters a Project Track is moving right now (the playhead is
+    // between two keyframes that differ for them), with their track's
+    // colour: the node GUI marks them like a track's own parameters. Kept by
+    // the primary, noted by its engines on every pass.
+    std::unordered_map<std::string, ofColor> projectMovingColors;
+    uint64_t projectMovingFrame = std::numeric_limits<uint64_t>::max();
+    void noteProjectMoving(const std::string& path, const ofColor& color);
     void rebuildProjectChannels();
     void applyProjectTracks();
     // Paths bound by curve lanes of state-capture clips (the only readers of the map above).
