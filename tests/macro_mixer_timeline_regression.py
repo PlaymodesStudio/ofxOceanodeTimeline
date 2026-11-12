@@ -156,12 +156,19 @@ int main(int argc, char** argv) {
 
     // A morph in place: the destination's timeline replaces the origin's in
     // the running canvas and starts; what it drives follows it, not the
-    // control morph from the ramp's value to the saved -1.
+    // control morph from the ramp's value to the saved -1. A continuous
+    // control blends from its running value into the timeline's with the
+    // morph's progress, landing on it when the morph ends.
+    const float beforeMorph = probe.level.get();
     runtime.request(b, 1000, 0, true); frame(0.05);
     check(runtime.morphingInPlace(), "a -> b morphs in place");
     frame(0.05);
     for(int i = 0; i < 5; ++i) frame(0.1);
-    check(near(probe.level.get(), 0.75f), "The destination's timeline holds Level at 0.75 during the morph: " + ofToString(probe.level.get()));
+    const float duringMorph = probe.level.get();
+    check(beforeMorph < 0.7f && duringMorph > beforeMorph + 0.02f && duringMorph < 0.75f - 0.02f,
+          "The destination's timeline blends Level from " + ofToString(beforeMorph) + " towards 0.75 during the morph: " + ofToString(duringMorph));
+    frame(0.1);
+    check(probe.level.get() > duringMorph && probe.level.get() <= 0.75f + 1e-4f, "...closer with the morph's progress: " + ofToString(probe.level.get()));
     check(model.transportFor(ref) != nullptr && model.transportFor(ref)->getState().isPlaying, "...playing from its start");
     check(model.getTimelineWindows().size() == 1, "The window a ticked stays open during the morph in place");
     runtime.finish(); frame(0.05);
