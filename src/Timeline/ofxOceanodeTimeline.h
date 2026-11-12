@@ -457,6 +457,9 @@ struct ofxOceanodeTimelineLane {
     std::vector<std::string> bindingIds;
     bool muted = false;
     bool solo = false;
+    // Dropdown lanes: the bound parameter's option names as the editor last
+    // saw them (not saved), to follow its points when the list changes.
+    std::vector<std::string> dropdownOptionsSeen;
     // Independent per-start roll, multiplied with the parent clip's chance.
     float chance = 1.0f;
     // Toggle lanes: also drive their own track's solo -- on while a block

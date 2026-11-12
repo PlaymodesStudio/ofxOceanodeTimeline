@@ -57,6 +57,10 @@ int divisionIndexForBeats(double beats);
 std::string compactParameterName(const std::string& path);
 ImU32 mutedTrackColor(const ofColor& color, float brightness, float saturation = 0.34f);
 bool hoverRect(const ImVec2& min, const ImVec2& max);
+// A Dropdown lane's points hold option indices. When the bound parameter's
+// list gains or loses options, each point follows its option to its new
+// index, and a point whose option is gone is removed.
+void followDropdownOptions(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineLane& lane, const std::vector<std::string>& options);
 std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineSequence& sequence, ofxOceanodeContainer& container,
                                              const std::string& trackId, const ofxOceanodeTimelineLane& lane);
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value);

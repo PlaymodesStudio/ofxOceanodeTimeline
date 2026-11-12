@@ -35,6 +35,7 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // parameter, shown by name and picked from its list.
     const bool dropdown = lane->type == ofxOceanodeTimelineLaneType::Dropdown;
     const auto options = dropdown ? laneDropdownOptions(timeline, sequence, *container, track.id, *lane) : std::vector<std::string>();
+    if(dropdown) followDropdownOptions(timeline, *lane, options);
     const char* valuePopup = dropdown ? "Dropdown option" : "Number value";
     const double content = sourceDuration(*clip);
     const double cycleLength = cycleDuration(*clip);
@@ -191,6 +192,8 @@ void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineCl
 
     const bool dropdown = lane->type == ofxOceanodeTimelineLaneType::Dropdown;
     const auto options = dropdown ? laneDropdownOptions(timeline, sequence, *container, track.id, *lane) : std::vector<std::string>();
+    // (The previewed lane is the timeline's own: only this view of it is const.)
+    if(dropdown) followDropdownOptions(timeline, const_cast<ofxOceanodeTimelineLane&>(*lane), options);
     dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
     const int cycles = clip.repeatContent ? static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip))) : 1;
     for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {

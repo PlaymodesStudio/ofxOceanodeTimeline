@@ -128,6 +128,42 @@ std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timelin
     return parameter == nullptr ? std::vector<std::string>() : ofxOceanodeTimelineDropdownOptions(*parameter);
 }
 
+void followDropdownOptions(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineLane& lane, const std::vector<std::string>& options) {
+    // Nothing bound, or a relayed dropdown with nothing connected: the list
+    // is not known now, and the points wait for it.
+    if(options.empty() || (options.size() == 1 && options.front() == "No dropdown connected")) return;
+    auto& seen = lane.dropdownOptionsSeen;
+    if(seen.empty() || seen == options) { seen = options; return; }
+    // The same number of options: renamed (or reordered) in place, and the
+    // indices still mean what they did.
+    if(seen.size() != options.size()) {
+        // By name, without the index some sources put in front ("2: Name"),
+        // which changes for every option after a removed one.
+        auto name = [](const std::string& label, size_t index) {
+            const std::string prefix = ofToString(index) + ": ";
+            return label.compare(0, prefix.size(), prefix) == 0 ? label.substr(prefix.size()) : label;
+        };
+        std::vector<int> moved(seen.size(), -1);
+        std::vector<bool> taken(options.size(), false);
+        for(size_t from = 0; from < seen.size(); ++from)
+            for(size_t to = 0; to < options.size(); ++to)
+                if(!taken[to] && name(options[to], to) == name(seen[from], from)) {
+                    moved[from] = static_cast<int>(to);
+                    taken[to] = true;
+                    break;
+                }
+        bool changed = false;
+        for(size_t i = lane.curvePoints.size(); i-- > 0;) {
+            const int index = static_cast<int>(std::lround(lane.curvePoints[i].value));
+            if(index < 0 || index >= static_cast<int>(seen.size())) continue; // never was an option of the list
+            if(moved[index] < 0) { eraseCurvePointWithTensions(lane, i); changed = true; }
+            else if(moved[index] != index) { lane.curvePoints[i].value = static_cast<float>(moved[index]); changed = true; }
+        }
+        if(changed) timeline.invalidateSchedule();
+    }
+    seen = options;
+}
+
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value) {
     const int index = static_cast<int>(std::lround(value));
     if(index < 0 || index >= static_cast<int>(options.size())) return ofToString(index);
