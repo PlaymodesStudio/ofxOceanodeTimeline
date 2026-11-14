@@ -3305,6 +3305,39 @@ void ofxOceanodeTimelineController::draw() {
                 ImGui::SetTooltip("Add keyframe: store every parameter of the patch at the playhead.\n"
                                   "A keyframe already there is overwritten. Playback interpolates\n"
                                   "the parameters that differ between keyframes.");
+            // Right below it, when the row is tall enough for both: the
+            // playhead to the keyframe before, or after, where it is.
+            const float navY = buttonY + ImGui::GetFontSize() + 3.0f;
+            if(navY + ImGui::GetFontSize() <= headerMax.y - 1.0f) {
+                int step = 0;
+                ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+                ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, navY));
+                if(ImGui::SmallButton(("<##prevProjectKey" + track.id).c_str())) step = -1;
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous keyframe");
+                ImGui::SameLine(0.0f, 2.0f);
+                if(ImGui::SmallButton((">##nextProjectKey" + track.id).c_str())) step = 1;
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the next keyframe");
+                ImGui::PopStyleColor();
+                if(step != 0) {
+                    anyClipInteractionClaimedThisFrame = true;
+                    const double here = transportState.beatPosition;
+                    double target = 0.0;
+                    bool found = false;
+                    for(const auto& keyClip : track.clips) {
+                        const double clipEnd = keyClip.startBeat + keyClip.durationBeats;
+                        const int cycles = keyClip.repeatContent
+                            ? std::max(1, static_cast<int>(std::ceil(keyClip.durationBeats / std::max(1e-6, cycleDuration(keyClip))))) : 1;
+                        for(int cycle = 0; cycle < std::min(cycles, 4096); ++cycle)
+                            for(const auto& keyframe : keyClip.projectKeyframes) {
+                                const double beat = sourceToTimelineBeat(keyClip, keyframe.beat, cycle);
+                                if(beat < keyClip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue; // cut off by the clip
+                                if(step < 0 ? beat >= here - 1e-4 : beat <= here + 1e-4) continue;
+                                if(!found || (step < 0 ? beat > target : beat < target)) { target = beat; found = true; }
+                            }
+                    }
+                    if(found) seekShownTimeline(timeline, target);
+                }
+            }
         }
         ImGui::SetCursorScreenPos(ImVec2(muteX, buttonY));
         if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
