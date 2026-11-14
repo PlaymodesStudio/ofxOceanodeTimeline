@@ -322,29 +322,25 @@ int main() {
             zoomView.pixelsPerSecond=140; zoomView.scrollX=0; for(int i=0;i<15;++i) frame();
         }
     }
-    // Locate and click the actual toolbar button by its hover id.
-    auto toolbarPoint=[&](const char* key) {
-        // Row 2 of the toolbar sits under the scope bar and row 1: scan the rows.
-        const auto id=ImGui::FindWindowByName("Timeline")->GetID(key);
-        for(float y=40;y<120;y+=6) for(float x=280;x<650;x+=4) {
-            const ImVec2 point(x,y); frame(1250,point,false);
-            if(ImGui::GetCurrentContext()->HoveredId==id) return point;
-        }
-        assert(false && "Toolbar button not found"); return ImVec2();
-    };
-    auto clickZoom=[&]() {
-        const auto point=toolbarPoint("##tbZoomIn");
-        frame(1250,point,true); frame(1250,point,false);
+    // The zoom slider sits under the track headers, level with the scrollbar.
+    // A click along it sets the zoom; both clicks land above the current one.
+    auto clickZoom=[&](float along) {
+        const float left=ImGui::FindWindowByName("Timeline")->WorkRect.Min.x;
+        const ImVec2 point(left+ofxOceanodeTimelineEditorUi::labelWidth*along,
+                           (ui.scrollbarThumb.y1+ui.scrollbarThumb.y2)*0.5f);
+        const float before=zoomView.pixelsPerSecond;
+        frame(1250,point,false); frame(1250,point,true); frame(1250,point,false);
+        assert(zoomView.pixelsPerSecond>before);
     };
     owner->getTransport()->seekToBeat(8); zoomView.pixelsPerSecond=140; zoomView.scrollX=100; frame();
     const double playheadSeconds=model.beatToSeconds(8,120);
     const double playheadScreen=playheadSeconds*zoomView.pixelsPerSecond-zoomView.scrollX;
-    clickZoom();
+    clickZoom(0.85f);
     assert(std::abs(playheadSeconds*zoomView.pixelsPerSecond-zoomView.scrollX-playheadScreen)<0.001);
-    // With the playhead offscreen, toolbar zoom keeps the viewport center fixed.
+    // With the playhead offscreen, the zoom slider keeps the viewport center fixed.
     owner->getTransport()->seekToBeat(0); zoomView.scrollX=200; frame();
     const double centerTime=(zoomView.scrollX+zoomVisible*0.5)/zoomView.pixelsPerSecond;
-    clickZoom();
+    clickZoom(0.95f);
     assert(std::abs((zoomView.scrollX+zoomVisible*0.5)/zoomView.pixelsPerSecond-centerTime)<0.0001);
     model.getViewState()=originalView; ui.zoomAnchorUntil=0; frame();
     // Open the real import modal, remap saved targets, and confirm using the

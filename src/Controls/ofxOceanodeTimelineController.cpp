@@ -1475,7 +1475,6 @@ void ofxOceanodeTimelineController::draw() {
                                    ofxOceanodeTimelineEditorUi::maxLabelWidth);
     ofxOceanodeTimelineEditorUi::labelWidth = viewState.labelWidth;
     float& pixelsPerSecond = viewState.pixelsPerSecond;
-    const float zoomBeforeToolbar = pixelsPerSecond;
     float& timelineScrollX = viewState.scrollX;
     // The timeline shown plays on its transport: the global one, its own,
     // or (dependent) where the timeline placing it has it; its playhead is
@@ -1551,7 +1550,7 @@ void ofxOceanodeTimelineController::draw() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 5.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
     const float toolbarHeight = ImGui::GetFrameHeight();
-    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, ZoomIn, ZoomOut, Dots, Tap, Clock, Magnet, Metronome };
+    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, Dots, Tap, Clock, Magnet, Metronome };
     auto drawIcon = [&](ImDrawList* dl, ToolIcon icon, ImVec2 c, float s, ImU32 col) {
         switch(icon) {
             case ToolIcon::Play:
@@ -1594,13 +1593,6 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 break;
             }
-            case ToolIcon::ZoomIn:
-                dl->AddLine(ImVec2(c.x - s * 0.36f, c.y), ImVec2(c.x + s * 0.36f, c.y), col, 1.8f);
-                dl->AddLine(ImVec2(c.x, c.y - s * 0.36f), ImVec2(c.x, c.y + s * 0.36f), col, 1.8f);
-                break;
-            case ToolIcon::ZoomOut:
-                dl->AddLine(ImVec2(c.x - s * 0.36f, c.y), ImVec2(c.x + s * 0.36f, c.y), col, 1.8f);
-                break;
             case ToolIcon::Dots:
                 for(int i = -1; i <= 1; ++i) dl->AddCircleFilled(ImVec2(c.x + i * s * 0.3f, c.y), s * 0.09f, col);
                 break;
@@ -2137,16 +2129,6 @@ void ofxOceanodeTimelineController::draw() {
 
     groupSeparator();
     {
-        if(iconButton("##tbZoomOut", ToolIcon::ZoomOut, "Zoom out around the visible playhead, or the view center"))
-            pixelsPerSecond = ofClamp(pixelsPerSecond / 1.4f, kMinPixelsPerSecond, kMaxPixelsPerSecond);
-        ImGui::SameLine(0.0f, 2.0f);
-        ImGui::SetNextItemWidth(58.0f);
-        ImGui::DragFloat("##tbPxPerSec", &pixelsPerSecond, 1.0f, kMinPixelsPerSecond, kMaxPixelsPerSecond, "%.0f px/s");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom around the visible playhead, or the view center.\nMouse wheel over the timeline zooms at the pointer; the yellow guide marks the anchor.");
-        ImGui::SameLine(0.0f, 2.0f);
-        if(iconButton("##tbZoomIn", ToolIcon::ZoomIn, "Zoom in around the visible playhead, or the view center"))
-            pixelsPerSecond = ofClamp(pixelsPerSecond * 1.4f, kMinPixelsPerSecond, kMaxPixelsPerSecond);
-        ImGui::SameLine(0.0f, 4.0f);
         if(iconButton("##tbFit", ToolIcon::Fit, "Zoom to fit every clip and marker")) requestZoomToFit = true;
         ImGui::SameLine(0.0f, 4.0f);
         if(iconButton("##tbFollow", ToolIcon::Follow, followPlayhead ? "Follow playhead: on" : "Follow playhead: off",
@@ -2320,7 +2302,6 @@ void ofxOceanodeTimelineController::draw() {
         fittedLoadStamp = stamp;
         requestZoomToFit = true;
     }
-    const bool fittingTimeline = requestZoomToFit;
     if(requestZoomToFit) {
         requestZoomToFit = false;
         zoomAnchorUntil = 0.0;
@@ -2365,11 +2346,6 @@ void ofxOceanodeTimelineController::draw() {
     auto playheadInView = [&]() { return playheadViewX() >= 0.0f && playheadViewX() <= visibleWidth; };
     // Zoom around the playhead while it is in view, else the view's centre.
     auto playheadAnchor = [&]() { return playheadInView() ? playheadViewX() : visibleWidth * 0.5f; };
-    if(!fittingTimeline && pixelsPerSecond != zoomBeforeToolbar) {
-        const float newScale = pixelsPerSecond;
-        pixelsPerSecond = zoomBeforeToolbar;
-        zoomAt(newScale, playheadAnchor());
-    }
     // Resolve zoom before either child draws: ruler, clips and scrollbar all
     // use the new scale and its scroll limits in the very same frame.
     const auto& wheelIO = ImGui::GetIO();
@@ -2837,12 +2813,6 @@ void ofxOceanodeTimelineController::draw() {
                         const bool edge = std::abs(clipRight - hit->x2) < 1.0f && mouse.x >= hit->x2 - edgeZone;
                         const bool leftEdge = !edge && std::abs(clipLeft - hit->x1) < 1.0f && mouse.x <= hit->x1 + edgeZone;
                         if(edge || leftEdge) showEdgeCursor(edge ? rightEdgeDragMode(innerTrack.isWaveTrack) : ClipDragMode::TrimStart);
-                        if(!ImGui::IsAnyItemActive())
-                            ImGui::SetTooltip("%s", (clip->name + "  (" + macroLabel + ")\n" +
-                                ofxOceanodeTimelinePresentation::clipSummary(*clip, innerTrack.isWaveTrack) + "\n"
-                                "Drag to move. Right edge: " +
-                                ofxOceanodeTimelinePresentation::endEditName(static_cast<ofxOceanodeTimelineEndEdit>(endEditTool)) +
-                                ", left edge: trim. Double-click to edit.").c_str());
                         if(clicked) {
                             anyClipInteractionClaimedThisFrame = true;
                             selectedClips.clear();
@@ -3995,18 +3965,6 @@ void ofxOceanodeTimelineController::draw() {
                 }
             }
             if(clipDragMode == ClipDragMode::None) {
-                const auto count = ofxOceanodeTimelinePresentation::targetCount(clip);
-                std::string projection;
-                if(targetsView && !currentRowBindingId.empty()) {
-                    const auto sources = std::count_if(clip.lanes.begin(), clip.lanes.end(), [&](const auto& source) {
-                        return std::find(source.bindingIds.begin(), source.bindingIds.end(), currentRowBindingId) != source.bindingIds.end();
-                    });
-                    projection = ofToString(sources) + " lane(s) in this clip drive this target. Inspect the target for combined output.\n";
-                }
-                ImGui::SetTooltip("Clip: %s\n%s\nOne clip: moving or stretching affects all its lanes and %zu targets.\n%sDouble-click to open content. Right edge: %s.\nShift: trim / extend. Cmd/Ctrl: stretch edge or duplicate body.",
-                    clip.name.c_str(), ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack).c_str(), count, projection.c_str(),
-                    track.isWaveTrack ? "Stretch audio (changes speed)" : ofxOceanodeTimelinePresentation::endEditName(
-                        static_cast<ofxOceanodeTimelineEndEdit>(endEditTool)));
                 const float hoverEdgeZone = std::min(kEdgePixels, (x2 - x1) * 0.25f);
                 if(mouse.x >= x2 - hoverEdgeZone) showEdgeCursor(rightEdgeDragMode(track.isWaveTrack));
                 else if(mouse.x <= x1 + hoverEdgeZone) showEdgeCursor(ClipDragMode::TrimStart);
@@ -6042,6 +6000,23 @@ void ofxOceanodeTimelineController::draw() {
         const ImVec2 thumbMax(thumbX + thumbWidth, trackMax.y - 2.0f);
 
         scrollbarThumb = {thumbMin.x, thumbMin.y, thumbMax.x, thumbMax.y};
+
+        // The zoom slider: pinned under the track headers, level with the
+        // scrollbar, so it never scrolls away with the tracks. It zooms around
+        // the playhead while that is in view, else the view's centre. Its
+        // colours are the style's own, like the Canvas header's zoom slider.
+        {
+            constexpr float kZoomSliderMargin = 4.0f;
+            float sliderScale = ofClamp(pixelsPerSecond, minimumZoomScale, maximumZoomScale);
+            ImGui::SetCursorScreenPos(ImVec2(viewportMin.x + kZoomSliderMargin, viewportMax.y));
+            ImGui::SetNextItemWidth(std::max(1.0f, kLabelWidth - 2.0f * kZoomSliderMargin));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(0.0f, std::max(0.0f, (scrollbarHeight - ImGui::GetFontSize()) * 0.5f)));
+            if(ImGui::SliderFloat("##timelineZoomSlider", &sliderScale, minimumZoomScale, maximumZoomScale, "",
+                                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoInput))
+                zoomAt(sliderScale, playheadAnchor());
+            ImGui::PopStyleVar();
+        }
 
         ImGui::SetCursorScreenPos(trackMin);
         ImGui::InvisibleButton("##timelineHScrollbar", ImVec2(trackWidth, scrollbarHeight));
