@@ -319,6 +319,7 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::DrumGrid: return "Drum Grid";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
+        case ofxOceanodeTimelineLaneType::Color: return "Colour";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
         case ofxOceanodeTimelineLaneType::MultiValue: return "Multi Value";
         case ofxOceanodeTimelineLaneType::MultiSlider: return "Multi Slider";
@@ -338,11 +339,13 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
 // oscillator whose control sublanes shape it.
 // Toggle is a Multi Gate with one row: on / off blocks for a single value
 // (mute, solo, an effect's on), the default for a bool parameter's clips.
-// Dropdown is the default for a dropdown parameter's clips.
+// Dropdown is the default for a dropdown parameter's clips, Colour for a
+// colour parameter's.
 constexpr const char* kLaneTypeOptions[] = {
     "Step Sequencer", "Curve", "Piano Roll", "Multi Value", "Multi Slider", "Multi Gate", "Toggle", "Number", "Dropdown",
-    "Drum Grid", "LFO"
+    "Drum Grid", "LFO", "Colour"
 };
+constexpr int kColorOptionIndex = 11;
 constexpr int kToggleOptionIndex = 6;
 constexpr int kDrumGridOptionIndex = 9;
 constexpr int kLfoOptionIndex = 10;
@@ -360,7 +363,8 @@ const char* contentDescription(int option) {
         "Absolute numeric values held until the next change.",
         "Named parameter options held until the next change.",
         "A drum kit step grid: one row per kit piece, with per-step velocity, pitch, probability, ratchet and nudge.",
-        "An oscillator mapped through the lane's output range; its control sublanes shape it over time."
+        "An oscillator mapped through the lane's output range; its control sublanes shape it over time.",
+        "Colour keys for a colour parameter, each blending into the next along its own sigmoid."
     };
     return descriptions[std::max(0, std::min(option, kLaneTypeOptionCount - 1))];
 }
@@ -376,6 +380,7 @@ ofxOceanodeTimelineLaneType laneTypeFromOptionIndex(int index) {
         case 8: return ofxOceanodeTimelineLaneType::Dropdown;
         case kDrumGridOptionIndex: return ofxOceanodeTimelineLaneType::DrumGrid;
         case kLfoOptionIndex: return ofxOceanodeTimelineLaneType::Lfo;
+        case kColorOptionIndex: return ofxOceanodeTimelineLaneType::Color;
         case kToggleOptionIndex: return ofxOceanodeTimelineLaneType::MultiGate;
         default: return ofxOceanodeTimelineLaneType::Step;
     }
@@ -404,6 +409,7 @@ int optionIndexForLaneType(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::MultiGate: return 5;
         case ofxOceanodeTimelineLaneType::DrumGrid: return kDrumGridOptionIndex;
         case ofxOceanodeTimelineLaneType::Lfo: return kLfoOptionIndex;
+        case ofxOceanodeTimelineLaneType::Color: return kColorOptionIndex;
         default: return 0;
     }
 }
@@ -7950,6 +7956,13 @@ std::string ofxOceanodeTimelineController::addBoundLane(ofxOceanodeTimelineManag
     if(typeIndex == kToggleOptionIndex) makeToggleLane(timeline.getLane(sequence, trackId, clipId, laneId));
     timeline.addBindingToLane(sequence, trackId, clipId, laneId, binding.id);
     auto* lane = timeline.getLane(sequence, trackId, clipId, laneId);
+    // A Colour lane starts on its target's colour.
+    if(lane != nullptr && laneType == ofxOceanodeTimelineLaneType::Color && !lane->colors.empty()) {
+        if(auto* parameter = timeline.resolverFor(sequence).find(binding.parameterPath)) {
+            if(binding.valueType == typeid(ofFloatColor).name()) lane->colors.front() = parameter->cast<ofFloatColor>().getParameter().get();
+            else if(binding.valueType == typeid(ofColor).name()) lane->colors.front() = ofFloatColor(parameter->cast<ofColor>().getParameter().get());
+        }
+    }
     if(lane != nullptr && laneType != ofxOceanodeTimelineLaneType::PianoRoll &&
        laneType != ofxOceanodeTimelineLaneType::MultiGate &&
        laneType != ofxOceanodeTimelineLaneType::Wave &&
@@ -7994,6 +8007,7 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
     if(fresh.valueType == typeid(bool).name() || ofxOceanodeTimelineChordInstrument(parameter))
         fresh.laneType = ofxOceanodeTimelineLaneType::MultiGate;
     if(!ofxOceanodeTimelineDropdownOptions(*parameter).empty()) fresh.laneType = ofxOceanodeTimelineLaneType::Dropdown;
+    if(ofxOceanodeTimelineIsColorType(fresh.valueType)) fresh.laneType = ofxOceanodeTimelineLaneType::Color;
     parameterClipType = optionIndexForBinding(existing != nullptr ? *existing : fresh);
     if(request.kind != ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Clip) {
         // The clip it goes in: the track's selected one, else the one being

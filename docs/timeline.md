@@ -675,6 +675,32 @@ are always applied as whole indices. Option names are read live from the
 parameter, so a lane whose parameter is missing shows indices and edits them
 numerically. Switching a Number lane to Dropdown rounds its values to indices.
 
+## Colour lanes
+
+A colour parameter (`ofFloatColor` or `ofColor`) can be published to a track
+like any other, and its clips get a **Colour** lane by default. The lane has
+two bands over the same time axis:
+
+- **Colours** (above): each key is a small swatch at its beat, and the band
+  is painted in the colour the lane plays, so a blend shows as it will look.
+  Click to add a key (it takes the colour playing there), drag a key to move
+  it, double-click or right-click it for the colour picker (with alpha),
+  Shift-click to delete. The last key cannot be deleted.
+- **Blend** (below): one sigmoid per pair of consecutive keys, from 0 at a key
+  to 1 at the next. Drag it sideways to move where it bends and up or down to
+  steepen it, as a Project Track's easing; double-click for a straight blend.
+  There is always exactly one blend curve between two keys.
+
+Colours blend channel by channel (red, green, blue and alpha) along that
+sigmoid; after the last key the colour holds.
+
+A Colour lane keeps its points like a Number lane (`curvePoints`, with one
+`curveTensions` entry per segment for the blend). A point's value is an index
+into the lane's `colors` (saved as `[r, g, b, a]`), so splitting, trimming and
+reversing a clip work as they do for held values. Splitting a clip in the
+middle of a blend starts the right-hand part on the earlier key's colour.
+Two Colour lanes are never joined into one when clips are merged.
+
 ## Per-frame cost
 
 `tests/perf_benchmark.py` builds an optimized (-O2) session and prints timings.

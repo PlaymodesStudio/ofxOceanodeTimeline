@@ -33,6 +33,7 @@ private:
     ofxOceanodeTimelinePianoRollEditor pianoRoll;
     ofxOceanodeTimelineNumberEditor number;
     ofxOceanodeTimelineDropdownEditor dropdown;
+    ofxOceanodeTimelineColorEditor color;
     ofxOceanodeTimelineMultiSliderEditor multiSlider;
     ofxOceanodeTimelineMultiValueEditor multiValue;
     ofxOceanodeTimelineMultiGateEditor multiGate;

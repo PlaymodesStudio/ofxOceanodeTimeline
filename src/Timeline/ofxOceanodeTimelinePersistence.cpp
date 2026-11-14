@@ -337,6 +337,7 @@ std::string ofxOceanodeTimelineManager::laneTypeToString(ofxOceanodeTimelineLane
         case ofxOceanodeTimelineLaneType::Lfo: return "Lfo";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
+        case ofxOceanodeTimelineLaneType::Color: return "Color";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
         case ofxOceanodeTimelineLaneType::MultiValue: return "MultiValue";
         case ofxOceanodeTimelineLaneType::MultiSlider: return "MultiSlider";
@@ -353,6 +354,7 @@ ofxOceanodeTimelineLaneType ofxOceanodeTimelineManager::laneTypeFromString(const
     if(laneType == "Lfo") return ofxOceanodeTimelineLaneType::Lfo;
     if(laneType == "Number") return ofxOceanodeTimelineLaneType::Number;
     if(laneType == "Dropdown") return ofxOceanodeTimelineLaneType::Dropdown;
+    if(laneType == "Color") return ofxOceanodeTimelineLaneType::Color;
     if(laneType == "Curve") return ofxOceanodeTimelineLaneType::Curve;
     if(laneType == "MultiValue") return ofxOceanodeTimelineLaneType::MultiValue;
     if(laneType == "MultiSlider") return ofxOceanodeTimelineLaneType::MultiSlider;
@@ -695,6 +697,10 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             for(const auto& tension : lane.curveTensions) laneJson["curveTensions"].push_back({
                 {"inflection", tension.inflection}, {"steepness", tension.steepness}
             });
+            if(lane.type == ofxOceanodeTimelineLaneType::Color) {
+                laneJson["colors"] = ofJson::array();
+                for(const auto& color : lane.colors) laneJson["colors"].push_back({color.r, color.g, color.b, color.a});
+            }
             laneJson["pianoNotes"] = ofJson::array();
             for(const auto& note : lane.pianoNotes) laneJson["pianoNotes"].push_back({
                 {"startBeat", note.startBeat}, {"durationBeats", note.durationBeats},
@@ -1246,6 +1252,17 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                         }
                         lane.curveTensions.resize(lane.curvePoints.empty() ? 0 : lane.curvePoints.size() - 1);
                         if(ofxOceanodeTimelineIsHeldValueLane(lane.type)) lane.curveInterpolation = "Step";
+                        if(laneJson.contains("colors") && laneJson["colors"].is_array())
+                            for(const auto& colorJson : laneJson["colors"]) {
+                                ofFloatColor color(1.0f, 1.0f, 1.0f, 1.0f);
+                                if(colorJson.is_array() && colorJson.size() >= 3) {
+                                    auto channel = [&](size_t i, float fallback) {
+                                        return i < colorJson.size() && colorJson[i].is_number() ? colorJson[i].get<float>() : fallback;
+                                    };
+                                    color = ofFloatColor(channel(0, 1.0f), channel(1, 1.0f), channel(2, 1.0f), channel(3, 1.0f));
+                                }
+                                lane.colors.push_back(color);
+                            }
                         if(laneJson.contains("pianoNotes") && laneJson["pianoNotes"].is_array()) {
                             for(const auto& noteJson : laneJson["pianoNotes"]) {
                                 if(!noteJson.is_object()) continue;

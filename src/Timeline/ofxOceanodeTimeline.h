@@ -73,7 +73,11 @@ enum class ofxOceanodeTimelineLaneType {
     // drives the lane's targets like a Curve does. Its shape is set by the
     // control sublanes in lfoControls (frequency, roundness, skew...), each a
     // Curve-like envelope over the clip's source beats.
-    Lfo
+    Lfo,
+    // Sequences a colour parameter: each point is a colour key (its value an
+    // index into the lane's colors), and each segment's tension is the
+    // sigmoid the colour blends along into the next key.
+    Color
 };
 
 inline bool ofxOceanodeTimelineIsLfoLane(ofxOceanodeTimelineLaneType type) {
@@ -94,9 +98,26 @@ inline bool ofxOceanodeTimelineLaneUsesNoteRoles(ofxOceanodeTimelineLaneType typ
 }
 
 // Number and Dropdown lanes hold absolute values in curvePoints, each until
-// the next point -- no normalization, no interpolation.
+// the next point -- no normalization, no interpolation. A Color lane's points
+// are kept the same way (their values are indices, never interpolated: the
+// colours they stand for are, see ofxOceanodeTimelineColorAt), so cutting,
+// reversing and merging a clip treat all three alike.
 inline bool ofxOceanodeTimelineIsHeldValueLane(ofxOceanodeTimelineLaneType type) {
-    return type == ofxOceanodeTimelineLaneType::Number || type == ofxOceanodeTimelineLaneType::Dropdown;
+    return type == ofxOceanodeTimelineLaneType::Number || type == ofxOceanodeTimelineLaneType::Dropdown ||
+           type == ofxOceanodeTimelineLaneType::Color;
+}
+
+// A Color lane's colour at a source beat: the key at or before it, blended
+// into the next along that segment's sigmoid (curveTensions; the default
+// tension is a straight blend). False when the lane has no key.
+struct ofxOceanodeTimelineLane;
+bool ofxOceanodeTimelineColorAt(const ofxOceanodeTimelineLane& lane, double beat, ofFloatColor& color);
+// The colour a Color lane's point stands for (white past the lane's colours).
+ofFloatColor ofxOceanodeTimelineColorOfPoint(const ofxOceanodeTimelineLane& lane, float value);
+// A colour as an automation value: "r,g,b,a", 0..1, or 0..255 for an ofColor.
+std::string ofxOceanodeTimelineColorText(const ofFloatColor& color, bool bytes);
+inline bool ofxOceanodeTimelineIsColorType(const std::string& valueType) {
+    return valueType == typeid(ofFloatColor).name() || valueType == typeid(ofColor).name();
 }
 
 // The option names of a scalar int/float dropdown parameter, empty for any
@@ -460,6 +481,9 @@ struct ofxOceanodeTimelineLane {
     // Dropdown lanes: the bound parameter's option names as the editor last
     // saw them (not saved), to follow its points when the list changes.
     std::vector<std::string> dropdownOptionsSeen;
+    // Color lanes: the colours its points index (a point's value). Entries no
+    // point uses any more are harmless.
+    std::vector<ofFloatColor> colors;
     // Independent per-start roll, multiplied with the parent clip's chance.
     float chance = 1.0f;
     // Toggle lanes: also drive their own track's solo -- on while a block

@@ -19,6 +19,7 @@ inline const char* laneKind(const ofxOceanodeTimelineLane& lane) {
         case ofxOceanodeTimelineLaneType::MultiGate: return lane.multiRowCount <= 1 ? "Toggle" : "Multi Gate";
         case ofxOceanodeTimelineLaneType::Number: return "Number";
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
+        case ofxOceanodeTimelineLaneType::Color: return "Colour";
         case ofxOceanodeTimelineLaneType::Lfo: return "LFO";
         default: return "Audio";
     }

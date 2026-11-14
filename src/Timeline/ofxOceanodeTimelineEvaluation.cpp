@@ -1791,6 +1791,18 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                         }
                         continue;
                     }
+                    if(lane.type == ofxOceanodeTimelineLaneType::Color) {
+                        // The colour of its keys, blended along each
+                        // segment's sigmoid, in the form its target reads.
+                        ofFloatColor color;
+                        if(!ofxOceanodeTimelineColorAt(lane, sourceBeat, color)) continue;
+                        for(const auto& bindingId : lane.bindingIds) {
+                            const auto* binding = bindingFor(track, bindingId);
+                            if(!wantsBinding(binding) || binding->bypass) continue;
+                            contribute(binding, ofxOceanodeTimelineColorText(color, binding->valueType == typeid(ofColor).name()));
+                        }
+                        continue;
+                    }
                     if(lane.type == ofxOceanodeTimelineLaneType::Wave) {
                         // Real audio, not automation -- never touches a
                         // binding/parameter at all. Handled by the dedicated
@@ -2288,6 +2300,8 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
     for(const auto& point : lane.curvePoints) { hash.add(point.beat); hash.add(point.value); }
     hash.add(lane.curveTensions.size());
     for(const auto& tension : lane.curveTensions) { hash.add(tension.inflection); hash.add(tension.steepness); }
+    hash.add(lane.colors.size());
+    for(const auto& color : lane.colors) { hash.add(color.r); hash.add(color.g); hash.add(color.b); hash.add(color.a); }
     hash.add(lane.pianoNotes.size());
     {
         // The bulk of most sessions. Four independent lanes so the multiplies
@@ -2581,6 +2595,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                             switch(lane.type) {
                                 case ofxOceanodeTimelineLaneType::Number:
                                 case ofxOceanodeTimelineLaneType::Dropdown:
+                                case ofxOceanodeTimelineLaneType::Color:
                                     for(const auto& point : lane.curvePoints) addSourceBeat(point.beat);
                                     break;
                                 case ofxOceanodeTimelineLaneType::Curve:

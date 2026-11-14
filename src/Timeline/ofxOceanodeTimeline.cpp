@@ -527,6 +527,22 @@ bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
     }
     if(valueType == typeid(std::string).name())
         return setIfChanged(parameter.cast<std::string>().getParameter(), value);
+    if(ofxOceanodeTimelineIsColorType(valueType)) {
+        // "r, g, b" or "r, g, b, a"; anything else is not a colour.
+        float channels[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        size_t count = 0;
+        automationText::forEachToken(value, [&](const char* begin, const char* end) {
+            if(count < 4) channels[count] = static_cast<float>(automationText::parse(begin, end));
+            ++count;
+        });
+        if(count < 3) return false;
+        if(valueType == typeid(ofFloatColor).name())
+            return setIfChanged(parameter.cast<ofFloatColor>().getParameter(),
+                                ofFloatColor(channels[0], channels[1], channels[2], count > 3 ? channels[3] : 1.0f));
+        auto byte = [](float channel) { return static_cast<unsigned char>(ofClamp(std::round(channel), 0.0f, 255.0f)); };
+        return setIfChanged(parameter.cast<ofColor>().getParameter(),
+                            ofColor(byte(channels[0]), byte(channels[1]), byte(channels[2]), count > 3 ? byte(channels[3]) : 255));
+    }
     if(valueType == typeid(std::vector<float>).name()) {
         std::vector<float> result;
         automationText::forEachToken(value, [&](const char* begin, const char* end) {
@@ -558,6 +574,45 @@ bool applyAutomationValue(ofxOceanodeAbstractParameter& parameter,
     return true;
 }
 } // namespace
+
+ofFloatColor ofxOceanodeTimelineColorOfPoint(const ofxOceanodeTimelineLane& lane, float value) {
+    const long index = std::lround(value);
+    return index >= 0 && index < static_cast<long>(lane.colors.size()) ? lane.colors[static_cast<size_t>(index)]
+                                                                         : ofFloatColor(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+bool ofxOceanodeTimelineColorAt(const ofxOceanodeTimelineLane& lane, double beat, ofFloatColor& color) {
+    const auto& points = lane.curvePoints;
+    if(points.empty()) return false;
+    // The key at or before the beat (the first one, ahead of it).
+    const auto after = std::upper_bound(points.begin(), points.end(), beat,
+        [](double b, const auto& point) { return b < point.beat; });
+    const size_t index = after == points.begin() ? 0 : static_cast<size_t>(after - points.begin()) - 1;
+    const ofFloatColor from = ofxOceanodeTimelineColorOfPoint(lane, points[index].value);
+    if(index + 1 >= points.size() || beat <= points[index].beat) { color = from; return true; }
+    const double span = points[index + 1].beat - points[index].beat;
+    if(span <= kEpsilon) { color = from; return true; }
+    const float linear = static_cast<float>(std::max(0.0, std::min(1.0, (beat - points[index].beat) / span)));
+    const ofxOceanodeTimelineCurveTension tension = index < lane.curveTensions.size() ? lane.curveTensions[index]
+                                                                                      : ofxOceanodeTimelineCurveTension{};
+    const float t = ofxOceanodeTimelineCurve::sigmoidFlex(linear, tension.inflection, tension.steepness);
+    const ofFloatColor to = ofxOceanodeTimelineColorOfPoint(lane, points[index + 1].value);
+    color = ofFloatColor(from.r + (to.r - from.r) * t, from.g + (to.g - from.g) * t,
+                         from.b + (to.b - from.b) * t, from.a + (to.a - from.a) * t);
+    return true;
+}
+
+std::string ofxOceanodeTimelineColorText(const ofFloatColor& color, bool bytes) {
+    std::string text;
+    const float channels[4] = {color.r, color.g, color.b, color.a};
+    for(int i = 0; i < 4; ++i) {
+        if(i > 0) text += ",";
+        if(bytes) automationText::appendInt(text, static_cast<int>(ofClamp(std::round(channels[i] * 255.0f), 0.0f, 255.0f)));
+        else automationText::appendFloat(text, channels[i]);
+    }
+    return text;
+}
+
 void ofxOceanodeTimelineMergeOverlappingGates(std::vector<ofxOceanodeTimelineGateRegion>& row) {
     std::stable_sort(row.begin(), row.end(), [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
     std::vector<ofxOceanodeTimelineGateRegion> merged;
@@ -1345,6 +1400,8 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
     if(ofxOceanodeTimelineChordInstrument(&parameter)) binding.laneType = ofxOceanodeTimelineLaneType::MultiGate;
     // and a dropdown's to a Dropdown lane
     if(!ofxOceanodeTimelineDropdownOptions(parameter).empty()) binding.laneType = ofxOceanodeTimelineLaneType::Dropdown;
+    // a colour's to a Colour lane
+    if(ofxOceanodeTimelineIsColorType(binding.valueType)) binding.laneType = ofxOceanodeTimelineLaneType::Color;
     track->bindings.push_back(binding);
     invalidateEvaluationIndexes();
 
@@ -1475,7 +1532,8 @@ bool ofxOceanodeTimelineManager::isStepLaneCompatible(const ofxOceanodeAbstractP
            type == typeid(std::vector<float>).name() ||
            type == typeid(std::vector<int>).name() ||
            type == typeid(std::vector<bool>).name() ||
-           type == typeid(std::vector<std::string>).name();
+           type == typeid(std::vector<std::string>).name() ||
+           ofxOceanodeTimelineIsColorType(type); // a Colour lane's
 }
 
 bool ofxOceanodeTimelineManager::moveBinding(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& bindingId, int newIndex) {
@@ -2792,6 +2850,8 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
         std::string key = ofToString(static_cast<int>(lane.type)) + "|" + lane.curveInterpolation + "|" +
             ofToString(lane.valueMin, 6) + "|" + ofToString(lane.valueMax, 6) + "|";
         for(const auto& id : ids) key += id + ",";
+        // A Colour lane's points index its own colours: never joined with another's.
+        if(lane.type == ofxOceanodeTimelineLaneType::Color) key += "|" + lane.id;
         key += "|" + lane.pianoPitchBindingId + "," + lane.pianoGateBindingId + "," + lane.pianoVelocityBindingId + "," +
                lane.drumDurationBindingId + "," + lane.drumFilterBindingId + "," + lane.drumStutterBindingId;
         // Pattern lanes share one grid: the same cell once stretched.
@@ -3452,6 +3512,8 @@ std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& 
     if(ofxOceanodeTimelineIsHeldValueLane(type)) {
         lane.curveInterpolation = "Step";
         lane.curvePoints = {{0.0, 0.0f}};
+        // One key, white until its target's colour is known (addBoundLane).
+        if(type == ofxOceanodeTimelineLaneType::Color) lane.colors = {ofFloatColor(1.0f, 1.0f, 1.0f, 1.0f)};
     } else if(type == ofxOceanodeTimelineLaneType::Curve) {
         lane.curvePoints = {{0.0, 0.0f}, {clip->contentDurationBeats, 1.0f}};
         lane.curveTensions.push_back({0.5f, 1.0f});
@@ -3686,6 +3748,14 @@ bool ofxOceanodeTimelineManager::setClipLaneType(ofxOceanodeTimelineSequence& se
     if(ofxOceanodeTimelineIsHeldValueLane(type)) {
         lane->curveInterpolation = "Step";
         if(lane->curvePoints.empty()) lane->curvePoints = {{0.0, 0.0f}};
+    }
+    // a Colour lane's points index its colours: none carry over from, or to,
+    // another type
+    if((type == ofxOceanodeTimelineLaneType::Color) != (previousType == ofxOceanodeTimelineLaneType::Color)) {
+        lane->curvePoints = {{0.0, 0.0f}};
+        lane->curveTensions.clear();
+        lane->colors.clear();
+        if(type == ofxOceanodeTimelineLaneType::Color) lane->colors = {ofFloatColor(1.0f, 1.0f, 1.0f, 1.0f)};
     }
     // a dropdown holds option indices
     if(type == ofxOceanodeTimelineLaneType::Dropdown) {

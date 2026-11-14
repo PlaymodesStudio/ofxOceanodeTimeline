@@ -8,6 +8,7 @@ ofxOceanodeTimelineLaneEditor& ofxOceanodeTimelineLaneEditors::forType(ofxOceano
         case ofxOceanodeTimelineLaneType::PianoRoll: return pianoRoll;
         case ofxOceanodeTimelineLaneType::Number: return number;
         case ofxOceanodeTimelineLaneType::Dropdown: return dropdown;
+        case ofxOceanodeTimelineLaneType::Color: return color;
         case ofxOceanodeTimelineLaneType::MultiSlider: return multiSlider;
         case ofxOceanodeTimelineLaneType::MultiValue: return multiValue;
         case ofxOceanodeTimelineLaneType::MultiGate: return multiGate;
