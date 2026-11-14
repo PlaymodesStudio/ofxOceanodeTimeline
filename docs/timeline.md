@@ -118,7 +118,7 @@ roles. Other clips, project tempo, clip groups, and track volume automation
 stay in the project. Captured-state clips are recalled as ordinary clips, so
 future state captures cannot overwrite the recalled material.
 
-Use **Load clip...** in the toolbar or **Load clip from disk...** in a track's
+Use **Load clip...** in the timeline's **...** menu or **Load clip from disk...** in a track's
 context menu. Choose an existing compatible track or a new track, set the
 start beat, and map each saved parameter to a parameter in the current
 project. The chooser lists compatible parameters in the current patch. Nothing
@@ -153,7 +153,7 @@ All durations are in beats:
 | Tool | Effect |
 | --- | --- |
 | Repeat | Change the visible length, preserving one source cycle and its stretch; enable repeats |
-| Trim / extend | Change the source window at the existing stretch; disable repeats; hidden notes/points remain stored |
+| Trim | Change the source window at the existing stretch; disable repeats; hidden notes/points remain stored |
 | Stretch | Fit the existing source into a new timeline length; disable repeats |
 
 Moving either loop handle preserves the red playhead's current position,
@@ -161,7 +161,7 @@ both while playing and while paused. Playback continues towards the edited
 boundary. Moving the end behind the playhead leaves playback beyond that
 boundary until an explicit seek or restart enters the loop again.
 
-Shift-dragging a right edge temporarily selects Trim / extend. Cmd/Ctrl-dragging
+Shift-dragging a right edge temporarily selects Trim. Cmd/Ctrl-dragging
 it selects Stretch. Audio always stretches the complete source slice, which
 changes playback speed. Left-edge trim and Cmd/Ctrl-drag on a clip body (copy)
 retain their existing shortcuts. Drag feedback identifies the operation,
@@ -229,7 +229,7 @@ works and releases its notes normally.
 
 ## Understanding an output
 
-Open **What drives this target?** in the toolbar, a target row's context menu,
+Open **What drives this target?** in a target row's context menu,
 or an assigned lane target's **Inspect** button. At the playhead it shows:
 
 1. Lane values inside clips, including shared piano voice pools.
@@ -362,7 +362,7 @@ lanes.
 ## Undo and redo
 
 With a timeline window focused, **Cmd/Ctrl+Z** undoes an action and
-**Shift+Cmd/Ctrl+Z** redoes it. The toolbar also has **Undo** and **Redo** buttons.
+**Shift+Cmd/Ctrl+Z** redoes it.
 Text fields keep their normal text undo while editing.
 
 History covers tracks, bindings, clips, lane contents and settings, clip groups,

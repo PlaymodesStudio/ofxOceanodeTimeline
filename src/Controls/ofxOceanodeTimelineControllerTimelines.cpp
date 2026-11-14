@@ -6,6 +6,9 @@
 
 #include "Managers/ofxOceanodeContainer.h"
 #include "ofxOceanodeShared.h"
+#ifdef OFXOCEANODE_USE_MIDI
+#include "Managers/ofxOceanodeMidiClock.h"
+#endif
 #include "ofxOceanodeMenu.h"
 #include "ofxOceanodeColors.h"
 #include "imgui.h"
@@ -89,7 +92,7 @@ const char* clockSourceExplanation(ClockSource source) {
         case ClockSource::Global: return "Linked to the global transport: it plays, stops and seeks with it, at the global tempo,\n"
                                          "looping on its own (the global transport itself never loops).";
         case ClockSource::Free: return "Free: its own transport on the shared clock, played, stopped and seeked by itself, at its own tempo.";
-        case ClockSource::Dependent: return "Dependent: placed as clips in another timeline, it plays where they place it, at that\n"
+        case ClockSource::Dependent: return "Relative: placed as clips in another timeline, it plays where they place it, at that\n"
                                             "timeline's tempo. Play previews it alone (never the timeline placing it).";
     }
     return "";
@@ -105,7 +108,10 @@ std::string scopeExplanation(ScopeKind kind, ClockSource source) {
 ImU32 withAlpha(ImU32 color, int alpha) { return (color & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << 24); }
 } // namespace
 
-void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& timeline) {
+// The scope bar: the shown timeline's name and its "..." menu, then (drawn by
+// the caller on the same row, before endScopeBar) its transport. Returns the
+// band's top; the row's style stays pushed until endScopeBar.
+float ofxOceanodeTimelineController::beginScopeBar(ofxOceanodeTimelineManager& timeline) {
     const auto shown = scopeRef();
     const ScopeKind kind = scopeKindOf(shown);
     const bool exists = timeline.timelineExists(shown);
@@ -151,22 +157,18 @@ void ofxOceanodeTimelineController::drawScopeBar(ofxOceanodeTimelineManager& tim
     }
     ImGui::SameLine(0.0f, 4.0f);
     drawTimelineActions(timeline);
-    if(exists) {
-        ImGui::SameLine(0.0f, 10.0f);
-        {
-            const ImVec2 pos = ImGui::GetCursorScreenPos();
-            dl->AddLine(ImVec2(pos.x, pos.y + 2.0f), ImVec2(pos.x, pos.y + rowHeight - 2.0f), IM_COL32(255, 255, 255, 38), 1.0f);
-            ImGui::Dummy(ImVec2(1.0f, rowHeight));
-        }
-        ImGui::SameLine(0.0f, 10.0f);
-        ImGui::PushID("playerBar");
-        drawPlayerBar(timeline, shown);
-        ImGui::PopID();
-    }
-    ImGui::PopStyleVar(3);
     ImGui::PopID();
+    return top;
+}
+
+void ofxOceanodeTimelineController::endScopeBar(ofxOceanodeTimelineManager& timeline, float top) {
+    const float pad = 4.0f;
+    const float rowHeight = ImGui::GetFrameHeight();
+    const ImU32 accent = timelineAccent(timeline, scopeRef());
+    auto* dl = ImGui::GetWindowDrawList();
+    ImGui::PopStyleVar(3);
     {
-        const float bottom = ImGui::GetItemRectMax().y + pad;
+        const float bottom = top + pad + rowHeight + pad;
         const float bandLeft = ImGui::GetWindowPos().x;
         const float bandRight = bandLeft + ImGui::GetWindowWidth();
         dl->ChannelsSetCurrent(0);
@@ -369,7 +371,7 @@ const char* clockSourceLabel(ClockSource source) {
     switch(source) {
         case ClockSource::Global: return "Global";
         case ClockSource::Free: return "Free";
-        case ClockSource::Dependent: return "Dependent";
+        case ClockSource::Dependent: return "Relative";
     }
     return "";
 }
@@ -547,7 +549,7 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             dl->AddLine(ImVec2(left, y), ImVec2(left + lineWidth, y), ink, 1.0f);
         }
     }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, playback settings, delete, place, open in a window");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, playback settings, timebase, sync, delete, place, load a clip, open in a window");
     if(ImGui::BeginPopup("##timelineActionsMenu")) {
         const std::string canvas = rootCanvas(shown.canvas) ? std::string() : shown.canvas;
         // Both through the New Timeline dialog (name, colour, owner), shown in this window.
@@ -588,6 +590,105 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             ImGui::EndMenu();
         }
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop range, time signature and quantize");
+        // Settings of every timeline, not this one alone: timebase, clock
+        // sync and the timestamped events' lookahead.
+        if(ImGui::BeginMenu("Timebase")) {
+            const bool time = timeline.getTimebase() == ofxOceanodeTimelineTimebase::Time;
+            if(ImGui::MenuItem("Beats", nullptr, !time)) timeline.setTimebase(ofxOceanodeTimelineTimebase::Beats);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo changes preserve musical positions.");
+            if(ImGui::MenuItem("Time", nullptr, time)) timeline.setTimebase(ofxOceanodeTimelineTimebase::Time);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Manual tempo changes preserve absolute timing.");
+            ImGui::EndMenu();
+        }
+#ifdef OFXOCEANODE_USE_MIDI
+        if(auto* clockSync = container->getMidiClockSync()) {
+            if(ImGui::BeginMenu("Sync")) {
+                if(ImGui::IsWindowAppearing()) midiPortChoices = ofxOceanodeMidiClock::availablePorts();
+                const bool midiClock = container->isMidiClockSyncEnabled();
+                if(ImGui::MenuItem("Internal", nullptr, !midiClock)) container->setMidiClockSyncEnabled(false);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Oceanode runs its own transport.");
+                if(ImGui::MenuItem("MIDI Clock", nullptr, midiClock)) container->setMidiClockSyncEnabled(true);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Follow an external MIDI clock (play/stop, song position, tempo).");
+                // Status: a word, details in the tooltip.
+                std::string statusText;
+                std::string statusTip;
+                const auto globalTransport = container->getTransport();
+                if(midiClock) {
+                    const auto clockStatus = clockSync->status();
+                    if(clockSync->getPortName().empty()) {
+                        statusText = "no port"; statusTip = "Choose a MIDI port below";
+                    } else if(!clockSync->isOpen()) {
+                        statusText = "offline"; statusTip = "Port not available (retrying): " + clockSync->getPortName();
+                    } else if(!clockStatus.receiving) {
+                        statusText = "no clock"; statusTip = "No clock arriving on " + clockSync->getPortName();
+                    } else {
+                        statusText = clockStatus.playing ? "play" : "stop";
+                        statusTip = clockSync->getPortName() + ": " + ofToString(clockStatus.bpm, 1) + " BPM";
+                    }
+                    if(!clockSync->isDrivingTransport()) statusTip += "\n(another source drives the transport)";
+                } else if(globalTransport != nullptr && globalTransport->hasExternalClock()) {
+                    statusText = "node"; statusTip = "Transport driven by a MIDI Clock node";
+                }
+                if(!statusText.empty()) {
+                    ImGui::TextDisabled("Status: %s", statusText.c_str());
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", statusTip.c_str());
+                }
+                ImGui::Separator();
+                const std::string currentPort = clockSync->getPortName();
+                ImGui::SetNextItemWidth(220.0f);
+                if(ImGui::BeginCombo("Port", currentPort.empty() ? "None" : currentPort.c_str())) {
+                    if(ImGui::Selectable("None", currentPort.empty())) container->setMidiClockSyncPort("");
+                    for(const auto& port : midiPortChoices) {
+                        if(ImGui::Selectable(port.c_str(), port == currentPort)) container->setMidiClockSyncPort(port);
+                    }
+                    ImGui::EndCombo();
+                }
+                bool reaper = clockSync->core().getReaperMode();
+                if(ImGui::Checkbox("REAPER mode", &reaper)) clockSync->core().setReaperMode(reaper);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A Song Position sent just before Start is honoured\n(start from that position instead of the top).");
+                bool clockOnly = clockSync->core().getClockOnly();
+                if(ImGui::Checkbox("Clock only", &clockOnly)) clockSync->core().setClockOnly(clockOnly);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("For devices that send clock but no Start/Stop:\nplay while ticks arrive, stop when they stop.");
+                bool stopOnLoss = clockSync->core().getStopOnClockLoss();
+                if(ImGui::Checkbox("Stop when the clock is lost", &stopOnLoss)) clockSync->core().setStopOnClockLoss(stopOnLoss);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("When ticks stop arriving while playing (cable pulled, master gone):\non = stop after half a second, off = hold at the last position.");
+                float offsetMs = clockSync->core().getOffsetMs();
+                ImGui::SetNextItemWidth(120.0f);
+                if(ImGui::DragFloat("Offset (ms)", &offsetMs, 0.5f, -250.0f, 250.0f, "%.1f"))
+                    clockSync->core().setOffsetMs(ofClamp(offsetMs, -250.0f, 250.0f));
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Positive runs ahead of the incoming clock (compensates output latency).");
+                int tempoWindow = clockSync->core().getTempoWindow();
+                ImGui::SetNextItemWidth(120.0f);
+                if(ImGui::DragInt("Tempo window (ticks)", &tempoWindow, 0.2f, 2, 96))
+                    clockSync->core().setTempoWindow(tempoWindow);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Clock ticks averaged for the tempo estimate (24 = one beat).");
+                ImGui::EndMenu();
+            }
+        }
+#endif
+        {
+            // The timestamped events' longest lookahead (the toolbar's clock button turns them on).
+            const bool timeStamped = timeline.isSchedulingEnabled();
+            ImGui::BeginDisabled(!timeStamped);
+            float lookahead = static_cast<float>(timeline.getSchedulingLookaheadMs());
+            ImGui::SetNextItemWidth(78.0f);
+            if(ImGui::DragFloat("Longest lookahead##schedulingLookahead", &lookahead, 1.0f, 0.0f, 1000.0f, "%.0f ms"))
+                timeline.setSchedulingLookaheadMs(lookahead);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Longest lookahead window of timestamped events (now using %.0f ms).\n"
+                                  "The window follows recent frame intervals (3 frames + 10 ms, at least 50 ms)\n"
+                                  "up to this limit. Longer survives bigger GUI stalls; shorter leaves less\n"
+                                  "already-sent content that stop, seek or edits can only correct.\n"
+                                  "Used while Timestamped (the toolbar's clock button) is on.",
+                                  timeline.effectiveSchedulingLookaheadMs());
+            ImGui::EndDisabled();
+        }
+        ImGui::Separator();
         if(ImGui::MenuItem("Delete this timeline", nullptr, false, timeline.timelineExists(shown))) {
             const auto removed = shown;
             timeline.removeTimeline(removed); // its windows close with it
@@ -619,13 +720,25 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
         }
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("A track whose clips play that timeline: place, repeat, stretch and offset them like any clip.");
+        if(ImGui::MenuItem("Load clip...", nullptr, false, timeline.timelineExists(shown))) {
+            // At the shown timeline's playhead, on the one selected track if any.
+            const auto shownTransport = timeline.transportFor(shown);
+            double beat = (shownTransport != nullptr ? shownTransport->getState() : container->getTransportState()).beatPosition;
+            if(!timeline.timelinePlayheadBeat(shown, beat)) beat = 0.0;
+            clipFileRequest = ClipFileRequest::Load;
+            clipFileTrackId = selectedTracks.size() == 1 ? *selectedTracks.begin() : std::string();
+            clipImportBeat = snapBeat(std::max(0.0, beat));
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Recall a saved clip with all its lanes and choose new parameter targets.");
         if(ImGui::MenuItem("Open in a new window", nullptr, false, timeline.timelineExists(shown))) timeline.openTimelineWindow(shown);
         ImGui::EndPopup();
     }
 }
 
-// The shown timeline's clock source as one dropdown: Free or Global
-// transport, the user's choice; Dependent set by the app while another
+// The shown timeline's clock source as one dropdown, the first control of
+// the toolbar: Free or Global, the user's choice; Relative (the model's
+// Dependent) set by the app while another
 // timeline places it (as clips of a timeline track, or carried along with
 // its macro), shown locked until that placement goes. The toolbar below
 // drives it; the rest of its playback settings (loop range, meter,
@@ -640,9 +753,9 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
     const std::string hostName = dependent ? (timeline.placedBy(ref, host) ? timeline.timelineName(host) : std::string("another timeline"))
                                            : std::string();
     static const char* const kFreeLabel = "Free";
-    static const char* const kGlobalLabel = "Global transport";
-    static const char* const kDependentLabel = "Dependent";
-    const std::string preview = dependent ? "Dependent on " + hostName : std::string(free ? kFreeLabel : kGlobalLabel);
+    static const char* const kGlobalLabel = "Global";
+    static const char* const kDependentLabel = "Relative";
+    const std::string preview = dependent ? "Relative to " + hostName : std::string(free ? kFreeLabel : kGlobalLabel);
     // Sized to its text: the widest option, or the host's name while dependent.
     const float widest = std::max({ImGui::CalcTextSize(preview.c_str()).x, ImGui::CalcTextSize(kGlobalLabel).x,
                                    ImGui::CalcTextSize(kDependentLabel).x});
@@ -658,22 +771,22 @@ void ofxOceanodeTimelineController::drawPlayerBar(ofxOceanodeTimelineManager& ti
         ImGui::Selectable(kDependentLabel, false, ImGuiSelectableFlags_Disabled);
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Set by the app, not chosen: a timeline placed in another one (as clips of a timeline\n"
-                              "track, or inside a macro placed as a whole) is dependent on it, and plays where its\n"
+                              "track, or inside a macro placed as a whole) is relative to it, and plays where its\n"
                               "clips place it, at that timeline's tempo.");
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
     if(!open && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         if(dependent)
-            ImGui::SetTooltip("Dependent: placed as clips in %s, it plays where they place it, at that timeline's tempo.\n"
+            ImGui::SetTooltip("Relative: placed as clips in %s, it plays where they place it, at that timeline's tempo.\n"
                               "The toolbar previews it alone. Remove the timeline track placing it to choose again.",
                               hostName.c_str());
         else
             ImGui::SetTooltip("Free: its own transport. The toolbar plays, stops and seeks it at its own tempo and\n"
                               "loop, alongside the global transport; nodes can follow it as a Time Source.\n"
-                              "Global transport: linked to it (its position, play state and tempo); the loop stays\n"
-                              "the timeline's own (the global transport itself never loops).\n"
-                              "Dependent is set by the app while another timeline places this one.");
+                              "Global: linked to the global transport (its position, play state and tempo); the loop\n"
+                              "stays the timeline's own (the global transport itself never loops).\n"
+                              "Relative is set by the app while another timeline places this one.");
     }
     if(timeline.transportFor(ref) == nullptr) {
         ImGui::SameLine();

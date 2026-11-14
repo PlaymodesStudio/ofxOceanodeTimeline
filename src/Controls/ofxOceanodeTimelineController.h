@@ -376,7 +376,8 @@ private:
     // name on a badge that opens the navigator, the actions menu) and, for
     // one other than the main, its player (whether it is independent, else
     // its own tempo; an independent one's transport is the toolbar's).
-    void drawScopeBar(ofxOceanodeTimelineManager& timeline);
+    float beginScopeBar(ofxOceanodeTimelineManager& timeline);
+    void endScopeBar(ofxOceanodeTimelineManager& timeline, float top);
     void drawTimelineActions(ofxOceanodeTimelineManager& timeline);
     // The navigator: every timeline under its canvas, the canvases nested as
     // they are, with how each plays, its tempo, meter and sync.
@@ -570,7 +571,7 @@ private:
     // ---- View ----
     // Session-only alternate projections of the same clips and routing.
     bool targetsView = false;
-    int endEditTool = 0; // Repeat, Trim / extend, Stretch; modifiers override it.
+    int endEditTool = 0; // Repeat, Trim, Stretch; modifiers override it.
     bool targetInspectorOpen = false;
     std::string inspectedTargetPath;
     void drawTargetInspector(ofxOceanodeTimelineManager& timeline);

@@ -41,7 +41,7 @@ inline std::string clipSummary(const ofxOceanodeTimelineClip& clip, bool audio =
 }
 inline const char* endEditName(ofxOceanodeTimelineEndEdit operation) {
     switch(operation) {
-        case ofxOceanodeTimelineEndEdit::Trim: return "Trim / extend";
+        case ofxOceanodeTimelineEndEdit::Trim: return "Trim";
         case ofxOceanodeTimelineEndEdit::Stretch: return "Stretch";
         default: return "Repeat";
     }

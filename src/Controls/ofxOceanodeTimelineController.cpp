@@ -1463,9 +1463,12 @@ void ofxOceanodeTimelineController::draw() {
     }
     importDroppedAudio(timeline);
     beginHistoryGesture(timeline);
-    drawScopeBar(timeline);
+    // The scope bar stays open: the shown timeline's transport is drawn on
+    // its row below, after the name, before endScopeBar().
+    const float scopeBarTop = beginScopeBar(timeline);
     // No timeline here yet: nothing to draw but the way to make one.
     if(!timeline.timelineExists(scopeRef())) {
+        endScopeBar(timeline, scopeBarTop);
         drawEmptyState(timeline);
         finishHistoryGesture(timeline);
         return;
@@ -1534,23 +1537,15 @@ void ofxOceanodeTimelineController::draw() {
        ImGui::IsKeyPressed(ImGuiKey_Z, false))
         requestZoomToFit = true;
 
-    // ======================= Toolbar =======================
-    // Two rows of grouped controls. Row 1: transport, position, tempo, meter,
-    // sync. Row 2: loop, grid, view, output timing, tracks. Groups are split
-    // by thin vertical rules; transport and toggles are drawn as icons.
-    // Darker panel behind both rows: widgets draw on channel 1, the panel is
-    // filled on channel 0 once the rows' height is known.
-    auto* toolbarDl = ImGui::GetWindowDrawList();
-    toolbarDl->ChannelsSplit(2);
-    toolbarDl->ChannelsSetCurrent(1);
-    const float toolbarPad = 5.0f;
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + toolbarPad);
-    const float toolbarTop = ImGui::GetCursorScreenPos().y - toolbarPad;
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 5.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+    // ============ Scope bar transport and toolbar ============
+    // The scope bar's row, after the timeline's name: transport, loop,
+    // position, tempo, meter. Then the toolbar's row of grouped controls:
+    // clock source, start options, grid and snap, right edge tool, view,
+    // output timing, tracks. Groups are split by thin vertical rules;
+    // transport and toggles are drawn as icons.
+    // The scope bar's frame padding is the toolbar's, so one height fits both.
     const float toolbarHeight = ImGui::GetFrameHeight();
-    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, Dots, Tap, Clock, Magnet, Metronome };
+    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, Tap, Clock, Magnet, Metronome };
     auto drawIcon = [&](ImDrawList* dl, ToolIcon icon, ImVec2 c, float s, ImU32 col) {
         switch(icon) {
             case ToolIcon::Play:
@@ -1593,9 +1588,6 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 break;
             }
-            case ToolIcon::Dots:
-                for(int i = -1; i <= 1; ++i) dl->AddCircleFilled(ImVec2(c.x + i * s * 0.3f, c.y), s * 0.09f, col);
-                break;
             case ToolIcon::Tap:
                 dl->AddCircle(c, s * 0.4f, col, 16, 1.6f);
                 dl->AddCircleFilled(c, s * 0.16f, col);
@@ -1652,6 +1644,19 @@ void ofxOceanodeTimelineController::draw() {
         if(tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
         return pressed;
     };
+    // Text toggle button: lit, it takes the style's active colour (orange)
+    // and a black label.
+    auto toggleButton = [&](const char* label, bool on) {
+        if(on) {
+            const ImVec4 lit = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+            ImGui::PushStyleColor(ImGuiCol_Button, lit);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lit);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+        }
+        const bool pressed = ImGui::Button(label);
+        if(on) ImGui::PopStyleColor(3);
+        return pressed;
+    };
     // Thin vertical rule between groups.
     auto groupSeparator = [&]() {
         ImGui::SameLine(0.0f, 9.0f);
@@ -1660,12 +1665,6 @@ void ofxOceanodeTimelineController::draw() {
                                             IM_COL32(255, 255, 255, 38), 1.0f);
         ImGui::Dummy(ImVec2(1.0f, toolbarHeight));
         ImGui::SameLine(0.0f, 9.0f);
-    };
-    // Small dim caption in front of a group (kept to a word).
-    auto caption = [&](const char* text) {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", text);
-        ImGui::SameLine(0.0f, 5.0f);
     };
     // The toolbar drives the timeline shown: its own transport (free, or
     // the preview of a dependent one), else the global transport it is
@@ -1720,7 +1719,51 @@ void ofxOceanodeTimelineController::draw() {
         bpm = ofClamp(static_cast<float>(60.0 / interval), 20.0f, 400.0f);
         return true;
     };
-    // ---- Row 1: transport | position | tempo | meter | sync | timebase ----
+    // ---- Scope bar row: transport | loop | position | tempo | meter ----
+    auto loopButton = [&]() {
+        // The shown timeline's own loop, whatever its clock source (ownPlay
+        // is its settings whichever transport it plays on). Linked to the
+        // global transport, it wraps that transport's position in the loop
+        // itself: the global transport runs on, unlooped, for everything
+        // else following it.
+        const bool localLoopAvailable = ownPlay != nullptr;
+        bool loopEnabled = localLoopAvailable && ownPlay->loopEnabled;
+        auto setLoop = [&](bool enabled, double start, double end) {
+            if(ownPlay == nullptr) return;
+            auto settings = *ownPlay;
+            settings.loopEnabled = enabled;
+            settings.loopStartBeat = start;
+            settings.loopEndBeat = end;
+            timeline.setPlaySettings(shownRef, settings);
+        };
+        double loopStart = localLoopAvailable ? ownPlay->loopStartBeat : 0.0;
+        double loopEnd = localLoopAvailable ? ownPlay->loopEndBeat : 4.0;
+        const char* loopTip = !localLoopAvailable ? "No timeline shown"
+            : loopEnabled ? "Loop on (this timeline's own; the global transport itself never loops)\nRight-click: its start and end"
+                          : "Loop off (this timeline's own; the global transport itself never loops)\nRight-click: its start and end";
+        if(iconButton("##tbLoop", ToolIcon::Loop, loopTip,
+                      loopEnabled && localLoopAvailable,
+                      IM_COL32(120, 135, 240, 255), localLoopAvailable))
+            setLoop(!loopEnabled, loopStart, loopEnd);
+        // Its start and end, in beats: a right-click on the button.
+        if(localLoopAvailable) ImGui::OpenPopupOnItemClick("##tbLoopRange", ImGuiPopupFlags_MouseButtonRight);
+        if(ImGui::BeginPopup("##tbLoopRange")) {
+            ImGui::TextDisabled("Loop range (beats)");
+            ImGui::SetNextItemWidth(64.0f);
+            if(ImGui::InputDouble("##loopStart", &loopStart, 0.0, 0.0, "%.3g"))
+                setLoop(loopEnabled, snapBeat(loopStart), loopEnd);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loop start (beats)");
+            ImGui::SameLine(0.0f, 3.0f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("-");
+            ImGui::SameLine(0.0f, 3.0f);
+            ImGui::SetNextItemWidth(64.0f);
+            if(ImGui::InputDouble("##loopEnd", &loopEnd, 0.0, 0.0, "%.3g"))
+                setLoop(loopEnabled, loopStart, std::max(loopStart + 1.0 / kPPQ, snapBeat(loopEnd)));
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loop end (beats)");
+            ImGui::EndPopup();
+        }
+    };
     if(transport != nullptr) {
         // Following an external clock: position, play state and tempo come from it.
         const char* lockedTip = "Following an external clock";
@@ -1733,6 +1776,7 @@ void ofxOceanodeTimelineController::draw() {
                           on, IM_COL32(240, 185, 80, 255)))
                 timeline.setMetronomeEnabled(!on, shownRef);
         };
+        groupSeparator();
         if(own) {
             // Its own transport: Play and Stop land on its quantize instant.
             double pendingClock = 0.0;
@@ -1760,31 +1804,6 @@ void ofxOceanodeTimelineController::draw() {
             swappedButtons = false;
             ImGui::SameLine(0.0f, 2.0f);
             metronomeButton();
-            ImGui::SameLine(0.0f, 6.0f);
-            static const char* quantizeLabels[] = {"Now", "Next beat", "Next bar"};
-            int quantize = ownPlay->quantize;
-            ImGui::SetNextItemWidth(84.0f);
-            if(ImGui::Combo("##tbQuantize", &quantize, quantizeLabels, 3)) {
-                auto settings = *ownPlay;
-                settings.quantize = quantize;
-                timeline.setPlaySettings(shownRef, settings);
-            }
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
-                                  "of the global transport while it plays (else of the clock).");
-            if(!dependent) {
-                ImGui::SameLine(0.0f, 6.0f);
-                bool playOnLoad = ownPlay->playOnLoad;
-                if(ImGui::Checkbox("Play on load##tbOwnPlayOnLoad", &playOnLoad)) {
-                    auto settings = *ownPlay;
-                    settings.playOnLoad = playOnLoad;
-                    timeline.setPlaySettings(shownRef, settings);
-                }
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Play on load: it plays from its start (at its quantize) once the preset or its\n"
-                                      "macro's preset loads, and each time its macro turns active. While the macro\n"
-                                      "(or one around it) is inactive it waits, and it stops when the macro turns off.");
-            }
         } else {
             // Linked to the global transport: these drive it.
             if(iconButton("##tbToStart", ToolIcon::ToStart, externalClock ? lockedTip : "Back to the start", false, 0, !externalClock))
@@ -1799,14 +1818,11 @@ void ofxOceanodeTimelineController::draw() {
                 transport->setIsPlaying(!transportState.isPlaying);
             ImGui::SameLine(0.0f, 2.0f);
             metronomeButton();
-            ImGui::SameLine(0.0f, 6.0f);
-            bool playOnLoad = timeline.getPlayOnPresetLoad();
-            if(ImGui::Checkbox("Play on load##tbPlayOnLoad", &playOnLoad)) timeline.setPlayOnPresetLoad(playOnLoad);
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Play on preset load: when this preset is loaded, the global transport plays from the start.\n"
-                                  "Saved with the preset (off by default).");
         }
-
+        ImGui::SameLine(0.0f, 2.0f);
+    } else groupSeparator();
+    loopButton();
+    if(transport != nullptr) {
         groupSeparator();
         {
             // Position readout: bar . beat . sixteenth, and the song time.
@@ -1845,11 +1861,11 @@ void ofxOceanodeTimelineController::draw() {
             float bpm = ownState.bpm;
             bpmInput("##tbBpmHost", bpm, false);
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Dependent: it plays at the tempo of %s, the timeline placing it\n"
+                ImGui::SetTooltip("Relative: it plays at the tempo of %s, the timeline placing it\n"
                                   "(through its clips' stretch), and previews alone at that tempo.", hostName.c_str());
             ImGui::SameLine(0.0f, 4.0f);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImVec4(0.75f, 0.7f, 0.95f, 1.0f), "DEP");
+            ImGui::TextColored(ImVec4(0.75f, 0.7f, 0.95f, 1.0f), "REL");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Tempo from %s", hostName.c_str());
         } else if(own) {
             // Its own tempo: a fixed BPM, a ratio of the clock's, or its BPM lane.
@@ -1945,163 +1961,61 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time signature");
         }
-#ifdef OFXOCEANODE_USE_MIDI
-        if(auto* clockSync = container->getMidiClockSync()) {
-            groupSeparator();
-            caption("Sync");
-            const char* syncModes[] = {"Internal", "MIDI Clock"};
-            int syncMode = container->isMidiClockSyncEnabled() ? 1 : 0;
-            ImGui::SetNextItemWidth(92.0f);
-            if(ImGui::Combo("##transportSync", &syncMode, syncModes, 2))
-                container->setMidiClockSyncEnabled(syncMode == 1);
+    }
+    endScopeBar(timeline, scopeBarTop);
+
+    // Darker panel behind the toolbar: widgets draw on channel 1, the panel
+    // is filled on channel 0 once its height is known.
+    auto* toolbarDl = ImGui::GetWindowDrawList();
+    toolbarDl->ChannelsSplit(2);
+    toolbarDl->ChannelsSetCurrent(1);
+    const float toolbarPad = 5.0f;
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + toolbarPad);
+    const float toolbarTop = ImGui::GetCursorScreenPos().y - toolbarPad;
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+    // ---- Toolbar: clock source | start options ----
+    ImGui::PushID("playerBar");
+    drawPlayerBar(timeline, shownRef);
+    ImGui::PopID();
+    if(transport != nullptr) {
+        if(own) {
+            ImGui::SameLine(0.0f, 6.0f);
+            static const char* quantizeLabels[] = {"Now", "Next beat", "Next bar"};
+            int quantize = ownPlay->quantize;
+            ImGui::SetNextItemWidth(84.0f);
+            if(ImGui::Combo("##tbQuantize", &quantize, quantizeLabels, 3)) {
+                auto settings = *ownPlay;
+                settings.quantize = quantize;
+                timeline.setPlaySettings(shownRef, settings);
+            }
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Internal: Oceanode runs its own transport.\n"
-                                  "MIDI Clock: follow an external MIDI clock (play/stop, song position, tempo).");
-            ImGui::SameLine(0.0f, 2.0f);
-            if(iconButton("##midiClockSyncSettingsButton", ToolIcon::Dots, "MIDI clock port and options"))
-                ImGui::OpenPopup("##midiClockSyncSettings");
-            // Status: a coloured dot and a word; details in the tooltip.
-            ImU32 statusColor = 0;
-            std::string statusText;
-            std::string statusTip;
-            if(container->isMidiClockSyncEnabled()) {
-                const auto clockStatus = clockSync->status();
-                if(clockSync->getPortName().empty()) {
-                    statusColor = IM_COL32(255, 165, 50, 255); statusText = "no port"; statusTip = "Choose a MIDI port in the options (...)";
-                } else if(!clockSync->isOpen()) {
-                    statusColor = IM_COL32(255, 165, 50, 255); statusText = "offline"; statusTip = "Port not available (retrying): " + clockSync->getPortName();
-                } else if(!clockStatus.receiving) {
-                    statusColor = IM_COL32(255, 90, 90, 255); statusText = "no clock"; statusTip = "No clock arriving on " + clockSync->getPortName();
-                } else {
-                    statusColor = IM_COL32(110, 240, 130, 255);
-                    statusText = clockStatus.playing ? "play" : "stop";
-                    statusTip = clockSync->getPortName() + ": " + ofToString(clockStatus.bpm, 1) + " BPM";
-                }
-                if(!clockSync->isDrivingTransport()) statusTip += "\n(another source drives the transport)";
-            } else if(externalClock) {
-                statusColor = IM_COL32(110, 240, 130, 255); statusText = "node"; statusTip = "Transport driven by a MIDI Clock node";
-            }
-            if(!statusText.empty()) {
+                ImGui::SetTooltip("When Play and Stop take effect: at once, or on the next beat or bar\n"
+                                  "of the global transport while it plays (else of the clock).");
+            if(!dependent) {
                 ImGui::SameLine(0.0f, 6.0f);
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                const float textWidth = ImGui::CalcTextSize(statusText.c_str()).x;
-                ImGui::Dummy(ImVec2(14.0f + textWidth, toolbarHeight));
-                auto* dl = ImGui::GetWindowDrawList();
-                dl->AddCircleFilled(ImVec2(pos.x + 5.0f, pos.y + toolbarHeight * 0.5f), 4.0f, statusColor);
-                dl->AddText(ImVec2(pos.x + 13.0f, pos.y + (toolbarHeight - ImGui::GetTextLineHeight()) * 0.5f),
-                            IM_COL32(200, 204, 212, 255), statusText.c_str());
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", statusTip.c_str());
-            }
-            if(ImGui::BeginPopup("##midiClockSyncSettings")) {
-                if(ImGui::IsWindowAppearing()) midiPortChoices = ofxOceanodeMidiClock::availablePorts();
-                const auto& portChoices = midiPortChoices;
-                const std::string currentPort = clockSync->getPortName();
-                ImGui::SetNextItemWidth(220.0f);
-                if(ImGui::BeginCombo("Port", currentPort.empty() ? "None" : currentPort.c_str())) {
-                    if(ImGui::Selectable("None", currentPort.empty())) container->setMidiClockSyncPort("");
-                    for(const auto& port : portChoices) {
-                        if(ImGui::Selectable(port.c_str(), port == currentPort)) container->setMidiClockSyncPort(port);
-                    }
-                    ImGui::EndCombo();
+                if(toggleButton("AUTO##tbOwnPlayOnLoad", ownPlay->playOnLoad)) {
+                    auto settings = *ownPlay;
+                    settings.playOnLoad = !settings.playOnLoad;
+                    timeline.setPlaySettings(shownRef, settings);
                 }
-                bool reaper = clockSync->core().getReaperMode();
-                if(ImGui::Checkbox("REAPER mode", &reaper)) clockSync->core().setReaperMode(reaper);
                 if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("A Song Position sent just before Start is honoured\n(start from that position instead of the top).");
-                bool clockOnly = clockSync->core().getClockOnly();
-                if(ImGui::Checkbox("Clock only", &clockOnly)) clockSync->core().setClockOnly(clockOnly);
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("For devices that send clock but no Start/Stop:\nplay while ticks arrive, stop when they stop.");
-                bool stopOnLoss = clockSync->core().getStopOnClockLoss();
-                if(ImGui::Checkbox("Stop when the clock is lost", &stopOnLoss)) clockSync->core().setStopOnClockLoss(stopOnLoss);
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("When ticks stop arriving while playing (cable pulled, master gone):\non = stop after half a second, off = hold at the last position.");
-                float offsetMs = clockSync->core().getOffsetMs();
-                ImGui::SetNextItemWidth(120.0f);
-                if(ImGui::DragFloat("Offset (ms)", &offsetMs, 0.5f, -250.0f, 250.0f, "%.1f"))
-                    clockSync->core().setOffsetMs(ofClamp(offsetMs, -250.0f, 250.0f));
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Positive runs ahead of the incoming clock (compensates output latency).");
-                int tempoWindow = clockSync->core().getTempoWindow();
-                ImGui::SetNextItemWidth(120.0f);
-                if(ImGui::DragInt("Tempo window (ticks)", &tempoWindow, 0.2f, 2, 96))
-                    clockSync->core().setTempoWindow(tempoWindow);
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Clock ticks averaged for the tempo estimate (24 = one beat).");
-                ImGui::EndPopup();
+                    ImGui::SetTooltip("Auto (play on load): it plays from its start (at its quantize) once the preset or its\n"
+                                      "macro's preset loads, and each time its macro turns active. While the macro\n"
+                                      "(or one around it) is inactive it waits, and it stops when the macro turns off.");
             }
+        } else {
+            ImGui::SameLine(0.0f, 6.0f);
+            const bool playOnLoad = timeline.getPlayOnPresetLoad();
+            if(toggleButton("AUTO##tbPlayOnLoad", playOnLoad)) timeline.setPlayOnPresetLoad(!playOnLoad);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Auto (play on preset load): when this preset is loaded, the global transport plays from the start.\n"
+                                  "Saved with the preset (off by default).");
         }
-#endif
-        groupSeparator();
-        caption("Timebase");
-        const char* timebaseModes[] = {"Beats", "Time"};
-        int timebaseMode = timeline.getTimebase() == ofxOceanodeTimelineTimebase::Time ? 1 : 0;
-        ImGui::SetNextItemWidth(72.0f);
-        if(ImGui::Combo("##timelineTimebase", &timebaseMode, timebaseModes, 2))
-            timeline.setTimebase(timebaseMode == 1
-                ? ofxOceanodeTimelineTimebase::Time
-                : ofxOceanodeTimelineTimebase::Beats);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Beats: tempo changes preserve musical positions.\n"
-                              "Time: manual tempo changes preserve absolute timing.");
     }
 
-    // ---- Row 2: history | loop | grid | view | output timing | tracks ----
-    // A macro timeline (open or unfolded) keeps its own history.
-    ImGui::BeginDisabled(!timeline.canUndoGlobalEdit() && !timeline.canUndoTimelineEdit(scope(timeline)) && undoOrder.empty());
-    if(ImGui::Button("Undo##timeline")) restoreHistory(timeline, false);
-    ImGui::EndDisabled();
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Undo timeline action (Cmd/Ctrl+Z)");
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!timeline.canRedoGlobalEdit() && !timeline.canRedoTimelineEdit(scope(timeline)) && redoOrder.empty());
-    if(ImGui::Button("Redo##timeline")) restoreHistory(timeline, true);
-    ImGui::EndDisabled();
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Redo timeline action (Shift+Cmd/Ctrl+Z)");
-    groupSeparator();
-    {
-        // The shown timeline's own loop, whatever its clock source (ownPlay
-        // is its settings whichever transport it plays on). Linked to the
-        // global transport, it wraps that transport's position in the loop
-        // itself: the global transport runs on, unlooped, for everything
-        // else following it.
-        const bool localLoopAvailable = ownPlay != nullptr;
-        bool loopEnabled = localLoopAvailable && ownPlay->loopEnabled;
-        auto setLoop = [&](bool enabled, double start, double end) {
-            if(ownPlay == nullptr) return;
-            auto settings = *ownPlay;
-            settings.loopEnabled = enabled;
-            settings.loopStartBeat = start;
-            settings.loopEndBeat = end;
-            timeline.setPlaySettings(shownRef, settings);
-        };
-        double loopStart = localLoopAvailable ? ownPlay->loopStartBeat : 0.0;
-        double loopEnd = localLoopAvailable ? ownPlay->loopEndBeat : 4.0;
-        const char* loopTip = !localLoopAvailable ? "No timeline shown"
-            : loopEnabled ? "Loop on (this timeline's own; the global transport itself never loops)"
-                          : "Loop off (this timeline's own; the global transport itself never loops)";
-        if(iconButton("##tbLoop", ToolIcon::Loop, loopTip,
-                      loopEnabled && localLoopAvailable,
-                      IM_COL32(120, 135, 240, 255), localLoopAvailable))
-            setLoop(!loopEnabled, loopStart, loopEnd);
-        ImGui::SameLine(0.0f, 4.0f);
-        ImGui::BeginDisabled(!loopEnabled || !localLoopAvailable);
-        ImGui::SetNextItemWidth(56.0f);
-        if(ImGui::InputDouble("##loopStart", &loopStart, 0.0, 0.0, "%.3g"))
-            setLoop(loopEnabled, snapBeat(loopStart), loopEnd);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop start (beats)");
-        ImGui::SameLine(0.0f, 3.0f);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("-");
-        ImGui::SameLine(0.0f, 3.0f);
-        ImGui::SetNextItemWidth(56.0f);
-        if(ImGui::InputDouble("##loopEnd", &loopEnd, 0.0, 0.0, "%.3g"))
-            setLoop(loopEnabled, loopStart, std::max(loopStart + 1.0 / kPPQ, snapBeat(loopEnd)));
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Loop end (beats)");
-        ImGui::EndDisabled();
-    }
-
+    // ---- Grid and snap | right edge tool | view | output timing | tracks ----
     groupSeparator();
     if(iconButton("##tbSnapToggle", ToolIcon::Magnet,
                   snapEnabled ? "Snap to grid: on (clips, markers, loop, playhead)" : "Snap to grid: off",
@@ -2126,6 +2040,16 @@ void ofxOceanodeTimelineController::draw() {
         }
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Grid and snap division");
     }
+    ImGui::SameLine(0.0f, 4.0f);
+    {
+        const char* edgeTools[] = {"Repeat", "Trim", "Stretch"};
+        ImGui::SetNextItemWidth(78.0f);
+        ImGui::Combo("##tbEdgeTool", &endEditTool, edgeTools, 3);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Right edge tool: what dragging a clip's right edge does.\n"
+                              "Also used by Timeline length fields. Audio always stretches its full source slice.\n"
+                              "Shift overrides with Trim; Cmd/Ctrl overrides with Stretch.");
+    }
 
     groupSeparator();
     {
@@ -2139,9 +2063,8 @@ void ofxOceanodeTimelineController::draw() {
         ImGui::SameLine(0.0f, 6.0f);
         {
             const bool laneVisible = !dependent && (own ? ownPlay->bpmLaneVisible : timeline.isBpmLaneVisible());
-            if(laneVisible) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             ImGui::BeginDisabled(dependent);
-            if(ImGui::Button("BPM Lane##tbBpmLane")) {
+            if(toggleButton("BPM Lane##tbBpmLane", laneVisible)) {
                 if(own) {
                     auto settings = *ownPlay;
                     settings.bpmLaneVisible = !laneVisible;
@@ -2149,20 +2072,16 @@ void ofxOceanodeTimelineController::draw() {
                 } else timeline.setBpmLaneVisible(!laneVisible);
             }
             ImGui::EndDisabled();
-            if(laneVisible) ImGui::PopStyleColor();
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip(dependent ? "A dependent timeline follows its host's tempo: no BPM lane of its own."
+                ImGui::SetTooltip(dependent ? "A relative timeline follows its host's tempo: no BPM lane of its own."
                                   : own ? "Show or hide this timeline's BPM lane (its tempo over time, when enabled).\nHidden, it still plays."
                                         : "Show or hide the global BPM lane (the global tempo over time, when enabled).\nHidden, it still plays.");
         }
-    }
-
-    groupSeparator();
-    {
+        ImGui::SameLine(0.0f, 6.0f);
         // Timestamped events: discrete lanes (steps, notes, gates, multi-value
         // blocks) are handed to a backend that can execute them at an exact
         // instant, a lookahead ahead of the playhead. Off sends everything on
-        // the frame that crosses it.
+        // the frame that crosses it. Its longest lookahead is in the "..." menu.
         const bool timeStamped = timeline.isSchedulingEnabled();
         if(iconButton("##tbTimeStamped", ToolIcon::Clock,
                       "Timestamped: send steps, notes and gates to SuperCollider with their exact time\n"
@@ -2170,43 +2089,19 @@ void ofxOceanodeTimelineController::draw() {
                       "Curves and parameters without a timestamping backend are unaffected.",
                       timeStamped, IM_COL32(90, 205, 205, 255)))
             timeline.setSchedulingEnabled(!timeStamped);
-        ImGui::SameLine(0.0f, 4.0f);
-        ImGui::BeginDisabled(!timeStamped);
-        float lookahead = static_cast<float>(timeline.getSchedulingLookaheadMs());
-        ImGui::SetNextItemWidth(78.0f);
-        if(ImGui::DragFloat("##schedulingLookahead", &lookahead, 1.0f, 0.0f, 1000.0f, "max %.0f ms"))
-            timeline.setSchedulingLookaheadMs(lookahead);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Longest lookahead window (now using %.0f ms).\n"
-                              "The window follows recent frame intervals (3 frames + 10 ms, at least 50 ms)\n"
-                              "up to this limit. Longer survives bigger GUI stalls; shorter leaves less\n"
-                              "already-sent content that stop, seek or edits can only correct.",
-                              timeline.effectiveSchedulingLookaheadMs());
-        ImGui::EndDisabled();
     }
 
     groupSeparator();
     // A Wave Track is created together with its first audio clip. Selecting
     // the file here avoids leaving an empty track behind and makes the
     // waveform visible immediately after the track is added.
-    if(ImGui::Button("+ Wave Track")) {
+    if(ImGui::Button("+ Wave")) {
         waveFileRequest = WaveFileRequest::NewTrack;
         waveFileRequestBeat = std::max(0.0, transportState.beatPosition);
     }
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("New track with an audio file. Wave tracks play on the timeline's own transport\n"
-                          "(a dependent timeline's only while it previews).");
-    auto sameLineIfRoom = [&](float width) {
-        const float right = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
-        if(ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width < right) ImGui::SameLine();
-    };
-    sameLineIfRoom(ImGui::CalcTextSize("Load clip...").x + ImGui::GetStyle().FramePadding.x * 2);
-    if(ImGui::Button("Load clip...")) {
-        clipFileRequest = ClipFileRequest::Load;
-        clipFileTrackId = selectedTracks.size() == 1 ? *selectedTracks.begin() : std::string();
-        clipImportBeat = snapBeat(std::max(0.0, transportState.beatPosition));
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Recall a saved clip with all its lanes and choose new parameter targets.");
+                          "(a relative timeline's only while it previews).");
     ImGui::PopStyleVar(3);
     {
         // Stop just short of the next row (the style's item spacing below the rows).
@@ -2268,19 +2163,6 @@ void ofxOceanodeTimelineController::draw() {
         }
     }
 
-    ImGui::TextUnformatted("View"); ImGui::SameLine();
-    if(ImGui::RadioButton("Clips", !targetsView)) targetsView = false;
-    ImGui::SameLine();
-    if(ImGui::RadioButton("Targets", targetsView)) targetsView = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Parameter destinations. A clip may appear on several rows; all appearances refer to the same clip.");
-    sameLineIfRoom(220.0f);
-    ImGui::SetNextItemWidth(140.0f);
-    const char* edgeTools[] = {"Repeat", "Trim / extend", "Stretch"};
-    ImGui::Combo("Right edge", &endEditTool, edgeTools, 3);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Also used by Timeline length fields. Audio always stretches its full source slice.\nShift overrides with Trim / extend; Cmd/Ctrl overrides with Stretch.");
-    sameLineIfRoom(ImGui::CalcTextSize("What drives this target?").x + ImGui::GetStyle().FramePadding.x * 2);
-    if(ImGui::Button("What drives this target?")) targetInspectorOpen = !targetInspectorOpen;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Inspect lanes, winning clips, cross-track blending and final output at the playhead.");
     if(targetInspectorOpen) drawTargetInspector(timeline);
 
     const double endBeat = getContentEndBeat(timeline);
@@ -2393,12 +2275,16 @@ void ofxOceanodeTimelineController::draw() {
     const float maxTimelineScrollX = std::max(0.0f, timelineWidth - visibleWidth);
     auto beatOffset = [&](double beat) { return beatToPixels(timeline, beat, transportState.bpm); };
     auto beatAtOffset = [&](float pixels) { return pixelsToBeat(timeline, pixels, transportState.bpm, endBeat); };
-    // Give a manual zoom time to settle before automatic playback paging.
+    // Follow playhead: it runs to the view's centre, then stays there while
+    // the clips scroll under it, frame by frame (whole pixels, so text stays
+    // sharp). Out of view (a seek, a loop wrap), it is brought to the centre.
+    // Give a manual zoom time to settle first.
     if(followPlayhead && transportState.isPlaying && transportState.beatPosition > kHiddenPlayheadBeat + 1.0 &&
        !zoomedThisFrame && ImGui::GetTime() >= zoomAnchorUntil) {
         const float playheadX = beatOffset(transportState.beatPosition);
-        if(playheadX > timelineScrollX + visibleWidth * 0.9f || playheadX < timelineScrollX)
-            timelineScrollX = playheadX - visibleWidth * 0.1f;
+        const float center = visibleWidth * 0.5f;
+        if(playheadX > timelineScrollX + center || playheadX < timelineScrollX)
+            timelineScrollX = std::round(playheadX - center);
     }
     timelineScrollX = ofClamp(timelineScrollX, 0.0f, maxTimelineScrollX);
     auto drawZoomAnchor = [&]() {
@@ -3361,9 +3247,15 @@ void ofxOceanodeTimelineController::draw() {
                     static_cast<unsigned char>(ofClamp(menuColor[2] * 255.0f, 0.0f, 255.0f)),
                     static_cast<unsigned char>(ofClamp(menuColor[3] * 255.0f, 0.0f, 255.0f)));
             }
-            if(!track.isWaveTrack && ImGui::MenuItem(trackCollapsed ? "Show target rows" : "Hide target rows")) {
-                targetsView = true;
-                if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
+            if(!track.isWaveTrack) {
+                // The toolbar has no view selector: this is the way into the
+                // target rows, and back to the clips.
+                const bool rowsShown = targetsView && !trackCollapsed;
+                if(ImGui::MenuItem(rowsShown ? "Hide target rows" : "Show target rows")) {
+                    targetsView = true;
+                    if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = rowsShown;
+                }
+                if(targetsView && ImGui::MenuItem("Back to clips view")) targetsView = false;
             }
 
             if(track.isMacroTrack()) {
@@ -5755,7 +5647,7 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::SetTooltip("%s in the macro's timeline\nStart: %.3f beats | Length: %.3f beats",
                         innerDrag.mode == ClipDragMode::Move ? "Move clip" : innerDrag.mode == ClipDragMode::TrimStart ? "Trim clip start"
                             : innerDrag.mode == ClipDragMode::Stretch ? "Stretch source" : innerDrag.mode == ClipDragMode::Resize
-                            ? "Trim / extend source window" : "Repeat source",
+                            ? "Trim source window" : "Repeat source",
                         innerDrag.mode == ClipDragMode::TrimStart ? trimBeat : clip->startBeat, clip->durationBeats);
                 }
             } else {
@@ -5773,7 +5665,7 @@ void ofxOceanodeTimelineController::draw() {
         if(const auto* activeClip = timeline.getClip(scope(timeline), draggingTrackId, draggingClipId)) {
             const char* action = clipDragMode == ClipDragMode::Repeat ? "Repeat source"
                 : clipDragMode == ClipDragMode::Stretch ? "Stretch source"
-                : clipDragMode == ClipDragMode::Resize ? "Trim / extend source window (hidden data retained)"
+                : clipDragMode == ClipDragMode::Resize ? "Trim source window (hidden data retained)"
                 : clipDragMode == ClipDragMode::TrimStart ? "Trim clip start"
                 : clipDragMode == ClipDragMode::Duplicate ? "Duplicate clip" : "Move clip";
             ImGui::SetTooltip("%s\nTimeline: %.3f beats | Source: %.3f beats | Stretch: %.2f%%\nAffects %zu clip(s), with all their lanes.", action,
@@ -6438,10 +6330,21 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
     }
 
     const int totalSeconds = static_cast<int>(std::floor(timeline.beatToSeconds(endBeat, bpm)));
+    // Clock labels, no unit: 5, 1:01, 1:23:44.
+    auto clockLabel = [](char* text, size_t size, int second) {
+        const int hours = second / 3600, minutes = second / 60 % 60, seconds = second % 60;
+        if(hours > 0) std::snprintf(text, size, "%d:%02d:%02d", hours, minutes, seconds);
+        else if(minutes > 0) std::snprintf(text, size, "%d:%02d", minutes, seconds);
+        else std::snprintf(text, size, "%d", seconds);
+    };
     // Tick every second (fewer when zoomed far out); label every Nth tick so
-    // labels stay about 38 px apart and don't shift while scrolling.
+    // labels stay apart (38 px, or the timeline's widest label) and don't
+    // shift while scrolling.
+    char widestLabel[20];
+    clockLabel(widestLabel, sizeof(widestLabel), totalSeconds);
+    const double labelSpacing = std::max(38.0f, ImGui::CalcTextSize(widestLabel).x + 12.0f);
     const int secondsStep = std::max(1, static_cast<int>(std::ceil(3.0 / std::max(0.001f, pixelsPerSecond))));
-    const int labelEvery = std::max(1, static_cast<int>(std::ceil(38.0 / std::max(0.001f, pixelsPerSecond * secondsStep))));
+    const int labelEvery = std::max(1, static_cast<int>(std::ceil(labelSpacing / std::max(0.001f, pixelsPerSecond * secondsStep))));
     const int firstSecond = std::max(0, static_cast<int>(std::floor(timelineScrollX / std::max(0.001f, pixelsPerSecond))) / secondsStep * secondsStep);
     const int lastSecond = std::min(totalSeconds, static_cast<int>(std::ceil((timelineScrollX + timelineWidth) / std::max(0.001f, pixelsPerSecond))) + secondsStep);
     for(int second = firstSecond; second <= lastSecond; second += secondsStep) {
@@ -6449,7 +6352,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         dl->AddLine(ImVec2(x, min.y), ImVec2(x, rulerDividerY), IM_COL32(90, 90, 100, 145), 1.0f);
         if((second / secondsStep) % labelEvery == 0) {
             char secondsLabel[20];
-            std::snprintf(secondsLabel, sizeof(secondsLabel), "%ds", second);
+            clockLabel(secondsLabel, sizeof(secondsLabel), second);
             dl->AddText(ImVec2(x + 4.0f, min.y + kRulerRowGap), IM_COL32(175, 175, 185, 255), secondsLabel);
         }
     }
@@ -6641,6 +6544,9 @@ void ofxOceanodeTimelineController::drawTargetInspector(ofxOceanodeTimelineManag
                     paths.push_back(binding.parameterPath);
         if(std::find(paths.begin(), paths.end(), inspectedTargetPath) == paths.end())
             inspectedTargetPath = paths.empty() ? std::string() : paths.front();
+        // Opened from a target's menu; closed here.
+        if(ImGui::SmallButton("Close##targetInspectorClose")) targetInspectorOpen = false;
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 70.0f));
         if(ImGui::BeginCombo("Target", inspectedTargetPath.empty() ? "No targets published" : inspectedTargetPath.c_str())) {
             for(const auto& path : paths)
