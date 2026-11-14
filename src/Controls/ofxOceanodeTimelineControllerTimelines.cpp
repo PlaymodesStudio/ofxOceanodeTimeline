@@ -267,7 +267,7 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
     const bool duplicate = newTimelineRequest.duplicate;
     if(duplicate) ImGui::TextDisabled("A copy of %s", timeline.timelineName(newTimelineRequest.duplicateOf).c_str());
     else if(newTimelineRequest.parameter != nullptr)
-        ImGui::TextDisabled("With %s on its first track", newTimelineRequest.parameter->getName().c_str());
+        ImGui::TextDisabled("For %s: its track, clip and lane are asked next", newTimelineRequest.parameter->getName().c_str());
     else if(newTimelineRequest.projectTrack) ImGui::TextDisabled("With a Project Track");
     const float fieldWidth = 320.0f;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
@@ -332,10 +332,15 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
                     timeline.setPlaySettings(made, settings);
                 }
             }
+            // The parameter it was made for goes on through the same dialog
+            // as on any timeline: a new track, its clip and the type of lane
+            // that drives it are asked there, never assumed.
             if(auto* parameter = newTimelineRequest.parameter; parameter != nullptr && !duplicate)
                 if(auto* sequence = timeline.timelineFor(made)) {
-                    const auto track = timeline.createTrack(*sequence, parameter->getName());
-                    timeline.addBinding(*sequence, track, *parameter);
+                    const std::string path = timeline.resolverFor(*sequence).pathOf(*parameter);
+                    if(!path.empty())
+                        timeline.requestParameterClip({made, std::string(), path,
+                                                       ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Clip});
                 }
             if(newTimelineRequest.projectTrack && !duplicate)
                 if(auto* sequence = timeline.timelineFor(made)) timeline.createProjectTrack(*sequence);

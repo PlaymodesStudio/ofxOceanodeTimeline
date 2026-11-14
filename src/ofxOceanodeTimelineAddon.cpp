@@ -150,8 +150,8 @@ public:
                         if(ImGui::Selectable(((root ? std::string("Main canvas") : ref.canvas) + " > New Timeline...").c_str()))
                             requestNewTimeline(ref.canvas);
                         if(ImGui::IsItemHovered())
-                            ImGui::SetTooltip(root ? "The main canvas has no timeline: make one,\nwith this parameter on its first track."
-                                                   : "This macro has no timeline: make one,\nwith this parameter on its first track.");
+                            ImGui::SetTooltip(root ? "The main canvas has no timeline: make one for this parameter.\nIts track, clip and lane are asked next."
+                                                   : "This macro has no timeline: make one for this parameter.\nIts track, clip and lane are asked next.");
                         ImGui::PopID();
                         continue;
                     }
@@ -188,11 +188,18 @@ public:
                     ImGui::Unindent();
                     ImGui::PopID();
                 }
-                ImGui::Separator();
-                if(ImGui::Selectable("New Timeline...")) requestNewTimeline(eligibleCanvases.empty() ? std::string() : eligibleCanvases.back().first);
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("A new timeline with this parameter on its first track:\n"
-                                      "on this canvas or one around it.");
+                // One more timeline, on the parameter's own canvas (or, in the
+                // dialog, one around it). Not when that canvas has none yet:
+                // its first is already offered above, and this would be the
+                // same entry twice.
+                const std::string newTimelineCanvas = eligibleCanvases.empty() ? std::string() : eligibleCanvases.back().first;
+                if(!timelineManager.timelinesOfCanvas(newTimelineCanvas).empty()) {
+                    ImGui::Separator();
+                    if(ImGui::Selectable("New Timeline...")) requestNewTimeline(newTimelineCanvas);
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A new timeline for this parameter, on this canvas or one around it:\n"
+                                          "its track, clip and lane are asked next.");
+                }
                 ImGui::EndMenu();
             }
             // Wherever it is bound, in any of those timelines.
