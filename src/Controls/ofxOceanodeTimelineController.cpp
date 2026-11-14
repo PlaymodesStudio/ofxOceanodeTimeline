@@ -890,17 +890,18 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
 }
 
 double ofxOceanodeTimelineController::getContentEndBeat(const ofxOceanodeTimelineManager& timeline) const {
-    const double barBeats = timeline.getBeatsPerBar();
-    double endBeat = std::max(barBeats, static_cast<double>(visibleBars) * barBeats);
+    // The timeline has no length of its own: it ends one content span past
+    // its last clip, so there is always empty room to grow into. This is the
+    // same span the widest zoom shows. An empty timeline counts as four bars.
+    double lastClipBeat = 0.0;
+    for(const auto& track : scope(timeline).tracks)
+        for(const auto& clip : track.clips) lastClipBeat = std::max(lastClipBeat, clip.startBeat + clip.durationBeats);
+    if(lastClipBeat <= 0.0) lastClipBeat = timeline.getBeatsPerBar() * 4.0;
+    double endBeat = 2.0 * lastClipBeat;
     double loopStartBeat = 0.0, loopEndBeat = 0.0;
     if(shownLoop(timeline, loopStartBeat, loopEndBeat)) endBeat = std::max(endBeat, loopEndBeat);
     if(const auto* lane = shownBpmLane(timeline))
         for(const auto& point : *lane) endBeat = std::max(endBeat, point.beat);
-    for(const auto& track : scope(timeline).tracks) {
-        for(const auto& clip : track.clips) {
-            endBeat = std::max(endBeat, clip.startBeat + clip.durationBeats);
-        }
-    }
     return endBeat;
 }
 
@@ -2151,10 +2152,6 @@ void ofxOceanodeTimelineController::draw() {
         if(iconButton("##tbFollow", ToolIcon::Follow, followPlayhead ? "Follow playhead: on" : "Follow playhead: off",
                       followPlayhead, IM_COL32(240, 185, 80, 255)))
             followPlayhead = !followPlayhead;
-        ImGui::SameLine(0.0f, 6.0f);
-        ImGui::SetNextItemWidth(62.0f);
-        ImGui::DragInt("##tbBars", &visibleBars, 0.25f, 1, 256, "%d bars");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Timeline length");
         // The BPM lane: the global tempo's for a timeline linked to the
         // global transport, its own for a free one; none for a dependent one.
         ImGui::SameLine(0.0f, 6.0f);
