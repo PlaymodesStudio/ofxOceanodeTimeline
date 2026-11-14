@@ -5325,6 +5325,11 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
         }
         bool colorResolved = false;
         ofColor movingColor;
+        // The keyframe the playhead rests on, if any (a seek to one may land
+        // a hair before it).
+        const double keyframeReach = 1e-3;
+        const int onKeyframe = before >= 0 && std::abs(sourceBeat - beats[static_cast<size_t>(before)]) < keyframeReach ? before
+                             : after < count && std::abs(beats[static_cast<size_t>(after)] - sourceBeat) < keyframeReach ? after : -1;
         for(auto& channel : entry.channels) {
             // Explicit automation wins, on this timeline or an outer one.
             if(bindingsByPathCache.count(channel.path) > 0) continue;
@@ -5375,18 +5380,39 @@ void ofxOceanodeTimelineManager::applyProjectTracks() {
                 const float t = a == b || span <= kEpsilon ? 0.0f
                     : a == before && b == after ? eased
                     : static_cast<float>(std::max(0.0, std::min(1.0, (sourceBeat - beats[static_cast<size_t>(a)]) / span)));
-                // Between two keyframes that differ for it: shown on its node.
-                if(primary != nullptr && t > 0.0f && t < 1.0f && from != to) {
-                    // In the colour the track has now: this copy's is the one
-                    // it had when last rebuilt (a colour is not content).
-                    if(!colorResolved) {
-                        colorResolved = true;
-                        movingColor = entry.track->color;
-                        if(const auto* source = primary->timelineFor(engineRef))
-                            for(const auto& track : source->tracks)
-                                if(track.id == entry.track->id) { movingColor = track.color; break; }
+                // Shown on its node. Between two keyframes: what differs
+                // between them. On a keyframe: what the transition leaving it
+                // moves, in the track's colour, and what the one that arrived
+                // at it moved, a quarter darker (leaving wins for both).
+                if(primary != nullptr) {
+                    bool leaving = false, arrived = false;
+                    const auto& texts = channel.texts;
+                    if(onKeyframe >= 0 && texts[static_cast<size_t>(onKeyframe)] != nullptr) {
+                        const auto& here = channel.numbers[static_cast<size_t>(onKeyframe)];
+                        int next = onKeyframe + 1, previous = onKeyframe - 1;
+                        while(next < count && texts[static_cast<size_t>(next)] == nullptr) ++next;
+                        while(previous >= 0 && texts[static_cast<size_t>(previous)] == nullptr) --previous;
+                        leaving = next < count && channel.numbers[static_cast<size_t>(next)] != here;
+                        arrived = previous >= 0 && channel.numbers[static_cast<size_t>(previous)] != here;
+                    } else leaving = t > 0.0f && t < 1.0f && from != to;
+                    if(leaving || arrived) {
+                        // In the colour the track has now: this copy's is the one
+                        // it had when last rebuilt (a colour is not content).
+                        if(!colorResolved) {
+                            colorResolved = true;
+                            movingColor = entry.track->color;
+                            if(const auto* source = primary->timelineFor(engineRef))
+                                for(const auto& track : source->tracks)
+                                    if(track.id == entry.track->id) { movingColor = track.color; break; }
+                        }
+                        ofColor shown = movingColor;
+                        if(!leaving) {
+                            shown.r = static_cast<unsigned char>(shown.r * 0.75f);
+                            shown.g = static_cast<unsigned char>(shown.g * 0.75f);
+                            shown.b = static_cast<unsigned char>(shown.b * 0.75f);
+                        }
+                        primary->noteProjectMoving(channel.path, shown);
                     }
-                    primary->noteProjectMoving(channel.path, movingColor);
                 }
                 std::vector<float> value = t <= 0.0f ? from
                     : blendProjectNumbers(from, to, t, type == intType || type == intVectorType, channel.logarithmic);
