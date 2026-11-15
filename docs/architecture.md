@@ -494,7 +494,9 @@ each with its view). The main controller (`windowId` 0) reports
 and the Window menu lists none; instead it creates and draws one editor per
 window (`windowId` > 0) from `drawBeforeWindows`, swapping each window's
 `ofxOceanodeTimelineViewState` in while it draws, so zoom and scroll are per
-window and saved with it. A new timeline (the New Timeline dialog, drawn from
+window and saved with it. The window's Right edge tool (`rightEdgeTool`) is
+kept the same way: copied into its editor's `endEditTool` before it draws and
+back after, and saved in its `"windows"` entry. A new timeline (the New Timeline dialog, drawn from
 `drawPopups`) opens in a new window, brought forward; a request naming a
 timeline ("Add to Timeline", a track rename, a piano roll setup, "Edit
 Timeline" on a macro node) goes to the window showing it (`requestTaker`,

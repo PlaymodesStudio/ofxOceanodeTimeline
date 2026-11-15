@@ -926,8 +926,17 @@ double ofxOceanodeTimelineController::snapBeat(double beat) const {
     return ofxOceanodeTimelineEditorView::snapBeat(beat, snapEnabled, effectiveRulerSnapBeats);
 }
 
+int ofxOceanodeTimelineController::rightEdgeToolWith(bool shift, bool command) const {
+    if(!shift && !command) return endEditTool;
+    // Shift is Trim's key and Cmd Stretch's (Shift wins when both are held).
+    // The key of the selected tool would do what a plain drag already does:
+    // it holds Repeat, the tool that key-less drag gave up.
+    const int held = shift ? 1 : 2;
+    return held == endEditTool ? 0 : held;
+}
+
 ofxOceanodeTimelineController::ClipDragMode ofxOceanodeTimelineController::rightEdgeDragMode(bool waveTrack) const {
-    // On macOS Cmd is the stretch modifier. Ctrl is reserved by the
+    // On macOS Cmd is the second modifier. Ctrl is reserved by the
     // canvas/ImGui interaction layer and can turn a drag into a
     // context-menu gesture. ImGui deliberately maps macOS Cmd to its logical
     // Ctrl modifier (and physical Ctrl to Super). Using KeySuper here was
@@ -936,11 +945,10 @@ ofxOceanodeTimelineController::ClipDragMode ofxOceanodeTimelineController::right
     const bool commandDown = io.KeyCtrl || (io.KeyMods & ImGuiMod_Ctrl) != 0;
     // Wave clips are complete audio slices: every edge drag (plain, Cmd or
     // Shift) stretches the whole source.
-    return waveTrack ? ClipDragMode::Stretch
-         : io.KeyShift ? ClipDragMode::Resize
-         : commandDown ? ClipDragMode::Stretch
-         : endEditTool == 1 ? ClipDragMode::Resize
-         : endEditTool == 2 ? ClipDragMode::Stretch : ClipDragMode::Repeat;
+    if(waveTrack) return ClipDragMode::Stretch;
+    const int tool = rightEdgeToolWith(io.KeyShift, commandDown);
+    return tool == 1 ? ClipDragMode::Resize
+         : tool == 2 ? ClipDragMode::Stretch : ClipDragMode::Repeat;
 }
 
 void ofxOceanodeTimelineController::showEdgeCursor(ClipDragMode mode) const {
@@ -2065,7 +2073,8 @@ void ofxOceanodeTimelineController::draw() {
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Right edge tool: what dragging a clip's right edge does.\n"
                               "Also used by Timeline length fields. Audio always stretches its full source slice.\n"
-                              "Shift overrides with Trim; Cmd/Ctrl overrides with Stretch.");
+                              "The other two stay on the keys: Shift+drag: %s; Cmd/Ctrl+drag: %s.",
+                              edgeTools[rightEdgeToolWith(true, false)], edgeTools[rightEdgeToolWith(false, true)]);
     }
 
     groupSeparator();
@@ -4208,7 +4217,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip(track.isMacroTrack()
                         ? "Play the macro's timeline backwards in this clip, at the same speed.\nThe macro's timeline itself stays as written."
-                        : "Play this clip backwards at the same speed: its content is mirrored in place.\nCmd+drag the right edge back past the start also reverses it.");
+                        : "Play this clip backwards at the same speed: its content is mirrored in place.\nStretching the right edge back past the start also reverses it.");
             }
             if(ImGui::MenuItem("Rename clip")) {
                 requestClipRename(track.id, clip);

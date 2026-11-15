@@ -177,13 +177,28 @@ All durations are in beats:
 | Trim | Change the source window at the existing stretch; disable repeats; hidden notes/points remain stored |
 | Stretch | Fit the existing source into a new timeline length; disable repeats |
 
+The tool is chosen per timeline window and saved with the window in the
+preset (`rightEdgeTool` in its `"windows"` entry); a new window, and a preset
+saved before, start on Repeat.
+
 Moving either loop handle preserves the red playhead's current position,
 both while playing and while paused. Playback continues towards the edited
 boundary. Moving the end behind the playhead leaves playback beyond that
 boundary until an explicit seek or restart enters the loop again.
 
-Shift-dragging a right edge temporarily selects Trim. Cmd/Ctrl-dragging
-it selects Stretch. Audio always stretches the complete source slice, which
+A plain drag of a right edge uses the selected tool; the other two stay on
+the modifier keys, so all three are always in reach. Shift-dragging selects
+Trim and Cmd/Ctrl-dragging Stretch, except that the key of the selected tool
+selects Repeat instead (Shift wins when both are held):
+
+| Right edge tool | Drag | Shift-drag | Cmd/Ctrl-drag |
+| --- | --- | --- | --- |
+| Repeat | Repeat | Trim | Stretch |
+| Trim | Trim | Repeat | Stretch |
+| Stretch | Stretch | Trim | Repeat |
+
+The selector's tooltip shows what each key does now. Audio always stretches
+the complete source slice, which
 changes playback speed. Left-edge trim and Cmd/Ctrl-drag on a clip body (copy)
 retain their existing shortcuts. Drag feedback identifies the operation,
 source/timeline lengths and the number of affected clips.
@@ -535,8 +550,9 @@ can be placed; one that would end up playing itself (directly or through the
 timelines it places) is not offered. A new clip lasts one pass of the placed
 timeline: the end of its last clip, at least a bar of its own meter. The
 placed timeline follows the host beat for beat: a 4-beat timeline fills 4
-host beats; stretch the clip (Cmd+drag on its right edge, or the Tempo
-field) to play it slower or faster, and **Restore length** puts it back to
+host beats; stretch the clip (a Stretch drag of its right edge, Cmd+drag
+unless Stretch is the selected **Right edge** tool, or the Tempo field) to
+play it slower or faster, and **Restore length** puts it back to
 its natural speed with as many repeats. Its data is shared, so an edit
 reaches every instance, while each instance has its own playhead and rolls
 its own chance and mutations. **Duplicate this timeline** makes an
@@ -594,8 +610,8 @@ Timeline** finds the parameter in all of them. The **LFO Track** node picks
 a timeline, then one of its tracks.
 
 **Windows.** Each timeline opens in a window of its own, docked with the
-timeline windows already there, with its own zoom and scroll (saved with the
-window). **Open in a new window** (or **Open its timeline in a new window**
+timeline windows already there, with its own zoom, scroll and **Right edge**
+tool (saved with the window). **Open in a new window** (or **Open its timeline in a new window**
 from a macro node) opens one more on that timeline; **Edit Timeline** on a
 macro node and **Add to Timeline** bring the window showing the timeline
 forward, or open one. A window can show any other timeline from its own

@@ -721,7 +721,7 @@ int main() {
         auto* clip=model.getClip(t,c); clip->startBeat=2; clip->durationBeats=2; clip->contentDurationBeats=2;
         clip->contentStretch=1; clip->repeatContent=true; clip->contentOffsetBeats=0;
         const auto curveBefore=*model.getLane(t,c,curve);
-        ui.endEditTool=2; ui.snapEnabled=false; // the Stretch tool (Cmd+drag picks it too)
+        ui.endEditTool=2; ui.snapEnabled=false; // the Stretch tool (with another tool selected, Cmd+drag picks it)
         for(int settle=0;settle<25;++settle) frame();
         const auto rect=*std::find_if(ui.clipScreenRects.begin(),ui.clipScreenRects.end(),[&](const auto& r){return r.clipId==c;});
         const float beatPixels=(rect.x2-rect.x1)/2.0f;

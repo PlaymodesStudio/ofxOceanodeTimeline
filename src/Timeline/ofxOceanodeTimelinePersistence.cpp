@@ -66,6 +66,20 @@ void viewFromJson(const ofJson& json, ofxOceanodeTimelineViewState& view) {
     view.trackHeight = ofClamp(json.value("trackHeight", kMinTrackHeight), kMinTrackHeight, kMaxTrackHeight);
 }
 
+// A window's Right edge tool, by name (a file without one: Repeat).
+const char* endEditToString(ofxOceanodeTimelineEndEdit tool) {
+    switch(tool) {
+        case ofxOceanodeTimelineEndEdit::Trim: return "Trim";
+        case ofxOceanodeTimelineEndEdit::Stretch: return "Stretch";
+        default: return "Repeat";
+    }
+}
+ofxOceanodeTimelineEndEdit endEditFromString(const std::string& tool) {
+    if(tool == "Trim") return ofxOceanodeTimelineEndEdit::Trim;
+    if(tool == "Stretch") return ofxOceanodeTimelineEndEdit::Stretch;
+    return ofxOceanodeTimelineEndEdit::Repeat;
+}
+
 // Drum Grid lane data. Format 2: hits at beat positions. Files without a
 // format hold the first, index-based shape (steps x beatsPerStep), converted
 // on load so they play exactly as before.
@@ -512,7 +526,8 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         for(const auto& window : timelineWindows)
             if(window.hostLabel.empty())
                 json["windows"].push_back({{"id", window.id}, {"canvas", window.ref.canvas}, {"timeline", window.ref.timeline},
-                                           {"view", viewToJson(window.view)}});
+                                           {"view", viewToJson(window.view)},
+                                           {"rightEdgeTool", endEditToString(window.rightEdgeTool)}});
     }
     return json;
 }
@@ -901,6 +916,8 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
                 window.ref = normalizedRef({entry.value("canvas", std::string()), entry.value("timeline", std::string())});
                 window.view = viewState;
                 if(entry.contains("view")) viewFromJson(entry["view"], window.view);
+                if(entry.contains("rightEdgeTool") && entry["rightEdgeTool"].is_string())
+                    window.rightEdgeTool = endEditFromString(entry["rightEdgeTool"].get<std::string>());
                 timelineWindows.push_back(window);
             }
     // Every timeline lives in a window of its own; a preset saved with none

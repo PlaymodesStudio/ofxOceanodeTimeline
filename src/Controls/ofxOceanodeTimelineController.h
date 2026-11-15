@@ -230,8 +230,13 @@ private:
     // mouse is over (same row, another parameter row, another track).
     enum class ClipDragMode { None, Move, Resize, Stretch, Repeat, TrimStart, Duplicate };
     ClipDragMode clipDragMode = ClipDragMode::None;
-    // What dragging a clip's right edge does now: the End edit tool, or the
-    // one Shift (trim / extend) or Cmd (stretch) holds; Wave clips stretch.
+    // The Right edge tool (0 Repeat, 1 Trim, 2 Stretch, as endEditTool) a
+    // drag uses with these keys held: the selected one with neither. Shift
+    // holds Trim and Cmd Stretch, except that the key of the selected tool
+    // holds Repeat instead, so all three are always in reach.
+    int rightEdgeToolWith(bool shift, bool command) const;
+    // What dragging a clip's right edge does now (rightEdgeToolWith the keys
+    // held); Wave clips stretch.
     ClipDragMode rightEdgeDragMode(bool waveTrack) const;
     // Shows the cursor of an edge drag (trim, stretch or repeat) at the mouse.
     void showEdgeCursor(ClipDragMode mode) const;
@@ -571,7 +576,10 @@ private:
     // ---- View ----
     // Session-only alternate projections of the same clips and routing.
     bool targetsView = false;
-    int endEditTool = 0; // Repeat, Trim, Stretch; modifiers override it.
+    // Repeat, Trim, Stretch; modifiers override it. Not session-only: a
+    // window's editor takes it from its window's entry before drawing and
+    // gives it back after (TimelineWindow::rightEdgeTool, saved with it).
+    int endEditTool = 0;
     bool targetInspectorOpen = false;
     std::string inspectedTargetPath;
     void drawTargetInspector(ofxOceanodeTimelineManager& timeline);

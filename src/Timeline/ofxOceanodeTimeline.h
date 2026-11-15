@@ -1616,8 +1616,12 @@ public:
     // A host's window (a MacroMixer's, on a source graph's timeline) carries
     // its host label: titled "(label)" after it, its ImGui id keyed on it
     // (so docking finds it again across activations), never saved.
-    // Each window keeps its own zoom, scroll and column width (saved with it).
-    struct TimelineWindow { int id = 0; TimelineRef ref; std::string hostLabel; ofxOceanodeTimelineViewState view; };
+    // Each window keeps its own zoom, scroll and column width, and its Right
+    // edge tool (all saved with it).
+    struct TimelineWindow {
+        int id = 0; TimelineRef ref; std::string hostLabel; ofxOceanodeTimelineViewState view;
+        ofxOceanodeTimelineEndEdit rightEdgeTool = ofxOceanodeTimelineEndEdit::Repeat;
+    };
     const std::vector<TimelineWindow>& getTimelineWindows() const { return timelineWindows; }
     TimelineWindow* findTimelineWindow(int id) {
         for(auto& window : timelineWindows) if(window.id == id) return &window;

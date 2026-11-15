@@ -1007,9 +1007,17 @@ void ofxOceanodeTimelineController::drawTimelineWindows() {
             // Its own zoom and scroll (saved with it): what the editors read
             // while it draws. Found again by id afterwards: drawing may open
             // or close windows, which moves the list's entries.
-            if(auto* entry = timeline.findTimelineWindow(window.id)) std::swap(timeline.getViewState(), entry->view);
+            // Its Right edge tool too: the window's entry keeps it (so a
+            // preset load sets it), the editor edits its copy while drawing.
+            if(auto* entry = timeline.findTimelineWindow(window.id)) {
+                std::swap(timeline.getViewState(), entry->view);
+                editor->endEditTool = static_cast<int>(entry->rightEdgeTool);
+            }
             editor->draw();
-            if(auto* entry = timeline.findTimelineWindow(window.id)) std::swap(timeline.getViewState(), entry->view);
+            if(auto* entry = timeline.findTimelineWindow(window.id)) {
+                std::swap(timeline.getViewState(), entry->view);
+                entry->rightEdgeTool = static_cast<ofxOceanodeTimelineEndEdit>(editor->endEditTool);
+            }
         }
         ImGui::End();
         if(!open) timeline.closeTimelineWindow(window.id);
