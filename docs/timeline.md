@@ -83,6 +83,17 @@ an equal amount of empty space to its right. This limit uses clips from every
 track in the timeline, including hidden or muted tracks, and updates as their
 lengths change. Reaching the limit returns the view to the origin.
 
+### Track pads
+
+Every pad in the left column (a track, a folder, a row of an unfolded macro
+track) lays its controls out in rows from its top. The first row has what
+every track has: from the left, the fold arrow, the colour, the name, then the
+hamburger (Clip settings) and **+**; against the right edge, **M** and **S**.
+A track without one of these keeps the others where they are. What only one
+kind of track has goes on a second row, against the right edge: a Project
+Track's **<** **+ Key** **>**, and the timeline a macro track places. A
+pad too short for two rows keeps them on the first, before **M**.
+
 An **LFO** is a lane type like Curve or Step Sequencer: a clip can hold any
 number of LFO lanes alongside its other lanes, each with its own **Targets**
 and **Lane** tabs, mute/solo, chance and output range (Min/Max, set from the

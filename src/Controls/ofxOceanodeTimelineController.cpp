@@ -213,6 +213,15 @@ constexpr float kWaveTrackMinHeight = 48.0f;
 constexpr float kWaveTrackMaxHeight = 360.0f;
 constexpr float kTrackResizeHandleHeight = 6.0f;
 constexpr float kEdgePixels = 8.0f;
+// A pad's controls sit in rows from its top, not centred in it. The first
+// row (level with the clip titles) has what every track has; a second one
+// under it has what only one kind of track has.
+constexpr float kPadRowTop = 6.0f;
+constexpr float kPadRowGap = 3.0f;
+// The fold arrow's slot at the left of a pad's first row (kept empty by a
+// track without one, so colours and names line up down the column).
+constexpr float kPadArrowSlot = 22.0f;
+constexpr float kPadRightMargin = 6.0f;
 
 // The chance knob sits in a clip's top-right corner when it fits, just
 // inside the right-edge drag strip so resizing still works. top and bottom
@@ -2416,6 +2425,62 @@ void ofxOceanodeTimelineController::draw() {
         trackHeaderDragStart = ImGui::GetIO().MousePos;
         trackHeaderDragging = false;
     };
+    // ---- Pad layout, the same for a track, a folder and a row of an
+    // unfolded macro ----
+    // First row, at the top of the pad. From the left: fold arrow, colour,
+    // name, then (a track's) settings and + buttons. Against the right
+    // edge: M and S. A second row under it is for what only one kind of
+    // track has, against the right edge too.
+    struct PadRow {
+        float arrowX = 0.0f, swatchX = 0.0f, nameX = 0.0f; // from the left
+        float muteX = 0.0f, right = 0.0f;                  // M (S follows it), and where S ends
+        float y = 0.0f, secondY = 0.0f;                    // top of each row's text and buttons
+        bool hasSecondRow = false;                         // the pad is tall enough for it
+        ImVec2 swatchSize;                                 // as big as the S button
+    };
+    auto padRow = [&](const ImVec2& rowMin, const ImVec2& rowMax, float indent) {
+        const auto& style = ImGui::GetStyle();
+        const float fontSize = ImGui::GetFontSize();
+        PadRow row;
+        row.swatchSize = ImVec2(ImGui::CalcTextSize("S").x + style.FramePadding.x * 2.0f, fontSize);
+        row.arrowX = rowMin.x + indent + 5.0f;
+        row.swatchX = rowMin.x + indent + kPadArrowSlot;
+        row.nameX = row.swatchX + row.swatchSize.x + style.ItemSpacing.x;
+        row.right = rowMin.x + kLabelWidth - kPadRightMargin;
+        row.muteX = row.right - smallButtonReserve("M") - smallButtonReserve("S") + style.ItemSpacing.x;
+        // Never lower than centred, in a pad too short for the top margin.
+        row.y = rowMin.y + std::min(kPadRowTop, std::max(0.0f, (rowMax.y - rowMin.y - fontSize) * 0.5f));
+        row.secondY = row.y + fontSize + kPadRowGap;
+        row.hasSecondRow = row.secondY + fontSize <= rowMax.y - 1.0f;
+        return row;
+    };
+    auto overPadSwatch = [&](const PadRow& row) {
+        return ImGui::IsMouseHoveringRect(ImVec2(row.swatchX, row.y),
+                                          ImVec2(row.swatchX + row.swatchSize.x, row.y + row.swatchSize.y));
+    };
+    // The colour swatch of a pad's first row: a click opens a picker on it.
+    // True (with the colour picked) while the picker changes it.
+    // A ColorButton with its own picker popup: ColorEdit4 with a local
+    // temporary swatch was easy to click past and appeared non-persistent.
+    auto padColorSwatch = [&](const std::string& id, const ofColor& current, const PadRow& row, ofColor& picked) {
+        const std::string popupId = "##trackColorPopup" + id;
+        const ImVec4 color(current.r / 255.0f, current.g / 255.0f, current.b / 255.0f, current.a / 255.0f);
+        ImGui::SetCursorScreenPos(ImVec2(row.swatchX, row.y));
+        ImGui::SetNextItemAllowOverlap();
+        if(ImGui::ColorButton(("##trackColorButton" + id).c_str(), color, ImGuiColorEditFlags_NoTooltip, row.swatchSize))
+            ImGui::OpenPopup(popupId.c_str());
+        bool changed = false;
+        if(ImGui::BeginPopup(popupId.c_str())) {
+            float rgba[4] = {color.x, color.y, color.z, color.w};
+            if(ImGui::ColorPicker4("##picker", rgba, ImGuiColorEditFlags_AlphaBar)) {
+                auto channel = [](float value) { return static_cast<unsigned char>(ofClamp(value * 255.0f, 0.0f, 255.0f)); };
+                picked = ofColor(channel(rgba[0]), channel(rgba[1]), channel(rgba[2]), channel(rgba[3]));
+                changed = true;
+            }
+            ImGui::EndPopup();
+        }
+        return changed;
+    };
     // A clip of a macro timeline where a placement plays it, inside
     // [left, right] of the row [y1, y2] (originX: screen x of beat 0): its
     // lanes previewed in bands; a macro inside, or a muted clip, as a bar.
@@ -2580,19 +2645,20 @@ void ofxOceanodeTimelineController::draw() {
                 dl->AddRectFilled(rowMin, ImVec2(rowMin.x + indent, rowMax.y), IM_COL32(17, 17, 20, 255));
                 dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), padMax, mutedTrackColor(innerTrack.color, 0.22f, 0.36f));
                 // A tree line from the macro track, in its color: these rows are its timeline.
+                // Its branch points at the pad's first row, where the name is.
+                const PadRow pad = padRow(rowMin, rowMax, indent);
                 const float guideX = rowMin.x + tab - kUnfoldedIndent * 0.5f;
-                const float midY = (rowMin.y + rowMax.y) * 0.5f;
+                const float branchY = pad.y + ImGui::GetFontSize() * 0.5f;
                 dl->AddLine(ImVec2(guideX, rowMin.y), ImVec2(guideX, rowMax.y), macroColor, 2.0f);
-                dl->AddLine(ImVec2(guideX, midY), ImVec2(rowMin.x + indent, midY), macroColor, 2.0f);
+                dl->AddLine(ImVec2(guideX, branchY), ImVec2(rowMin.x + indent, branchY), macroColor, 2.0f);
                 dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), ImVec2(rowMin.x + indent + 3.0f, rowMax.y), macroColor);
-                const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
                 if(innerTrack.isMacroTrack())
-                    drawFoldArrow(dl, ImVec2(rowMin.x + indent + 5, textY), innerTrack.macroUnfolded);
-                dl->PushClipRect(rowMin, ImVec2(rowMin.x + kLabelWidth - 85, rowMax.y), true);
-                dl->AddText(ImVec2(rowMin.x + indent + 22, textY), IM_COL32(225, 225, 225, 255), innerTrack.name.c_str());
+                    drawFoldArrow(dl, ImVec2(pad.arrowX, pad.y), innerTrack.macroUnfolded);
+                const ImVec2 padHoverMax(std::max(pad.nameX, pad.muteX - ImGui::GetStyle().ItemSpacing.x), rowMax.y);
+                dl->PushClipRect(ImVec2(pad.nameX, rowMin.y), padHoverMax, true);
+                dl->AddText(ImVec2(pad.nameX, pad.y), IM_COL32(225, 225, 225, 255), innerTrack.name.c_str());
                 dl->PopClipRect();
-                const ImVec2 padHoverMax(rowMin.x + kLabelWidth - 85, rowMax.y);
-                if(hoverRect(rowMin, padHoverMax)) {
+                if(hoverRect(rowMin, padHoverMax) && !overPadSwatch(pad)) {
                     if(!ImGui::IsAnyItemActive())
                         ImGui::SetTooltip("%s", (innerTrack.name + "  (" + macroLabel + ")\nA track of that timeline, edited in place: every clip placing it follows." +
                             (innerTrack.isMacroTrack() ? std::string("\nClick the arrow to unfold it.") : std::string())).c_str());
@@ -2601,7 +2667,10 @@ void ofxOceanodeTimelineController::draw() {
                         if(auto* editTrack = timeline.getTrack(*inner, innerTrack.id)) editTrack->macroUnfolded = !innerTrack.macroUnfolded;
                     }
                 }
-                ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kLabelWidth - 82, rowMin.y + (rowHeight - 19.0f) * 0.5f));
+                ofColor pickedColor;
+                if(padColorSwatch(rowId, innerTrack.color, pad, pickedColor))
+                    if(auto* editTrack = timeline.getTrack(*inner, innerTrack.id)) editTrack->color = pickedColor;
+                ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
                 if(playbackToggle("innerMute" + rowId, "M", innerTrack.muted, "Mute this track of the macro's timeline"))
                     timeline.setTrackMuted(*inner, innerTrack.id, !innerTrack.muted);
                 ImGui::SameLine();
@@ -2817,21 +2886,22 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddRectFilled(rowMin, padMax, mutedTrackColor(track.color, 0.34f, 0.5f));
             dl->AddRectFilled(ImVec2(rowMin.x + folderIndent, rowMin.y), ImVec2(rowMin.x + folderIndent + 3.0f, rowMax.y),
                               IM_COL32(track.color.r, track.color.g, track.color.b, 255));
-            const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
-            drawFoldArrow(dl, ImVec2(rowMin.x + folderIndent + 5, textY), !track.collapsed);
+            // The pad's first row: fold arrow, colour and name; M and S at its right.
+            const PadRow pad = padRow(rowMin, rowMax, folderIndent);
+            drawFoldArrow(dl, ImVec2(pad.arrowX, pad.y), !track.collapsed);
             size_t inside = 0;
             for(const auto& other : scope(timeline).tracks)
                 if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) ++inside;
             const std::string label = track.name + "  (" + ofToString(inside) + ")";
-            dl->PushClipRect(rowMin, ImVec2(rowMin.x + kLabelWidth - 85, rowMax.y), true);
-            dl->AddText(ImVec2(rowMin.x + folderIndent + 22, textY), IM_COL32(235, 235, 235, 255), label.c_str());
+            const ImVec2 folderPadMax(std::max(pad.nameX, pad.muteX - ImGui::GetStyle().ItemSpacing.x), rowMax.y);
+            dl->PushClipRect(ImVec2(pad.nameX, rowMin.y), folderPadMax, true);
+            dl->AddText(ImVec2(pad.nameX, pad.y), IM_COL32(235, 235, 235, 255), label.c_str());
             dl->PopClipRect();
             if(selectedTracks.count(track.id)) {
                 dl->AddRectFilled(rowMin, padMax, IM_COL32(120, 170, 255, 35));
                 dl->AddRect(ImVec2(rowMin.x + 1, rowMin.y + 1), ImVec2(rowMax.x - 1, rowMax.y - 1), IM_COL32(150, 190, 255, 255), 0.0f, 0, 2.0f);
             }
-            const ImVec2 folderPadMax(rowMin.x + kLabelWidth - 85, rowMax.y);
-            if(hoverRect(rowMin, folderPadMax)) {
+            if(hoverRect(rowMin, folderPadMax) && !overPadSwatch(pad)) {
                 if(!ImGui::IsAnyItemActive())
                     ImGui::SetTooltip("Folder: mute, solo and latency apply to everything inside.\nClick the arrow to fold. Drag tracks onto it to file them; drag it to move it.\nDouble-click to rename. Right-click for folder actions.");
                 if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -2859,12 +2929,17 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::OpenPopup(("##folderMenu" + track.id).c_str());
                 }
             }
-            ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kLabelWidth - 82, rowMin.y + (rowHeight - 19.0f) * 0.5f));
+            ofColor pickedColor;
+            if(padColorSwatch(track.id, track.color, pad, pickedColor))
+                if(auto* editFolder = timeline.getTrack(scope(timeline), track.id)) editFolder->color = pickedColor;
+            ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
             if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute everything in this folder"))
                 timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
             ImGui::SameLine();
             if(playbackToggle("trackSolo" + track.id, "S", track.solo, "Solo everything in this folder"))
                 timeline.setTrackSolo(scope(timeline), track.id, !track.solo);
+            // The next row starts under this one, wherever its buttons are.
+            ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
             // What is inside, one thin row per track, in each track's color.
             std::vector<const ofxOceanodeTimelineTrack*> contents;
             for(const auto& other : scope(timeline).tracks)
@@ -2973,7 +3048,6 @@ void ofxOceanodeTimelineController::draw() {
             dl->AddRectFilled(ImVec2(stripeX, headerMin.y), ImVec2(stripeX + 3.0f, headerMax.y),
                               IM_COL32(folder->color.r, folder->color.g, folder->color.b, 255));
         }
-        const float headerTextY = headerMin.y + (trackHeaderHeight - ImGui::GetTextLineHeight()) * 0.5f;
         // In the Clips view a track's arrow opens and closes its clip editor,
         // as double-clicking a clip does, and + adds a lane to the clip the
         // editor shows (opening it first when it is closed).
@@ -3010,22 +3084,53 @@ void ofxOceanodeTimelineController::draw() {
             expandClipLanes(track, editorClip->id);
         };
         const bool addLaneButton = editorClip != nullptr && !track.isWaveTrack;
-        // A Project Track has "+ Key" there: a keyframe at the playhead.
-        const float addLaneWidth = track.isProjectTrack ? smallButtonReserve("+ Key")
-                                 : addLaneButton ? smallButtonReserve("+") : 0.0f;
-        const float settingsWidth = smallButtonReserve("   ");
-        // + M S and the colour swatch (sized like S) sit at the column's
-        // right edge, one item spacing apart.
-        const ImVec2 swatchSize(ImGui::CalcTextSize("S").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFontSize());
-        const float muteX = headerMin.x + kLabelWidth - 6.0f - swatchSize.x - smallButtonReserve("S") - smallButtonReserve("M");
-        const float buttonY = headerMin.y + (trackHeaderHeight - ImGui::GetFontSize()) * 0.5f;
-        const float padRight = muteX - 3.0f - addLaneWidth - settingsWidth;
+        // ---- The pad's rows (see padRow) ----
+        // First row, from the left: fold arrow, colour, name, settings and
+        // +; against the right edge: M and S, with the latency correction
+        // before them. What only this kind of track has goes on the second
+        // row, against the right edge: a Project Track's keyframe buttons,
+        // the timeline a macro track places. A pad too short for a second
+        // row keeps them on the first, before M.
+        const PadRow pad = padRow(headerMin, headerMax, folderIndent);
+        const float padSpacing = ImGui::GetStyle().ItemSpacing.x;
+        auto padButtonWidth = [&](const char* label) { return smallButtonReserve(label) - padSpacing; };
+        const float specificY = pad.hasSecondRow ? pad.secondY : pad.y;
+        // Where what follows the name on the first row has to end.
+        float firstRowRight = pad.muteX - padSpacing;
+        // The track's latency correction, set from its right-click menu.
+        const std::string latencyLabel = track.latencyOffsetMs == 0.0f ? std::string()
+            : (track.latencyOffsetMs > 0.0f ? "+" : "") + ofToString(track.latencyOffsetMs, 1) + " ms";
+        const float latencyX = firstRowRight - ImGui::CalcTextSize(latencyLabel.c_str()).x;
+        if(!latencyLabel.empty()) firstRowRight = latencyX - padSpacing;
+        // A Project Track's "+ Key" (a keyframe at the playhead), between
+        // "<" and ">" (the playhead to the keyframe before, or after, where
+        // it is).
+        constexpr float kKeyNavGap = 2.0f;
+        const float projectKeysWidth = !track.isProjectTrack ? 0.0f
+            : padButtonWidth("<") + kKeyNavGap + padButtonWidth("+ Key") + kKeyNavGap + padButtonWidth(">");
+        const float projectKeysX = (pad.hasSecondRow ? pad.right : firstRowRight) - projectKeysWidth;
+        if(track.isProjectTrack && !pad.hasSecondRow) firstRowRight = projectKeysX - padSpacing;
+        // The name gives way to the buttons that follow it.
+        const float nameRight = std::max(pad.nameX, std::min(pad.nameX + ImGui::CalcTextSize(track.name.c_str()).x,
+            firstRowRight - smallButtonReserve("   ") - (addLaneButton ? smallButtonReserve("+") : 0.0f)));
+        const float settingsX = nameRight + padSpacing;
+        const float addLaneX = settingsX + smallButtonReserve("   ");
+        const float leftGroupRight = addLaneButton ? addLaneX + padButtonWidth("+") : addLaneX - padSpacing;
+        // The pad itself (select, drag, rename, menu) is the column around its buttons.
+        const ImVec2 padMax(headerMin.x + kLabelWidth, headerMax.y);
+        auto overPadButtons = [&](float x1, float x2, float y) {
+            return ImGui::IsMouseHoveringRect(ImVec2(x1, y), ImVec2(x2, y + ImGui::GetFontSize()));
+        };
+        const bool overPadControl = overPadSwatch(pad) || overPadButtons(settingsX, leftGroupRight, pad.y) ||
+            overPadButtons(pad.muteX, pad.right, pad.y) ||
+            (track.isProjectTrack && overPadButtons(projectKeysX, projectKeysX + projectKeysWidth, specificY));
+        // The arrow's strip is the whole height of the pad.
         const bool editorArrowHovered = editorArrow &&
-            hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + 22, headerMax.y));
+            hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + kPadArrowSlot, headerMax.y));
         // A macro track's arrow unfolds its macro's tracks under it; in the
         // Targets view an arrow folds a track's rows. A Wave Track there has
         // nothing to fold, so it gets no arrow.
-        const ImVec2 arrowAt(headerMin.x + folderIndent + 5, headerTextY);
+        const ImVec2 arrowAt(pad.arrowX, pad.y);
         if(track.isMacroTrack()) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
         else if(targetsView && !track.isWaveTrack && !track.isProjectTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
         else if(editorArrow) drawFoldArrow(dl, arrowAt, editorOpenHere, editorArrowHovered ? IM_COL32(255, 255, 255, 255) : labelTextColor);
@@ -3036,25 +3141,8 @@ void ofxOceanodeTimelineController::draw() {
             if(editorOpenHere) closeTrackEditor(track.id);
             else if(editorClip != nullptr) openEditor();
         }
-        dl->PushClipRect(headerMin, ImVec2(padRight, headerMax.y), true);
-        dl->AddText(ImVec2(headerMin.x + folderIndent + 22, headerTextY), IM_COL32(235, 235, 235, 255), track.name.c_str());
-        if(track.isMacroTrack()) {
-            // What it places, in the colour the scope bar gives that kind of
-            // timeline (a macro's own, or a further one of a canvas).
-            std::string placedName = "timeline";
-            ofxOceanodeTimelineManager::TimelineRef placedRef;
-            const auto carried = timeline.carriedTimelines(scope(timeline), track);
-            if(!carried.empty() && timeline.refOf(*carried.front(), placedRef)) {
-                const std::string name = timeline.timelineName(placedRef);
-                if(name != track.name) placedName = name;
-                // The macro's other timelines its clips carry (placed as a whole).
-                if(carried.size() > 1) placedName += " +" + ofToString(carried.size() - 1);
-            }
-            // A macro's timeline in purple, one of this canvas in teal.
-            const ImU32 placedColor = track.macroCanvas != "." ? IM_COL32(190, 140, 230, 210) : IM_COL32(90, 190, 175, 210);
-            const float nameWidth = ImGui::CalcTextSize(track.name.c_str()).x;
-            dl->AddText(ImVec2(headerMin.x + folderIndent + 22 + nameWidth + 8, headerTextY), placedColor, ("> " + placedName).c_str());
-        }
+        dl->PushClipRect(ImVec2(pad.nameX, headerMin.y), ImVec2(nameRight, headerMax.y), true);
+        dl->AddText(ImVec2(pad.nameX, pad.y), IM_COL32(235, 235, 235, 255), track.name.c_str());
         dl->PopClipRect();
         // A binding's target parameter can disappear (node deleted, preset
         // loaded on a different graph, ...). The manager keeps the binding
@@ -3063,13 +3151,41 @@ void ofxOceanodeTimelineController::draw() {
         // stops applying with no clue why.
         const bool hasMissingTarget = std::any_of(track.bindings.begin(), track.bindings.end(),
             [](const auto& binding) { return binding.missingTarget && !binding.bypass; });
-        if(hasMissingTarget) {
-            const float nameWidth = ImGui::CalcTextSize(track.name.c_str()).x;
-            dl->AddText(ImVec2(headerMin.x + folderIndent + 22 + nameWidth + 6, headerTextY),
-                       IM_COL32(255, 165, 60, 255), "[missing target]");
+        if(hasMissingTarget || track.isMacroTrack()) {
+            // On the second row: a missing target under the name, the
+            // timeline a macro track places against the right edge. A pad
+            // with one row has them after the + button, in what room is left.
+            float labelX = pad.hasSecondRow ? pad.nameX : leftGroupRight + padSpacing;
+            const float labelRight = !pad.hasSecondRow ? firstRowRight
+                                   : track.isProjectTrack ? projectKeysX - padSpacing : pad.right;
+            dl->PushClipRect(ImVec2(labelX, headerMin.y), ImVec2(std::max(labelX, labelRight), headerMax.y), true);
+            if(hasMissingTarget) {
+                dl->AddText(ImVec2(labelX, specificY), IM_COL32(255, 165, 60, 255), "[missing target]");
+                labelX += ImGui::CalcTextSize("[missing target]").x + padSpacing;
+            }
+            if(track.isMacroTrack()) {
+                // What it places, in the colour the scope bar gives that kind of
+                // timeline (a macro's own, or a further one of a canvas).
+                std::string placedName = "timeline";
+                ofxOceanodeTimelineManager::TimelineRef placedRef;
+                const auto carried = timeline.carriedTimelines(scope(timeline), track);
+                if(!carried.empty() && timeline.refOf(*carried.front(), placedRef)) {
+                    const std::string name = timeline.timelineName(placedRef);
+                    if(name != track.name) placedName = name;
+                    // The macro's other timelines its clips carry (placed as a whole).
+                    if(carried.size() > 1) placedName += " +" + ofToString(carried.size() - 1);
+                }
+                // A macro's timeline in purple, one of this canvas in teal.
+                const ImU32 placedColor = track.macroCanvas != "." ? IM_COL32(190, 140, 230, 210) : IM_COL32(90, 190, 175, 210);
+                const std::string placedLabel = "> " + placedName;
+                const float placedX = pad.hasSecondRow
+                    ? std::max(labelX, labelRight - ImGui::CalcTextSize(placedLabel.c_str()).x) : labelX;
+                dl->AddText(ImVec2(placedX, specificY), placedColor, placedLabel.c_str());
+            }
+            dl->PopClipRect();
         }
 
-        const bool trackPadHovered = hoverRect(headerMin, ImVec2(padRight, headerMax.y)) && !editorArrowHovered;
+        const bool trackPadHovered = hoverRect(headerMin, padMax) && !overPadControl && !editorArrowHovered;
         if(trackPadHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             trackPadClickedThisFrame = true;
             selectedClips.clear();
@@ -3089,7 +3205,6 @@ void ofxOceanodeTimelineController::draw() {
         if(trackPadHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip("Select track. Shift or Cmd/Ctrl-click to toggle multiple tracks.\nDouble-click to rename. Right-click for track actions.");
         if(selectedTracks.count(track.id)) {
-            const ImVec2 padMax(headerMin.x + kLabelWidth, headerMax.y);
             dl->AddRectFilled(headerMin, padMax, IM_COL32(120, 170, 255, 35));
             dl->AddRect(ImVec2(headerMin.x + 1, headerMin.y + 1),
                         ImVec2(headerMax.x - 1, headerMax.y - 1), IM_COL32(150, 190, 255, 255), 0.0f, 0, 2.0f);
@@ -3097,17 +3212,17 @@ void ofxOceanodeTimelineController::draw() {
                         ImVec2(padMax.x - 1, headerMax.y - 1), IM_COL32(150, 190, 255, 255), 2.0f);
         }
 
-        const ImVec2 headerInteractionMax(padRight, headerMax.y);
-        if(hoverRect(headerMin, headerInteractionMax) && !editorArrowHovered) {
+        if(trackPadHovered) {
+            const bool overArrowSlot = ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + kPadArrowSlot;
             if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 pendingTrackId = track.id;
                 pendingNewTrackDialog = false;
                 std::strncpy(pendingTrackName, track.name.c_str(), sizeof(pendingTrackName) - 1);
                 pendingTrackName[sizeof(pendingTrackName) - 1] = '\0';
                 requestRenamePopup = true;
-            } else if(track.isMacroTrack() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
+            } else if(track.isMacroTrack() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
-            } else if(targetsView && !track.isWaveTrack && !track.isProjectTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().MousePos.x < headerMin.x + folderIndent + 22) {
+            } else if(targetsView && !track.isWaveTrack && !track.isProjectTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
             } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 pendingTrackId = track.id;
@@ -3116,7 +3231,11 @@ void ofxOceanodeTimelineController::draw() {
             }
         }
 
-        ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth - settingsWidth, buttonY));
+        // ---- First row: colour, then settings and + after the name ----
+        ofColor pickedColor;
+        if(padColorSwatch(track.id, track.color, pad, pickedColor))
+            if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->color = pickedColor;
+        ImGui::SetCursorScreenPos(ImVec2(settingsX, pad.y));
         const bool settingsClicked = ImGui::SmallButton(("   ##clipSettings" + track.id).c_str());
         const auto settingsMin = ImGui::GetItemRectMin(), settingsMax = ImGui::GetItemRectMax();
         const ImVec2 settingsCenter((settingsMin.x + settingsMax.x) * 0.5f, (settingsMin.y + settingsMax.y) * 0.5f);
@@ -3135,7 +3254,7 @@ void ofxOceanodeTimelineController::draw() {
         }
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip settings shared by all lanes");
         if(addLaneButton) {
-            ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, buttonY));
+            ImGui::SetCursorScreenPos(ImVec2(addLaneX, pad.y));
             ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
             const bool addLane = ImGui::SmallButton(("+##addLane" + track.id).c_str());
             ImGui::PopStyleColor();
@@ -3149,10 +3268,14 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add another lane to %s", editorClip->name.c_str());
         }
         if(track.isProjectTrack) {
-            ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, buttonY));
+            // ---- Second row: a Project Track's keyframe buttons ----
+            int step = 0;
             ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+            ImGui::SetCursorScreenPos(ImVec2(projectKeysX, specificY));
+            if(ImGui::SmallButton(("<##prevProjectKey" + track.id).c_str())) step = -1;
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous keyframe");
+            ImGui::SameLine(0.0f, kKeyNavGap);
             const bool addKey = ImGui::SmallButton(("+ Key##addProjectKey" + track.id).c_str());
-            ImGui::PopStyleColor();
             if(addKey) {
                 anyClipInteractionClaimedThisFrame = true;
                 requestProjectKeyframe = true;
@@ -3164,41 +3287,32 @@ void ofxOceanodeTimelineController::draw() {
                 ImGui::SetTooltip("Add keyframe: store every parameter of the patch at the playhead.\n"
                                   "A keyframe already there is overwritten. Playback interpolates\n"
                                   "the parameters that differ between keyframes.");
-            // Right below it, when the row is tall enough for both: the
-            // playhead to the keyframe before, or after, where it is.
-            const float navY = buttonY + ImGui::GetFontSize() + 3.0f;
-            if(navY + ImGui::GetFontSize() <= headerMax.y - 1.0f) {
-                int step = 0;
-                ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
-                ImGui::SetCursorScreenPos(ImVec2(muteX - addLaneWidth, navY));
-                if(ImGui::SmallButton(("<##prevProjectKey" + track.id).c_str())) step = -1;
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous keyframe");
-                ImGui::SameLine(0.0f, 2.0f);
-                if(ImGui::SmallButton((">##nextProjectKey" + track.id).c_str())) step = 1;
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the next keyframe");
-                ImGui::PopStyleColor();
-                if(step != 0) {
-                    anyClipInteractionClaimedThisFrame = true;
-                    const double here = transportState.beatPosition;
-                    double target = 0.0;
-                    bool found = false;
-                    for(const auto& keyClip : track.clips) {
-                        const double clipEnd = keyClip.startBeat + keyClip.durationBeats;
-                        const int cycles = keyClip.repeatContent
-                            ? std::max(1, static_cast<int>(std::ceil(keyClip.durationBeats / std::max(1e-6, cycleDuration(keyClip))))) : 1;
-                        for(int cycle = 0; cycle < std::min(cycles, 4096); ++cycle)
-                            for(const auto& keyframe : keyClip.projectKeyframes) {
-                                const double beat = sourceToTimelineBeat(keyClip, keyframe.beat, cycle);
-                                if(beat < keyClip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue; // cut off by the clip
-                                if(step < 0 ? beat >= here - 1e-4 : beat <= here + 1e-4) continue;
-                                if(!found || (step < 0 ? beat > target : beat < target)) { target = beat; found = true; }
-                            }
-                    }
-                    if(found) seekShownTimeline(timeline, target);
+            ImGui::SameLine(0.0f, kKeyNavGap);
+            if(ImGui::SmallButton((">##nextProjectKey" + track.id).c_str())) step = 1;
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the next keyframe");
+            ImGui::PopStyleColor();
+            if(step != 0) {
+                anyClipInteractionClaimedThisFrame = true;
+                const double here = transportState.beatPosition;
+                double target = 0.0;
+                bool found = false;
+                for(const auto& keyClip : track.clips) {
+                    const double clipEnd = keyClip.startBeat + keyClip.durationBeats;
+                    const int cycles = keyClip.repeatContent
+                        ? std::max(1, static_cast<int>(std::ceil(keyClip.durationBeats / std::max(1e-6, cycleDuration(keyClip))))) : 1;
+                    for(int cycle = 0; cycle < std::min(cycles, 4096); ++cycle)
+                        for(const auto& keyframe : keyClip.projectKeyframes) {
+                            const double beat = sourceToTimelineBeat(keyClip, keyframe.beat, cycle);
+                            if(beat < keyClip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue; // cut off by the clip
+                            if(step < 0 ? beat >= here - 1e-4 : beat <= here + 1e-4) continue;
+                            if(!found || (step < 0 ? beat > target : beat < target)) { target = beat; found = true; }
+                        }
                 }
+                if(found) seekShownTimeline(timeline, target);
             }
         }
-        ImGui::SetCursorScreenPos(ImVec2(muteX, buttonY));
+        // ---- First row, against the right edge: latency, M and S ----
+        ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
         if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
             timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
         ImGui::SameLine();
@@ -3206,35 +3320,15 @@ void ofxOceanodeTimelineController::draw() {
         const bool soloed = track.solo; // (a Toggle lane driving it is the engine's playback state)
         if(playbackToggle("trackSolo" + track.id, "S", soloed, "Solo track (multiple solos allowed)"))
             timeline.setTrackSolo(scope(timeline), track.id, !soloed);
-        if(track.latencyOffsetMs != 0.0f) {
-            // The track's latency correction, set from its right-click menu.
-            const std::string latencyLabel = ofToString(track.latencyOffsetMs, 1) + " ms";
-            const std::string shown = (track.latencyOffsetMs > 0.0f ? "+" : "") + latencyLabel;
-            const ImVec2 size = ImGui::CalcTextSize(shown.c_str());
-            const ImVec2 at(padRight - 3.0f - size.x, headerMin.y + (trackHeaderHeight - size.y) * 0.5f);
-            ImGui::GetWindowDrawList()->AddText(at, IM_COL32(230, 190, 90, 220), shown.c_str());
+        if(!latencyLabel.empty()) {
+            const ImVec2 size = ImGui::CalcTextSize(latencyLabel.c_str());
+            const ImVec2 at(latencyX, pad.y);
+            ImGui::GetWindowDrawList()->AddText(at, IM_COL32(230, 190, 90, 220), latencyLabel.c_str());
             if(ImGui::IsMouseHoveringRect(at, ImVec2(at.x + size.x, at.y + size.y)))
                 ImGui::SetTooltip("Latency correction (track right-click menu)");
         }
 
-        // Use a ColorButton + explicit picker popup. ColorEdit4 with a local
-        // temporary swatch was easy to click past and appeared non-persistent.
-        ImGui::SetCursorScreenPos(ImVec2(headerMin.x + kLabelWidth - 6.0f - swatchSize.x, buttonY));
-        ImGui::SetNextItemAllowOverlap();
         const ImVec4 color(track.color.r / 255.0f, track.color.g / 255.0f, track.color.b / 255.0f, track.color.a / 255.0f);
-        const std::string colorButtonId = "##trackColorButton" + track.id;
-        if(ImGui::ColorButton(colorButtonId.c_str(), color, ImGuiColorEditFlags_NoTooltip, swatchSize)) ImGui::OpenPopup(("##trackColorPopup" + track.id).c_str());
-        if(ImGui::BeginPopup(("##trackColorPopup" + track.id).c_str())) {
-            float rgba[4] = {color.x, color.y, color.z, color.w};
-            if(ImGui::ColorPicker4("##picker", rgba, ImGuiColorEditFlags_AlphaBar)) {
-                if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->color = ofColor(
-                    static_cast<unsigned char>(ofClamp(rgba[0] * 255.0f, 0.0f, 255.0f)),
-                    static_cast<unsigned char>(ofClamp(rgba[1] * 255.0f, 0.0f, 255.0f)),
-                    static_cast<unsigned char>(ofClamp(rgba[2] * 255.0f, 0.0f, 255.0f)),
-                    static_cast<unsigned char>(ofClamp(rgba[3] * 255.0f, 0.0f, 255.0f)));
-            }
-            ImGui::EndPopup();
-        }
         if(ImGui::BeginPopup(("##trackMenu" + track.id).c_str())) {
             ImGui::TextUnformatted(track.name.c_str());
             drawSynthNavigation(timeline, track);
@@ -4320,10 +4414,11 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 }
             }
-            // The bottom edge resizes the track, before any clip under it.
+            // The bottom edge resizes the track, before any clip under it
+            // (not from a pad button reaching into it, on a short track).
             const ImVec2 resizeMin(headerMin.x, headerMax.y - kTrackResizeHandleHeight);
             const bool resizeHovered = resizableTrack && trackResizeId.empty() && clipDragMode == ClipDragMode::None &&
-                                       hoverRect(resizeMin, headerMax);
+                                       hoverRect(resizeMin, headerMax) && !overPadControl;
             if(resizeHovered || trackResizeId == track.id) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
                 dl->AddLine(ImVec2(headerMin.x, headerMax.y - 1.0f), ImVec2(headerMax.x, headerMax.y - 1.0f),

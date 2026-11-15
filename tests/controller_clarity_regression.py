@@ -183,14 +183,15 @@ int main() {
     auto trackToggle=[&](const std::string& track,float offset) {
         const auto row=std::find_if(ui.clipDropRows.begin(),ui.clipDropRows.end(),[&](const auto& r){return r.trackId==track;});
         assert(row!=ui.clipDropRows.end());
-        const ImVec2 point(ui.fileDropBounds.x+offset,(row->top+row->bottom)*0.5f);
+        // On the pad's first row: 6 px down from its top, as tall as the font.
+        const ImVec2 point(ui.fileDropBounds.x+offset,row->top+6.0f+ImGui::GetTextLineHeight()*0.5f);
         frame(1250,point,false); frame(1250,point,true); frame(1250,point,false);
     };
-    // M, S and the colour swatch (as wide as S) end at the column's edge, 6px in.
+    // M and S end the pad's first row at the column's edge, 6px in.
     const float spacing=ImGui::GetStyle().ItemSpacing.x, padX=ImGui::GetStyle().FramePadding.x;
     const float soloWidth=ImGui::CalcTextSize("S").x+padX*2, muteWidth=ImGui::CalcTextSize("M").x+padX*2;
-    const float soloOffset=-6-soloWidth-spacing-soloWidth*0.5f;
-    const float muteOffset=-6-soloWidth-spacing-soloWidth-spacing-muteWidth*0.5f;
+    const float soloOffset=-6-soloWidth*0.5f;
+    const float muteOffset=-6-soloWidth-spacing-muteWidth*0.5f;
     for(const auto& track : {t,wt}) {
         trackToggle(track,muteOffset); assert(model.getTrack(track)->muted);
         trackToggle(track,muteOffset); assert(!model.getTrack(track)->muted);
@@ -548,9 +549,17 @@ int main() {
             return (row->minY+row->maxY)*0.5f;
         };
         auto arrow=[&]() { return ImVec2(padLeft+12,rowY()); };
+        // The pad's buttons are on its first row, at the top of the pad:
+        // 6 px down, as tall as the font. The hamburger and + follow the name.
+        auto buttonRowY=[&]() {
+            const auto row=std::find_if(ui.trackHeaderRows.begin(),ui.trackHeaderRows.end(),
+                [&](const auto& r){return r.trackId==t && !r.isFolder;});
+            assert(row!=ui.trackHeaderRows.end());
+            return row->minY+12.0f;
+        };
         auto plus=[&]() {   // find + specifically; the hamburger precedes it
-            const float y=rowY();
-            for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-130;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth;x+=2) {
+            const float y=buttonRowY();
+            for(float x=padLeft;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth;x+=2) {
                 frame(1250,ImVec2(x,y),false);
                 auto* hovered=ImGui::GetCurrentContext()->HoveredWindow;
                 if(hovered && ImGui::GetCurrentContext()->HoveredId==
@@ -572,10 +581,9 @@ int main() {
         // The hamburger opens a separate, closeable window with a clip picker.
         const ImGuiID settingsId=ImHashStr(("   ##clipSettings"+t).c_str(),0,viewport->ID);
         ImVec2 settingsAt(-1,-1);
-        for(float x=padLeft+ofxOceanodeTimelineEditorUi::labelWidth-150;
-            x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth && settingsAt.x<0;x+=2) {
-            frame(1250,ImVec2(x,rowY()),false);
-            if(ImGui::GetCurrentContext()->HoveredId==settingsId) settingsAt=ImVec2(x,rowY());
+        for(float x=padLeft;x<padLeft+ofxOceanodeTimelineEditorUi::labelWidth && settingsAt.x<0;x+=2) {
+            frame(1250,ImVec2(x,buttonRowY()),false);
+            if(ImGui::GetCurrentContext()->HoveredId==settingsId) settingsAt=ImVec2(x,buttonRowY());
         }
         assert(settingsAt.x>=0);
         const auto beforeSettings=model.toJson();
@@ -1253,7 +1261,8 @@ int main() {
     assert(headerRow(folder) && headerRow(folder)->isFolder);
     auto dragHeader=[&](const std::string& id,ImVec2 to) {
         const auto* from=headerRow(id); assert(from);
-        const ImVec2 start(ui.fileDropBounds.x-150,(from->minY+from->maxY)*0.5f);
+        // Grabbed under the pad's first row (its buttons), above the resize edge.
+        const ImVec2 start(ui.fileDropBounds.x-150,from->maxY-10.0f);
         frame(1250,start,false); frame(1250,start,true);
         for(int i=1;i<=6;++i) frame(1250,ImVec2(start.x,start.y+(to.y-start.y)*i/6.0f),true);
         frame(1250,to,false); frame(); frame();
