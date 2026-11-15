@@ -6315,7 +6315,8 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
         for(const auto& lane : clip->lanes)
             if(std::find(lane.bindingIds.begin(), lane.bindingIds.end(), request.second) != lane.bindingIds.end()) { laneId = lane.id; break; }
         if(laneId.empty()) {
-            laneId = timeline.createLane(scope(timeline), request.first, clipId, compactParameterName(binding->parameterPath), binding->laneType);
+            // Named by the parameter's whole path, as every lane made for a parameter.
+            laneId = timeline.createLane(scope(timeline), request.first, clipId, binding->parameterPath, binding->laneType);
             timeline.addBindingToLane(scope(timeline), request.first, clipId, laneId, request.second);
             auto* lane = timeline.getLane(scope(timeline), request.first, clipId, laneId);
             auto* parameter = container->findTimelineParameter(binding->parameterPath);
@@ -8050,6 +8051,10 @@ void ofxOceanodeTimelineController::openParameterClipDialog(ofxOceanodeTimelineM
     if(ofxOceanodeTimelineIsColorType(fresh.valueType)) fresh.laneType = ofxOceanodeTimelineLaneType::Color;
     parameterClipType = optionIndexForBinding(existing != nullptr ? *existing : fresh);
     if(request.kind != ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Clip) {
+        // The name field is the new lane's here: the parameter's whole path
+        // (node included), as the lane a new clip is made with.
+        std::strncpy(parameterClipName, request.parameterPath.c_str(), sizeof(parameterClipName) - 1);
+        parameterClipName[sizeof(parameterClipName) - 1] = '\0';
         // The clip it goes in: the track's selected one, else the one being
         // edited, else the one at the playhead, else its first.
         const auto* track = timeline.getTrack(*sequence, request.trackId);
@@ -8243,7 +8248,7 @@ void ofxOceanodeTimelineController::drawParameterLanePopup(ofxOceanodeTimelineMa
         const std::string clipId = parameterLaneClipId;
         const auto laneId = binding == nullptr ? std::string()
             : addBoundLane(timeline, track.id, clipId, *binding, parameterClipType,
-                           parameterClipName[0] == '\0' ? parameter.getName() : std::string(parameterClipName));
+                           parameterClipName[0] == '\0' ? binding->parameterPath : std::string(parameterClipName));
         if(!laneId.empty()) {
             editorAnchorBindingId.clear();
             editorState.editorTrackId = track.id;

@@ -230,7 +230,9 @@ incoming segment's settings. The same rule applies to LFO control curves.
 The left column holds each open clip editor. The track header's arrow opens
 or closes its lanes, **+** adds a lane or clip, and the hamburger opens shared
 Clip settings. When a track contains several clips, the floating window has a
-clip picker. Each lane's pad starts with fold and the lane name, with M/S
+clip picker. A lane made for a parameter is named by the parameter's whole
+path, node included (`MacroMixer_1/Target`), however it was added; rename it in
+its **Lane** tab. Each lane's pad starts with fold and the lane name, with M/S
 against its right edge (as on a track pad), followed directly by its tabs:
 **Targets** (what the lane drives), **Lane** (name, type, output range and
 the editor's own settings), **Mutate** and **Rndm** (piano rolls only, see

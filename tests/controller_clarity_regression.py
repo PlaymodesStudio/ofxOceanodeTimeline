@@ -1111,7 +1111,7 @@ int main() {
         for(const auto& binding:model.getTrack(t)->bindings) if(binding.parameterPath==filterPath) filterBinding=binding.id;
         const auto& newLane=model.getClip(t,c)->lanes.back();
         assert(!filterBinding.empty() && newLane.bindingIds==std::vector<std::string>{filterBinding});
-        assert(newLane.name=="Cutoff" && newLane.type==ofxOceanodeTimelineLaneType::Curve);
+        assert(newLane.name==filterPath && newLane.type==ofxOceanodeTimelineLaneType::Curve); // the whole path, node included
         assert(ui.editorState.clipEditorOpen && ui.editorState.editorClipId==c && ui.editorState.editorLaneId==newLane.id);
         assert(model.undoTimelineEdit() && model.toJson()["timelines"][0]["tracks"]==tracksBeforeLane);
         // New Target: an existing lane (the one being edited, in the selected
