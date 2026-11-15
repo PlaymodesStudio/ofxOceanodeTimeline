@@ -71,7 +71,11 @@ void ofxOceanodeTimelineHeldValueEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             }
             dl->AddRectFilled(ImVec2(x, top), ImVec2(endX, bottom), color);
             dl->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(235, 235, 235, 210), 2.0f);
-            dl->PushClipRect(ImVec2(std::max(left, x + 3.0f), top), ImVec2(std::min(right, endX), bottom), true);
+            // The label is cut 10px short of the next one (the next key, or
+            // the next repeat), so two never read as one.
+            const bool labelFollows = i + 1 < lane->curvePoints.size() || cycle + 1 < cycles;
+            dl->PushClipRect(ImVec2(std::max(left, x + 3.0f), top),
+                             ImVec2(std::min(right, endX - (labelFollows ? 10.0f : 0.0f)), bottom), true);
             const std::string label = dropdown ? dropdownOptionLabel(options, point.value) : ofToString(point.value, 6);
             dl->AddText(ImVec2(x + 6.0f, top + 6.0f), IM_COL32(245, 245, 245, 235), label.c_str());
             dl->PopClipRect();
@@ -197,11 +201,21 @@ void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineCl
     dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
     const int cycles = clip.repeatContent ? static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip))) : 1;
     for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
-        for(const auto& point : lane->curvePoints) {
+        for(size_t i = 0; i < lane->curvePoints.size(); ++i) {
+            const auto& point = lane->curvePoints[i];
             const float x = min.x + beatOffset(sourceToTimelineBeat(clip, point.beat, cycle));
             dl->AddLine(ImVec2(x, min.y + 4.0f), ImVec2(x, max.y - 4.0f), previewInk(preview, 160));
             const std::string label = dropdown ? dropdownOptionLabel(options, point.value) : ofToString(point.value, 4);
+            // Cut 10px short of the next label (the next key, or the first
+            // key of the next repeat), so two never overlap or read as one.
+            float labelEnd = right - 1.0f;
+            if(i + 1 < lane->curvePoints.size())
+                labelEnd = min.x + beatOffset(sourceToTimelineBeat(clip, lane->curvePoints[i + 1].beat, cycle)) - 10.0f;
+            else if(cycle + 1 < cycles)
+                labelEnd = min.x + beatOffset(sourceToTimelineBeat(clip, lane->curvePoints.front().beat, cycle + 1)) - 10.0f;
+            dl->PushClipRect(ImVec2(x, min.y + 3.0f), ImVec2(labelEnd, max.y - 3.0f), true);
             dl->AddText(ImVec2(x + 4.0f, min.y + 4.0f), previewInk(preview, 220), label.c_str());
+            dl->PopClipRect();
         }
     }
     dl->PopClipRect();
