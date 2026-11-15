@@ -7,6 +7,12 @@
 
 namespace ofxOceanodeTimelineLaneEditorUi {
 bool playbackToggle(const std::string& id, const char* label, bool on, const char* tooltip);
+// A lane's top row is its fold arrow and name from the left, then M and S
+// against its right edge, as on a track pad. playbackPairWidth: what the
+// two buttons take, `spacing` apart. sameLinePlaybackPair: stays on the
+// current line and moves to where M goes for S to end at `right` (screen x).
+float playbackPairWidth(float spacing);
+void sameLinePlaybackPair(float right, float spacing);
 // A lane's name: a Selectable drawn with no background, focused or not.
 void drawChanceKnob(ImDrawList* dl, float chance, bool active, const ImVec2& center, float radius);
 ImVec2 laneChanceCenter(const ImVec2& min, const ImVec2& max);

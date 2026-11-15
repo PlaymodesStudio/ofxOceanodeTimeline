@@ -7037,13 +7037,21 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
             ImGui::EndPopup();
         }
     };
-    auto drawLanePlayback = [&]() {
+    // A lane's top row: fold arrow and name from the left, then M and S
+    // against its right edge, as on a track pad (and spaced as there,
+    // whatever item spacing the row itself uses). right: where S ends.
+    const float playbackSpacing = ImGui::GetStyle().ItemSpacing.x;
+    auto laneNameWidth = [&](float right) {
+        return std::max(1.0f, right - playbackPairWidth(playbackSpacing) - ImGui::GetStyle().ItemSpacing.x -
+                              ImGui::GetCursorScreenPos().x);
+    };
+    auto drawLanePlayback = [&](float right) {
+        sameLinePlaybackPair(right, playbackSpacing);
         if(playbackToggle("laneMute" + lane->id, "M", lane->muted, "Mute lane"))
             timeline.setLaneMuted(scope(timeline), track.id, clip->id, lane->id, !lane->muted);
-        ImGui::SameLine();
+        ImGui::SameLine(0.0f, playbackSpacing);
         if(playbackToggle("laneSolo" + lane->id, "S", lane->solo, "Solo lane within this clip (multiple solos allowed)"))
             timeline.setLaneSolo(scope(timeline), track.id, clip->id, lane->id, !lane->solo);
-        ImGui::SameLine();
     };
     // An LFO lane's control sublanes, as rows under its own (hidden with it
     // when it is folded).
@@ -7064,14 +7072,15 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         if(foldButton(("##laneExpand" + lane->id).c_str(), false)) editorState.collapsedLaneIds.erase(lane->id);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Expand lane");
         ImGui::SameLine();
-        drawLanePlayback();
+        const float playbackRight = rowZoneLeft - kPadRightMargin;   // level with the track pads' S
         {
-            const float nameWidth = std::max(1.0f, rowZoneLeft - 6.0f - ImGui::GetCursorScreenPos().x);
+            const float nameWidth = laneNameWidth(playbackRight);
             laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeaderCollapsed" + lane->id, isFocused,
                                ImVec2(nameWidth, 0));
         }
         if(ImGui::IsItemClicked()) focusLane();
-        drawLaneMenu(false);
+        drawLaneMenu(false);   // on the name
+        drawLanePlayback(playbackRight);
         // Reuse the clip miniature in the folded row, at the clip's own time.
         const float originX = rowZoneLeft - timelineScrollX;
         const float left = std::max(rowZoneLeft, originX + beatOffset(clip->startBeat));
@@ -7193,16 +7202,18 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                       ImVec2(kLabelWidth - 10.0f - clipIndent - pianoKeyboardReserve,
                              editorHeight - 8.0f - kLaneResizeHandleHeight), false,
                       shallowProperties ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None);
-    // Header: fold, M/S and name; the lane tabs follow directly below.
+    // Header: fold and name, M/S at its right; the lane tabs follow directly below.
     if(foldButton(("##laneCollapse" + lane->id).c_str(), true)) editorState.collapsedLaneIds.insert(lane->id);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse lane");
     ImGui::SameLine();
-    drawLanePlayback();
     {
-        const float nameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+        // The pad ends a pixel past the track pads' S.
+        const float playbackRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x - 1.0f;
+        const float nameWidth = laneNameWidth(playbackRight);
         if(laneNameSelectable(fitText(laneLabel, nameWidth - 8.0f) + "##laneHeader" + lane->id, isFocused,
                               ImVec2(nameWidth, 0)))
             focusLane();
+        drawLanePlayback(playbackRight);
     }
     if(ImGui::BeginTabBar("##clipPropertyTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
         if(ImGui::BeginTabItem("Targets")) {

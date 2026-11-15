@@ -24,6 +24,15 @@ bool playbackToggle(const std::string& id, const char* label, bool on, const cha
     return clicked;
 }
 
+float playbackPairWidth(float spacing) {
+    const float padding = ImGui::GetStyle().FramePadding.x * 2.0f;
+    return ImGui::CalcTextSize("M").x + padding + spacing + ImGui::CalcTextSize("S").x + padding;
+}
+void sameLinePlaybackPair(float right, float spacing) {
+    ImGui::SameLine();
+    ImGui::SetCursorScreenPos(ImVec2(right - playbackPairWidth(spacing), ImGui::GetCursorScreenPos().y));
+}
+
 void drawChanceKnob(ImDrawList* dl, float clipChance, bool active, const ImVec2& center, float radius) {
     // Ring = 100%; the filled arc shows how likely the clip is to play.
     const float chance = ofClamp(clipChance, 0.0f, 1.0f);

@@ -167,13 +167,19 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
             focusLane();
             focusedControlKey = key;
         };
-        auto drawPlayback = [&]() {
+        // As a lane's top row: fold arrow and name from the left, then M
+        // and S against the right edge (right: where S ends).
+        const float playbackSpacing = ImGui::GetStyle().ItemSpacing.x;
+        auto nameWidthBefore = [&](float right) {
+            return std::max(1.0f, right - playbackPairWidth(playbackSpacing) - playbackSpacing - ImGui::GetCursorScreenPos().x);
+        };
+        auto drawPlayback = [&](float right) {
+            sameLinePlaybackPair(right, playbackSpacing);
             if(playbackToggle("lfoControlMute" + key, "M", control.muted, "Mute control: it uses its default"))
                 timeline.setLaneMuted(sequence, track.id, clip.id, key, !control.muted);
-            ImGui::SameLine();
+            ImGui::SameLine(0.0f, playbackSpacing);
             if(playbackToggle("lfoControlSolo" + key, "S", control.solo, "Solo control among this LFO's controls (the others use their defaults)"))
                 timeline.setLaneSolo(sequence, track.id, clip.id, key, !control.solo);
-            ImGui::SameLine();
         };
 
         // ---- folded: one line, with the envelope in miniature ----
@@ -189,12 +195,13 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
             if(foldButton(("##lfoControlExpand" + key).c_str(), false)) editorState.expandedLfoControlKeys.insert(key);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Expand control");
             ImGui::SameLine();
-            drawPlayback();
             char label[96];
             std::snprintf(label, sizeof(label), "%s   %.3g", control.name.c_str(), current);
-            const float nameWidth = std::max(1.0f, zoneLeft - 6.0f - ImGui::GetCursorScreenPos().x);
+            const float playbackRight = zoneLeft - 6.0f;   // level with the track pads' S
+            const float nameWidth = nameWidthBefore(playbackRight);
             laneNameSelectable(fitText(label, nameWidth - 8.0f) + "##lfoControlCollapsed" + key, focused, ImVec2(nameWidth, 0));
             if(ImGui::IsItemClicked()) focusControl();
+            drawPlayback(playbackRight);
             const float left = std::max(zoneLeft, originX + view.beatToPixels(clip.startBeat));
             const float right = std::min({rowMax.x, dl->GetClipRectMax().x, originX + view.beatToPixels(clip.startBeat + clip.durationBeats)});
             if(right > left) {
@@ -263,7 +270,7 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
                         resizeActive ? 2.0f : 1.0f);
         }
 
-        // Properties: fold, M/S, name, then the control's mode and value.
+        // Properties: fold and name, M/S at their right, then the control's mode and value.
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + indent, rowMin.y + 4.0f));
         if(compactLaneHeight(height)) ImGui::SetNextWindowScroll(ImVec2(0, 0));
         ImGui::BeginChild(("##lfoControlProperties" + track.id + clip.id + key).c_str(),
@@ -272,11 +279,13 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
         if(foldButton(("##lfoControlCollapse" + key).c_str(), true)) editorState.expandedLfoControlKeys.erase(key);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Collapse control");
         ImGui::SameLine();
-        drawPlayback();
         {
-            const float nameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+            // The pad ends a pixel past the track pads' S.
+            const float playbackRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x - 1.0f;
+            const float nameWidth = nameWidthBefore(playbackRight);
             if(laneNameSelectable(fitText(control.name, nameWidth - 8.0f) + "##lfoControlHeader" + key, focused, ImVec2(nameWidth, 0)))
                 focusControl();
+            drawPlayback(playbackRight);
         }
         int mode = control.curveInterpolation == "Value" ? 0 : 1 + static_cast<int>(curveInterpolationMode(control.curveInterpolation));
         const int previousMode = mode;
