@@ -13,6 +13,7 @@
 #include "Managers/ofxOceanodeMidiClock.h"
 #endif
 #include "ofxOceanodeTransport.h"
+#include "ofxOceanodeTransportWidgets.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #ifdef TARGET_GLFW_WINDOW
@@ -1614,8 +1615,7 @@ void ofxOceanodeTimelineController::draw() {
                 break;
             }
             case ToolIcon::Tap:
-                dl->AddCircle(c, s * 0.4f, col, 16, 1.6f);
-                dl->AddCircleFilled(c, s * 0.16f, col);
+                ofxOceanodeTransportWidgets::drawTapIcon(dl, c, s, col);
                 break;
             case ToolIcon::Magnet: { // horseshoe magnet, poles up
                 const float r = s * 0.3f;
@@ -1731,18 +1731,11 @@ void ofxOceanodeTimelineController::draw() {
         bpm = ofClamp(typed, 1.0f, 999.0f);
         return true;
     };
-    // Tap tempo: the average of the last taps; a pause of 2 s starts over.
+    // Tap tempo: the average of the last taps; a pause of 2 s starts over
+    // (core's, shared with the menu bar's tap button).
     auto tapTempo = [&](float& bpm) {
         if(!iconButton("##tbTap", ToolIcon::Tap, "Tap tempo: tap on the beat")) return false;
-        const double now = ofGetElapsedTimef();
-        if(!tapTimes.empty() && now - tapTimes.back() > 2.0) tapTimes.clear();
-        tapTimes.push_back(now);
-        if(tapTimes.size() > 8) tapTimes.erase(tapTimes.begin());
-        if(tapTimes.size() < 2) return false;
-        const double interval = (tapTimes.back() - tapTimes.front()) / (tapTimes.size() - 1);
-        if(interval <= 0.0) return false;
-        bpm = ofClamp(static_cast<float>(60.0 / interval), 20.0f, 400.0f);
-        return true;
+        return ofxOceanodeTransportWidgets::tapTempo(tapTimes, ofGetElapsedTimef(), bpm);
     };
     // ---- Scope bar row: transport | loop | position | tempo | meter ----
     auto loopButton = [&]() {
@@ -1850,33 +1843,17 @@ void ofxOceanodeTimelineController::draw() {
     if(transport != nullptr) {
         groupSeparator();
         {
-            // Position readout: bar . beat . sixteenth, and the song time.
+            // Position readout: bar . beat . sixteenth, and the song time. The
+            // widget is core's, drawn the same in the menu bar for the global
+            // transport; here it shows the transport and meter of the timeline shown.
             const auto& shownState = own ? ownState : transportState;
-            const double beatsPerBar = std::max(1e-6, ownMeter
+            const double beatsPerBar = ownMeter
                 ? ownPlay->timeSignatureNumerator * (4.0 / std::max(1, ownPlay->timeSignatureDenominator))
-                : timeline.getBeatsPerBar());
+                : timeline.getBeatsPerBar();
             const double beat = std::max(0.0, shownState.beatPosition);
-            const int bar = static_cast<int>(std::floor(beat / beatsPerBar)) + 1;
-            const double inBar = beat - (bar - 1) * beatsPerBar;
-            const int beatInBar = static_cast<int>(std::floor(inBar)) + 1;
-            const int sixteenth = static_cast<int>(std::floor((inBar - std::floor(inBar)) * 4.0)) + 1;
-            const double seconds = own ? std::max(0.0, ownState.seconds) : timeline.beatToSeconds(beat, transportState.bpm);
-            const int minutes = static_cast<int>(seconds / 60.0);
-            char positionText[32];
-            char timeText[32];
-            std::snprintf(positionText, sizeof(positionText), "%3d. %d. %d", bar, beatInBar, sixteenth);
-            std::snprintf(timeText, sizeof(timeText), "%d:%06.3f", minutes, seconds - minutes * 60.0);
-            const ImVec2 pos = ImGui::GetCursorScreenPos();
-            const ImVec2 size(170.0f, toolbarHeight);
-            ImGui::Dummy(size);
-            auto* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(12, 14, 18, 255), 3.0f);
-            dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(255, 255, 255, 25), 3.0f);
-            const float textY = pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f;
-            dl->AddText(ImVec2(pos.x + 8.0f, textY),
-                        shownState.isPlaying ? IM_COL32(120, 235, 160, 255) : IM_COL32(230, 232, 238, 255), positionText);
-            const float timeWidth = ImGui::CalcTextSize(timeText).x;
-            dl->AddText(ImVec2(pos.x + size.x - timeWidth - 8.0f, textY), IM_COL32(150, 155, 165, 255), timeText);
+            const double seconds = own ? ownState.seconds : timeline.beatToSeconds(beat, transportState.bpm);
+            ofxOceanodeTransportWidgets::positionReadout("##tbPosition", beat, beatsPerBar, seconds,
+                                                         shownState.isPlaying, toolbarHeight);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Bar . beat . sixteenth    song time\nBeat %.3f", beat);
         }
 
