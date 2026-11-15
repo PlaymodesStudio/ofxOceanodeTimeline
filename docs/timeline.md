@@ -83,6 +83,11 @@ an equal amount of empty space to its right. This limit uses clips from every
 track in the timeline, including hidden or muted tracks, and updates as their
 lengths change. Reaching the limit returns the view to the origin.
 
+The toolbar's **Zoom to fit** button (four corners, also Alt+Z) fits every
+clip and marker. **Zoom to loop** (the same corners around an L, to its left)
+fits the loop region instead; it is disabled while Loop is off. A loop longer
+than the widest clip-based view is still shown whole.
+
 ### Track pads
 
 Every pad in the left column (a track, a folder, a row of an unfolded macro

@@ -1554,7 +1554,7 @@ void ofxOceanodeTimelineController::draw() {
     // transport and toggles are drawn as icons.
     // The scope bar's frame padding is the toolbar's, so one height fits both.
     const float toolbarHeight = ImGui::GetFrameHeight();
-    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, Tap, Clock, Magnet, Metronome };
+    enum class ToolIcon { Play, Pause, Stop, ToStart, Loop, Follow, Fit, FitLoop, Tap, Clock, Magnet, Metronome };
     auto drawIcon = [&](ImDrawList* dl, ToolIcon icon, ImVec2 c, float s, ImU32 col) {
         switch(icon) {
             case ToolIcon::Play:
@@ -1587,7 +1587,8 @@ void ofxOceanodeTimelineController::draw() {
                 dl->AddLine(ImVec2(c.x - s * 0.02f, c.y - s * 0.28f), ImVec2(c.x + s * 0.28f, c.y), col, 1.8f);
                 dl->AddLine(ImVec2(c.x + s * 0.28f, c.y), ImVec2(c.x - s * 0.02f, c.y + s * 0.28f), col, 1.8f);
                 break;
-            case ToolIcon::Fit: { // four corners
+            case ToolIcon::Fit:       // four corners
+            case ToolIcon::FitLoop: { // the same corners, around an L (the loop)
                 const float o = s * 0.42f, l = s * 0.2f;
                 for(int sx = -1; sx <= 1; sx += 2)
                     for(int sy = -1; sy <= 1; sy += 2) {
@@ -1595,6 +1596,13 @@ void ofxOceanodeTimelineController::draw() {
                         dl->AddLine(k, ImVec2(k.x - sx * l, k.y), col, 1.6f);
                         dl->AddLine(k, ImVec2(k.x, k.y - sy * l), col, 1.6f);
                     }
+                if(icon == ToolIcon::FitLoop) {
+                    const float h = s * 0.24f, stemX = c.x - s * 0.14f;
+                    dl->PathLineTo(ImVec2(stemX, c.y - h));
+                    dl->PathLineTo(ImVec2(stemX, c.y + h));
+                    dl->PathLineTo(ImVec2(c.x + s * 0.16f, c.y + h));
+                    dl->PathStroke(col, 0, 1.6f);
+                }
                 break;
             }
             case ToolIcon::Tap:
@@ -2062,6 +2070,13 @@ void ofxOceanodeTimelineController::draw() {
 
     groupSeparator();
     {
+        // Zoom to the loop region: only while the shown timeline's loop is on.
+        const bool loopOn = ownPlay != nullptr && ownPlay->loopEnabled;
+        if(iconButton("##tbFitLoop", ToolIcon::FitLoop,
+                      loopOn ? "Zoom to fit the loop region" : "Zoom to fit the loop region (Loop is off)",
+                      false, IM_COL32(95, 150, 235, 255), loopOn))
+            requestZoomToLoop = true;
+        ImGui::SameLine(0.0f, 4.0f);
         if(iconButton("##tbFit", ToolIcon::Fit, "Zoom to fit every clip and marker")) requestZoomToFit = true;
         ImGui::SameLine(0.0f, 4.0f);
         if(iconButton("##tbFollow", ToolIcon::Follow, followPlayhead ? "Follow playhead: on" : "Follow playhead: off",
@@ -2206,6 +2221,23 @@ void ofxOceanodeTimelineController::draw() {
         const float usable = std::max(40.0f, availableWidth - kLabelWidth - 24.0f);
         pixelsPerSecond = ofClamp(static_cast<float>(usable / seconds), minimumZoomScale, maximumZoomScale);
         timelineScrollX = 0.0f;
+    }
+    if(requestZoomToLoop) {
+        // The loop region across the visible width, with the margin Fit
+        // leaves split between its two ends. A loop longer than the widest
+        // clip-based view still fits: this zooms out past that limit.
+        requestZoomToLoop = false;
+        double loopStartBeat = 0.0, loopEndBeat = 0.0;
+        if(shownLoop(timeline, loopStartBeat, loopEndBeat) && loopEndBeat > loopStartBeat) {
+            zoomAnchorUntil = 0.0;
+            const double startSeconds = timeline.beatToSeconds(loopStartBeat, transportState.bpm);
+            const double seconds = std::max(0.001, timeline.beatToSeconds(loopEndBeat, transportState.bpm) - startSeconds);
+            const float usable = std::max(40.0f, availableWidth - kLabelWidth - 24.0f);
+            pixelsPerSecond = ofClamp(static_cast<float>(usable / seconds), kMinPixelsPerSecond, maximumZoomScale);
+            // Centred, when the closest zoom leaves it narrower than the view.
+            const float loopWidth = static_cast<float>(seconds * pixelsPerSecond);
+            timelineScrollX = std::max(0.0f, static_cast<float>(startSeconds * pixelsPerSecond) - (visibleWidth - loopWidth) * 0.5f);
+        }
     }
     const float scrollbarHeight = ImGui::GetStyle().ScrollbarSize;
     const ImVec2 timelineAreaMin = ImGui::GetCursorScreenPos();

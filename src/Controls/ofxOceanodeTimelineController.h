@@ -592,6 +592,7 @@ private:
     ImVec2 wheelAxisTravel = ImVec2(0.0f, 0.0f);
     double lastWheelTime = -1.0;
     bool requestZoomToFit = false;     // fit every clip and marker in the visible width
+    bool requestZoomToLoop = false;    // fit the loop region in the visible width (toolbar, while the loop is on)
     uint64_t fittedLoadStamp = 0;      // the latest loaded timeline the view was fitted to (its loadStamp)
     // The time scrollbar: its middle scrolls, a handle at either end of its
     // thumb zooms, the view's other edge staying at the same time.
