@@ -2342,8 +2342,13 @@ void appendCurveWindow(const ofxOceanodeTimelineLane& lane, double from, double 
     for(size_t i = 0; i < window.size(); ++i) {
         if(i > 0) {
             const int a = window[i - 1].index, b = window[i].index;
-            const bool wholeSegment = a >= 0 && b == a + 1 && static_cast<size_t>(a) < lane.curveTensions.size();
-            outTensions.push_back(wholeSegment ? lane.curveTensions[a]
+            // A whole segment keeps its tension; one the lane holds no tension
+            // for is neutral, as it plays (valueAtBeat). Fitting it instead
+            // would misread a segment that starts on a jump (two points on
+            // one beat), sampling the value before the jump as its start.
+            const bool wholeSegment = a >= 0 && b == a + 1;
+            outTensions.push_back(wholeSegment ? (static_cast<size_t>(a) < lane.curveTensions.size()
+                                                      ? lane.curveTensions[a] : ofxOceanodeTimelineCurveTension{})
                                                : fitTension(window[i - 1].originalBeat, window[i].originalBeat));
         }
         outPoints.push_back({placeAt + window[i].originalBeat - from, window[i].value});
@@ -3515,6 +3520,9 @@ std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& 
         // One key, white until its target's colour is known (addBoundLane).
         if(type == ofxOceanodeTimelineLaneType::Color) lane.colors = {ofFloatColor(1.0f, 1.0f, 1.0f, 1.0f)};
     } else if(type == ofxOceanodeTimelineLaneType::Curve) {
+        // Sigmoid: straight until a segment's handle bends it (a neutral
+        // tension is an exact line).
+        lane.curveInterpolation = "Sigmoid";
         lane.curvePoints = {{0.0, 0.0f}, {clip->contentDurationBeats, 1.0f}};
         lane.curveTensions.push_back({0.5f, 1.0f});
     } else if(type == ofxOceanodeTimelineLaneType::MultiValue) {
@@ -3770,7 +3778,7 @@ bool ofxOceanodeTimelineManager::setClipLaneType(ofxOceanodeTimelineSequence& se
         if(lane->pianoGateBindingId.empty() && lane->bindingIds.size() > 1) lane->pianoGateBindingId = lane->bindingIds[1];
         if(lane->pianoVelocityBindingId.empty() && lane->bindingIds.size() > 2) lane->pianoVelocityBindingId = lane->bindingIds[2];
     } else if(type == ofxOceanodeTimelineLaneType::Curve) {
-        lane->curveInterpolation = "Linear";
+        lane->curveInterpolation = "Sigmoid"; // as a new Curve lane (createLane)
         if(lane->curvePoints.empty()) {
             const double contentDuration = clip == nullptr ? 4.0 : clip->contentDurationBeats;
             lane->curvePoints = {{0.0, 0.0f}, {contentDuration, 1.0f}};

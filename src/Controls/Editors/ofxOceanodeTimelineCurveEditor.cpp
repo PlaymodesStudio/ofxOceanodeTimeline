@@ -27,8 +27,12 @@ void ofxOceanodeTimelineCurveEditor::drawProperties(ofxOceanodeTimelineLaneEdito
         curveTensionSegment = -1;
     }
     const auto selectedInterpolation = curveInterpolationMode(lane->curveInterpolation);
-    if(selectedInterpolation == CurveInterpolationMode::LogExp) ImGui::TextDisabled("Alt-drag vertically");
-    else if(selectedInterpolation == CurveInterpolationMode::Sigmoid) ImGui::TextDisabled("Alt-drag freely");
+    if(selectedInterpolation == CurveInterpolationMode::LogExp) ImGui::TextDisabled("Drag a handle up / down");
+    else if(selectedInterpolation == CurveInterpolationMode::Sigmoid) ImGui::TextDisabled("Drag a segment's handle");
+    if((selectedInterpolation == CurveInterpolationMode::LogExp || selectedInterpolation == CurveInterpolationMode::Sigmoid) &&
+       ImGui::IsItemHovered())
+        ImGui::SetTooltip("Each segment has a handle on its curve: drag it to bend the segment,\n"
+                          "double-click it for a straight line. Alt-drag anywhere on a segment does the same.");
     ImGui::Checkbox("Clamp to range", &lane->curveClamp);
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("Clamp curve values to the configured Range min..max");
@@ -216,6 +220,28 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             }
         }
     }
+    // A Sigmoid or Log/Exp segment has a handle on its curve, as a Project
+    // Track's transition has: where the sigmoid is half way (it follows the
+    // bend sideways), or the middle of a Log/Exp segment (it follows the bend
+    // up and down). Segments too short to hold one beside their points have none.
+    const bool tensionMode = interpolation == CurveInterpolationMode::LogExp || interpolation == CurveInterpolationMode::Sigmoid;
+    constexpr float kTensionHandleMinWidth = 24.0f, kTensionHandlePick = 7.0f;
+    struct TensionHandle { ImVec2 at; float width; };
+    const auto tensionHandle = [&](size_t segment, int cycle) {
+        const auto& a = lane->curvePoints[segment];
+        const auto& b = lane->curvePoints[segment + 1];
+        const auto tension = lane->curveTensions[segment];
+        const float t = interpolation == CurveInterpolationMode::Sigmoid ? ofClamp(tension.inflection, 0.01f, 0.99f) : 0.5f;
+        const float xa = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, a.beat, cycle));
+        const float xb = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, b.beat, cycle));
+        return TensionHandle{ImVec2(xa + (xb - xa) * t,
+                                    curveValueToY(ofLerp(a.value, b.value, curveSegmentShape(t, interpolation, tension)))),
+                             xb - xa};
+    };
+    const auto tensionNeutral = [&](const ofxOceanodeTimelineCurveTension& tension) {
+        return std::abs(tension.steepness - 1.0f) < 1e-4f &&
+               (interpolation != CurveInterpolationMode::Sigmoid || std::abs(tension.inflection - 0.5f) < 1e-4f);
+    };
     // Keep the margin available for endpoint handles, including selection rings.
     dl->PushClipRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y), true);
     for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
@@ -252,6 +278,25 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
                 const ImVec2 b(timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, source2, cycle)),
                                curveValueToY(value2));
                 dl->AddLine(a, b, IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 240 : 130), 2.0f);
+            }
+        }
+        if(tensionMode) {
+            const ImU32 ink = IM_COL32(track.color.r, track.color.g, track.color.b, cycle == 0 ? 255 : 130);
+            const ImU32 dark = IM_COL32(20, 20, 20, cycle == 0 ? 230 : 130);
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            for(size_t i = 0; i + 1 < points.size(); ++i) {
+                const auto handle = tensionHandle(i, cycle);
+                if(handle.width < kTensionHandleMinWidth) continue;
+                // Hollow while the segment is straight, filled once bent;
+                // white while dragged, larger under the mouse.
+                const bool neutral = tensionNeutral(lane->curveTensions[i]);
+                const bool dragged = isFocused && curveTensionSegment == static_cast<int>(i);
+                const bool hovered = isFocused && editorCanvasHovered && litPoint < 0 && curveDragPointIndex < 0 &&
+                    curveTensionSegment < 0 && std::abs(mouse.x - handle.at.x) <= kTensionHandlePick &&
+                    std::abs(mouse.y - handle.at.y) <= kTensionHandlePick;
+                const float handleRadius = dragged || hovered ? 5.0f : 3.5f;
+                dl->AddCircleFilled(handle.at, handleRadius, dragged ? IM_COL32(255, 255, 255, 255) : neutral ? dark : ink);
+                dl->AddCircle(handle.at, handleRadius, neutral ? ink : dark, 0, 1.0f);
             }
         }
         for(size_t i = 0; i < points.size(); ++i) {
@@ -308,6 +353,32 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         }
         return -1;
     };
+    // The segment whose tension handle the mouse is on (points win over it).
+    auto hitTensionHandle = [&]() {
+        if(!tensionMode) return -1;
+        for(size_t i = 0; i + 1 < lane->curvePoints.size() && i < lane->curveTensions.size(); ++i) {
+            const auto handle = tensionHandle(i, hoveredCycle);
+            if(handle.width >= kTensionHandleMinWidth && std::abs(curveMouse.x - handle.at.x) <= kTensionHandlePick &&
+               std::abs(curveMouse.y - handle.at.y) <= kTensionHandlePick)
+                return static_cast<int>(i);
+        }
+        return -1;
+    };
+    if(curveHovered && curveDragPointIndex < 0 && curveTensionSegment < 0 && hitPoint() < 0) {
+        const int hoveredHandle = hitTensionHandle();
+        if(hoveredHandle >= 0) {
+            const auto& tension = lane->curveTensions[hoveredHandle];
+            if(interpolation == CurveInterpolationMode::Sigmoid) {
+                ImGui::SetTooltip("Bend at %d%%, steepness %.2f\n"
+                                  "Drag sideways: where it bends. Up / down: how sharply.\nDouble-click: linear.",
+                                  static_cast<int>(std::round(tension.inflection * 100.0f)), tension.steepness);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            } else {
+                ImGui::SetTooltip("Steepness %.2f\nDrag up / down: how it bends.\nDouble-click: linear.", tension.steepness);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            }
+        }
+    }
 
     if(curveHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         curveValuePointIndex = hitPoint();
@@ -323,11 +394,28 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     if(curveHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         curveDragPointIndex = hitPoint();
         curveTensionSegment = -1;
+        curveTensionFromHandle = false;
+        const int clickedHandle = curveDragPointIndex < 0 ? hitTensionHandle() : -1;
         if(curveDragPointIndex >= 0 && ImGui::GetIO().KeyShift) {
             if(!curveSelectedPointIndices.erase(curveDragPointIndex)) curveSelectedPointIndices.insert(curveDragPointIndex);
             curveDragPointIndex = -1;
         } else if(curveDragPointIndex >= 0) {
             curveSelectedPointIndices = {curveDragPointIndex};
+        } else if(clickedHandle >= 0) {
+            // A segment's handle: drag it to bend the segment, double-click
+            // it for a straight line (as a Project Track's easing handle).
+            auto& tension = lane->curveTensions[clickedHandle];
+            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) tension = ofxOceanodeTimelineCurveTension{};
+            else {
+                curveTensionSegment = clickedHandle;
+                curveTensionFromHandle = true;
+                curveTensionDragStartX = curveMouse.x;
+                curveTensionDragStartY = curveMouse.y;
+                curveTensionStartInflection = tension.inflection;
+                curveTensionStartSteepness = tension.steepness;
+                // the handle follows the mouse along its own segment
+                curveTensionDragWidth = tensionHandle(static_cast<size_t>(clickedHandle), hoveredCycle).width;
+            }
         } else if(curveDragPointIndex < 0 && ImGui::GetIO().KeyAlt &&
                   (interpolation == CurveInterpolationMode::LogExp || interpolation == CurveInterpolationMode::Sigmoid) &&
                   lane->curvePoints.size() > 1) {
@@ -346,11 +434,12 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
                     curveTensionDragStartY = curveMouse.y;
                     curveTensionStartInflection = tension.inflection;
                     curveTensionStartSteepness = tension.steepness;
+                    curveTensionDragWidth = right - left;
                 }
                 break;
             }
         }
-        if(curveDragPointIndex < 0 && curveTensionSegment < 0 &&
+        if(curveDragPointIndex < 0 && curveTensionSegment < 0 && clickedHandle < 0 &&
            !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift) {
             curveDragPointIndex = insertCurvePoint(*lane, {
                 std::max(0.0, std::min(content, view.snapBeat(curveSourceBeat))), curveValue
@@ -405,18 +494,30 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             auto& tension = lane->curveTensions[curveTensionSegment];
             if(interpolation == CurveInterpolationMode::Sigmoid) {
                 tension.inflection = ofClamp(curveTensionStartInflection +
-                    (curveMouse.x - curveTensionDragStartX) / std::max(1.0f, right - left), 0.01f, 0.99f);
+                    (curveMouse.x - curveTensionDragStartX) / std::max(1.0f, curveTensionDragWidth), 0.01f, 0.99f);
             } else {
                 tension.inflection = 0.5f;
             }
-            const float steepnessDelta = -(curveMouse.y - curveTensionDragStartY) /
-                std::max(1.0f, (curveBottom - curveTop) / 3.0f);
-            tension.steepness = ofClamp(curveTensionStartSteepness * std::exp(steepnessDelta * 0.5f), 0.1f, 10.0f);
+            // A Log/Exp handle sits on the middle of its segment, where the
+            // curve is at 0.5^steepness of the way: it follows the mouse.
+            const float yA = curveValueToY(lane->curvePoints[curveTensionSegment].value);
+            const float yB = curveValueToY(lane->curvePoints[curveTensionSegment + 1].value);
+            if(curveTensionFromHandle && interpolation == CurveInterpolationMode::LogExp && std::abs(yB - yA) > 4.0f) {
+                if(ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+                    const float way = ofClamp((curveMouse.y - yA) / (yB - yA), 0.0005f, 0.9995f);
+                    tension.steepness = ofClamp(std::log(way) / std::log(0.5f), 0.1f, 10.0f);
+                }
+            } else {
+                const float steepnessDelta = -(curveMouse.y - curveTensionDragStartY) /
+                    std::max(1.0f, (curveBottom - curveTop) / 3.0f);
+                tension.steepness = ofClamp(curveTensionStartSteepness * std::exp(steepnessDelta * 0.5f), 0.1f, 10.0f);
+            }
         }
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         curveDragPointIndex = -1;
         curveTensionSegment = -1;
+        curveTensionFromHandle = false;
     }
     // Delete / Backspace removes the selected points (Timeline focused, nothing
     // being edited). One key press: the controller records it as one undo step.

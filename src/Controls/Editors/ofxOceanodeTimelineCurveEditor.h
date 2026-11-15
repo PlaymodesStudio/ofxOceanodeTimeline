@@ -33,4 +33,8 @@ private:
     float curveTensionDragStartY = 0.0f;
     float curveTensionStartInflection = 0.5f;
     float curveTensionStartSteepness = 1.0f;
+    // A tension drag started on the segment's handle (not Alt on the segment),
+    // and the pixel width a full sideways sweep of the bend takes.
+    bool curveTensionFromHandle = false;
+    float curveTensionDragWidth = 1.0f;
 };
