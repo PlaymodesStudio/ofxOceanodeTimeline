@@ -88,6 +88,11 @@ clip and marker. **Zoom to loop** (the same corners around an L, to its left)
 fits the loop region instead; it is disabled while Loop is off. A loop longer
 than the widest clip-based view is still shown whole.
 
+The zoom slider under the track pads zooms around the playhead while it is in
+view, else around the view's centre. With Cmd (or Ctrl) held it does what a
+Cmd wheel zoom does: the playhead comes to the middle of the view and the zoom
+happens there.
+
 ### Track pads
 
 Every pad in the left column (a track, a folder, a row of an unfolded macro

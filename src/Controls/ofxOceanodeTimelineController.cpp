@@ -6036,8 +6036,10 @@ void ofxOceanodeTimelineController::draw() {
 
         // The zoom slider: pinned under the track headers, level with the
         // scrollbar, so it never scrolls away with the tracks. It zooms around
-        // the playhead while that is in view, else the view's centre. Its
-        // colours are the style's own, like the Canvas header's zoom slider.
+        // the playhead while that is in view, else the view's centre. With
+        // Cmd (or Ctrl), as a wheel zoom: the playhead comes to the middle of
+        // the view and the zoom happens there. Its colours are the style's
+        // own, like the Canvas header's zoom slider.
         {
             constexpr float kZoomSliderMargin = 4.0f;
             float sliderScale = ofClamp(pixelsPerSecond, minimumZoomScale, maximumZoomScale);
@@ -6046,9 +6048,17 @@ void ofxOceanodeTimelineController::draw() {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 ImVec2(0.0f, std::max(0.0f, (scrollbarHeight - ImGui::GetFontSize()) * 0.5f)));
             if(ImGui::SliderFloat("##timelineZoomSlider", &sliderScale, minimumZoomScale, maximumZoomScale, "",
-                                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoInput))
-                zoomAt(sliderScale, playheadAnchor());
+                                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoInput)) {
+                const bool centerPlayhead = (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) &&
+                                            transportState.beatPosition > kHiddenPlayheadBeat + 1.0;
+                if(centerPlayhead) {
+                    timelineScrollX += playheadViewX() - visibleWidth * 0.5f;
+                    zoomAt(sliderScale, playheadViewX());
+                } else zoomAt(sliderScale, playheadAnchor());
+            }
             ImGui::PopStyleVar();
+            if(ImGui::IsItemHovered() && !ImGui::IsItemActive())
+                ImGui::SetTooltip("Zoom. With Cmd/Ctrl: around the playhead, brought to the middle of the view.");
         }
 
         ImGui::SetCursorScreenPos(trackMin);
