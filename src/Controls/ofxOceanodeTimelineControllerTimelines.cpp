@@ -3,6 +3,7 @@
 // menu, and the further Timeline windows the main controller hosts.
 
 #include "ofxOceanodeTimelineController.h"
+#include "Editors/ofxOceanodeTimelineLaneEditorUi.h"
 
 #include "Managers/ofxOceanodeContainer.h"
 #include "ofxOceanodeShared.h"
@@ -106,6 +107,9 @@ std::string scopeExplanation(ScopeKind kind, ClockSource source) {
     return what + "\n" + clockSourceExplanation(source);
 }
 ImU32 withAlpha(ImU32 color, int alpha) { return (color & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << 24); }
+// The scope bar's name badge is this wide whatever the name, so what
+// follows it on the row stays where it is from one timeline to the next.
+constexpr float kScopeBadgeWidth = 160.0f;
 } // namespace
 
 // The scope bar: the shown timeline's name and its "..." menu, then (drawn by
@@ -129,13 +133,17 @@ float ofxOceanodeTimelineController::beginScopeBar(ofxOceanodeTimelineManager& t
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + pad);
     const float top = ImGui::GetCursorScreenPos().y - pad;
     const float rowHeight = ImGui::GetFrameHeight();
-    // The badge: the shown timeline's name on its colour. Click: the
-    // navigator, every timeline as a tree, this one marked.
+    // The badge: the shown timeline's name on its colour, at a fixed width
+    // (a name too long for it is shortened, and whole in the tooltip).
+    // Click: the navigator, every timeline as a tree, this one marked.
     {
-        const std::string name = exists ? timeline.timelineName(shown) : std::string("No timeline");
-        const ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
+        const std::string fullName = exists ? timeline.timelineName(shown) : std::string("No timeline");
         const float arrow = ImGui::GetFontSize() * 0.5f;
-        const ImVec2 size(textSize.x + arrow + 20.0f, rowHeight);
+        const ImVec2 size(kScopeBadgeWidth, rowHeight);
+        // Room for the name: 7 px in from the left, 6 px before the arrow, itself 7 px in from the right.
+        const std::string name = ofxOceanodeTimelineLaneEditorUi::fitText(fullName, size.x - arrow - 20.0f);
+        const bool shortened = name != fullName;
+        const ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         if(ImGui::InvisibleButton("##timelinesNavigatorButton", size)) ImGui::OpenPopup("##timelinesNavigator");
         const bool hot = ImGui::IsItemHovered() || ImGui::IsPopupOpen("##timelinesNavigator");
@@ -148,7 +156,8 @@ float ofxOceanodeTimelineController::beginScopeBar(ofxOceanodeTimelineManager& t
         dl->AddText(ImVec2(pos.x + 7.0f, pos.y + (size.y - textSize.y) * 0.5f), ink, name.c_str());
         ImGui::RenderArrow(dl, ImVec2(pos.x + size.x - arrow - 7.0f, pos.y + (size.y - arrow) * 0.5f), ink, ImGuiDir_Down, 0.5f);
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s\nClick: every timeline, and where this one is.",
+            ImGui::SetTooltip("%s%s%s\nClick: every timeline, and where this one is.",
+                              shortened ? fullName.c_str() : "", shortened ? "\n" : "",
                               exists ? scopeExplanation(kind, source).c_str() : "No timeline on this canvas yet: make one with the ... menu.");
         if(ImGui::BeginPopup("##timelinesNavigator")) {
             drawTimelinesTree(timeline, shown);

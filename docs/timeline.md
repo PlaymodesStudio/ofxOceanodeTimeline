@@ -450,7 +450,8 @@ in a timeline window's **...** menu. The new one opens in a new window,
 brought forward (in the asking window itself while that shows a canvas with
 no timeline). The scope bar at the top of each window says which timeline it
 shows: a badge with its name (teal for a timeline of the main canvas, purple
-for a macro's own, or its own **Color**), the path to it (**Macro 1 > ...**,
+for a macro's own, or its own **Color**; always 160 px wide, a longer name
+shortened and shown whole in its tooltip), the path to it (**Macro 1 > ...**,
 each step a way back), the timelines navigator (every timeline under its
 canvas, with its clock source, tempo, meter and where its tempo comes from;
 pick one to show it in this window), and the **...** menu: new, duplicate,
