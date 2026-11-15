@@ -3440,13 +3440,27 @@ void ofxOceanodeTimelineController::draw() {
             const double visibleTo = std::min(endBeat, beatAtOffset(std::max(0.0f, max.x - min.x)) + grid);
             const int firstLine = std::max(0, static_cast<int>(std::floor(visibleFrom / grid)));
             const int lines = static_cast<int>(std::ceil(visibleTo / grid));
+            // Lines packed close together (a wide zoom) fade, down to a
+            // quarter of their opacity, so they do not fill the rows; each
+            // kind (bar, beat, grid) by its own spacing on screen.
+            constexpr float kFullSpacing = 32.0f, kFaintSpacing = 12.0f, kFaintOpacity = 0.25f;
+            auto fadedBySpacing = [&](ImU32 color, double everyBeats) {
+                const float spacing = beatOffset(visibleFrom + everyBeats) - beatOffset(visibleFrom);
+                const float opacity = ofClamp(kFaintOpacity + (1.0f - kFaintOpacity) * (spacing - kFaintSpacing) / (kFullSpacing - kFaintSpacing),
+                                              kFaintOpacity, 1.0f);
+                const ImU32 alpha = static_cast<ImU32>(std::round((color >> IM_COL32_A_SHIFT & 0xFF) * opacity));
+                return (color & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
+            };
+            const ImU32 barLine = fadedBySpacing(kBar, timeline.getBeatsPerBar());
+            const ImU32 beatLine = fadedBySpacing(IM_COL32(74, 74, 74, 145), std::max(grid, 1.0));
+            const ImU32 gridLine = fadedBySpacing(kGrid, grid);
             for(int i = firstLine; i <= lines; ++i) {
                 const double beat = i * grid;
                 const float x = min.x + beatOffset(beat);
                 const bool isBar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
                 const bool quarter = std::fmod(beat, 1.0) < 0.001;
                 if(isBar || quarter || beatOffset(beat + grid) - beatOffset(beat) >= 4.0f)
-                    dl->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), isBar ? kBar : quarter ? IM_COL32(92, 92, 92, 145) : kGrid, isBar ? 1.5f : 1.0f);
+                    dl->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), isBar ? barLine : quarter ? beatLine : gridLine, isBar ? 1.5f : 1.0f);
             }
         };
 
@@ -3477,7 +3491,7 @@ void ofxOceanodeTimelineController::draw() {
                 // A clip its chance roll left out of this pass reads as half muted.
                 const bool rolledOut = transportPlaying && !shownOwnsTransport(timeline) && timeline.isClipChanceSilenced(clip);
                 const ImU32 fill = IM_COL32(lift(track.color.r), lift(track.color.g), lift(track.color.b),
-                                            clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 235 : (lane == nullptr ? 75 : 185)));
+                                            clip.muted ? 45 : rolledOut ? 70 : (clipSelected ? 176 : (lane == nullptr ? 56 : 139)));
                 dl->AddRectFilled(ImVec2(left + 1, min.y + 3), ImVec2(right - 1, max.y - 3), fill);
                 // The plot area below the title band is half as bright; its
                 // content is drawn in the clip's colour (clipInk).
@@ -6320,7 +6334,7 @@ void ofxOceanodeTimelineController::drawRuler(ofxOceanodeTimelineManager& timeli
         const bool bar = std::fmod(beat, beatsPerBar) < 0.001;
         const bool quarter = std::fmod(beat, 1.0) < 0.001;
         if(bar || quarter || beatToPixels(timeline, beat + grid, bpm) - beatToPixels(timeline, beat, bpm) >= 4.0f)
-            dl->AddLine(ImVec2(x, rulerDividerY), ImVec2(x, max.y), bar ? kBar : quarter ? IM_COL32(95, 95, 95, 165) : kGrid, bar ? 1.5f : 1.0f);
+            dl->AddLine(ImVec2(x, rulerDividerY), ImVec2(x, max.y), bar ? kBar : quarter ? IM_COL32(76, 76, 76, 165) : kGrid, bar ? 1.5f : 1.0f);
         const int barNumber = static_cast<int>(std::round(beat / beatsPerBar));
         if(bar && barNumber % barLabelStep == 0) {
             char beatLabel[16];
