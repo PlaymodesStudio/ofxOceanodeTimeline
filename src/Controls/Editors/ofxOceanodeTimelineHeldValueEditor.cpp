@@ -443,7 +443,7 @@ void ofxOceanodeTimelineColorEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         lane->curvePoints[i].beat = std::max(minimum, std::min(std::max(minimum, maximum), view.snapBeat(sourceBeat)));
         timeline.invalidateSchedule();
     }
-    // A blend's shape, as a Project Track's easing: sideways moves the bend, up steepens it.
+    // A blend's shape, as a Global Track's easing: sideways moves the bend, up steepens it.
     if(blendHit >= 0 && keyDragIndex < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             lane->curveTensions[static_cast<size_t>(blendHit)] = ofxOceanodeTimelineCurveTension{};

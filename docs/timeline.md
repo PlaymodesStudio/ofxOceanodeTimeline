@@ -100,7 +100,7 @@ track) lays its controls out in rows from its top. The first row has what
 every track has: from the left, the fold arrow, the colour, the name, then the
 hamburger (Clip settings) and **+**; against the right edge, **M** and **S**.
 A track without one of these keeps the others where they are. What only one
-kind of track has goes on a second row, against the right edge: a Project
+kind of track has goes on a second row, against the right edge: a Global
 Track's **<** **+ Key** **>**, and the timeline a macro track places. A
 pad too short for two rows keeps them on the first, before **M**.
 
@@ -728,7 +728,7 @@ two bands over the same time axis:
   Shift-click to delete. The last key cannot be deleted.
 - **Blend** (below): one sigmoid per pair of consecutive keys, from 0 at a key
   to 1 at the next. Drag it sideways to move where it bends and up or down to
-  steepen it, as a Project Track's easing; double-click for a straight blend.
+  steepen it, as a Global Track's easing; double-click for a straight blend.
   There is always exactly one blend curve between two keys.
 
 Colours blend channel by channel (red, green, blue and alpha) along that

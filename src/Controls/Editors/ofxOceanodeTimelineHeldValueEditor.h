@@ -20,7 +20,7 @@ private:
 
 // A Colour lane: two bands over the same time axis. Above, the colour keys (a
 // swatch each, the band painted in the colour the lane plays); below, the
-// sigmoid each key blends along into the next, shaped like a Project Track's
+// sigmoid each key blends along into the next, shaped like a Global Track's
 // easing. Here rather than in a file of its own: its points are kept like a
 // held-value lane's.
 class ofxOceanodeTimelineColorEditor final : public ofxOceanodeTimelineLaneEditor {

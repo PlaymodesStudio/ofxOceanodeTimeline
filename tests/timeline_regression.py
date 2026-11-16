@@ -124,6 +124,40 @@ static void checkNear(double actual, double expected, int line) {
 #define near(actual, expected) checkNear(actual, expected, __LINE__)
 int main() {
     ofSeedRandom(); // OF normally constructs its random engine during app startup.
+    // Global Track names and keyframes use the new schema throughout editing
+    // and persistence; preset migration is handled by the standalone script.
+    {
+        ofxOceanodeContainer owner;
+        TestTimeline model(&owner);
+        auto& sequence = model.editSequence();
+        const auto id = model.createGlobalTrack(sequence);
+        assert(!id.empty() && model.createGlobalTrack(sequence) == id);
+        auto* track = model.getTrack(id);
+        assert(track->isGlobalTrack && track->name == "Global Track");
+        assert(model.globalTrackOf(sequence) == track);
+        const auto clipId = track->clips.front().id;
+        assert(track->clips.front().name == "Global");
+        // This adapter has no nodes to capture; seed real saved values instead.
+        auto values = std::make_shared<const std::map<std::string, std::string>>(
+            std::map<std::string, std::string>{{"Level", "0.75"}, {"Label", "Scene A"}});
+        model.getClip(id, clipId)->globalKeyframes = {{0, values}, {4, values}};
+        assert(model.getClip(id, clipId)->globalKeyframes.size() == 2);
+        assert(model.setGlobalKeyframeEase(sequence, id, clipId, 0, {0.3f, 2.0f}));
+        assert(model.moveGlobalKeyframe(sequence, id, clipId, 1, 6) == 1);
+        auto saved = model.toJson();
+        const auto& json = saved["tracks"][0];
+        assert(json["isGlobalTrack"] == true && !json.contains("isProjectTrack"));
+        assert(json["clips"][0].contains("globalKeyframes") && !json["clips"][0].contains("projectKeyframes"));
+        model.fromJson(saved);
+        const auto* clip = model.getClip(id, clipId);
+        assert(model.getTrack(id)->isGlobalTrack && clip->globalKeyframes.size() == 2);
+        near(clip->globalKeyframes[0].ease.inflection, 0.3);
+        near(clip->globalKeyframes[0].ease.steepness, 2.0);
+        near(clip->globalKeyframes[1].beat, 6);
+        assert(*clip->globalKeyframes[0].values == *values);
+        assert(model.removeGlobalKeyframe(model.editSequence(), id, clipId, 1));
+        assert(model.getClip(id, clipId)->globalKeyframes.size() == 1);
+    }
     // Duplicate all editable lane types in place, retaining their entire
     // serialized content/settings but giving each an independent identity.
     {
@@ -532,14 +566,14 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
             # Canvases: only the root exists here, and no macro has timelines.
             'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
-            # A Project Track keyframe walks real nodes: nothing to capture here.
-            'void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer&, '
+            # A Global Track keyframe walks real nodes: nothing to capture here.
+            'void ofxOceanodeTimelineManager::captureGlobalValues(ofxOceanodeContainer&, '
             'const std::unordered_set<ofxOceanodeAbstractParameter*>&, std::map<std::string, std::string>&) const {}\n'
             # The core's morph rules need real nodes: here every parameter is
             # a control, and numbers blend linearly.
-            'ofxOceanodeTimelineManager::ProjectControl ofxOceanodeTimelineManager::projectControlOf('
+            'ofxOceanodeTimelineManager::GlobalControl ofxOceanodeTimelineManager::globalControlOf('
             'ofxOceanodeAbstractParameter&) const { return {}; }\n'
-            'std::vector<float> ofxOceanodeTimelineManager::blendProjectNumbers(const std::vector<float>& from, '
+            'std::vector<float> ofxOceanodeTimelineManager::blendGlobalNumbers(const std::vector<float>& from, '
             'const std::vector<float>& to, float t, bool, bool) {\n'
             '    if(from.size() != to.size()) return t < 0.5f ? from : to;\n'
             '    std::vector<float> value(from.size());\n'

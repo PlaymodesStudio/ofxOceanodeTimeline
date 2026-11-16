@@ -152,7 +152,7 @@ void ofxOceanodeTimelineManager::makeAbsolute(ofxOceanodeTimelineSequence& seque
                 lane.targetProbability = std::move(moved);
             }
             // (The copy's own maps: the source keeps its relative paths.)
-            for(auto& keyframe : clip.projectKeyframes) {
+            for(auto& keyframe : clip.globalKeyframes) {
                 if(!keyframe.values) continue;
                 auto moved = std::make_shared<std::map<std::string, std::string>>();
                 for(const auto& [path, value] : *keyframe.values) (*moved)[absolute(path)] = value;

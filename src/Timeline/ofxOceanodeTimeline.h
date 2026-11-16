@@ -688,13 +688,13 @@ inline void ofxOceanodeTimelineRemoveMutationGroup(ofxOceanodeTimelineLane& lane
     }
 }
 
-// A Project Track keyframe: the patch's state at one position of its clip.
+// A Global Track keyframe: the patch's state at one position of its clip.
 // Values are the parameters' automation texts (parameterValueForAutomation)
 // by path, relative to the sequence's canvas like a binding's path. The map
 // is shared between copies (an engine's played copy, undo snapshots) and
 // never edited in place: a change makes a new map and a new stamp, so the
 // stamp alone tells whether the content changed (see sequenceSignature).
-struct ofxOceanodeTimelineProjectKeyframe {
+struct ofxOceanodeTimelineGlobalKeyframe {
     double beat = 0.0; // the clip's source beats
     std::shared_ptr<const std::map<std::string, std::string>> values;
     // The easing of the transition from this keyframe to the next: a
@@ -776,9 +776,9 @@ struct ofxOceanodeTimelineClip {
     double waveFileDurationMs = 0.0;
     std::vector<float> waveformPeaks;
     std::vector<ofxOceanodeTimelineLane> lanes;
-    // A Project Track's clip: the patch states it interpolates between,
+    // A Global Track's clip: the patch states it interpolates between,
     // sorted by beat. No lanes.
-    std::vector<ofxOceanodeTimelineProjectKeyframe> projectKeyframes;
+    std::vector<ofxOceanodeTimelineGlobalKeyframe> globalKeyframes;
 };
 
 inline bool ofxOceanodeTimelineClipHasLfoLane(const ofxOceanodeTimelineClip& clip) {
@@ -992,12 +992,12 @@ struct ofxOceanodeTimelineTrack {
     // (there's nothing to expand into per-binding rows) and to skip the
     // usual parameter-picking step when creating a clip on it.
     bool isWaveTrack = false;
-    // A Project Track (createProjectTrack) has no bindings either: its clips
-    // hold keyframes of the whole patch (ofxOceanodeTimelineProjectKeyframe)
+    // A Global Track (createGlobalTrack) has no bindings either: its clips
+    // hold keyframes of the whole patch (ofxOceanodeTimelineGlobalKeyframe)
     // and playback interpolates every parameter that differs between them.
     // A parameter another track automates, or one with an incoming
     // connection, is left alone.
-    bool isProjectTrack = false;
+    bool isGlobalTrack = false;
     // Height of the single Wave Track row in the timeline. Not persisted:
     // editor layout (lane heights, collapsed lanes, zoom, snap) is session
     // state everywhere else in the timeline, and this was the one exception.
@@ -1321,25 +1321,25 @@ public:
     // usual id/uniqueness/list bookkeeping and just marks the result.
     std::string createWaveTrack(const std::string& requestedName = "Wave Track");
     std::string createWaveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Wave Track");
-    // ---- Project Track (see ofxOceanodeTimelineTrack::isProjectTrack) ----
+    // ---- Global Track (see ofxOceanodeTimelineTrack::isGlobalTrack) ----
     // One per timeline: returns the existing one's id when there is one.
     // It is made with one empty clip, which grows as keyframes are added.
-    std::string createProjectTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Project Track");
-    static const ofxOceanodeTimelineTrack* projectTrackOf(const ofxOceanodeTimelineSequence& sequence);
+    std::string createGlobalTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Global Track");
+    static const ofxOceanodeTimelineTrack* globalTrackOf(const ofxOceanodeTimelineSequence& sequence);
     // Captures every storable parameter of the sequence's canvas (and the
     // macros inside it) at a timeline beat: a new keyframe, or the one
     // already there overwritten. A beat outside the clip grows the clip to
     // it (an unstretched clip only). clipId empty: the clip at the beat, or
     // the nearest one. Returns how many parameters were captured (0: none).
-    int addProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+    int addGlobalKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                            const std::string& clipId, double timelineBeat);
-    bool removeProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+    bool removeGlobalKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                const std::string& clipId, size_t index);
-    // The easing from keyframe `index` to the next one (see ofxOceanodeTimelineProjectKeyframe::ease).
-    bool setProjectKeyframeEase(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+    // The easing from keyframe `index` to the next one (see ofxOceanodeTimelineGlobalKeyframe::ease).
+    bool setGlobalKeyframeEase(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                 const std::string& clipId, size_t index, const ofxOceanodeTimelineCurveTension& ease);
     // Moves a keyframe to a timeline beat inside its clip; returns its new index (-1: not moved).
-    int moveProjectKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+    int moveGlobalKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                             const std::string& clipId, size_t index, double timelineBeat);
     // Independent copy immediately below the source, with fresh routing/content IDs.
     std::string duplicateTrack(const std::string& trackId);
@@ -1427,10 +1427,10 @@ public:
                              const std::map<std::string, std::string>& oldToNew, const ofJson& record, bool backwards);
     // Every parameter any timeline drives.
     void collectBoundParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
-    // The parameters Project Tracks move: those whose value differs between
+    // The parameters Global Tracks move: those whose value differs between
     // the keyframes of a clip. Not bindings (they stay hand-editable); a
     // MacroMixer morph asks, to leave them to the track.
-    void collectProjectDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
+    void collectGlobalDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const;
     // Drops the parameter's bindings from every timeline (a node going away).
     void removeBindingsOf(ofxOceanodeAbstractParameter& parameter);
 
@@ -1478,7 +1478,7 @@ public:
         std::string canvas;                  // the owner preselected ("" the root)
         std::vector<std::string> canvases;   // the owners offered; empty: every canvas
         ofxOceanodeAbstractParameter* parameter = nullptr; // put on its first track
-        bool projectTrack = false;           // made with a Project Track
+        bool globalTrack = false;           // made with a Global Track
         TimelineRef duplicateOf;             // a copy of this one (its canvas only)
         bool duplicate = false;
         int window = 0;                      // the Timeline window to show it in
@@ -2357,25 +2357,25 @@ private:
     // Drops entries of deleted macros and keeps each shared list's base on
     // a live copy's container.
     void pruneMacroSequences() const;
-    // A Project Track keyframe's values: every control (projectControlOf)
+    // A Global Track keyframe's values: every control (globalControlOf)
     // of `base` and the macros in it that a snapshot can hold, skipping
     // those in `bound`. Paths are relative to `base`.
-    void captureProjectValues(ofxOceanodeContainer& base,
+    void captureGlobalValues(ofxOceanodeContainer& base,
                               const std::unordered_set<ofxOceanodeAbstractParameter*>& bound,
                               std::map<std::string, std::string>& values) const;
-    // What a Project Track does with a parameter, by the rules a MacroMixer
+    // What a Global Track does with a parameter, by the rules a MacroMixer
     // morph follows (the core's ofxOceanodeMorph). control: a value the
     // user sets; false for what something else produces (Portals, a Macro's
     // pins, routers fed through their Macro's pin, cabled or read-only
     // parameters) and for node configuration, which no keyframe stores and
     // no track writes.
-    struct ProjectControl { bool control = true; bool discrete = false; bool logarithmic = false; };
-    ProjectControl projectControlOf(ofxOceanodeAbstractParameter& parameter) const;
+    struct GlobalControl { bool control = true; bool discrete = false; bool logarithmic = false; };
+    GlobalControl globalControlOf(ofxOceanodeAbstractParameter& parameter) const;
     // A numeric control's value between two keyframes (t in 0..1), by the
     // MacroMixer's interpolation: lists of different lengths are resampled
     // into each other, integers round, a logarithmic control glides
     // geometrically while all its values are positive.
-    static std::vector<float> blendProjectNumbers(const std::vector<float>& from, const std::vector<float>& to,
+    static std::vector<float> blendGlobalNumbers(const std::vector<float>& from, const std::vector<float>& to,
                                                   float t, bool integers, bool logarithmic);
     struct SequenceHistory {
         std::unique_ptr<SequenceSnapshot> pending;
@@ -2834,46 +2834,46 @@ private:
     // GUI: an external parameter edit becomes a temporary live override until
     // the next capture commits it as a point (or playback resumes).
     std::unordered_map<std::string, std::string> stateCaptureLastAppliedValues;
-    // Project Tracks (an engine's): one channel per parameter whose value
-    // differs between the keyframes of a project clip, rebuilt with the
+    // Global Tracks (an engine's): one channel per parameter whose value
+    // differs between the keyframes of a global clip, rebuilt with the
     // evaluation indexes. Numeric channels interpolate; the others hold the
     // keyframe before the playhead. A path that is not a control
-    // (projectControlOf; older keyframes stored some) is never written.
-    struct ProjectChannel {
+    // (globalControlOf; older keyframes stored some) is never written.
+    struct GlobalChannel {
         std::string path;                        // absolute
         int kind = 0;                            // 0: not resolved yet, 1: interpolated, 2: held, 3: not a control
         bool logarithmic = false;                // interpolated: geometric glide
         std::vector<std::vector<float>> numbers; // per keyframe (interpolated; empty where absent)
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
     };
-    struct ProjectClipChannels {
+    struct GlobalClipChannels {
         const ofxOceanodeTimelineTrack* track = nullptr;
         const ofxOceanodeTimelineClip* clip = nullptr;
         std::vector<double> beats;
         std::vector<ofxOceanodeTimelineCurveTension> eases; // per keyframe: to the next one
-        std::vector<ProjectChannel> channels;
+        std::vector<GlobalChannel> channels;
     };
-    std::vector<ProjectClipChannels> projectChannelsCache;
-    bool projectChannelsValid = false;
-    // What a Project Track last computed for a path. A value is written only
+    std::vector<GlobalClipChannels> globalChannelsCache;
+    bool globalChannelsValid = false;
+    // What a Global Track last computed for a path. A value is written only
     // when it differs from this, never because the parameter does: a
     // parameter stays editable by hand wherever the track's value holds
     // still (stopped, or between two equal keyframes).
     // blended: the last write went through the parameter's automation filter
     // (a MacroMixer morph blending the track in), so it was not the track's
     // own value and the next write is due whatever the track computes.
-    struct ProjectApplied { std::vector<float> numbers; std::string text; bool blended = false; };
-    std::unordered_map<std::string, ProjectApplied> projectLastApplied;
-    uint64_t projectLoadCountSeen = 0;
-    // The parameters a Project Track is moving right now (the playhead is
+    struct GlobalApplied { std::vector<float> numbers; std::string text; bool blended = false; };
+    std::unordered_map<std::string, GlobalApplied> globalLastApplied;
+    uint64_t globalLoadCountSeen = 0;
+    // The parameters a Global Track is moving right now (the playhead is
     // between two keyframes that differ for them), with their track's
     // colour: the node GUI marks them like a track's own parameters. Kept by
     // the primary, noted by its engines on every pass.
-    std::unordered_map<std::string, ofColor> projectMovingColors;
-    uint64_t projectMovingFrame = std::numeric_limits<uint64_t>::max();
-    void noteProjectMoving(const std::string& path, const ofColor& color);
-    void rebuildProjectChannels();
-    void applyProjectTracks();
+    std::unordered_map<std::string, ofColor> globalMovingColors;
+    uint64_t globalMovingFrame = std::numeric_limits<uint64_t>::max();
+    void noteGlobalMoving(const std::string& path, const ofColor& color);
+    void rebuildGlobalChannels();
+    void applyGlobalTracks();
     // Paths bound by curve lanes of state-capture clips (the only readers of the map above).
     std::unordered_set<std::string> stateCapturePathsCache;
     uint64_t evaluationIndexesSignature = 0;

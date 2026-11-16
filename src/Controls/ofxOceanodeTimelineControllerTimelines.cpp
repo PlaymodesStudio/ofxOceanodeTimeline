@@ -279,7 +279,7 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
     if(duplicate) ImGui::TextDisabled("A copy of %s", timeline.timelineName(newTimelineRequest.duplicateOf).c_str());
     else if(newTimelineRequest.parameter != nullptr)
         ImGui::TextDisabled("For %s: its track, clip and lane are asked next", newTimelineRequest.parameter->getName().c_str());
-    else if(newTimelineRequest.projectTrack) ImGui::TextDisabled("With a Project Track");
+    else if(newTimelineRequest.globalTrack) ImGui::TextDisabled("With a Global Track");
     const float fieldWidth = 320.0f;
     if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(fieldWidth);
@@ -353,8 +353,8 @@ void ofxOceanodeTimelineController::drawNewTimelinePopup(ofxOceanodeTimelineMana
                         timeline.requestParameterClip({made, std::string(), path,
                                                        ofxOceanodeTimelineManager::ParameterClipRequest::Kind::Clip});
                 }
-            if(newTimelineRequest.projectTrack && !duplicate)
-                if(auto* sequence = timeline.timelineFor(made)) timeline.createProjectTrack(*sequence);
+            if(newTimelineRequest.globalTrack && !duplicate)
+                if(auto* sequence = timeline.timelineFor(made)) timeline.createGlobalTrack(*sequence);
             // In a window of its own, brought forward: the one it was asked
             // from while that shows no timeline (a canvas's empty state), else a new one.
             const auto* asking = timeline.findTimelineWindow(newTimelineRequest.window);

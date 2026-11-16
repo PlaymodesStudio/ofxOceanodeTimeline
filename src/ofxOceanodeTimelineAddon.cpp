@@ -40,7 +40,7 @@ public:
         manager.collectBoundParameters(result);
     }
     void collectStateDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const override {
-        manager.collectProjectDrivenParameters(result);
+        manager.collectGlobalDrivenParameters(result);
     }
     void retargetParameterPaths(const std::map<std::string, std::string>& oldToNew) override {
         manager.retargetAllParameterPaths(oldToNew);
@@ -162,7 +162,7 @@ public:
                     if(auto* sequence = timelineManager.findTimeline(ref)) {
                         const std::string path = pathFor(canvas);
                         for(const auto& track : sequence->tracks) {
-                            if(track.isWaveTrack || track.isProjectTrack || track.isFolder || track.isMacroTrack()) continue;
+                            if(track.isWaveTrack || track.isGlobalTrack || track.isFolder || track.isMacroTrack()) continue;
                             const bool bound = std::any_of(track.bindings.begin(), track.bindings.end(),
                                                            [&](const auto& binding) { return binding.parameterPath == path; });
                             // A track already driving it reads as such.
@@ -260,43 +260,43 @@ public:
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", root ? "A new timeline, on the main canvas or a macro's, in a window of its own."
                                          : "A new timeline, on this macro's canvas or another, in a window of its own.");
-        // A Project Track: keyframes of the whole patch, on one of this
+        // A Global Track: keyframes of the whole patch, on one of this
         // canvas's timelines or a new one.
-        const char* projectTip = "A track holding keyframes of every parameter of this canvas\n"
+        const char* globalTip = "A track holding keyframes of every parameter of this canvas\n"
                                  "(and the macros in it). Playback interpolates between them.";
         const auto refs = manager.timelinesOfCanvas(canvasId);
         auto onNewTimeline = [&]() {
             ofxOceanodeTimelineManager::NewTimelineRequest request;
             request.canvas = canvasId;
-            request.projectTrack = true;
+            request.globalTrack = true;
             manager.requestNewTimeline(request);
             ImGui::CloseCurrentPopup();
         };
         auto hasOne = [&](const ofxOceanodeTimelineManager::TimelineRef& ref) {
             const auto* sequence = manager.timelineFor(ref);
-            return sequence == nullptr || ofxOceanodeTimelineManager::projectTrackOf(*sequence) != nullptr;
+            return sequence == nullptr || ofxOceanodeTimelineManager::globalTrackOf(*sequence) != nullptr;
         };
         auto createOn = [&](const ofxOceanodeTimelineManager::TimelineRef& ref) {
-            if(auto* sequence = manager.timelineFor(ref)) manager.createProjectTrack(*sequence);
+            if(auto* sequence = manager.timelineFor(ref)) manager.createGlobalTrack(*sequence);
             ImGui::CloseCurrentPopup();
         };
         if(refs.empty()) {
-            if(ImGui::Selectable("Create Project Track: New Timeline...")) onNewTimeline();
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("This canvas has no timeline: make one, with a Project Track.\n%s", projectTip);
+            if(ImGui::Selectable("Create Global Track: New Timeline...")) onNewTimeline();
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("This canvas has no timeline: make one, with a Global Track.\n%s", globalTip);
         } else if(refs.size() == 1 && !hasOne(refs.front())) {
-            if(ImGui::Selectable("Create Project Track")) createOn(refs.front());
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("On %s.\n%s", manager.timelineName(refs.front()).c_str(), projectTip);
-        } else if(ImGui::BeginMenu("Create Project Track")) {
+            if(ImGui::Selectable("Create Global Track")) createOn(refs.front());
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("On %s.\n%s", manager.timelineName(refs.front()).c_str(), globalTip);
+        } else if(ImGui::BeginMenu("Create Global Track")) {
             for(const auto& ref : refs) {
                 const bool taken = hasOne(ref);
                 const std::string label = manager.timelineName(ref) + (taken ? "  (has one)" : "") +
-                                          "##project" + ofxOceanodeTimelineManager::timeSourceId(ref);
+                                          "##global" + ofxOceanodeTimelineManager::timeSourceId(ref);
                 if(ImGui::MenuItem(label.c_str(), nullptr, false, !taken)) createOn(ref);
             }
             ImGui::Separator();
             if(ImGui::MenuItem("New Timeline...")) onNewTimeline();
             ImGui::EndMenu();
-        } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", projectTip);
+        } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", globalTip);
     }
     void drawNodeMenu(ofxOceanodeNodeModel& model) override {
         using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;

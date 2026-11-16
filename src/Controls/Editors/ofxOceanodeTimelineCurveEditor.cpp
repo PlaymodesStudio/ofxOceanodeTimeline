@@ -220,7 +220,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             }
         }
     }
-    // A Sigmoid or Log/Exp segment has a handle on its curve, as a Project
+    // A Sigmoid or Log/Exp segment has a handle on its curve, as a Global
     // Track's transition has: where the sigmoid is half way (it follows the
     // bend sideways), or the middle of a Log/Exp segment (it follows the bend
     // up and down). Segments too short to hold one beside their points have none.
@@ -403,7 +403,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             curveSelectedPointIndices = {curveDragPointIndex};
         } else if(clickedHandle >= 0) {
             // A segment's handle: drag it to bend the segment, double-click
-            // it for a straight line (as a Project Track's easing handle).
+            // it for a straight line (as a Global Track's easing handle).
             auto& tension = lane->curveTensions[clickedHandle];
             if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) tension = ofxOceanodeTimelineCurveTension{};
             else {

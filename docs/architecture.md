@@ -70,32 +70,39 @@ stay at the controller's deferred mutation point so drawing cannot invalidate
 track, clip or lane vectors mid-iteration. The controller forwards selection
 cleanup and track removal to the editors without accessing their private state.
 
-## Project Track
+## Global Track
 
-A Project Track (`ofxOceanodeTimelineTrack::isProjectTrack`, one per
-timeline, made from the canvas menu's Create Project Track) has no bindings
+Saved tracks use `isGlobalTrack` and clips use `globalKeyframes`. To update
+older presets, run `python3 scripts/migrate_global_tracks.py /path/to/Presets`
+to preview the changes, then repeat with `--apply`. The script visits JSON
+files recursively, renames the former fields and default labels, and keeps
+a `.before-global-track` backup of each changed file. Custom names and
+captured parameter values are preserved; the runtime reads the new schema.
+
+A Global Track (`ofxOceanodeTimelineTrack::isGlobalTrack`, one per
+timeline, made from the canvas menu's Create Global Track) has no bindings
 and its clips no lanes: a clip holds keyframes of the whole patch
-(`projectKeyframes`, in the clip's source beats, so clip timing applies to
-them as to any content). `addProjectKeyframe` stores the automation text of
+(`globalKeyframes`, in the clip's source beats, so clip timing applies to
+them as to any content). `addGlobalKeyframe` stores the automation text of
 every control a Node Snapshot can hold (`ofxOceanodeNode::canSnapshotParameter`)
 in the sequence's canvas and the macros in it, by path, leaving out
 parameters a track of any timeline drives. What a control is, is the core's
 rule for a MacroMixer morph (`ofxOceanodeMorph::isControl`, through
-`projectControlOf`): a value the user sets. Portal values, a Macro's pins
+`globalControlOf`): a value the user sets. Portal values, a Macro's pins
 (the routers inside it are stored instead), routers fed through their
 Macro's pin, parameters with an incoming connection, read-only ones, those
 that take no cable and those a node marks `MorphHint::Skip` or `Structural`
 are left out: something else produces them, or they are configuration. A
 beat outside an unstretched clip grows the clip to it.
 
-Playback is an engine's last apply step (`applyProjectTracks`). Per project
+Playback is an engine's last apply step (`applyGlobalTracks`). Per global
 clip it keeps one channel for each path whose value is not the same in every
-keyframe (`rebuildProjectChannels`, with the evaluation indexes); the others
+keyframe (`rebuildGlobalChannels`, with the evaluation indexes); the others
 are never written, and neither is a path that is not a control (keyframes
 made before capture followed that rule hold some). Floats, ints and numeric
 vectors interpolate between the keyframes around the playhead by the
 MacroMixer's interpolation (`ofxOceanodeMorph::blend`, through
-`blendProjectNumbers`): vectors of different lengths are resampled into each
+`blendGlobalNumbers`): vectors of different lengths are resampled into each
 other, integers round, and a parameter its node marks `MorphHint::Log`
 glides geometrically while its values are positive. Dropdowns, booleans,
 strings, colours and parameters marked `MorphHint::Switch` hold the keyframe
@@ -106,24 +113,24 @@ far along the way every interpolated parameter is. The clip draws the
 keyframes alternately low and high so the line between two of them shows
 that easing (the levels mean nothing else), with a handle per transition:
 dragged sideways it moves the bend, up or down it changes the steepness,
-double-clicked it goes back to linear (`setProjectKeyframeEase`).
+double-clicked it goes back to linear (`setGlobalKeyframeEase`).
 A value is written only when it differs from what the track last computed
-for that path (`projectLastApplied`), not when the parameter differs: where
+for that path (`globalLastApplied`), not when the parameter differs: where
 the track's value holds still (stopped, or between equal keyframes) the
 parameter stays editable by hand, which is how the next keyframe is set up.
 A preset load sets parameters to their saved values while the engine may
 live on (the next preset's timeline has the same id), so loading keyframes
-from a file (`loadCount`) makes every Project Track forget what it last
+from a file (`loadCount`) makes every Global Track forget what it last
 wrote and write its values again.
-A MacroMixer morph is told which parameters Project Tracks move
-(`collectProjectDrivenParameters`, the extension's
+A MacroMixer morph is told which parameters Global Tracks move
+(`collectGlobalDrivenParameters`, the extension's
 `collectStateDrivenParameters`): it leaves them out of its control morph, as
 it does bound ones, and blends the destination's track in through the
 parameter's automation filter. While a filter is set the track writes on
 every pass, and once more after it is cleared, so the parameter lands on the
 track's value when the morph ends.
 A path with a binding, or driven by an outer timeline, is left to it. Only
-the played timeline's own Project Track plays: one inside a macro timeline
+the played timeline's own Global Track plays: one inside a macro timeline
 placed by a macro clip does not yet.
 
 A keyframe's values are a shared, never-edited map with a stamp that changes

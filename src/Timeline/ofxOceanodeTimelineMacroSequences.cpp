@@ -115,7 +115,7 @@ void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroCo
             // A timeline of the same id in the loaded sequence keeps this
             // one's engine, which holds this one's content until its next
             // update: rewound below, it would write this one's start (a
-            // Project Track's first keyframe) over the values of now, and
+            // Global Track's first keyframe) over the values of now, and
             // what the loaded timeline does not drive would stay there.
             for(auto& player : players)
                 if(player->ref.canvas == ref.canvas && player->ref.timeline == ref.timeline) player->awaitingSync = true;
@@ -300,17 +300,17 @@ void ofxOceanodeTimelineManager::collectBoundParameters(std::unordered_set<ofxOc
         for(const auto& timeline : entry.timelines->timelines) collect(*timeline, *entry.address);
 }
 
-void ofxOceanodeTimelineManager::collectProjectDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const {
+void ofxOceanodeTimelineManager::collectGlobalDrivenParameters(std::unordered_set<ofxOceanodeAbstractParameter*>& result) const {
     if(container == nullptr) return;
-    // As rebuildProjectChannels chooses its channels.
+    // As rebuildGlobalChannels chooses its channels.
     auto collect = [&](const ofxOceanodeTimelineSequence& sequence, const ofxOceanodeContainer& base) {
         for(const auto& track : sequence.tracks) {
-            if(!track.isProjectTrack) continue;
+            if(!track.isGlobalTrack) continue;
             for(const auto& clip : track.clips) {
-                if(clip.projectKeyframes.size() < 2) continue;
+                if(clip.globalKeyframes.size() < 2) continue;
                 std::map<std::string, const std::string*> first;
                 std::set<std::string> differing;
-                for(const auto& keyframe : clip.projectKeyframes) {
+                for(const auto& keyframe : clip.globalKeyframes) {
                     if(!keyframe.values) continue;
                     for(const auto& value : *keyframe.values) {
                         const auto found = first.emplace(value.first, &value.second);
@@ -319,7 +319,7 @@ void ofxOceanodeTimelineManager::collectProjectDrivenParameters(std::unordered_s
                 }
                 for(const auto& path : differing)
                     if(auto* parameter = base.findTimelineParameter(path))
-                        if(projectControlOf(*parameter).control) result.insert(parameter);
+                        if(globalControlOf(*parameter).control) result.insert(parameter);
             }
         }
     };
@@ -555,12 +555,12 @@ std::vector<std::string> ofxOceanodeTimelineManager::allCanvases() const {
     return canvases;
 }
 
-// Here rather than with the rest of the Project Track: walking nodes and
+// Here rather than with the rest of the Global Track: walking nodes and
 // macros needs the core's node headers, which this file already takes.
 namespace {
 // The Macro whose canvas `matches`, among `canvas` and the macros in it (and
 // a MacroMixer's graphs, whose own Macro is not known here).
-bool findProjectOwner(ofxOceanodeContainer& canvas, ofxOceanodeNodeMacro* owner,
+bool findGlobalOwner(ofxOceanodeContainer& canvas, ofxOceanodeNodeMacro* owner,
                       const std::function<bool(ofxOceanodeContainer&)>& matches,
                       ofxOceanodeNodeMacro*& result, size_t depth = 0) {
     if(depth >= 64) return false;
@@ -569,15 +569,15 @@ bool findProjectOwner(ofxOceanodeContainer& canvas, ofxOceanodeNodeMacro* owner,
         if(node == nullptr) continue;
         if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel()))
             if(auto inner = macro->getContainer())
-                if(findProjectOwner(*inner, macro, matches, result, depth + 1)) return true;
+                if(findGlobalOwner(*inner, macro, matches, result, depth + 1)) return true;
     }
     for(const auto& guest : canvas.getTimelineGuests())
-        if(guest != nullptr && findProjectOwner(*guest, nullptr, matches, result, depth + 1)) return true;
+        if(guest != nullptr && findGlobalOwner(*guest, nullptr, matches, result, depth + 1)) return true;
     return false;
 }
 }
 
-void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer& base,
+void ofxOceanodeTimelineManager::captureGlobalValues(ofxOceanodeContainer& base,
                                                       const std::unordered_set<ofxOceanodeAbstractParameter*>& bound,
                                                       std::map<std::string, std::string>& values) const {
     std::function<void(ofxOceanodeContainer&, ofxOceanodeNodeMacro*)> collect = [&](ofxOceanodeContainer& canvas, ofxOceanodeNodeMacro* owner) {
@@ -602,17 +602,17 @@ void ofxOceanodeTimelineManager::captureProjectValues(ofxOceanodeContainer& base
     // The Macro `base` is the canvas of, when it is one.
     ofxOceanodeNodeMacro* owner = nullptr;
     if(container != nullptr)
-        findProjectOwner(*container, nullptr, [&](ofxOceanodeContainer& canvas) { return &canvas == &base; }, owner);
+        findGlobalOwner(*container, nullptr, [&](ofxOceanodeContainer& canvas) { return &canvas == &base; }, owner);
     collect(base, owner);
 }
 
-ofxOceanodeTimelineManager::ProjectControl ofxOceanodeTimelineManager::projectControlOf(ofxOceanodeAbstractParameter& parameter) const {
-    ProjectControl result;
+ofxOceanodeTimelineManager::GlobalControl ofxOceanodeTimelineManager::globalControlOf(ofxOceanodeAbstractParameter& parameter) const {
+    GlobalControl result;
     auto* model = parameter.getNodeModel();
     if(model == nullptr || container == nullptr) return result;
     if(dynamic_cast<ofxOceanodeNodeMacro*>(model) != nullptr) { result.control = false; return result; }
     ofxOceanodeNodeMacro* owner = nullptr;
-    findProjectOwner(*container, nullptr, [&](ofxOceanodeContainer& canvas) {
+    findGlobalOwner(*container, nullptr, [&](ofxOceanodeContainer& canvas) {
         for(auto* node : canvas.getAllModules())
             if(node != nullptr && &node->getNodeModel() == model) return true;
         return false;
@@ -626,7 +626,7 @@ ofxOceanodeTimelineManager::ProjectControl ofxOceanodeTimelineManager::projectCo
     return result;
 }
 
-std::vector<float> ofxOceanodeTimelineManager::blendProjectNumbers(const std::vector<float>& from, const std::vector<float>& to,
+std::vector<float> ofxOceanodeTimelineManager::blendGlobalNumbers(const std::vector<float>& from, const std::vector<float>& to,
                                                                    float t, bool integers, bool logarithmic) {
     if(!integers) return ofxOceanodeMorph::blend(from, to, t, logarithmic);
     auto whole = [](const std::vector<float>& values) {

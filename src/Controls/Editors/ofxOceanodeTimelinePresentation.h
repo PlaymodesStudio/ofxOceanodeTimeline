@@ -31,8 +31,8 @@ inline size_t targetCount(const ofxOceanodeTimelineClip& clip) {
 }
 inline std::string clipSummary(const ofxOceanodeTimelineClip& clip, bool audio = false) {
     if(audio || !clip.waveFilePath.empty()) return clip.waveFilePath.empty() ? "Audio / No file" : "Audio";
-    if(!clip.projectKeyframes.empty())
-        return ofToString(clip.projectKeyframes.size()) + (clip.projectKeyframes.size() == 1 ? " keyframe" : " keyframes");
+    if(!clip.globalKeyframes.empty())
+        return ofToString(clip.globalKeyframes.size()) + (clip.globalKeyframes.size() == 1 ? " keyframe" : " keyframes");
     if(clip.lanes.empty()) return "Empty clip";
     const std::string content = clip.lanes.size() == 1 ? laneKind(clip.lanes.front())
         : ofToString(clip.lanes.size()) + " lanes";
