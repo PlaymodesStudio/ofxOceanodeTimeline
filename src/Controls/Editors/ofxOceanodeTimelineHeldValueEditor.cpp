@@ -204,6 +204,13 @@ void ofxOceanodeTimelineHeldValueEditor::drawPreview(const ofxOceanodeTimelineCl
         for(size_t i = 0; i < lane->curvePoints.size(); ++i) {
             const auto& point = lane->curvePoints[i];
             const float x = min.x + beatOffset(sourceToTimelineBeat(clip, point.beat, cycle));
+            if(dropdown && (static_cast<size_t>(cycle) * lane->curvePoints.size() + i) % 2 == 1) {
+                const float endX = min.x + beatOffset(sourceToTimelineBeat(clip,
+                    i + 1 < lane->curvePoints.size() ? lane->curvePoints[i + 1].beat : sourceDuration(clip), cycle));
+                // A 33% black overlay darkens the existing summary background,
+                // following the lane's alternation across repeat boundaries.
+                dl->AddRectFilled(ImVec2(x, min.y + 3.0f), ImVec2(endX, max.y - 3.0f), IM_COL32(0, 0, 0, 84));
+            }
             dl->AddLine(ImVec2(x, min.y + 4.0f), ImVec2(x, max.y - 4.0f), previewInk(preview, 160));
             const std::string label = dropdown ? dropdownOptionLabel(options, point.value) : ofToString(point.value, 4);
             // Cut 10px short of the next label (the next key, or the first
