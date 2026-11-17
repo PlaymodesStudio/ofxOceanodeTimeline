@@ -7158,7 +7158,11 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     // A Chords lane (a chord bank's gates) gets the chords' header and room for them.
     ofxOceanodeTimelineInstrument chordBank;
     const bool chordLane = timeline.chordLaneInstrument(track, *lane, &chordBank);
-    const float defaultEditorHeight = chordLane
+    // A Multi Curve shown as lanes gets room for each of them.
+    const bool stackedCurves = lane->type == ofxOceanodeTimelineLaneType::MultiCurve && lane->multiCurveStacked;
+    const float defaultEditorHeight = stackedCurves
+        ? std::max(laneEditors.defaultHeight(lane->type), 96.0f * static_cast<float>(lane->multiCurves.size()))
+        : chordLane
         ? std::max(laneEditors.defaultHeight(lane->type), 16.0f + std::max(lane->multiRowCount, chordBank.voices) * (ImGui::GetTextLineHeight() + 7.0f))
         : laneEditors.defaultHeight(lane->type);
     const auto laneHeightIt = editorState.laneEditorHeights.find(lane->id);

@@ -2313,7 +2313,7 @@ void appendCurveWindow(const ofxOceanodeTimelineLane& lane, double from, double 
                        std::vector<ofxOceanodeTimelineCurvePoint>& outPoints,
                        std::vector<ofxOceanodeTimelineCurveTension>& outTensions) {
     auto points = lane.curvePoints;
-    std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
+    std::stable_sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
     const float fallback = points.empty() ? 0.0f : points.front().value;
     auto valueAt = [&](double beat) {
         return valueAtBeat(points, lane.curveTensions, lane.curveInterpolation, beat, fallback);
@@ -4302,7 +4302,7 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
     // Points past the new end go; the value the curve had there stays as its
     // last point.
     auto trimCurve = [&](ofxOceanodeTimelineLane& lane) {
-        std::sort(lane.curvePoints.begin(), lane.curvePoints.end(),
+        std::stable_sort(lane.curvePoints.begin(), lane.curvePoints.end(),
             [](const auto& a, const auto& b) { return a.beat < b.beat; });
         std::string boundaryValue;
         const bool hasBoundaryValue = evaluateCurve(lane, contentEnd, boundaryValue);

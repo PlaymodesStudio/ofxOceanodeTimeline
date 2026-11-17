@@ -635,7 +635,11 @@ struct ofxOceanodeTimelineLane {
     // Curve data (curvePoints / curveTensions); everything else about them is
     // copied from the lane (ofxOceanodeTimelineSyncMultiCurves). Kept when the
     // lane is switched to another type; only saved for Multi Curve lanes.
+    // A curve's `name` is its label (empty: its number).
     std::vector<ofxOceanodeTimelineLane> multiCurves;
+    // Multi Curve lanes: the editor shows each curve in a lane of its own,
+    // one below the other, instead of one at a time behind tabs.
+    bool multiCurveStacked = false;
     // LFO control sublanes: which control this is (kLfoParameters id), so
     // the evaluator and editor do not infer it from the user-facing name.
     std::string lfoParameter;

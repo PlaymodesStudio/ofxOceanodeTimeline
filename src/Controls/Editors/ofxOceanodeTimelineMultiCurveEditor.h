@@ -6,6 +6,8 @@
 // Several curves on one lane (one per component of a bound vector), edited
 // one at a time: a strip of tabs along the top picks the curve the canvas
 // edits, as in ofxSantiNodes' sigmoidCurve; the others are drawn behind it.
+// Or, from a tab's menu, each curve in a lane of its own, one below the other.
+// The same menu names a curve.
 // The curve itself is edited by an ordinary Curve editor.
 class ofxOceanodeTimelineMultiCurveEditor : public ofxOceanodeTimelineLaneEditor {
 public:
@@ -25,4 +27,5 @@ private:
     // The tab a right-click's menu is for.
     std::string menuLaneId;
     int menuCurve = -1;
+    char menuName[64] = {};
 };

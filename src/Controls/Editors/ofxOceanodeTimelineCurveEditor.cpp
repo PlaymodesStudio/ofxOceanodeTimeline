@@ -459,9 +459,12 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     // here made the drag silently stop applying the moment that happened.
     if((curveDragPointIndex >= 0 || curveTensionSegment >= 0) && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if(curveDragPointIndex >= 0 && curveDragPointIndex < static_cast<int>(lane->curvePoints.size())) {
-            const double minimumBeat = curveDragPointIndex > 0 ? lane->curvePoints[curveDragPointIndex - 1].beat + 1.0 / kPPQ : 0.0;
+            // A point may sit on its neighbour's beat (a vertical step: the
+            // curve jumps from the earlier point's value to the later one's),
+            // never past it, so the points keep their order.
+            const double minimumBeat = curveDragPointIndex > 0 ? lane->curvePoints[curveDragPointIndex - 1].beat : 0.0;
             const double maximumBeat = curveDragPointIndex + 1 < static_cast<int>(lane->curvePoints.size())
-                ? lane->curvePoints[curveDragPointIndex + 1].beat - 1.0 / kPPQ : content;
+                ? lane->curvePoints[curveDragPointIndex + 1].beat : content;
             // Playback wraps at each repeat. Editing instead follows the grabbed
             // occurrence continuously, stopping at the clip/source/neighbour bounds.
             const double dragTimelineBeat = ofClamp(curveTimelineBeat, clip->startBeat, clip->startBeat + clip->durationBeats);

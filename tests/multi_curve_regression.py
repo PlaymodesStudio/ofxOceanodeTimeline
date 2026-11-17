@@ -40,6 +40,8 @@ int main() {
         lane.curveInterpolation = "Linear";
         lane.multiCurves[0].curvePoints = {{0, 0}, {4, 1}};
         lane.multiCurves[1].curvePoints = {{0, 1}, {4, 0}};
+        lane.multiCurves[1].name = "Depth";
+        lane.multiCurveStacked = true;
         ofxOceanodeTimelineSyncMultiCurves(lane);
     }
     evaluate(1.0, {2.5f, 7.5f});
@@ -52,6 +54,7 @@ int main() {
         assert(lane.type == ofxOceanodeTimelineLaneType::MultiCurve && lane.multiCurves.size() == 2);
         assert(lane.multiCurves[1].curvePoints.size() == 2 && lane.multiCurves[1].curvePoints.front().value == 1.0f);
         assert(lane.multiCurves[1].curveInterpolation == "Linear");
+        assert(lane.multiCurves[0].name.empty() && lane.multiCurves[1].name == "Depth" && lane.multiCurveStacked);
     }
     evaluate(1.0, {2.5f, 7.5f});
 
@@ -137,8 +140,41 @@ int main() {
             assert(curve.curveTensions.size() + 1 == curve.curvePoints.size());
         }
     }
+
+    // Two points on one beat are a vertical step: the earlier point's value up
+    // to the beat, the later one's after it -- kept through save/load, split
+    // and reverse.
+    {
+        const auto t2 = model.createTrack("Step"), b2 = model.addBinding(t2, singleTarget);
+        const auto c3 = model.createClip(t2, "Jump", 20, 4);
+        const auto l3 = model.createLane(t2, c3, "Curve", ofxOceanodeTimelineLaneType::Curve);
+        model.addBindingToLane(t2, c3, l3, b2);
+        {
+            auto& lane = *model.getLane(t2, c3, l3);
+            lane.valueMin = 0; lane.valueMax = 10; lane.curveInterpolation = "Linear";
+            lane.curvePoints = {{0, 0}, {2, 0.2f}, {2, 0.9f}, {4, 1}};
+            lane.curveTensions.assign(3, {});
+        }
+        auto at = [&](double beat, float expected) {
+            owner.transport->seekToBeat(beat); model.update(); model.applyAutomation();
+            near(single.get(), expected);
+        };
+        auto jump = [&]() { at(21.0, 1.0f); at(22.0, 2.0f); at(22.5, 9.25f); at(23.0, 9.5f); };
+        jump();
+        { const auto saved = model.toJson(); model.fromJson(saved); }
+        const auto loaded = model.getLane(t2, c3, l3)->curvePoints;
+        assert(loaded.size() == 4 && loaded[1].value == 0.2f && loaded[2].value == 0.9f);
+        jump();
+        assert(model.reverseClip(t2, c3));
+        at(21.5, 9.25f); at(22.0, 9.0f); at(23.0, 1.0f);
+        assert(model.reverseClip(t2, c3));
+        jump();
+        const auto right2 = model.splitClip(t2, c3, 23.0);
+        assert(!right2.empty());
+        jump();
+    }
     std::cout << "Multi Curve passed: vector and single targets, save/load, curve count, clip end, "
-                 "reverse, split, merge, type changes, fitting to the target, extend and consolidate.\n";
+                 "reverse, split, merge, type changes, fitting to the target, extend, consolidate and same-beat points.\n";
 }
 '''
 

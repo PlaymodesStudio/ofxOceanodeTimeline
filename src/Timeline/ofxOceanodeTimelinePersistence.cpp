@@ -143,7 +143,7 @@ void lfoControlsFromJson(const ofJson& json, ofxOceanodeTimelineLane& lane) {
             for(const auto& pointJson : controlJson["points"])
                 if(pointJson.is_object())
                     control.curvePoints.push_back({pointJson.value("beat", 0.0), pointJson.value("value", 0.0f)});
-        std::sort(control.curvePoints.begin(), control.curvePoints.end(),
+        std::stable_sort(control.curvePoints.begin(), control.curvePoints.end(),
                   [](const auto& a, const auto& b) { return a.beat < b.beat; });
         if(controlJson.contains("tensions") && controlJson["tensions"].is_array())
             for(const auto& tensionJson : controlJson["tensions"])
@@ -715,9 +715,10 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
                 {"inflection", tension.inflection}, {"steepness", tension.steepness}
             });
             if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+                laneJson["multiCurveStacked"] = lane.multiCurveStacked;
                 laneJson["multiCurves"] = ofJson::array();
                 for(const auto& curve : lane.multiCurves) {
-                    ofJson curveJson = {{"points", ofJson::array()}, {"tensions", ofJson::array()}};
+                    ofJson curveJson = {{"name", curve.name}, {"points", ofJson::array()}, {"tensions", ofJson::array()}};
                     for(const auto& point : curve.curvePoints)
                         curveJson["points"].push_back({{"beat", point.beat}, {"value", point.value}});
                     for(const auto& tension : curve.curveTensions)
@@ -1268,7 +1269,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                                 });
                             }
                         }
-                        std::sort(lane.curvePoints.begin(), lane.curvePoints.end(), [](const auto& a, const auto& b) {
+                        std::stable_sort(lane.curvePoints.begin(), lane.curvePoints.end(), [](const auto& a, const auto& b) {
                             return a.beat < b.beat;
                         });
                         if(laneJson.contains("curveTensions") && laneJson["curveTensions"].is_array()) {
@@ -1286,6 +1287,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                             for(const auto& curveJson : laneJson["multiCurves"]) {
                                 if(static_cast<int>(lane.multiCurves.size()) >= kOfxOceanodeTimelineMaxMultiCurves) break;
                                 ofxOceanodeTimelineLane curve;
+                                if(curveJson.is_object()) curve.name = curveJson.value("name", std::string());
                                 if(curveJson.is_object() && curveJson.contains("points") && curveJson["points"].is_array())
                                     for(const auto& pointJson : curveJson["points"])
                                         if(pointJson.is_object())
@@ -1301,6 +1303,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                                 lane.multiCurves.push_back(std::move(curve));
                             }
                         }
+                        lane.multiCurveStacked = laneJson.value("multiCurveStacked", false);
                         if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve)
                             ofxOceanodeTimelineSetMultiCurveCount(lane, static_cast<int>(lane.multiCurves.size()),
                                                                   clip.contentDurationBeats);
