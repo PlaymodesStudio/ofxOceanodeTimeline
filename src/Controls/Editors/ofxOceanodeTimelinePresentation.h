@@ -12,6 +12,7 @@ inline const char* laneKind(const ofxOceanodeTimelineLane& lane) {
     switch(lane.type) {
         case ofxOceanodeTimelineLaneType::Step: return "Step Sequencer";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
+        case ofxOceanodeTimelineLaneType::MultiCurve: return "Multi Curve";
         case ofxOceanodeTimelineLaneType::PianoRoll: return "Piano Roll";
         case ofxOceanodeTimelineLaneType::DrumGrid: return "Drum Grid";
         case ofxOceanodeTimelineLaneType::MultiValue: return "Multi Value";

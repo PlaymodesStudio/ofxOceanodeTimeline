@@ -331,6 +331,7 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
         case ofxOceanodeTimelineLaneType::Color: return "Colour";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
+        case ofxOceanodeTimelineLaneType::MultiCurve: return "Multi Curve";
         case ofxOceanodeTimelineLaneType::MultiValue: return "Multi Value";
         case ofxOceanodeTimelineLaneType::MultiSlider: return "Multi Slider";
         case ofxOceanodeTimelineLaneType::MultiGate: return "Multi Gate";
@@ -353,8 +354,9 @@ const char* laneTypeName(ofxOceanodeTimelineLaneType type) {
 // colour parameter's.
 constexpr const char* kLaneTypeOptions[] = {
     "Step Sequencer", "Curve", "Piano Roll", "Multi Value", "Multi Slider", "Multi Gate", "Toggle", "Number", "Dropdown",
-    "Drum Grid", "LFO", "Colour"
+    "Drum Grid", "LFO", "Colour", "Multi Curve"
 };
+constexpr int kMultiCurveOptionIndex = 12;
 constexpr int kColorOptionIndex = 11;
 constexpr int kToggleOptionIndex = 6;
 constexpr int kDrumGridOptionIndex = 9;
@@ -374,7 +376,8 @@ const char* contentDescription(int option) {
         "Named parameter options held until the next change.",
         "A drum kit step grid: one row per kit piece, with per-step velocity, pitch, probability, ratchet and nudge.",
         "An oscillator mapped through the lane's output range; its control sublanes shape it over time.",
-        "Colour keys for a colour parameter, each blending into the next along its own sigmoid."
+        "Colour keys for a colour parameter, each blending into the next along its own sigmoid.",
+        "Several curves on one lane, one per element of a vector parameter; tabs pick the one being edited."
     };
     return descriptions[std::max(0, std::min(option, kLaneTypeOptionCount - 1))];
 }
@@ -391,6 +394,7 @@ ofxOceanodeTimelineLaneType laneTypeFromOptionIndex(int index) {
         case kDrumGridOptionIndex: return ofxOceanodeTimelineLaneType::DrumGrid;
         case kLfoOptionIndex: return ofxOceanodeTimelineLaneType::Lfo;
         case kColorOptionIndex: return ofxOceanodeTimelineLaneType::Color;
+        case kMultiCurveOptionIndex: return ofxOceanodeTimelineLaneType::MultiCurve;
         case kToggleOptionIndex: return ofxOceanodeTimelineLaneType::MultiGate;
         default: return ofxOceanodeTimelineLaneType::Step;
     }
@@ -420,6 +424,7 @@ int optionIndexForLaneType(ofxOceanodeTimelineLaneType type) {
         case ofxOceanodeTimelineLaneType::DrumGrid: return kDrumGridOptionIndex;
         case ofxOceanodeTimelineLaneType::Lfo: return kLfoOptionIndex;
         case ofxOceanodeTimelineLaneType::Color: return kColorOptionIndex;
+        case ofxOceanodeTimelineLaneType::MultiCurve: return kMultiCurveOptionIndex;
         default: return 0;
     }
 }
@@ -5641,6 +5646,8 @@ void ofxOceanodeTimelineController::draw() {
             editorState.editorLaneId = newLaneId;
             if(!pendingAddLaneTarget.empty()) timeline.addBindingToLane(scope(timeline), editorState.editorTrackId,
                 editorState.editorClipId, newLaneId, pendingAddLaneTarget);
+            if(laneType == ofxOceanodeTimelineLaneType::MultiCurve)
+                timeline.fitMultiCurvesToTarget(scope(timeline), editorState.editorTrackId, editorState.editorClipId, newLaneId);
             pendingAddLaneTarget.clear();
         }
         if(!newLaneId.empty() && optionIndex == kToggleOptionIndex)
@@ -8002,7 +8009,18 @@ std::string ofxOceanodeTimelineController::addBoundLane(ofxOceanodeTimelineManag
             } else if(binding.valueType == typeid(int).name()) {
                 lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
                 lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
+            } else if(laneType == ofxOceanodeTimelineLaneType::MultiCurve &&
+                      binding.valueType == typeid(std::vector<float>).name()) {
+                // Over the vector's range.
+                const auto& vectorParameter = parameter->cast<std::vector<float>>().getParameter();
+                const auto minimum = vectorParameter.getMin(), maximum = vectorParameter.getMax();
+                if(!minimum.empty() && !maximum.empty() && maximum.front() > minimum.front()) {
+                    lane->valueMin = minimum.front();
+                    lane->valueMax = maximum.front();
+                }
             }
+            // One curve per element the vector has now.
+            if(laneType == ofxOceanodeTimelineLaneType::MultiCurve) timeline.fitMultiCurvesToTarget(sequence, trackId, clipId, laneId);
         }
     }
     return laneId;

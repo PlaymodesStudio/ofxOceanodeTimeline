@@ -1,6 +1,7 @@
 #pragma once
 #include "ofxOceanodeTimelineStepEditor.h"
 #include "ofxOceanodeTimelineCurveEditor.h"
+#include "ofxOceanodeTimelineMultiCurveEditor.h"
 #include "ofxOceanodeTimelinePianoRollEditor.h"
 #include "ofxOceanodeTimelineNumberEditor.h"
 #include "ofxOceanodeTimelineDropdownEditor.h"
@@ -15,7 +16,7 @@ class ofxOceanodeTimelineLaneEditors {
 public:
     ofxOceanodeTimelineLaneEditor& forType(ofxOceanodeTimelineLaneType type);
     bool hasNoteSelection(const std::string& laneId) const { return pianoRoll.hasNoteSelection(laneId); }
-    bool hasCurvePointSelection(const std::string& laneId) const { return curve.hasPointSelection(laneId); }
+    bool hasCurvePointSelection(const std::string& laneId) const { return curve.hasPointSelection(laneId) || multiCurve.hasPointSelection(laneId); }
     // A point of one of this LFO lane's control sublanes is selected.
     bool hasLfoPointSelection(const std::string& laneId) const { return lfo.hasPointSelection(laneId); }
     // The LFO lane editor, for the control sublanes the shell draws below it.
@@ -23,13 +24,14 @@ public:
     void updateMonitoring(ofxOceanodeTimelineManager& timeline, ofxOceanodeTimelineSequence& sequence, const std::string& laneId) {
         pianoRoll.updateMonitoring(timeline, sequence, laneId);
     }
-    void clearSelection() { pianoRoll.clearSelection(); drumGrid.clearSelection(); curve.clearSelection(); lfo.clearSelection(); }
+    void clearSelection() { pianoRoll.clearSelection(); drumGrid.clearSelection(); curve.clearSelection(); multiCurve.clearSelection(); lfo.clearSelection(); }
     void forgetTrack(const std::string& trackId) { pianoRoll.forgetTrack(trackId); }
     static float keyboardReserve(ofxOceanodeTimelineLaneType type);
     static float defaultHeight(ofxOceanodeTimelineLaneType type);
 private:
     ofxOceanodeTimelineStepEditor step;
     ofxOceanodeTimelineCurveEditor curve;
+    ofxOceanodeTimelineMultiCurveEditor multiCurve;
     ofxOceanodeTimelinePianoRollEditor pianoRoll;
     ofxOceanodeTimelineNumberEditor number;
     ofxOceanodeTimelineDropdownEditor dropdown;

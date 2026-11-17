@@ -353,6 +353,7 @@ std::string ofxOceanodeTimelineManager::laneTypeToString(ofxOceanodeTimelineLane
         case ofxOceanodeTimelineLaneType::Dropdown: return "Dropdown";
         case ofxOceanodeTimelineLaneType::Color: return "Color";
         case ofxOceanodeTimelineLaneType::Curve: return "Curve";
+        case ofxOceanodeTimelineLaneType::MultiCurve: return "MultiCurve";
         case ofxOceanodeTimelineLaneType::MultiValue: return "MultiValue";
         case ofxOceanodeTimelineLaneType::MultiSlider: return "MultiSlider";
         case ofxOceanodeTimelineLaneType::MultiGate: return "MultiGate";
@@ -370,6 +371,7 @@ ofxOceanodeTimelineLaneType ofxOceanodeTimelineManager::laneTypeFromString(const
     if(laneType == "Dropdown") return ofxOceanodeTimelineLaneType::Dropdown;
     if(laneType == "Color") return ofxOceanodeTimelineLaneType::Color;
     if(laneType == "Curve") return ofxOceanodeTimelineLaneType::Curve;
+    if(laneType == "MultiCurve") return ofxOceanodeTimelineLaneType::MultiCurve;
     if(laneType == "MultiValue") return ofxOceanodeTimelineLaneType::MultiValue;
     if(laneType == "MultiSlider") return ofxOceanodeTimelineLaneType::MultiSlider;
     if(laneType == "MultiGate") return ofxOceanodeTimelineLaneType::MultiGate;
@@ -712,6 +714,17 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             for(const auto& tension : lane.curveTensions) laneJson["curveTensions"].push_back({
                 {"inflection", tension.inflection}, {"steepness", tension.steepness}
             });
+            if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+                laneJson["multiCurves"] = ofJson::array();
+                for(const auto& curve : lane.multiCurves) {
+                    ofJson curveJson = {{"points", ofJson::array()}, {"tensions", ofJson::array()}};
+                    for(const auto& point : curve.curvePoints)
+                        curveJson["points"].push_back({{"beat", point.beat}, {"value", point.value}});
+                    for(const auto& tension : curve.curveTensions)
+                        curveJson["tensions"].push_back({{"inflection", tension.inflection}, {"steepness", tension.steepness}});
+                    laneJson["multiCurves"].push_back(curveJson);
+                }
+            }
             if(lane.type == ofxOceanodeTimelineLaneType::Color) {
                 laneJson["colors"] = ofJson::array();
                 for(const auto& color : lane.colors) laneJson["colors"].push_back({color.r, color.g, color.b, color.a});
@@ -1269,6 +1282,28 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                         }
                         lane.curveTensions.resize(lane.curvePoints.empty() ? 0 : lane.curvePoints.size() - 1);
                         if(ofxOceanodeTimelineIsHeldValueLane(lane.type)) lane.curveInterpolation = "Step";
+                        if(laneJson.contains("multiCurves") && laneJson["multiCurves"].is_array()) {
+                            for(const auto& curveJson : laneJson["multiCurves"]) {
+                                if(static_cast<int>(lane.multiCurves.size()) >= kOfxOceanodeTimelineMaxMultiCurves) break;
+                                ofxOceanodeTimelineLane curve;
+                                if(curveJson.is_object() && curveJson.contains("points") && curveJson["points"].is_array())
+                                    for(const auto& pointJson : curveJson["points"])
+                                        if(pointJson.is_object())
+                                            curve.curvePoints.push_back({pointJson.value("beat", 0.0), pointJson.value("value", 0.0f)});
+                                std::stable_sort(curve.curvePoints.begin(), curve.curvePoints.end(),
+                                                 [](const auto& a, const auto& b) { return a.beat < b.beat; });
+                                if(curveJson.is_object() && curveJson.contains("tensions") && curveJson["tensions"].is_array())
+                                    for(const auto& tensionJson : curveJson["tensions"])
+                                        if(tensionJson.is_object())
+                                            curve.curveTensions.push_back({
+                                                ofClamp(tensionJson.value("inflection", 0.5f), 0.01f, 0.99f),
+                                                ofClamp(tensionJson.value("steepness", 1.0f), 0.1f, 10.0f)});
+                                lane.multiCurves.push_back(std::move(curve));
+                            }
+                        }
+                        if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve)
+                            ofxOceanodeTimelineSetMultiCurveCount(lane, static_cast<int>(lane.multiCurves.size()),
+                                                                  clip.contentDurationBeats);
                         if(laneJson.contains("colors") && laneJson["colors"].is_array())
                             for(const auto& colorJson : laneJson["colors"]) {
                                 ofFloatColor color(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1378,6 +1413,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                             clip.waveGain = lane.waveGain;
                             continue;
                         }
+                        ofxOceanodeTimelineSyncMultiCurves(lane); // once its settings are read
                         clip.lanes.push_back(std::move(lane));
                     }
                 }

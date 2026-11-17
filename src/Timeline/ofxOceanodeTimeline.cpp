@@ -2480,6 +2480,11 @@ void ofxOceanodeTimelineManager::cutClipContent(const ofxOceanodeTimelineClip& o
         };
         if(lane.type == ofxOceanodeTimelineLaneType::Curve || ofxOceanodeTimelineIsHeldValueLane(lane.type))
             cutCurve(lane, leftLane, rightLane);
+        if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+            const size_t curves = std::min({lane.multiCurves.size(), leftLane.multiCurves.size(), rightLane.multiCurves.size()});
+            for(size_t curve = 0; curve < curves; ++curve)
+                cutCurve(lane.multiCurves[curve], leftLane.multiCurves[curve], rightLane.multiCurves[curve]);
+        }
         if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
             // Every control envelope is cut like a curve.
             const size_t controls = std::min({lane.lfoControls.size(), leftLane.lfoControls.size(), rightLane.lfoControls.size()});
@@ -2772,6 +2777,8 @@ void ofxOceanodeTimelineManager::mirrorClipContent(ofxOceanodeTimelineClip& clip
         if(!lane.step.steps.empty()) mirrorSteps(lane, length);
         if(lane.type == ofxOceanodeTimelineLaneType::MultiSlider) mirrorSlider(lane, length);
         if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) mirrorDrumRows(lane, length);
+        if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve)
+            for(auto& curve : lane.multiCurves) mirrorCurve(curve, length);
         // An LFO lane's control envelopes are mirrored; the oscillator itself
         // still runs forwards (a rising saw stays rising).
         if(ofxOceanodeTimelineIsLfoLane(lane.type))
@@ -2870,6 +2877,11 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
         ofxOceanodeTimelineLane lane = source;
         if(isCurve(source)) {
             if(!source.curvePoints.empty()) layOutCurve(source, layout, lane.curvePoints, lane.curveTensions);
+        } else if(source.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+            for(size_t curve = 0; curve < source.multiCurves.size(); ++curve)
+                if(!source.multiCurves[curve].curvePoints.empty())
+                    layOutCurve(source.multiCurves[curve], layout,
+                                lane.multiCurves[curve].curvePoints, lane.multiCurves[curve].curveTensions);
         } else if(source.type == ofxOceanodeTimelineLaneType::PianoRoll) {
             lane.pianoNotes = layOutEvents(source.pianoNotes, layout);
         } else if(source.type == ofxOceanodeTimelineLaneType::MultiGate) {
@@ -2937,8 +2949,7 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
         events.erase(std::remove_if(events.begin(), events.end(), [&](const auto& e) { return e.startBeat >= cut - kEpsilon; }), events.end());
         for(auto& e : events) e.durationBeats = std::min(e.durationBeats, cut - e.startBeat);
     };
-    auto join = [&](ofxOceanodeTimelineLane& into, const ofxOceanodeTimelineLane& from) {
-        if(isCurve(into)) {
+    auto joinCurve = [&](ofxOceanodeTimelineLane& into, const ofxOceanodeTimelineLane& from) {
             if(from.curvePoints.empty()) return;
             if(into.curvePoints.empty()) { into.curvePoints = from.curvePoints; into.curveTensions = from.curveTensions; return; }
             // The first clip's value holds until the second starts (or is cut there).
@@ -2953,6 +2964,17 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
             into.curvePoints.insert(into.curvePoints.end(), from.curvePoints.begin(), from.curvePoints.end());
             into.curveTensions.insert(into.curveTensions.end(), from.curveTensions.begin(), from.curveTensions.end());
             into.curveTensions.resize(into.curvePoints.size() - 1);
+    };
+    auto join = [&](ofxOceanodeTimelineLane& into, const ofxOceanodeTimelineLane& from) {
+        if(isCurve(into)) {
+            joinCurve(into, from);
+        } else if(into.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+            // Curve by curve; a curve only the second clip has starts there.
+            if(into.multiCurves.size() < from.multiCurves.size()) into.multiCurves.resize(from.multiCurves.size());
+            ofxOceanodeTimelineSyncMultiCurves(into);
+            for(size_t curve = 0; curve < from.multiCurves.size(); ++curve)
+                joinCurve(into.multiCurves[curve], from.multiCurves[curve]);
+            ofxOceanodeTimelineSyncMultiCurves(into);
         } else if(into.type == ofxOceanodeTimelineLaneType::PianoRoll) {
             cropEvents(into.pianoNotes);
             into.pianoNotes.insert(into.pianoNotes.end(), from.pianoNotes.begin(), from.pianoNotes.end());
@@ -3315,6 +3337,8 @@ bool ofxOceanodeTimelineManager::extendClipStart(ofxOceanodeTimelineSequence& se
 
     for(auto& lane : clip->lanes) {
         for(auto& point : lane.curvePoints) point.beat += sourceDelta;
+        for(auto& curve : lane.multiCurves)
+            for(auto& point : curve.curvePoints) point.beat += sourceDelta;
         for(auto& note : lane.pianoNotes) note.startBeat += sourceDelta;
         for(auto& row : lane.multiValueRows) for(auto& region : row) region.startBeat += sourceDelta;
         for(auto& row : lane.multiGateRows) for(auto& region : row) region.startBeat += sourceDelta;
@@ -3525,6 +3549,9 @@ std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& 
         lane.curveInterpolation = "Sigmoid";
         lane.curvePoints = {{0.0, 0.0f}, {clip->contentDurationBeats, 1.0f}};
         lane.curveTensions.push_back({0.5f, 1.0f});
+    } else if(type == ofxOceanodeTimelineLaneType::MultiCurve) {
+        lane.curveInterpolation = "Sigmoid"; // as a Curve lane
+        ofxOceanodeTimelineSetMultiCurveCount(lane, 2, clip->contentDurationBeats);
     } else if(type == ofxOceanodeTimelineLaneType::MultiValue) {
         lane.multiValueRows.assign(std::max(1, lane.multiRowCount), {});
     } else if(type == ofxOceanodeTimelineLaneType::MultiGate) {
@@ -3599,6 +3626,27 @@ bool ofxOceanodeTimelineManager::setLaneMultiRowCount(ofxOceanodeTimelineSequenc
     if(lane->type == ofxOceanodeTimelineLaneType::MultiValue) lane->multiValueRows.resize(rowCount);
     else if(lane->type == ofxOceanodeTimelineLaneType::MultiGate) lane->multiGateRows.resize(rowCount);
     return true;
+}
+
+bool ofxOceanodeTimelineManager::fitMultiCurvesToTarget(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                        const std::string& clipId, const std::string& laneId) {
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
+    const auto* clip = getClip(sequence, trackId, clipId);
+    if(lane == nullptr || clip == nullptr || lane->type != ofxOceanodeTimelineLaneType::MultiCurve) return false;
+    for(const auto& bindingId : lane->bindingIds) {
+        const auto* binding = getBinding(sequence, trackId, bindingId);
+        auto* parameter = binding == nullptr ? nullptr : resolverFor(sequence).find(binding->parameterPath);
+        if(parameter == nullptr) continue;
+        size_t elements = 0;
+        if(binding->valueType == typeid(std::vector<float>).name())
+            elements = parameter->cast<std::vector<float>>().getParameter().get().size();
+        else if(binding->valueType == typeid(std::vector<int>).name())
+            elements = parameter->cast<std::vector<int>>().getParameter().get().size();
+        else continue;
+        ofxOceanodeTimelineSetMultiCurveCount(*lane, static_cast<int>(std::max<size_t>(1, elements)), clip->contentDurationBeats);
+        return true;
+    }
+    return false;
 }
 
 bool ofxOceanodeTimelineManager::reloadWaveform(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId) {
@@ -3738,6 +3786,15 @@ bool ofxOceanodeTimelineManager::setClipLaneType(ofxOceanodeTimelineSequence& se
     // loading folds the old Wave-lane format onto the clip, so nothing may
     // reintroduce one here either.
     if(type == ofxOceanodeTimelineLaneType::Wave) return false;
+    // A Multi Curve lane leaves as a Curve lane of its first curve (the
+    // curves are kept, should it be switched back).
+    if(lane->type == ofxOceanodeTimelineLaneType::MultiCurve && type != lane->type) {
+        if(!lane->multiCurves.empty()) {
+            lane->curvePoints = lane->multiCurves.front().curvePoints;
+            lane->curveTensions = lane->multiCurves.front().curveTensions;
+        }
+        lane->type = ofxOceanodeTimelineLaneType::Curve;
+    }
     const auto previousType = lane->type;
     if(clip != nullptr && clip->isStateCapture &&
        previousType == ofxOceanodeTimelineLaneType::Curve && type != previousType) {
@@ -3784,6 +3841,23 @@ bool ofxOceanodeTimelineManager::setClipLaneType(ofxOceanodeTimelineSequence& se
             lane->curvePoints = {{0.0, 0.0f}, {contentDuration, 1.0f}};
             lane->curveTensions = {{0.5f, 1.0f}};
         }
+    } else if(type == ofxOceanodeTimelineLaneType::MultiCurve) {
+        // A Curve lane's curve becomes the first one; nothing else carries over.
+        const bool fromCurve = previousType == ofxOceanodeTimelineLaneType::Curve;
+        const bool firstTime = lane->multiCurves.empty();
+        if(!fromCurve) lane->curveInterpolation = "Sigmoid";
+        ofxOceanodeTimelineSetMultiCurveCount(*lane, std::max<int>(2, static_cast<int>(lane->multiCurves.size())),
+                                              clip == nullptr ? 4.0 : clip->contentDurationBeats);
+        if(fromCurve && !lane->curvePoints.empty()) {
+            lane->multiCurves.front().curvePoints = lane->curvePoints;
+            lane->multiCurves.front().curveTensions = lane->curveTensions;
+        }
+        lane->curvePoints.clear();
+        lane->curveTensions.clear();
+        lane->curveScale.clear();
+        ofxOceanodeTimelineSyncMultiCurves(*lane);
+        // one curve per element of the vector it already drives
+        if(firstTime) fitMultiCurvesToTarget(sequence, trackId, clipId, laneId);
     } else if(type == ofxOceanodeTimelineLaneType::MultiValue) {
         if(lane->multiValueRows.empty()) lane->multiValueRows.assign(std::max(1, lane->multiRowCount), {});
     } else if(type == ofxOceanodeTimelineLaneType::MultiGate) {
@@ -4225,6 +4299,28 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
     const double contentEnd = std::max(1.0 / 24.0, visibleSourceDuration);
     bool changed = false;
 
+    // Points past the new end go; the value the curve had there stays as its
+    // last point.
+    auto trimCurve = [&](ofxOceanodeTimelineLane& lane) {
+        std::sort(lane.curvePoints.begin(), lane.curvePoints.end(),
+            [](const auto& a, const auto& b) { return a.beat < b.beat; });
+        std::string boundaryValue;
+        const bool hasBoundaryValue = evaluateCurve(lane, contentEnd, boundaryValue);
+        const auto firstHidden = std::upper_bound(lane.curvePoints.begin(), lane.curvePoints.end(), contentEnd + kEpsilon,
+            [](double beat, const auto& point) { return beat < point.beat; });
+        const bool removedPoints = firstHidden != lane.curvePoints.end();
+        if(removedPoints) {
+            lane.curvePoints.erase(firstHidden, lane.curvePoints.end());
+            changed = true;
+        }
+        if(removedPoints && hasBoundaryValue &&
+           (lane.curvePoints.empty() || lane.curvePoints.back().beat < contentEnd - kEpsilon)) {
+            if(lane.curvePoints.empty() && contentEnd > kEpsilon)
+                lane.curvePoints.push_back({0.0, ofToFloat(boundaryValue)});
+            lane.curvePoints.push_back({contentEnd, ofToFloat(boundaryValue)});
+        }
+        lane.curveTensions.resize(lane.curvePoints.empty() ? 0 : lane.curvePoints.size() - 1);
+    };
     for(auto& lane : clip->lanes) {
         if(lane.type == ofxOceanodeTimelineLaneType::Step) {
             const auto oldSize = lane.step.steps.size();
@@ -4295,25 +4391,10 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
                 lane.multiSliderValues.resize(static_cast<size_t>(std::max(1, lane.stepCount)), 0.0f);
                 changed = true;
             }
+        } else if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+            for(auto& curve : lane.multiCurves) trimCurve(curve);
         } else {
-            std::sort(lane.curvePoints.begin(), lane.curvePoints.end(),
-                [](const auto& a, const auto& b) { return a.beat < b.beat; });
-            std::string boundaryValue;
-            const bool hasBoundaryValue = evaluateCurve(lane, contentEnd, boundaryValue);
-            const auto firstHidden = std::upper_bound(lane.curvePoints.begin(), lane.curvePoints.end(), contentEnd + kEpsilon,
-                [](double beat, const auto& point) { return beat < point.beat; });
-            const bool removedPoints = firstHidden != lane.curvePoints.end();
-            if(removedPoints) {
-                lane.curvePoints.erase(firstHidden, lane.curvePoints.end());
-                changed = true;
-            }
-            if(removedPoints && hasBoundaryValue &&
-               (lane.curvePoints.empty() || lane.curvePoints.back().beat < contentEnd - kEpsilon)) {
-                if(lane.curvePoints.empty() && contentEnd > kEpsilon)
-                    lane.curvePoints.push_back({0.0, ofToFloat(boundaryValue)});
-                lane.curvePoints.push_back({contentEnd, ofToFloat(boundaryValue)});
-            }
-            lane.curveTensions.resize(lane.curvePoints.empty() ? 0 : lane.curvePoints.size() - 1);
+            trimCurve(lane);
         }
     }
 
@@ -5123,7 +5204,8 @@ void ofxOceanodeTimelineManager::applyAutomation() {
             // backend, which already has the raw value, would disagree.
             const auto lane = defaultBinding->laneType;
             const bool continuous = scheduledBackendPaths.count(path) == 0 &&
-                (lane == ofxOceanodeTimelineLaneType::Curve || lane == ofxOceanodeTimelineLaneType::Number ||
+                (lane == ofxOceanodeTimelineLaneType::Curve || lane == ofxOceanodeTimelineLaneType::MultiCurve ||
+                 lane == ofxOceanodeTimelineLaneType::Number ||
                  lane == ofxOceanodeTimelineLaneType::MultiValue || lane == ofxOceanodeTimelineLaneType::MultiSlider);
             applyAutomationValue(*parameter, value, defaultBinding->valueType, continuous);
         }

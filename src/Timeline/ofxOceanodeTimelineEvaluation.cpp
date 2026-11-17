@@ -72,7 +72,9 @@ std::string mapNormalizedLaneValue(const ofxOceanodeTimelineLane& lane,
         });
         return result.empty() ? normalizedValue : result;
     }
-    if(lane.type == ofxOceanodeTimelineLaneType::Curve && (vectorFloat || vectorInt)) {
+    const bool multiCurve = lane.type == ofxOceanodeTimelineLaneType::MultiCurve;
+    const bool curve = lane.type == ofxOceanodeTimelineLaneType::Curve || multiCurve;
+    if(curve && (vectorFloat || vectorInt)) {
         std::string result;
         bool first = true;
         automationText::forEachToken(normalizedValue, [&](const char* begin, const char* end) {
@@ -90,9 +92,12 @@ std::string mapNormalizedLaneValue(const ofxOceanodeTimelineLane& lane,
         return result.empty() ? normalizedValue : result;
     }
 
-    const float normalized = static_cast<float>(automationText::parse(normalizedValue));
+    // A single value takes a Multi Curve's first curve.
+    const float normalized = static_cast<float>(multiCurve
+        ? automationText::parse(normalizedValue.substr(0, normalizedValue.find(',')))
+        : automationText::parse(normalizedValue));
     float mapped = lane.valueMin + normalized * (lane.valueMax - lane.valueMin);
-    if(lane.type == ofxOceanodeTimelineLaneType::Curve && lane.curveClamp) {
+    if(curve && lane.curveClamp) {
         mapped = ofClamp(mapped, std::min(lane.valueMin, lane.valueMax),
                          std::max(lane.valueMin, lane.valueMax));
     }
@@ -1076,11 +1081,14 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                             continuouslyEvaluatedPathsCache.emplace(binding->parameterPath);
                     continue;
                 }
-                if(lane.type == ofxOceanodeTimelineLaneType::Curve) {
+                if(lane.type == ofxOceanodeTimelineLaneType::Curve ||
+                   lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
                     for(const auto& bindingId : lane.bindingIds)
                         if(const auto* binding = bindingFor(bindingId)) {
                             continuouslyEvaluatedPathsCache.emplace(binding->parameterPath);
-                            if(clip.isStateCapture) stateCapturePathsCache.emplace(binding->parameterPath);
+                            // only Curve lanes capture state
+                            if(clip.isStateCapture && lane.type == ofxOceanodeTimelineLaneType::Curve)
+                                stateCapturePathsCache.emplace(binding->parameterPath);
                         }
                     continue;
                 }
@@ -1744,7 +1752,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 }
                 for(const auto& sourceLane : clip.lanes) {
                     if(!laneAudible(clip, sourceLane)) continue;
-                    if(endingCurve && sourceLane.type != ofxOceanodeTimelineLaneType::Curve) continue;
+                    if(endingCurve && sourceLane.type != ofxOceanodeTimelineLaneType::Curve &&
+                       sourceLane.type != ofxOceanodeTimelineLaneType::MultiCurve) continue;
                     if(onlyPaths != nullptr) {
                         bool wanted = false;
                         for(const auto& id : sourceLane.bindingIds)
@@ -1810,6 +1819,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                         continue;
                     } else if(lane.type == ofxOceanodeTimelineLaneType::Step ||
                               lane.type == ofxOceanodeTimelineLaneType::Curve ||
+                              lane.type == ofxOceanodeTimelineLaneType::MultiCurve ||
                               ofxOceanodeTimelineIsHeldValueLane(lane.type) ||
                               lane.type == ofxOceanodeTimelineLaneType::MultiSlider) {
                         std::string value;
@@ -1819,6 +1829,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                                     ofxOceanodeTimelineClipTime::sourceDuration(clip), copyEpoch)
                             : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
                             ? evaluateMultiSlider(lane, sourceBeat, value)
+                            : lane.type == ofxOceanodeTimelineLaneType::MultiCurve
+                            ? evaluateMultiCurve(lane, sourceBeat, value)
                             : evaluateCurve(lane, sourceBeat, value);
                         if(!hasValue && lane.type != ofxOceanodeTimelineLaneType::Step) continue;
                         if(!hasValue) value = "0";
@@ -2346,6 +2358,15 @@ uint64_t ofxOceanodeTimelineManager::lanePlaybackSignature(const ofxOceanodeTime
             hash.add(step.probability); hash.add(step.ratchet); hash.add(step.duration); hash.add(step.filter); hash.add(step.stutter);
         }
     }
+    // A Multi Curve lane's curves (kept but unused on other lane types).
+    if(lane.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+        hash.add(lane.multiCurves.size());
+        for(const auto& curve : lane.multiCurves) {
+            hash.add(curve.curvePoints.size());
+            for(const auto& point : curve.curvePoints) { hash.add(point.beat); hash.add(point.value); }
+            for(const auto& tension : curve.curveTensions) { hash.add(tension.inflection); hash.add(tension.steepness); }
+        }
+    }
     // An LFO lane's controls (kept but unused on other lane types).
     if(ofxOceanodeTimelineIsLfoLane(lane.type)) {
         hash.add(lane.lfoControls.size());
@@ -2599,6 +2620,7 @@ void ofxOceanodeTimelineManager::collectChangeBeats(const ofxOceanodeTimelinePla
                                     for(const auto& point : lane.curvePoints) addSourceBeat(point.beat);
                                     break;
                                 case ofxOceanodeTimelineLaneType::Curve:
+                                case ofxOceanodeTimelineLaneType::MultiCurve:
                                 case ofxOceanodeTimelineLaneType::Lfo:
                                 case ofxOceanodeTimelineLaneType::Wave:
                                     // Continuous, or not automation at all.

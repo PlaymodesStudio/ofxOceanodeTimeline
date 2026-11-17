@@ -77,8 +77,19 @@ enum class ofxOceanodeTimelineLaneType {
     // Sequences a colour parameter: each point is a colour key (its value an
     // index into the lane's colors), and each segment's tension is the
     // sigmoid the colour blends along into the next key.
-    Color
+    Color,
+    // Several curves on one lane, one per component of a bound vector
+    // parameter (curve i -> component i), edited one at a time through tabs
+    // like ofxSantiNodes' sigmoidCurve. Each is a Curve-like sublane in
+    // multiCurves; mode, range, clamp and snap are the lane's own.
+    MultiCurve
 };
+
+constexpr int kOfxOceanodeTimelineMaxMultiCurves = 16;
+// The id a Multi Curve lane's curve is known by (the editor's selection).
+inline std::string ofxOceanodeTimelineMultiCurveKey(const std::string& laneId, int index) {
+    return laneId + "#curve" + std::to_string(index);
+}
 
 inline bool ofxOceanodeTimelineIsLfoLane(ofxOceanodeTimelineLaneType type) {
     return type == ofxOceanodeTimelineLaneType::Lfo;
@@ -620,6 +631,11 @@ struct ofxOceanodeTimelineLane {
     // Kept when the lane is switched to another type, so switching back
     // restores them; only saved for LFO lanes.
     std::vector<ofxOceanodeTimelineLane> lfoControls;
+    // Multi Curve lanes: the curves, in component order. Each holds ordinary
+    // Curve data (curvePoints / curveTensions); everything else about them is
+    // copied from the lane (ofxOceanodeTimelineSyncMultiCurves). Kept when the
+    // lane is switched to another type; only saved for Multi Curve lanes.
+    std::vector<ofxOceanodeTimelineLane> multiCurves;
     // LFO control sublanes: which control this is (kLfoParameters id), so
     // the evaluator and editor do not infer it from the user-facing name.
     std::string lfoParameter;
@@ -647,9 +663,42 @@ struct ofxOceanodeTimelineLane {
 
 // Gives an LFO lane's control sublanes the ids derived from the lane's own
 // (see ofxOceanodeTimelineLfoControlKey). Called wherever a lane gets a new id.
+// A Multi Curve lane's curves take their id and everything but their points
+// from the lane: the curve editor and the clip operations read a curve as an
+// ordinary Curve lane. Called wherever the lane's settings or id change.
+inline void ofxOceanodeTimelineSyncMultiCurves(ofxOceanodeTimelineLane& lane) {
+    for(size_t index = 0; index < lane.multiCurves.size(); ++index) {
+        auto& curve = lane.multiCurves[index];
+        curve.id = ofxOceanodeTimelineMultiCurveKey(lane.id, static_cast<int>(index));
+        curve.type = ofxOceanodeTimelineLaneType::Curve;
+        curve.valueMin = lane.valueMin;
+        curve.valueMax = lane.valueMax;
+        curve.curveClamp = lane.curveClamp;
+        curve.curveInterpolation = lane.curveInterpolation;
+        curve.curveScale = "Linear"; // no decibel axis: one range for every curve
+        curve.valueSnap = lane.valueSnap;
+        curve.valueQuantizeSteps = lane.valueQuantizeSteps;
+        curve.curveTensions.resize(curve.curvePoints.empty() ? 0 : curve.curvePoints.size() - 1);
+    }
+}
+
+// Grows (each new curve a 0..1 ramp over the content) or shrinks (dropping
+// the last curves) a Multi Curve lane's curves.
+inline void ofxOceanodeTimelineSetMultiCurveCount(ofxOceanodeTimelineLane& lane, int count, double contentDurationBeats) {
+    count = std::max(1, std::min(kOfxOceanodeTimelineMaxMultiCurves, count));
+    while(static_cast<int>(lane.multiCurves.size()) < count) {
+        ofxOceanodeTimelineLane curve;
+        curve.curvePoints = {{0.0, 0.0f}, {std::max(1.0 / 24.0, contentDurationBeats), 1.0f}};
+        lane.multiCurves.push_back(std::move(curve));
+    }
+    lane.multiCurves.resize(static_cast<size_t>(count));
+    ofxOceanodeTimelineSyncMultiCurves(lane);
+}
+
 inline void ofxOceanodeTimelineSyncLfoControlIds(ofxOceanodeTimelineLane& lane) {
     for(auto& control : lane.lfoControls)
         control.id = ofxOceanodeTimelineLfoControlKey(lane.id, control.lfoParameter);
+    ofxOceanodeTimelineSyncMultiCurves(lane);
 }
 
 // The rules a note of this mutation group follows (0 = A; a missing group
@@ -2022,6 +2071,11 @@ public:
                               const std::string& laneId, int rowCount);
     bool setLaneMultiRowCount(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                               const std::string& laneId, int rowCount);
+    // Gives a Multi Curve lane one curve per element its first vector target
+    // has now (existing curves are kept, as when setting the count by hand).
+    // False when the lane has no vector target to follow.
+    bool fitMultiCurvesToTarget(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                                const std::string& laneId);
     // Recomputes waveNumChannels/waveFileDurationMs/waveformPeaks from
     // whatever waveFilePath currently points at (WAV files only, matching
     // the old standalone Wave Track node's own reader). Pure file IO, no

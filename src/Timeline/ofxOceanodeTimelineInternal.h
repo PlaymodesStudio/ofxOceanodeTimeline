@@ -354,6 +354,20 @@ inline bool evaluateCurve(const ofxOceanodeTimelineLane& lane, double beat, std:
     return true;
 }
 
+// A Multi Curve lane: every curve's normalized value at the beat, comma
+// separated in component order (a curve without points gives 0).
+inline bool evaluateMultiCurve(const ofxOceanodeTimelineLane& lane, double beat, std::string& value) {
+    if(lane.multiCurves.empty()) return false;
+    value.clear();
+    for(size_t index = 0; index < lane.multiCurves.size(); ++index) {
+        const auto& curve = lane.multiCurves[index];
+        if(index > 0) value += ",";
+        automationText::appendFloat(value, valueAtBeat(curve.curvePoints, curve.curveTensions,
+                                                       lane.curveInterpolation, beat, 0.0f));
+    }
+    return true;
+}
+
 struct LfoParameterDefinition {
     const char* id;
     float minimum;

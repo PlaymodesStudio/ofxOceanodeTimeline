@@ -5,6 +5,7 @@ ofxOceanodeTimelineLaneEditor& ofxOceanodeTimelineLaneEditors::forType(ofxOceano
     switch(type) {
         case ofxOceanodeTimelineLaneType::Step: return step;
         case ofxOceanodeTimelineLaneType::Curve: return curve;
+        case ofxOceanodeTimelineLaneType::MultiCurve: return multiCurve;
         case ofxOceanodeTimelineLaneType::PianoRoll: return pianoRoll;
         case ofxOceanodeTimelineLaneType::Number: return number;
         case ofxOceanodeTimelineLaneType::Dropdown: return dropdown;
@@ -26,5 +27,6 @@ float ofxOceanodeTimelineLaneEditors::keyboardReserve(ofxOceanodeTimelineLaneTyp
 float ofxOceanodeTimelineLaneEditors::defaultHeight(ofxOceanodeTimelineLaneType type) {
     if(type == ofxOceanodeTimelineLaneType::DrumGrid) return 320.0f;
     if(type == ofxOceanodeTimelineLaneType::Lfo) return 230.0f;
+    if(type == ofxOceanodeTimelineLaneType::MultiCurve) return 212.0f; // a Curve plus its tab strip
     return type == ofxOceanodeTimelineLaneType::PianoRoll ? 480.0f : 190.0f;
 }
