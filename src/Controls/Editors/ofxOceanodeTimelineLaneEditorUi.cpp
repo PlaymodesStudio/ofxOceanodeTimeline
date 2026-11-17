@@ -183,12 +183,18 @@ std::string dropdownOptionLabel(const std::vector<std::string>& options, float v
 }
 
 int insertCurvePoint(ofxOceanodeTimelineLane& lane,
-                     const ofxOceanodeTimelineCurvePoint& point) {
+                     const ofxOceanodeTimelineCurvePoint& point, bool afterSameBeat) {
     const size_t oldPointCount = lane.curvePoints.size();
     auto oldTensions = lane.curveTensions;
     oldTensions.resize(oldPointCount > 0 ? oldPointCount - 1 : 0);
-    const auto insertion = std::lower_bound(lane.curvePoints.begin(), lane.curvePoints.end(), point.beat,
-        [](const auto& existing, double beat) { return existing.beat < beat; });
+    // On a beat that already has a point the two make a vertical step, and
+    // their order is its direction: the new point goes after the ones there
+    // (the curve continues from it) or before them (the curve arrives at it).
+    const auto insertion = afterSameBeat
+        ? std::upper_bound(lane.curvePoints.begin(), lane.curvePoints.end(), point.beat,
+            [](double beat, const auto& existing) { return beat < existing.beat; })
+        : std::lower_bound(lane.curvePoints.begin(), lane.curvePoints.end(), point.beat,
+            [](const auto& existing, double beat) { return existing.beat < beat; });
     const size_t insertionIndex = static_cast<size_t>(insertion - lane.curvePoints.begin());
     // A point inside a segment cuts it in two: each part keeps its piece of
     // the segment's bend (Sigmoid, Log/Exp) instead of becoming a straight line.

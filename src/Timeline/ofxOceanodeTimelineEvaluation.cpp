@@ -1697,6 +1697,16 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 const ofxOceanodeTimelineClip& clip) {
             return laneRetriggerGapBeats(track, lane) / placement.map.ratio * sourcePerTimelineBeat(clip);
         };
+        // While playing, a curve's vertical step the playhead reaches within the
+        // next two frames is taken now (curveBeatWithStepAhead), in the clip's
+        // source beats. Not at a clip's end, nor for a beat probed ahead.
+        const double framesAhead = isPlaying && std::isfinite(previousBeat) && beatPosition > previousBeat
+            ? std::min(0.5, 2.0 * (beatPosition - previousBeat)) : 0.0;
+        const double sequenceAhead = framesAhead <= 0.0 ? 0.0
+            : std::max(0.0, placement.map.toSequence(beatPosition + framesAhead) - placement.map.toSequence(beatPosition));
+        auto stepAhead = [&](const ofxOceanodeTimelineClip& clip) {
+            return endingCurveClips.count(&clip) > 0 ? 0.0 : sequenceAhead * sourcePerTimelineBeat(clip);
+        };
         for(const auto& track : placement.sequence->tracks) {
             if(!isTrackAudible(track)) continue;
             contributionTrack = &track;
@@ -1830,8 +1840,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                             : lane.type == ofxOceanodeTimelineLaneType::MultiSlider
                             ? evaluateMultiSlider(lane, sourceBeat, value)
                             : lane.type == ofxOceanodeTimelineLaneType::MultiCurve
-                            ? evaluateMultiCurve(lane, sourceBeat, value)
-                            : evaluateCurve(lane, sourceBeat, value);
+                            ? evaluateMultiCurve(lane, sourceBeat, value, stepAhead(clip))
+                            : evaluateCurve(lane, sourceBeat, value,
+                                            lane.type == ofxOceanodeTimelineLaneType::Curve ? stepAhead(clip) : 0.0);
                         if(!hasValue && lane.type != ofxOceanodeTimelineLaneType::Step) continue;
                         if(!hasValue) value = "0";
                         for(const auto& bindingId : lane.bindingIds) {

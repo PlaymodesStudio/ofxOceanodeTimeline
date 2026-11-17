@@ -28,4 +28,7 @@ private:
     std::string menuLaneId;
     int menuCurve = -1;
     char menuName[64] = {};
+    // The Curves count being typed (and the lane it is for), until the edit ends.
+    std::string pendingCountLaneId;
+    int pendingCount = 0;
 };

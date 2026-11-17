@@ -82,12 +82,15 @@ float valueAtBeat(const std::vector<ofxOceanodeTimelineCurvePoint>& points,
                   const std::string& interpolation, double beat, float fallback) {
     if(points.empty()) return fallback;
     if(points.size() == 1) return points.front().value;
-    if(beat <= points.front().beat) return points.front().value;
+    if(beat < points.front().beat) return points.front().value;
     if(beat >= points.back().beat) return points.back().value;
     const auto mode = curveInterpolationMode(interpolation);
-    const auto right = std::lower_bound(points.begin() + 1, points.end(), beat,
-        [](const ofxOceanodeTimelineCurvePoint& point, double targetBeat) {
-            return point.beat < targetBeat;
+    // The segment starting at or before the beat. Two points on one beat are
+    // a vertical step, in effect from that beat on: an event on the beat (a
+    // kick the curve opens for) already gets the later point's value.
+    const auto right = std::upper_bound(points.begin() + 1, points.end(), beat,
+        [](double targetBeat, const ofxOceanodeTimelineCurvePoint& point) {
+            return targetBeat < point.beat;
         });
     const size_t i = static_cast<size_t>(right - points.begin());
     const double span = std::max(1e-9, points[i].beat - points[i - 1].beat);
@@ -2325,17 +2328,26 @@ void appendCurveWindow(const ofxOceanodeTimelineLane& lane, double from, double 
     // Emitted points with their original beat and index (-1: a boundary point).
     struct WindowPoint { double originalBeat; float value; int index; };
     std::vector<WindowPoint> window;
-    auto pointIndexAt = [&](double beat) {
+    // The point on a beat: of several there (a vertical step), the first is
+    // where the curve arrives and the last where it goes on from.
+    auto pointIndexAt = [&](double beat, bool last = false) {
+        int found = -1;
         for(size_t i = 0; i < points.size(); ++i)
-            if(std::abs(points[i].beat - beat) <= kEpsilon) return static_cast<int>(i);
-        return -1;
+            if(std::abs(points[i].beat - beat) <= kEpsilon) {
+                found = static_cast<int>(i);
+                if(!last) break;
+            }
+        return found;
     };
-    window.push_back({from, valueAt(from), pointIndexAt(from)});
+    // The window starts with the value the curve has from `from` on, and ends
+    // with the one it arrives at `to` with: a step on either edge stays outside.
+    const int fromIndex = pointIndexAt(from, true), toIndex = pointIndexAt(to);
+    window.push_back({from, fromIndex >= 0 ? points[fromIndex].value : valueAt(from), fromIndex});
     for(size_t i = 0; i < points.size(); ++i) {
         if(points[i].beat > from + kEpsilon && points[i].beat < to - kEpsilon)
             window.push_back({points[i].beat, points[i].value, static_cast<int>(i)});
     }
-    window.push_back({to, valueAt(to), pointIndexAt(to)});
+    window.push_back({to, toIndex >= 0 ? points[toIndex].value : valueAt(to), toIndex});
     // Joining a second window: the previous window's last point stays and a
     // new point at the same beat starts this one (a jump, as at a cycle wrap).
     if(!outPoints.empty()) outTensions.push_back({});

@@ -72,8 +72,10 @@ std::vector<std::string> laneDropdownOptions(ofxOceanodeTimelineManager& timelin
 std::string dropdownOptionLabel(const std::vector<std::string>& options, float value);
 // Inserts a point in beat order; a segment it cuts keeps its bend in both
 // parts (ofxOceanodeTimelineCurve::fitSegmentShape). Returns its index.
+// afterSameBeat: on a beat that already has points, the new one goes after
+// them instead of before (see the definition).
 int insertCurvePoint(ofxOceanodeTimelineLane& lane,
-                     const ofxOceanodeTimelineCurvePoint& point);
+                     const ofxOceanodeTimelineCurvePoint& point, bool afterSameBeat = false);
 int curveSnapLevels(const ofxOceanodeTimelineLane& lane);
 void resetCurveTensions(ofxOceanodeTimelineLane& lane);
 void eraseCurvePointWithTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);

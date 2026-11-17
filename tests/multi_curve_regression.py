@@ -24,12 +24,17 @@ int main() {
         if(std::abs(a - e) > 1e-3f) std::cerr << "expected " << e << " got " << a << "\n";
         assert(std::abs(a - e) <= 1e-3f);
     };
+    int checks = 0;
     auto evaluate = [&](double beat, std::vector<float> expected) {
         owner.transport->seekToBeat(beat);
         model.update(); model.applyAutomation();
         const auto values = output.get();
         assert(values.size() == expected.size());
-        for(size_t i = 0; i < expected.size(); ++i) near(values[i], expected[i]);
+        for(size_t i = 0; i < expected.size(); ++i) {
+            if(std::abs(values[i] - expected[i]) > 1e-3f) std::cerr << "Beat " << beat << ", curve " << i << " (check " << checks << ")\n";
+            near(values[i], expected[i]);
+        }
+        ++checks;
         near(single.get(), expected.front()); // a single value takes the first curve
     };
     {
@@ -141,9 +146,9 @@ int main() {
         }
     }
 
-    // Two points on one beat are a vertical step: the earlier point's value up
-    // to the beat, the later one's after it -- kept through save/load, split
-    // and reverse.
+    // Two points on one beat are a vertical step: the earlier point's value
+    // before the beat, the later one's from it on -- kept through save/load,
+    // split and reverse.
     {
         const auto t2 = model.createTrack("Step"), b2 = model.addBinding(t2, singleTarget);
         const auto c3 = model.createClip(t2, "Jump", 20, 4);
@@ -159,19 +164,32 @@ int main() {
             owner.transport->seekToBeat(beat); model.update(); model.applyAutomation();
             near(single.get(), expected);
         };
-        auto jump = [&]() { at(21.0, 1.0f); at(22.0, 2.0f); at(22.5, 9.25f); at(23.0, 9.5f); };
+        auto jump = [&]() { at(21.0, 1.0f); at(21.99, 1.99f); at(22.0, 9.0f); at(22.5, 9.25f); at(23.0, 9.5f); };
         jump();
         { const auto saved = model.toJson(); model.fromJson(saved); }
         const auto loaded = model.getLane(t2, c3, l3)->curvePoints;
         assert(loaded.size() == 4 && loaded[1].value == 0.2f && loaded[2].value == 0.9f);
         jump();
         assert(model.reverseClip(t2, c3));
-        at(21.5, 9.25f); at(22.0, 9.0f); at(23.0, 1.0f);
+        at(21.5, 9.25f); at(22.0, 2.0f); at(23.0, 1.0f);
         assert(model.reverseClip(t2, c3));
         jump();
         const auto right2 = model.splitClip(t2, c3, 23.0);
         assert(!right2.empty());
         jump();
+
+        // Playing, the frame before the step already writes the value it steps
+        // to: an event scheduled on the step's beat finds it there.
+        owner.transport->seekToBeat(21.9); owner.transport->play(); model.update();
+        bool early = false;
+        for(int frame = 0; frame < 40 && owner.getTransportState().beatPosition < 22.0; ++frame) {
+            owner.transport->advanceFrameStep(1.0 / 60.0); model.update();
+            const double beat = owner.getTransportState().beatPosition;
+            if(beat < 22.0 && single.get() >= 9.0f) early = true;
+            if(beat < 21.9) assert(single.get() < 2.0f);
+        }
+        assert(early);
+        owner.transport->pause();
     }
     std::cout << "Multi Curve passed: vector and single targets, save/load, curve count, clip end, "
                  "reverse, split, merge, type changes, fitting to the target, extend, consolidate and same-beat points.\n";

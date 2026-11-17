@@ -33,9 +33,18 @@ void ofxOceanodeTimelineMultiCurveEditor::drawProperties(ofxOceanodeTimelineLane
 
     int curves = static_cast<int>(lane.multiCurves.size());
     propertyLabel("Curves");
-    // On Enter (or - / +), never while typing: a passing "1" would drop the rest.
-    if(ImGui::InputInt("##multiCurveCount", &curves, 1, 1, ImGuiInputTextFlags_EnterReturnsTrue))
-        ofxOceanodeTimelineSetMultiCurveCount(lane, curves, context.clip.contentDurationBeats);
+    // Applied once the edit ends (Enter, - / +, or leaving the field), never
+    // while typing: a passing "1" would drop the rest.
+    const bool editing = pendingCountLaneId == lane.id;
+    if(editing) curves = pendingCount;
+    if(ImGui::InputInt("##multiCurveCount", &curves, 1, 1)) {
+        pendingCountLaneId = lane.id;
+        pendingCount = curves;
+    }
+    if(pendingCountLaneId == lane.id && !ImGui::IsItemActive()) {
+        ofxOceanodeTimelineSetMultiCurveCount(lane, pendingCount, context.clip.contentDurationBeats);
+        pendingCountLaneId.clear();
+    }
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("One curve per element of the vector it drives (a single value takes the first).\n"
                           "Fewer: the last curves are removed.");

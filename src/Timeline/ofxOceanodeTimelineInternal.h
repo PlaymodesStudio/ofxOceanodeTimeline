@@ -347,23 +347,42 @@ inline bool clipCoversBeat(const ofxOceanodeTimelineClip& clip, double globalBea
     return globalBeat >= clip.startBeat - kEpsilon && globalBeat < clip.startBeat + duration - kEpsilon;
 }
 
-inline bool evaluateCurve(const ofxOceanodeTimelineLane& lane, double beat, std::string& value) {
+// The beat a curve is read at when it is written every frame: `beat`, or the
+// beat of a vertical step (two points on one beat) the playhead reaches
+// within `ahead`. A frame's write lands after the playhead passed the step,
+// while events scheduled on that very beat (a kick) fire on time: the step is
+// taken slightly early so they find the value it steps to. Points in beat order.
+inline double curveBeatWithStepAhead(const std::vector<ofxOceanodeTimelineCurvePoint>& points, double beat, double ahead) {
+    if(ahead <= 0.0) return beat;
+    double result = beat;
+    auto point = std::upper_bound(points.begin(), points.end(), beat,
+        [](double target, const ofxOceanodeTimelineCurvePoint& candidate) { return target < candidate.beat; });
+    for(; point != points.end() && point->beat <= beat + ahead; ++point) {
+        const auto next = point + 1;
+        if(next != points.end() && next->beat - point->beat <= 1e-9) result = point->beat;
+    }
+    return result;
+}
+
+inline bool evaluateCurve(const ofxOceanodeTimelineLane& lane, double beat, std::string& value, double stepAhead = 0.0) {
     if(lane.curvePoints.empty()) return false;
     value = automationText::formatFloat(valueAtBeat(lane.curvePoints, lane.curveTensions,
-                                   ofxOceanodeTimelineIsHeldValueLane(lane.type) ? "Step" : lane.curveInterpolation, beat, 0.0f));
+                                   ofxOceanodeTimelineIsHeldValueLane(lane.type) ? "Step" : lane.curveInterpolation,
+                                   curveBeatWithStepAhead(lane.curvePoints, beat, stepAhead), 0.0f));
     return true;
 }
 
 // A Multi Curve lane: every curve's normalized value at the beat, comma
 // separated in component order (a curve without points gives 0).
-inline bool evaluateMultiCurve(const ofxOceanodeTimelineLane& lane, double beat, std::string& value) {
+inline bool evaluateMultiCurve(const ofxOceanodeTimelineLane& lane, double beat, std::string& value, double stepAhead = 0.0) {
     if(lane.multiCurves.empty()) return false;
     value.clear();
     for(size_t index = 0; index < lane.multiCurves.size(); ++index) {
         const auto& curve = lane.multiCurves[index];
         if(index > 0) value += ",";
         automationText::appendFloat(value, valueAtBeat(curve.curvePoints, curve.curveTensions,
-                                                       lane.curveInterpolation, beat, 0.0f));
+                                                       lane.curveInterpolation,
+                                                       curveBeatWithStepAhead(curve.curvePoints, beat, stepAhead), 0.0f));
     }
     return true;
 }

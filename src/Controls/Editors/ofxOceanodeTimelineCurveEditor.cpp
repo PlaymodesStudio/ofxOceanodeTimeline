@@ -441,9 +441,10 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         }
         if(curveDragPointIndex < 0 && curveTensionSegment < 0 && clickedHandle < 0 &&
            !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift) {
-            curveDragPointIndex = insertCurvePoint(*lane, {
-                std::max(0.0, std::min(content, view.snapBeat(curveSourceBeat))), curveValue
-            });
+            // Snapped onto a beat that has a point: after it, unless the
+            // click was to its left.
+            const double newBeat = std::max(0.0, std::min(content, view.snapBeat(curveSourceBeat)));
+            curveDragPointIndex = insertCurvePoint(*lane, {newBeat, curveValue}, curveSourceBeat >= newBeat);
             curveSelectedPointIndices = {curveDragPointIndex}; // the new point, as if clicked
         }
         if(curveDragPointIndex >= 0) {
