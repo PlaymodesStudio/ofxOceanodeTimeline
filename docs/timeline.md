@@ -62,7 +62,8 @@ choosers also search the patch. Piano Roll targets are explicitly
 assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
 to select every note at that pitch in the piano-roll lane, including notes
 outside the visible window. Shift+right-click adds another pitch to the
-selection. Left-click still auditions the key. **+ Lane** chooses content and a
+selection. Left-click still auditions the key. A note sounds while it is drawn,
+grabbed, moved or resized (the lane's **Live edit sound**, on by default). **+ Lane** chooses content and a
 target together; “No target (assign later)” creates editable content without
 output. Lane properties scroll when a small editor height cannot fit them.
 Closing or folding the editor retains content. Right-click anywhere in a

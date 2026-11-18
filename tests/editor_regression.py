@@ -703,8 +703,7 @@ int main() {
     model.addBindingToLane(trackId,mc,ml,mpb); model.addBindingToLane(trackId,mc,ml,mgb);
     auto* monitor=model.getLane(trackId,mc,ml);
     monitor->pianoLowPitch=60; monitor->pianoHighPitch=63;
-    assert(!monitor->pianoLiveEditSound);
-    monitor->pianoLiveEditSound=true;
+    assert(monitor->pianoLiveEditSound);   // on by default
     // Pitch rows as in the keyboard test above: 60 at y 256, 61 at y 214.
     auto monitorFrame=[&](float x,float y,bool down){frame(mc,ml,true,ImVec2(x,y),down); model.update();};
     monitorFrame(265,256,false); monitorFrame(265,256,true);
@@ -713,6 +712,19 @@ int main() {
     monitorFrame(270,256,true); close(monitorGate,1);
     monitorFrame(300,214,true); close(monitorPitch,61); close(monitorGate,1);
     monitorFrame(300,214,false); close(monitorGate,0);
+    // Grabbing an existing note by its end (resize) sounds it too.
+    {
+        const auto& grabbed=monitor->pianoNotes.back();
+        const ofxOceanodeTimelineEditorView monitorView(model, 120.0f, 8.0, true, 0.25);
+        const float endX=230+monitorView.beatToPixels(grabbed.startBeat+grabbed.durationBeats)-1.0f;
+        const float rowY=grabbed.pitch==60?256.0f:214.0f;
+        const size_t count=monitor->pianoNotes.size();
+        monitorFrame(endX,rowY,false); monitorFrame(endX,rowY,true);
+        assert(monitor->pianoNotes.size()==count);
+        assert(pianoEditor.pianoDragMode==ofxOceanodeTimelinePianoRollEditor::PianoDragMode::Resize);
+        close(monitorPitch,grabbed.pitch); close(monitorGate,1);
+        monitorFrame(endX,rowY,false); close(monitorGate,0);
+    }
     monitor->pianoLiveEditSound=false;
     monitorFrame(310,214,true); model.update(); close(monitorGate,0);
     monitorFrame(310,214,false);
@@ -722,9 +734,13 @@ int main() {
     monitorFrame(400,256,false);
     const auto monitorSaved=model.toJson(); model.fromJson(monitorSaved);
     assert(model.getLane(trackId,mc,ml)->pianoLiveEditSound);
-    auto monitorLegacy=monitorSaved;
-    for(auto& tr:monitorLegacy["tracks"]) for(auto& clip:tr["clips"]) for(auto& ln:clip["lanes"]) ln.erase("pianoLiveEditSound");
-    model.fromJson(monitorLegacy); assert(!model.getLane(trackId,mc,ml)->pianoLiveEditSound);
+    // Turned off: kept. A file from when it was off by default: on.
+    model.getLane(trackId,mc,ml)->pianoLiveEditSound=false;
+    const auto monitorOff=model.toJson(); model.fromJson(monitorOff);
+    assert(!model.getLane(trackId,mc,ml)->pianoLiveEditSound);
+    auto monitorLegacy=monitorOff;
+    for(auto& tr:monitorLegacy["tracks"]) for(auto& clip:tr["clips"]) for(auto& ln:clip["lanes"]) { ln.erase("pianoEditSound"); ln["pianoLiveEditSound"]=false; }
+    model.fromJson(monitorLegacy); assert(model.getLane(trackId,mc,ml)->pianoLiveEditSound);
     ImGui::DestroyContext();
     std::cout << "Editor regression passed: all lane types, LFO, properties, previews, clip-stack balance, focus routing, step/curve/slider input.\n";
 }

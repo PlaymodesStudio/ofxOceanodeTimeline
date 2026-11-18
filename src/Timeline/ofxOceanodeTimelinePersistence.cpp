@@ -679,7 +679,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             laneJson["pianoLowPitch"] = lane.pianoLowPitch;
             laneJson["pianoHighPitch"] = lane.pianoHighPitch;
             laneJson["pianoSnapToGrid"] = lane.pianoSnapToGrid;
-            laneJson["pianoLiveEditSound"] = lane.pianoLiveEditSound;
+            laneJson["pianoEditSound"] = lane.pianoLiveEditSound;
             laneJson["pianoPitchBindingId"] = lane.pianoPitchBindingId;
             laneJson["pianoGateBindingId"] = lane.pianoGateBindingId;
             laneJson["pianoVelocityBindingId"] = lane.pianoVelocityBindingId;
@@ -1167,7 +1167,9 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                         lane.pianoLowPitch = ofClamp(laneJson.value("pianoLowPitch", 36), 0, 127);
                         lane.pianoHighPitch = ofClamp(laneJson.value("pianoHighPitch", 84), lane.pianoLowPitch, 127);
                         lane.pianoSnapToGrid = laneJson.value("pianoSnapToGrid", true);
-                        lane.pianoLiveEditSound = laneJson.value("pianoLiveEditSound", false);
+                        // On unless turned off. Files from when it was off by default
+                        // kept that default under "pianoLiveEditSound": not read.
+                        lane.pianoLiveEditSound = laneJson.value("pianoEditSound", true);
                         lane.pianoPitchBindingId = mapBinding(laneJson.value("pianoPitchBindingId", std::string()));
                         lane.pianoGateBindingId = mapBinding(laneJson.value("pianoGateBindingId", std::string()));
                         lane.pianoVelocityBindingId = mapBinding(laneJson.value("pianoVelocityBindingId", std::string()));

@@ -142,7 +142,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
     propertyLabel("Vel");
     ImGui::SliderFloat("##Vel", &lane->pianoDefaultVelocity, 0.0f, 1.0f, "%.2f");
     ImGui::Checkbox("Live edit sound", &lane->pianoLiveEditSound);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Monitor pitch and gate while inserting or moving notes.");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Hear a note while drawing, grabbing, moving or resizing it.");
     ImGui::Checkbox("Snap", &lane->pianoSnapToGrid);
     ImGui::SameLine(); ImGui::Checkbox("Mono", &lane->pianoMonophonic);
     // Scale overlay: shades the keys outside the scale; snap keeps drawn and
@@ -1157,8 +1157,10 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             ImGui::SetTooltip("Stretch x %.2f (on the grid)", factor);
         }
     }
+    // Live edit sound: the note drawn or grabbed sounds while the mouse is held.
     if(lane->pianoLiveEditSound && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-       (pianoDragMode == PianoDragMode::Move || pianoInsertionDrag) &&
+       (pianoDragMode == PianoDragMode::Move || pianoDragMode == PianoDragMode::Resize ||
+        pianoDragMode == PianoDragMode::Stretch) &&
        pianoDragNoteIndex >= 0 && pianoDragNoteIndex < static_cast<int>(lane->pianoNotes.size())) {
         const int monitorPitch = lane->pianoNotes[pianoDragNoteIndex].pitch;
         if(!editPreviewActive || editPreviewPitch != monitorPitch) {

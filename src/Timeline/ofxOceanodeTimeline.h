@@ -519,7 +519,8 @@ struct ofxOceanodeTimelineLane {
     int pianoLowPitch = 36;
     int pianoHighPitch = 84;
     bool pianoSnapToGrid = true;
-    bool pianoLiveEditSound = false;
+    // Sound the note being drawn, grabbed or moved in the piano roll.
+    bool pianoLiveEditSound = true;
     std::string pianoPitchBindingId;
     std::string pianoGateBindingId;
     std::string pianoVelocityBindingId;
