@@ -1072,6 +1072,23 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         pianoSelectedNoteIndices.clear();
         for(size_t i = 0; i < lane->pianoNotes.size(); ++i) pianoSelectedNoteIndices.insert(static_cast<int>(i));
     }
+    // Cmd+C / Cmd+X: the selected notes, to the clipboard every piano roll shares.
+    const bool noteShortcuts = !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl;
+    const bool cutNotes = noteShortcuts && ImGui::IsKeyPressed(ImGuiKey_X, false);
+    if(noteShortcuts && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !pianoSelectedNoteIndices.empty() &&
+       (cutNotes || ImGui::IsKeyPressed(ImGuiKey_C, false))) {
+        pianoNoteClipboard() = copyPianoNotes(*lane, pianoSelectedNoteIndices);
+        if(cutNotes) {
+            for(auto it = pianoSelectedNoteIndices.rbegin(); it != pianoSelectedNoteIndices.rend(); ++it)
+                if(*it >= 0 && *it < static_cast<int>(lane->pianoNotes.size())) lane->pianoNotes.erase(lane->pianoNotes.begin() + *it);
+            pianoSelectedNoteIndices.clear();
+        }
+    }
+    // Cmd+V: they land with the first one at the mouse (on the grid), selected.
+    if(noteShortcuts && hovered && !pianoNoteClipboard().empty() && pianoDragMode == PianoDragMode::None &&
+       ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+        pianoSelectedNoteIndices = pastePianoNotes(*lane, pianoNoteClipboard(), snappedSource);
+    }
     if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
        !pianoSelectedNoteIndices.empty() && !ImGui::IsAnyItemActive() &&
        !ImGui::GetIO().WantTextInput &&

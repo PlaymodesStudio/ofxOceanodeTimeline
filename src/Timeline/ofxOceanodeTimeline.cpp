@@ -3177,6 +3177,18 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
         ids = std::move(mapped);
     };
 
+    // Points a piano roll or drum grid lane at a note group's roles.
+    auto driveNoteGroup = [](ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineNoteGroup& group) {
+        const bool drums = lane.type == ofxOceanodeTimelineLaneType::DrumGrid;
+        lane.pianoPitchBindingId = group.pitchBindingId;
+        lane.pianoGateBindingId = group.gateBindingId;
+        lane.pianoVelocityBindingId = group.velocityBindingId;
+        lane.drumDurationBindingId = drums ? group.durationBindingId : std::string();
+        lane.drumFilterBindingId = drums ? group.filterBindingId : std::string();
+        lane.drumStutterBindingId = drums ? group.stutterBindingId : std::string();
+        lane.bindingIds = group.members();
+    };
+
     if(!dstBindingId.empty()) {
         if(dstTrack->isWaveTrack || getBinding(sequence, dstTrackId, dstBindingId) == nullptr) return std::string();
         {
@@ -3187,13 +3199,7 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
             if(ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) {
                 const auto* group = findNoteGroupForBinding(*dstTrack, dstBindingId);
                 if(group == nullptr) return std::string();
-                lane.pianoPitchBindingId = group->pitchBindingId;
-                lane.pianoGateBindingId = group->gateBindingId;
-                lane.pianoVelocityBindingId = group->velocityBindingId;
-                lane.drumDurationBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->durationBindingId : std::string();
-                lane.drumFilterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->filterBindingId : std::string();
-                lane.drumStutterBindingId = lane.type == ofxOceanodeTimelineLaneType::DrumGrid ? group->stutterBindingId : std::string();
-                lane.bindingIds = group->members();
+                driveNoteGroup(lane, *group);
             } else {
                 lane.bindingIds = {dstBindingId};
             }
@@ -3201,8 +3207,13 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
         }
     } else if(!sameTrack && !dstTrack->isWaveTrack) {
         {
-            std::vector<ofxOceanodeTimelineLane> kept;
-            for(auto lane : copy.lanes) {
+            // Note groups of the destination already driven by a lane of the copy.
+            std::set<std::string> takenGroups;
+            auto takeGroupsOf = [&](const ofxOceanodeTimelineLane& lane) {
+                for(const auto& id : lane.bindingIds)
+                    if(const auto* group = findNoteGroupForBinding(*dstTrack, id)) takenGroups.insert(group->id);
+            };
+            for(auto& lane : copy.lanes) {
                 mapIds(lane.bindingIds);
                 if(ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) {
                     lane.pianoPitchBindingId = mapBinding(lane.pianoPitchBindingId);
@@ -3211,6 +3222,21 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
                     lane.drumFilterBindingId = mapBinding(lane.drumFilterBindingId);
                     lane.drumStutterBindingId = mapBinding(lane.drumStutterBindingId);
                     lane.pianoVelocityBindingId = mapBinding(lane.pianoVelocityBindingId);
+                }
+                takeGroupsOf(lane);
+            }
+            // Notes are not tied to one instrument: a piano roll or drum grid
+            // whose parameters the destination lacks plays that track's own
+            // note group instead (its first one no other lane of the copy drives).
+            std::vector<ofxOceanodeTimelineLane> kept;
+            for(auto& lane : copy.lanes) {
+                if(lane.bindingIds.empty() && ofxOceanodeTimelineLaneUsesNoteRoles(lane.type)) {
+                    for(const auto& group : dstTrack->noteGroups) {
+                        if(takenGroups.count(group.id) > 0 || group.members().empty()) continue;
+                        driveNoteGroup(lane, group);
+                        takenGroups.insert(group.id);
+                        break;
+                    }
                 }
                 if(!lane.bindingIds.empty()) kept.push_back(std::move(lane));
             }

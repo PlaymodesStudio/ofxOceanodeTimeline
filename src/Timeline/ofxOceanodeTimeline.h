@@ -1934,7 +1934,9 @@ public:
     // Copies a clip, with fresh clip/lane ids, to dstTrackId at newStartBeat
     // and returns the new clip's id ("" when it cannot go there).
     //  - dstBindingId empty: the whole clip. On another track every binding is
-    //    remapped to that track's binding of the same parameter; lanes with no
+    //    remapped to that track's binding of the same parameter. A piano roll
+    //    or drum grid with no match plays that track's own note group (the
+    //    first one no other lane of the copy drives); other lanes with no
     //    match are dropped (nothing left: refused).
     //  - dstBindingId set: only the lane srcLaneId, now driving that binding (a
     //    piano roll needs a note group's row and takes its pitch/gate/velocity).

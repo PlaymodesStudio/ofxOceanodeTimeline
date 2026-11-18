@@ -302,6 +302,39 @@ bool pitchClassKeyboard(const char* id, int& mask, ImU32 onColor, float height) 
     }
     return changed;
 }
+std::vector<ofxOceanodeTimelinePianoNote> copyPianoNotes(const ofxOceanodeTimelineLane& lane, const std::set<int>& indices) {
+    std::vector<ofxOceanodeTimelinePianoNote> notes;
+    for(int index : indices)
+        if(index >= 0 && index < static_cast<int>(lane.pianoNotes.size())) notes.push_back(lane.pianoNotes[index]);
+    if(notes.empty()) return notes;
+    std::stable_sort(notes.begin(), notes.end(), [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+    const double first = notes.front().startBeat;
+    for(auto& note : notes) note.startBeat -= first;
+    return notes;
+}
+std::set<int> pastePianoNotes(ofxOceanodeTimelineLane& lane, const std::vector<ofxOceanodeTimelinePianoNote>& notes, double atBeat) {
+    std::set<int> pasted;
+    if(notes.empty()) return pasted;
+    atBeat = std::max(0.0, atBeat);
+    if(lane.pianoMonophonic) {
+        lane.pianoNotes.erase(std::remove_if(lane.pianoNotes.begin(), lane.pianoNotes.end(), [&](const auto& existing) {
+            return std::any_of(notes.begin(), notes.end(), [&](const auto& note) {
+                const double start = atBeat + note.startBeat;
+                return existing.startBeat < start + note.durationBeats && existing.startBeat + existing.durationBeats > start;
+            });
+        }), lane.pianoNotes.end());
+    }
+    for(auto note : notes) {
+        note.startBeat += atBeat;
+        lane.pianoNotes.push_back(note);
+        pasted.insert(static_cast<int>(lane.pianoNotes.size()) - 1);
+    }
+    return pasted;
+}
+std::vector<ofxOceanodeTimelinePianoNote>& pianoNoteClipboard() {
+    static std::vector<ofxOceanodeTimelinePianoNote> clipboard;
+    return clipboard;
+}
 std::string fitText(const std::string& text, float maxWidth) {
     if(ImGui::CalcTextSize(text.c_str()).x <= maxWidth) return text;
     std::string shortened = text;

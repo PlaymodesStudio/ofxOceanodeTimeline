@@ -682,6 +682,18 @@ visibility. Moving, stretching or repeating a clip does not shift these lines.
 The lane's Grid setting still controls note insertion and editing; coloured
 repeat boundaries remain visible.
 
+Cmd+C copies the selected piano-roll notes and Cmd+X cuts them. Cmd+V pastes
+them with the earliest note at the mouse position (snapped to the lane's grid
+when Snap is on), keeping pitches, velocities, probabilities and mutation, and
+leaves them selected. The clipboard is shared by every piano roll for the
+session, so notes can go to another clip, track or timeline. A monophonic lane
+drops the notes the pasted ones overlap.
+
+Cmd+dragging a clip onto another track copies it there. Lanes follow the
+destination's binding of the same parameter; a Piano Roll or Drum Grid whose
+parameters that track lacks plays the track's own note group instead, so a
+phrase can be copied from one instrument to another.
+
 ## Number clips
 
 Choose **Number** in the clip type selector or lane type menu. Click in the

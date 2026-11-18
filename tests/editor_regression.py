@@ -221,6 +221,46 @@ int main() {
     assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{1}));
     selectPitch(171.75f); assert(pianoEditor.pianoSelectedNoteIndices.empty());
     assert(model.toJson()==pitchBefore);
+    // Cmd+C copies the selected notes, Cmd+V drops them with the first one at
+    // the mouse and selects them, Cmd+X removes them again.
+    {
+        using namespace ofxOceanodeTimelineLaneEditorUi;
+        pianoNoteClipboard().clear();
+        selectPitch(256.75f);
+        assert((pianoEditor.pianoSelectedNoteIndices==std::set<int>{0,2,3}));
+        const ImVec2 over(400,200);
+        ImGuiKey command=ImGuiMod_Super;   // ImGui's logical Ctrl on macOS
+        io.AddKeyEvent(command,true); frame(pianoClip,pianoLane,true,over,false);
+        if(!io.KeyCtrl) { io.AddKeyEvent(command,false); command=ImGuiMod_Ctrl; io.AddKeyEvent(command,true); frame(pianoClip,pianoLane,true,over,false); }
+        assert(io.KeyCtrl);
+        auto press=[&](ImGuiKey key) {
+            io.AddKeyEvent(key,true); frame(pianoClip,pianoLane,true,over,false);
+            io.AddKeyEvent(key,false); frame(pianoClip,pianoLane,true,over,false);
+        };
+        press(ImGuiKey_C);
+        assert(pianoNoteClipboard().size()==3 && pianoNoteClipboard()[0].startBeat==0 &&
+               pianoNoteClipboard()[1].startBeat==2 && pianoNoteClipboard()[2].startBeat==20);
+        assert(model.toJson()==pitchBefore);
+        press(ImGuiKey_V);
+        assert(pitchLane->pianoNotes.size()==7 && (pianoEditor.pianoSelectedNoteIndices==std::set<int>{4,5,6}));
+        const double at=pitchLane->pianoNotes[4].startBeat, step=pitchLane->beatsPerStep;
+        assert(at>0 && std::abs(at/step-std::round(at/step))<1e-9);
+        assert(pitchLane->pianoNotes[5].startBeat==at+2 && pitchLane->pianoNotes[6].startBeat==at+20);
+        for(int i=4;i<7;++i) assert(pitchLane->pianoNotes[i].pitch==60 && pitchLane->pianoNotes[i].velocity==0.8f);
+        press(ImGuiKey_X);
+        assert(pianoEditor.pianoSelectedNoteIndices.empty() && model.toJson()==pitchBefore && pianoNoteClipboard().size()==3);
+        io.AddKeyEvent(command,false); frame(pianoClip,pianoLane,true,over,false);
+        // The clipboard is not tied to its lane: another piano roll takes the
+        // notes, and a monophonic one drops what they land on.
+        ofxOceanodeTimelineLane other; other.type=ofxOceanodeTimelineLaneType::PianoRoll;
+        other.pianoNotes={{4,1,72,1,1},{9,1,72,1,1}};
+        assert((pastePianoNotes(other,pianoNoteClipboard(),4)==std::set<int>{2,3,4}) && other.pianoNotes.size()==5);
+        other.pianoNotes={{4,1,72,1,1},{9,1,72,1,1}}; other.pianoMonophonic=true;
+        assert((pastePianoNotes(other,pianoNoteClipboard(),4)==std::set<int>{1,2,3}));
+        assert(other.pianoNotes[0].startBeat==9 && other.pianoNotes[1].startBeat==4 && other.pianoNotes[3].startBeat==24);
+        assert(copyPianoNotes(other,{}).empty() && pastePianoNotes(other,{},0).empty());
+        pianoNoteClipboard().clear();
+    }
     // Mouse input is routed only to the focused editor.
     const auto stepClip = model.createClip(trackId, "Step", 0, 4);
     const auto stepLane = model.createLane(trackId, stepClip, "Step", ofxOceanodeTimelineLaneType::Step);

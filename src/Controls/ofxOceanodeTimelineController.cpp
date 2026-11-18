@@ -5854,7 +5854,7 @@ void ofxOceanodeTimelineController::draw() {
                     if(newClipId.empty()) {
                         ofLogWarning("ofxOceanodeTimelineController")
                             << "Cannot duplicate \"" << sourceClip->name << "\" there: "
-                            << "no matching parameter on that track, or a piano roll dropped outside a note group, "
+                            << "no matching parameter on that track, or a piano roll dropped on a track with no free note group, "
                             << "or a Wave clip outside a Wave track";
                     } else {
                         selectedClips.clear();

@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include "ofxOceanodeTimelineEditorView.h"
 #include "ofxOceanodeTimelineEditorUi.h"
 #include "Timeline/ofxOceanodeTimeline.h"
@@ -80,6 +81,14 @@ int curveSnapLevels(const ofxOceanodeTimelineLane& lane);
 void resetCurveTensions(ofxOceanodeTimelineLane& lane);
 void eraseCurvePointWithTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);
 void eraseCurvePointKeepingTensions(ofxOceanodeTimelineLane& lane, size_t pointIndex);
+// Piano roll note clipboard, shared by every piano roll (so notes go from
+// one clip, track or timeline to another).
+// The chosen notes of a lane, their starts counted from the earliest one.
+std::vector<ofxOceanodeTimelinePianoNote> copyPianoNotes(const ofxOceanodeTimelineLane& lane, const std::set<int>& indices);
+// Adds the notes with the earliest at atBeat (pitches kept) and returns
+// their indices. A monophonic lane first drops the notes they overlap.
+std::set<int> pastePianoNotes(ofxOceanodeTimelineLane& lane, const std::vector<ofxOceanodeTimelinePianoNote>& notes, double atBeat);
+std::vector<ofxOceanodeTimelinePianoNote>& pianoNoteClipboard();
 // Lane-pad property row: the label in a left column, then sizes the next
 // widget to fill the row (less reserveRight for a trailing button).
 // Give the widget a "##id" label.
