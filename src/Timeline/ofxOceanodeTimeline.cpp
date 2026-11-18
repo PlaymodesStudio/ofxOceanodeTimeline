@@ -3736,6 +3736,18 @@ bool ofxOceanodeTimelineManager::addBindingToLane(ofxOceanodeTimelineSequence& s
         }
     }
     lane->bindingIds.push_back(bindingId);
+    // A note group's parameter brings the whole group: a piano roll holding
+    // only its pitch (or only its gate) would not play, and would silence
+    // the group's other lanes in the clip by writing that one parameter.
+    if(ofxOceanodeTimelineLaneUsesNoteRoles(lane->type)) {
+        if(const auto* group = findNoteGroupForBinding(*track, bindingId)) {
+            const auto groupCopy = *group;
+            syncNoteGroupLanes(*track, groupCopy, {bindingId});
+            invalidateEvaluationIndexes();
+            invalidateSchedule();
+            return true;
+        }
+    }
     if(lane->type == ofxOceanodeTimelineLaneType::DrumGrid) {
         // A kit is played by its gate first; pitch is optional.
         const bool alreadyRoled = lane->pianoPitchBindingId == bindingId || lane->pianoGateBindingId == bindingId ||
