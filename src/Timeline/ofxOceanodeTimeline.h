@@ -26,6 +26,7 @@
 
 class ofxOceanodeAbstractParameter;
 class ofxOceanodeContainer;
+class ofxOceanodeNode;
 class ofxOceanodeNodeModel;
 class ofxOceanodeNodeMacro;
 struct ofxOceanodeTimelineInstrument;
@@ -1543,6 +1544,39 @@ public:
         request = pendingNewTimeline;
         return true;
     }
+    // ---- The automation of copied nodes ----
+    // Nodes of `canvas` were copied to the clipboard folder: the tracks
+    // driving them, of that canvas's timelines and of the ones around it,
+    // are saved beside them (clipboardTimelines.json; no track, no file),
+    // their paths relative to the canvas, with the preset they come from.
+    void saveClipboardAutomation(ofxOceanodeContainer& canvas, const std::vector<ofxOceanodeNode*>& nodes,
+                                 const std::string& folder);
+    // What a paste into another preset can bring along: one new timeline
+    // per copied one, on the canvas pasted into, picked up by the editor,
+    // which asks first.
+    struct ClipboardPasteRequest {
+        std::string canvas;                         // pasted into ("" the root)
+        ofJson timelines;                           // [{"name", "sequence"}]
+        std::map<std::string, std::string> paths;   // as copied -> as pasted, relative to the canvas
+        std::vector<std::string> names;             // the timelines' names
+        int tracks = 0;                             // how many tracks they hold
+    };
+    // The user pasted the clipboard folder's nodes into `canvas` (oldToNew:
+    // their parameters' paths as copied -> now, absolute). Asks for the
+    // dialog when the folder holds automation copied from another preset.
+    void offerClipboardAutomation(ofxOceanodeContainer& canvas, const std::string& folder,
+                                  const std::map<std::string, std::string>& oldToNew);
+    bool consumeClipboardPasteRequest(ClipboardPasteRequest& request) {
+        if(!clipboardPasteRequested) return false;
+        clipboardPasteRequested = false;
+        request = std::move(pendingClipboardPaste);
+        pendingClipboardPaste = {};
+        return true;
+    }
+    // Makes the timelines of a request, driving the pasted nodes only.
+    std::vector<TimelineRef> pasteClipboardAutomation(const ClipboardPasteRequest& request);
+    // What tells one preset from another: its path, or, never saved, this run.
+    static std::string clipboardPresetIdentity();
     // A parameter's right-click "Add to Timeline": a new clip driving it on
     // a track of that timeline (a new track when trackId is empty), a new
     // lane driving it in one of the track's clips, or one more target of an
@@ -2510,6 +2544,8 @@ private:
     bool timelineScopeRequested = false;
     NewTimelineRequest pendingNewTimeline;
     bool newTimelineRequested = false;
+    ClipboardPasteRequest pendingClipboardPaste;
+    bool clipboardPasteRequested = false;
     ParameterClipRequest pendingParameterClip;
     bool parameterClipRequested = false;
     std::vector<std::unique_ptr<Player>> players;

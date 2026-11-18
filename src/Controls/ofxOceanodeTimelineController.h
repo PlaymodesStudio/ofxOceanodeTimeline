@@ -464,6 +464,10 @@ private:
     float newTimelineColor[3] = {};
     bool newTimelineColorEdited = false;
     bool requestNewTimelinePopup = false;
+    // ---- Nodes pasted from another preset: paste their timelines too? ----
+    void drawClipboardPastePopup(ofxOceanodeTimelineManager& timeline);
+    ofxOceanodeTimelineManager::ClipboardPasteRequest clipboardPaste;
+    bool requestClipboardPastePopup = false;
     // Back to the canvas at `depth` of the breadcrumb (0: the main canvas).
     void leaveScopesTo(size_t depth);
     void resetEditorForScope();

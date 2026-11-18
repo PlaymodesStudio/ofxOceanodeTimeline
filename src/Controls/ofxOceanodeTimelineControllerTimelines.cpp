@@ -1028,6 +1028,46 @@ void ofxOceanodeTimelineController::drawPopups() {
     if(secondary() || container == nullptr) return;
     // Every new timeline: the canvas, parameter and timelines menus.
     drawNewTimelinePopup(container->getTimelineManager());
+    // Nodes pasted from another preset, with the timelines that drove them.
+    drawClipboardPastePopup(container->getTimelineManager());
+}
+
+void ofxOceanodeTimelineController::drawClipboardPastePopup(ofxOceanodeTimelineManager& timeline) {
+    if(timeline.consumeClipboardPasteRequest(clipboardPaste)) requestClipboardPastePopup = true;
+    const char* title = "Paste Timeline?##clipboardTimeline";
+    if(requestClipboardPastePopup) {
+        ImGui::OpenPopup(title);
+        requestClipboardPastePopup = false;
+    }
+    centerNextModal();
+    if(!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    const bool several = clipboardPaste.names.size() > 1;
+    ImGui::TextUnformatted(several ? "The pasted nodes were automated by these timelines:"
+                                   : "The pasted nodes were automated by this timeline:");
+    for(const auto& name : clipboardPaste.names) ImGui::BulletText("%s", name.c_str());
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", several ? "Paste them too? Each becomes a new timeline on this canvas,"
+                                      : "Paste it too? It becomes a new timeline on this canvas,");
+    ImGui::TextDisabled("with the %d track%s driving the pasted nodes.", clipboardPaste.tracks,
+                        clipboardPaste.tracks == 1 ? "" : "s");
+    ImGui::Spacing();
+    const bool paste = ImGui::Button(several ? "Paste Timelines" : "Paste Timeline") ||
+                       ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+    ImGui::SameLine();
+    const bool skip = ImGui::Button("Nodes Only") || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if(paste) {
+        // Each in a window of its own, the first brought forward.
+        const auto made = timeline.pasteClipboardAutomation(clipboardPaste);
+        for(auto ref = made.rbegin(); ref != made.rend(); ++ref) {
+            const int shownIn = timeline.openTimelineWindow(*ref);
+            if(std::next(ref) == made.rend()) focusTimelineWindow(timeline, shownIn);
+        }
+    }
+    if(paste || skip) {
+        clipboardPaste = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void ofxOceanodeTimelineController::drawWindowMenuItems() {

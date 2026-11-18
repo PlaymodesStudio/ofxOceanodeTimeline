@@ -77,6 +77,14 @@ public:
     bool saveMacroPreset(const ofxOceanodeContainer& macroContainer, const std::string& folder) const override {
         return manager.saveMacroSequence(macroContainer, folder);
     }
+    void saveClipboard(ofxOceanodeContainer& canvas, const std::vector<ofxOceanodeNode*>& nodes,
+                       const std::string& folder) override {
+        manager.saveClipboardAutomation(canvas, nodes, folder);
+    }
+    void clipboardPasted(ofxOceanodeContainer& canvas, const std::string& folder,
+                         const std::map<std::string, std::string>& oldToNew) override {
+        manager.offerClipboardAutomation(canvas, folder, oldToNew);
+    }
     void removeParameterBindings(ofxOceanodeAbstractParameter& parameter) override {
         manager.removeBindingsOf(parameter);
     }

@@ -5774,6 +5774,9 @@ void ofxOceanodeTimelineManager::clearLiveOverride(const std::string& trackId, c
 
 void ofxOceanodeTimelineManager::clear() {
     if(!replayingTimelineEdit) clearTimelineHistory();
+    // A paste not answered yet was into the patch going away.
+    pendingClipboardPaste = {};
+    clipboardPasteRequested = false;
     // Correct anything already queued on a backend while the bindings that
     // know the right values still exist (afterwards a queued gate-on would
     // play with nothing to turn it off).

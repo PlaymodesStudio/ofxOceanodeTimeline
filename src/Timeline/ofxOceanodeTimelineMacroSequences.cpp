@@ -4,6 +4,7 @@
 #include "Timeline/ofxOceanodeTimeline.h"
 
 #include "Managers/ofxOceanodeContainer.h"
+#include "ofxOceanodeShared.h"
 #include "Nodes/ofxOceanodeNode.h"
 #include "Nodes/ofxOceanodeNodeMacro.h"
 #include "Nodes/ofxOceanodeMorph.h"
@@ -520,6 +521,183 @@ void ofxOceanodeTimelineManager::replayParameterMove(ofxOceanodeContainer& canva
     retargetAllParameterPaths(newToOld);
     invalidateEvaluationIndexes();
     invalidateSchedule();
+}
+
+// ---- The automation of copied nodes ----
+
+namespace {
+constexpr const char* kClipboardFile = "clipboardTimelines.json";
+}
+
+std::string ofxOceanodeTimelineManager::clipboardPresetIdentity() {
+    const std::string path = ofxOceanodeShared::getCurrentPresetPath();
+    if(!path.empty()) return "preset:" + path;
+    // Never saved: the same one for as long as the application runs.
+    static const std::string run = "unsaved:" + ofToString(ofGetSystemTimeMicros()) + "-" + ofToString(ofRandom(1e9f), 0);
+    return run;
+}
+
+void ofxOceanodeTimelineManager::saveClipboardAutomation(ofxOceanodeContainer& canvas, const std::vector<ofxOceanodeNode*>& nodes,
+                                                         const std::string& folder) {
+    if(container == nullptr || nodes.empty()) return;
+    const std::string copied = canvasIdOf(canvas);
+    // What was copied, as paths relative to the canvas start: a node's
+    // parameters, and everything inside a macro.
+    std::vector<std::string> nodePrefixes, macroPrefixes;
+    for(auto* node : nodes) {
+        if(node == nullptr) continue;
+        nodePrefixes.push_back(node->getParameters().getEscapedName() + "/");
+        auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel());
+        if(macro == nullptr || !macro->getContainer()) continue;
+        const std::string inner = relativeTo(copied, macro->getContainer()->getCanvasID());
+        if(!inner.empty()) macroPrefixes.push_back(inner);
+    }
+    auto isCopied = [&](const std::string& path) {
+        if(path.empty()) return false;
+        for(const auto& prefix : nodePrefixes) if(path.rfind(prefix, 0) == 0) return true;
+        for(const auto& prefix : macroPrefixes)
+            if(path.rfind(prefix + "::", 0) == 0 || path.rfind(prefix + " / ", 0) == 0) return true;
+        return false;
+    };
+    // The canvas's timelines and those of every canvas around it, from the root down.
+    std::vector<std::string> canvases{std::string()};
+    for(size_t at = copied.find(" / "); !copied.empty(); at = copied.find(" / ", at + 3)) {
+        canvases.push_back(at == std::string::npos ? copied : copied.substr(0, at));
+        if(at == std::string::npos) break;
+    }
+    ofJson timelines = ofJson::array();
+    for(const auto& owner : canvases) {
+        // The copied canvas as that timeline's paths name it ("": its own).
+        const std::string within = owner == copied ? std::string() : relativeTo(owner, copied);
+        auto toCopied = [&](const std::string& path) {
+            const std::string relative = within.empty() ? path : relativeTo(within, path);
+            return isCopied(relative) ? relative : std::string();
+        };
+        for(const auto& ref : timelinesOfCanvas(owner)) {
+            const auto* source = findTimeline(ref);
+            if(source == nullptr) continue;
+            // A wave, Global or macro track drives no copied parameter by a binding.
+            auto drives = [&](const ofxOceanodeTimelineTrack& track) {
+                if(track.isFolder || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack()) return false;
+                return std::any_of(track.bindings.begin(), track.bindings.end(),
+                                   [&](const auto& binding) { return !toCopied(binding.parameterPath).empty(); });
+            };
+            // (Copies are made every time nodes are: nothing is, of a timeline that drives none.)
+            if(std::none_of(source->tracks.begin(), source->tracks.end(), drives)) continue;
+            auto kept = *source;
+            kept.tracks.clear();
+            for(const auto& original : source->tracks) {
+                if(!drives(original)) continue;
+                auto track = original;
+                // A binding to anything else is left without a path: it is dropped on paste.
+                for(auto& binding : track.bindings) binding.parameterPath = toCopied(binding.parameterPath);
+                for(auto& clip : track.clips)
+                    for(auto& lane : clip.lanes) {
+                        std::decay_t<decltype(lane.targetProbability)> relative;
+                        for(const auto& [path, chance] : lane.targetProbability)
+                            if(const auto moved = toCopied(path); !moved.empty()) relative[moved] = chance;
+                        lane.targetProbability = std::move(relative);
+                    }
+                track.parentId.clear(); // its folder stays behind
+                kept.tracks.push_back(std::move(track));
+            }
+            if(kept.tracks.empty()) continue;
+            for(auto& group : kept.clipGroups)
+                group.members.erase(std::remove_if(group.members.begin(), group.members.end(),
+                    [&](const auto& member) { return kept.findTrack(member.first) == nullptr; }), group.members.end());
+            kept.clipGroups.erase(std::remove_if(kept.clipGroups.begin(), kept.clipGroups.end(),
+                [](const auto& group) { return group.members.size() < 2; }), kept.clipGroups.end());
+            kept.normalizeFolders();
+            timelines.push_back({{"name", timelineName(ref)}, {"sequence", sequenceToJson(kept)}});
+        }
+    }
+    if(timelines.empty()) return; // nothing drives them: no file, no question on paste
+    ofSavePrettyJson(ofFilePath::join(folder, kClipboardFile),
+                     {{"version", kPresetVersion}, {"preset", clipboardPresetIdentity()}, {"timelines", timelines}});
+}
+
+void ofxOceanodeTimelineManager::offerClipboardAutomation(ofxOceanodeContainer& canvas, const std::string& folder,
+                                                          const std::map<std::string, std::string>& oldToNew) {
+    const std::string file = ofFilePath::join(folder, kClipboardFile);
+    if(container == nullptr || !ofFile::doesFileExist(file)) return;
+    const ofJson document = ofLoadJson(file);
+    if(!document.is_object() || !document.contains("timelines") || !document["timelines"].is_array()) return;
+    if(document.value("version", kPresetVersion) > kPresetVersion) return; // written by a newer version
+    // Pasted where it was copied: its timelines are here already.
+    if(document.value("preset", std::string()) == clipboardPresetIdentity()) return;
+    ClipboardPasteRequest request;
+    request.canvas = canvasIdOf(canvas);
+    for(const auto& [from, to] : oldToNew) {
+        const std::string relative = relativeTo(request.canvas, to);
+        if(!relative.empty()) request.paths[from] = relative;
+    }
+    request.timelines = ofJson::array();
+    for(const auto& entry : document["timelines"]) {
+        if(!entry.is_object() || !entry.contains("sequence")) continue;
+        // Its tracks that drive something pasted (a node may have failed to).
+        int tracks = 0;
+        for(const auto& track : entry["sequence"].value("tracks", ofJson::array())) {
+            bool drives = false;
+            for(const auto& binding : track.value("bindings", ofJson::array()))
+                drives = drives || request.paths.count(binding.value("parameterPath", std::string())) > 0;
+            tracks += drives ? 1 : 0;
+        }
+        if(tracks == 0) continue;
+        request.tracks += tracks;
+        request.names.push_back(entry.value("name", std::string("Timeline")));
+        request.timelines.push_back(entry);
+    }
+    if(request.timelines.empty()) return;
+    pendingClipboardPaste = std::move(request);
+    clipboardPasteRequested = true;
+}
+
+std::vector<ofxOceanodeTimelineManager::TimelineRef>
+ofxOceanodeTimelineManager::pasteClipboardAutomation(const ClipboardPasteRequest& request) {
+    std::vector<TimelineRef> made;
+    if(container == nullptr || canvasContainer(request.canvas) == nullptr || !request.timelines.is_array()) return made;
+    for(const auto& entry : request.timelines) {
+        const std::string name = entry.value("name", std::string());
+        const auto ref = addTimeline(request.canvas, name);
+        auto* sequence = ref.timeline.empty() ? nullptr : timelineFor(ref);
+        if(sequence == nullptr) continue;
+        const std::string given = sequence->play.name;
+        sequenceFromJson(*sequence, entry["sequence"]); // keeps its new id and its canvas
+        sequence->play.name = given;
+        sequence->play.nodesFollowClips = false; // one per canvas: not this one's to take
+        // What did not come along: bindings to nodes that were not pasted,
+        // then the tracks left driving nothing.
+        std::vector<std::pair<std::string, std::string>> gone;
+        for(const auto& track : sequence->tracks)
+            for(const auto& binding : track.bindings)
+                if(request.paths.count(binding.parameterPath) == 0) gone.emplace_back(track.id, binding.id);
+        for(const auto& [trackId, bindingId] : gone) removeBinding(*sequence, trackId, bindingId);
+        std::vector<std::string> empty;
+        for(const auto& track : sequence->tracks) if(track.bindings.empty()) empty.push_back(track.id);
+        for(const auto& trackId : empty) removeTrack(*sequence, trackId);
+        // Onto the pasted nodes.
+        retargetParameterPaths(*sequence, request.paths);
+        for(auto& track : sequence->tracks) {
+            for(auto& binding : track.bindings) binding.missingTarget = false;
+            for(auto& clip : track.clips)
+                for(auto& lane : clip.lanes) {
+                    std::decay_t<decltype(lane.targetProbability)> moved;
+                    for(const auto& [path, chance] : lane.targetProbability)
+                        if(const auto to = request.paths.find(path); to != request.paths.end()) moved[to->second] = chance;
+                    lane.targetProbability = std::move(moved);
+                }
+        }
+        // The root's timelines flag what they drive here (a macro's: its engine).
+        if(request.canvas.empty())
+            for(const auto& track : sequence->tracks)
+                for(const auto& binding : track.bindings) refreshTimelineFlag(binding.parameterPath);
+        sequence->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp(); // the editor fits it like a loaded one
+        sequenceHistories.erase(sequence);
+        made.push_back(ref);
+    }
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return made;
 }
 
 // ---- Timelines by reference ----
