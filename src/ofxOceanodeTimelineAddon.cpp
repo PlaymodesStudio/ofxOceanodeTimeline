@@ -370,17 +370,21 @@ public:
                         "Open this macro's timeline in its window (a new one when none shows it).\nIt is saved with the macro (copies of a library macro share it).",
                         always, never, [&](const TimelineRef& ref) { manager.requestTimelineScope(ref); });
             {
-                // A track whose clips play one of this macro's timelines, with a
-                // first clip at the start, on a timeline of the canvas the macro
-                // is in or one around it.
-                const char* tip = "A track whose clips play this macro's timeline:\n"
+                // A track whose clips play this macro's timelines (all of them:
+                // the track is placed through the first, and holds the others
+                // with it), with a first clip at the start, on a timeline of the
+                // canvas the macro is in or one around it. Only that timeline
+                // is asked for.
+                const char* tip = "A track whose clips play this macro's timelines:\n"
                                   "place, repeat, stretch and offset them like any clip.";
-                auto hostsFor = [&](const TimelineRef& placed) {
+                auto hostsFor = [&](const TimelineRef&) {
                     std::vector<TimelineRef> hosts;
                     for(const auto& canvas : canvasesAround(model.getParents())) {
                         if(manager.canvasContainer(canvas) == nullptr) continue;
                         for(const auto& ref : manager.timelinesOfCanvas(canvas))
-                            if(!manager.timelineReaches(placed, ref)) hosts.push_back(ref);
+                            // (Never one that a timeline of the macro already plays.)
+                            if(std::none_of(own.begin(), own.end(), [&](const TimelineRef& inside) {
+                                return manager.timelineReaches(inside, ref); })) hosts.push_back(ref);
                     }
                     return hosts;
                 };
@@ -404,13 +408,7 @@ public:
                     if(ImGui::MenuItem("Add to Timeline as Macro Track: New Timeline...")) newTimelineOn(macroCanvas, nullptr);
                     if(ImGui::IsItemHovered()) ImGui::SetTooltip("This macro has no timeline: make one first.\n%s", tip);
                 } else if(ImGui::BeginMenu("Add to Timeline as Macro Track")) {
-                    if(own.size() == 1) hostItems(own.front());
-                    else
-                        for(const auto& placed : own)
-                            if(ImGui::BeginMenu((manager.timelineName(placed) + "##placed" + ofxOceanodeTimelineManager::timeSourceId(placed)).c_str())) {
-                                hostItems(placed);
-                                ImGui::EndMenu();
-                            }
+                    hostItems(own.front());
                     ImGui::EndMenu();
                 } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             }

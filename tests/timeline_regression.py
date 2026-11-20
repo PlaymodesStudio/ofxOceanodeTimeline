@@ -586,13 +586,12 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             '{ return canvas.empty() || canvas == "Canvas" || canvas == "0" ? container : nullptr; }\n'
             'ofxOceanodeTimelineCanvas* ofxOceanodeTimelineManager::getMacroTimelines(ofxOceanodeContainer&) { return nullptr; }\n'
             'std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContainer&) const { return std::string(); }\n'
-            # One canvas: no target is outside it, and every path is its own.
-            'std::string ofxOceanodeTimelineOutside::relativePath(const std::string&, const std::string& path) { return path; }\n'
-            'std::string ofxOceanodeTimelineOutside::absolutePath(const std::string&, const std::string& path) { return path; }\n'
-            'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findTarget(const ofxOceanodeContainer& base, '
-            'const std::string& path) const { return base.findTimelineParameter(path); }\n'
+            # No macro here: none of its timelines drives anything out on this canvas.
             'ofJson ofxOceanodeTimelineManager::outsideTargetsJson(const std::string&, const ofxOceanodeTimelineCanvas&) const '
-            '{ return ofJson::array(); }\n')
+            '{ return ofJson::array(); }\n'
+            'void ofxOceanodeTimelineManager::restoreOutsideTargets(const std::string&, const ofxOceanodeTimelineCanvas&) {}\n'
+            'std::vector<ofxOceanodeContainer*> ofxOceanodeTimelineManager::targetCanvases(const ofxOceanodeTimelineSequence&) const '
+            '{ return container == nullptr ? std::vector<ofxOceanodeContainer*>{} : std::vector<ofxOceanodeContainer*>{container}; }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(inject_fixture(cases) + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"

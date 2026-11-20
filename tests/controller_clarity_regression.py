@@ -1537,7 +1537,18 @@ int main() {
         const auto pt=model.createTrack(*pattern,"Pattern");
         const auto pb=model.addBinding(*pattern,pt,innerCutoff);
         assert(!pb.empty() && pattern->tracks[0].bindings[0].parameterPath=="Synth_1/Cutoff"); // relative to the macro
-        assert(model.addBinding(*pattern,pt,static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get("Cutoff"))).empty());
+        {
+            // A parameter of the canvas above the macro: an outside target, kept
+            // with "../" in front and found again from the macro's timeline.
+            auto& outerCutoff=static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get("Cutoff"));
+            const auto ob=model.addBinding(*pattern,pt,outerCutoff);
+            assert(!ob.empty() && pattern->tracks[0].bindings.size()==2);
+            const std::string outsidePath=pattern->tracks[0].bindings[1].parameterPath;
+            assert(ofxOceanodeTimelineOutside::isOutside(outsidePath) && ofxOceanodeTimelineOutside::levels(outsidePath)==1);
+            assert(model.resolverFor(*pattern).find(outsidePath)==&outerCutoff);
+            assert(model.addBinding(*pattern,pt,outerCutoff).empty()); // once per track
+            assert(model.removeBinding(*pattern,pt,ob) && pattern->tracks[0].bindings.size()==1);
+        }
         const auto pc=model.createClip(*pattern,pt,"Phrase",0,4);
         const auto pl=model.createLane(*pattern,pt,pc,"Cutoff",ofxOceanodeTimelineLaneType::Curve);
         model.addBindingToLane(*pattern,pt,pc,pl,pb);
