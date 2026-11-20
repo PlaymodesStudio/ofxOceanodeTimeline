@@ -1032,6 +1032,9 @@ struct ofxOceanodeTimelineTrack {
     std::string name;
     ofColor color = ofColor(65, 165, 245, 255);
     bool collapsed = false;
+    // The height of its row under an unfolded macro track, dragged from that
+    // row's bottom edge (0: the default one).
+    float unfoldedRowHeight = 0.0f;
     bool muted = false;
     bool solo = false;
     std::vector<ofxOceanodeTimelineParameterBinding> bindings;
@@ -1092,6 +1095,10 @@ struct ofxOceanodeTimelineTrack {
     // Unfolded: the editor shows the macro's tracks as rows under this one,
     // with its clips where this track's clips play them, editable in place.
     bool macroUnfolded = false;
+    // Unfolded, each timeline its clips play (the one placed, then those of
+    // the same macro they carry) has a row of its own with its tracks under
+    // it: the ids of the timelines whose tracks are folded away again.
+    std::vector<std::string> macroFoldedTimelines;
     float macroPreRollMs = 100.0f;
     float macroTailMs = 500.0f;
 };

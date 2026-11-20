@@ -102,7 +102,9 @@ every track has: from the left, the fold arrow, the colour, the name, then the
 hamburger (Clip settings) and **+**; against the right edge, **M** and **S**.
 A track without one of these keeps the others where they are. What only one
 kind of track has goes on a second row, against the right edge: a Global
-Track's **<** **+ Key** **>**, and the timeline a macro track places. A
+Track's **<** **+ Key** **>**. A macro track's pad has that first row only
+(the timelines it plays show under it when it is unfolded), so its header is a
+line shorter than the other tracks'. A
 pad too short for two rows keeps them on the first, before **M**.
 
 An **LFO** is a lane type like Curve or Step Sequencer: a clip can hold any
@@ -432,22 +434,123 @@ in the macro track's or a macro clip's right-click menu opens that timeline on
 its own (as the macro node's **Edit Timeline** does); the scope bar's path
 leads back.
 To see it in place instead, click the arrow on the macro track's header (or
-use **Unfold its tracks here** in its menu): that timeline's tracks show as
-rows under it, tabbed in with a line in the macro track's color (one more step
-for each macro inside a macro). Each row shows its clips where the
+use **Unfold its tracks here** in its menu). The macro track then holds the
+timelines its clips play, each on a row of its own: the timeline the track
+places first, then any other timeline of the same macro that no track places
+(they play along under the same clips). A timeline's row shows its name, how many
+tracks it has and where the macro clips play it; its arrow folds its tracks
+away (the row then previews them, a thin line of clips per track, and a click
+on that preview unfolds it again), and a double-click opens the timeline on
+its own. Which timelines are folded is saved with the track.
+
+A macro track made by placing a macro's timeline is named after the macro,
+as **MT:** and the title in its node's header (its local name, or the
+library Macro's), since it holds every timeline of that macro. The name
+follows the macro: rename it, or load another Macro in its node, and the track
+(and its clips still named after it) is renamed with it, unless you gave the
+track a name of your own
+(rename it like any track; a track placing another timeline of the same
+canvas keeps that timeline's name).
+
+Under each timeline's row its tracks show as
+rows, tabbed in one step (one more step for each macro inside a macro, and for
+each folder): the indentation alone shows the levels. A folder of that timeline has its row too,
+with its tracks tabbed in under it: its **M** and **S** apply to everything
+inside, its row previews those tracks, and its arrow folds them away (a click
+on the preview of a folded folder unfolds it). Folding a folder is the
+timeline's own state, so it is folded wherever that timeline shows. Each
+track's row shows its clips where the
 macro clips play them, through their repeats, tempo, content offset and
 reverse, so you can see the macro's contents against the rest of the
 arrangement.
 
+Every level is tabbed in by the same step in the left column (a folder's
+tracks, a macro track's timelines, their tracks, a track's lanes, an LFO
+lane's controls). A row's indentation is a color code of what it is inside:
+one strip per level, each in the header color of that level (a folder, the
+macro track, one of its timelines, the track a lane belongs to). A level's
+strip runs down the left edge for as long as its contents go, so the strips
+show at a glance where each folder, macro track, timeline and track ends.
+Rows stack with no gap between them and no line is drawn over the left
+column, so the strips run unbroken; a track's separator line shows over its
+clips only (and over its own header while you hover or drag it).
+A lane's header is its track's header color, 25% darker, folded or not.
+
+The line at the bottom of a track's row is its separator: drag it to resize
+that row (double-click it for the default height). While the track's lanes
+show under it, the line in the track's color between the row and its first
+lane is that handle, here and on a track of the timeline shown: it sits
+directly between the two headers, with no gap above or under it. The height is the track's
+own, saved with the macro's timeline, and used wherever that timeline is
+unfolded. Each lane of the docked clip editor is resized from its own bottom
+edge.
+
+A clip on these rows is drawn in its track's color, 25% darker, whatever its
+state; the clip being edited or dragged has a light outline. A clip's name
+(here and on a track of the timeline shown) is drawn dark on a light title
+band and light on a dark one, so it reads on any track color.
+
 Clips on these rows are edited in place: drag one to move it, drag its right
 edge to repeat, trim or stretch it (the **Right edge** tool and its modifiers
 apply), drag its left edge to trim it, and double-click it to open its content
-editor under its row. The right-click menu also renames, mutes, duplicates and
+editor under its row. The arrow on a track's row does the same, as on a
+track's own pad: it shows the track's lanes under the row (on its first clip
+with lanes) and folds them away again. Any number of rows can show their
+lanes at once, in any of the timelines and at any depth: opening, editing or
+folding one leaves the others as they are, and each stays open until its own
+arrow (or a double-click on one of its clips) folds it. The editor has everything it has in the timeline's own window:
+each lane's canvas and its **Targets** and **Lane** tabs (so **Add target...**
+gives the lane, and its track, a new target from here), tabbed in under the
+row. **Add target...** lists what that timeline can drive: the parameters of
+the nodes inside its macro (with the macro's canvas in front of each path),
+as the main timeline's lanes list those of the patch. The right-click menu also renames, mutes, duplicates and
 deletes it. The rows' **M** and **S** mute and solo within the macro's
 timeline. Edits change the macro's timeline itself, so every macro clip
 playing it follows; moves and snapping are in that timeline's own beats.
 Where a reversed macro clip plays the timeline mirrored, its clips are shown
 but not edited. A macro track inside the macro unfolds the same way.
+
+A track on these rows is selected like a track of the timeline shown: click
+its pad (Shift or Cmd/Ctrl-click for several), and its pad lights up with an
+outline around its row. Double-click its name to rename it. Right-click its
+pad for its track menu: its color, a new clip at the playhead, the blend mode
+and bypass of each of its targets, **Remove from Timeline** for a target, its
+latency, **Rename track**, **Duplicate track**, **Remove track** and opening
+the macro's timeline on its own. They act on the macro's timeline itself, so
+every macro clip playing it follows. Dragging tracks to reorder them, folders
+and loading clips from disk are still done in the timeline's own window.
+
+A macro track's own menu has **Save Macro** for a Macro of the library (a
+global one): it writes the Macro back to the library as it is now, with the
+changes made to its timelines here, and its other instances reload it. A
+local Macro is saved with the preset, so the item is disabled for it.
+
+Clips and lanes are made on these rows too. Right-click empty space of a
+track's row where a macro clip plays the timeline forward: **New clip here**
+opens the New Timeline Clip dialog for that track of the macro's timeline,
+with the start in that timeline's own beats. Before a row's **M**, as on a track's
+own pad, are the clip settings button (timing, stretch and repeats of a clip
+of the track, in a window) and, for a track whose clips have lanes, a **+**
+that adds another lane to the clip being edited (opening its editor first), or
+a new clip on the track. A piano roll clip on a track that has no note routing
+group yet opens the macro's timeline to set the group up there. Adding
+tracks is still done in the timeline itself.
+
+A Wave track's clips show their waveform on its row (and as a thin trace in
+the previews of a folded timeline, a folder and the macro clip itself). They
+are moved, trimmed and stretched there like any clip; a Wave clip's file and
+properties are edited in the macro's own timeline.
+
+A Global Track of the macro's timeline shows its keyframes on its row, with
+the easing between them, and they are edited there as on its own track: drag a
+keyframe to move it, drag an easing handle to shape the transition
+(double-click: linear), double-click a keyframe to put the playhead on it, and
+right-click to add a keyframe or delete the one under the mouse. The row's pad
+has the same **< + Key >** buttons: **+ Key** stores the macro's canvas where
+the playhead plays that timeline (so the playhead has to be on a macro clip
+playing it forward), and **<** and **>** step the playhead through the
+keyframes of every repeat. A macro clip's own preview marks each keyframe with
+a line.
 
 The unfolded state is saved with the track. Structural work (new tracks,
 targets, note groups) still happens in the macro's timeline itself, opened by
@@ -548,8 +651,21 @@ same **...** menu) adds a track to the timeline shown whose clips play another
 timeline, exactly like a macro track: move, repeat, stretch, offset and
 reverse the clips. Any timeline of the same canvas, or of a canvas inside it,
 can be placed; one that would end up playing itself (directly or through the
-timelines it places) is not offered. A new clip lasts one pass of the placed
-timeline: the end of its last clip, at least a bar of its own meter. The
+timelines it places) is not offered. A new clip lasts one pass of what it
+plays: the end of the last clip, at least a bar of that timeline's meter. A
+macro placed as a whole plays every timeline of the macro, so its pass is the
+longest of them, whichever one was picked. Macro clips follow that length. A
+macro clip never plays less than one whole pass: when a clip inside one of
+those timelines is moved or resized so the longest one ends later (on an
+unfolded row, or in the timeline's own window while this one is open), every
+macro clip of the track takes the longer pass as the edit is released, and so
+does a macro clip that is older than its timelines the first time it is
+shown. When the longest timeline gets shorter, the macro clips whose pass was
+its old length take the new one. A clip lasting a whole number of passes (one,
+usually) is resized to as many of the new pass; one cut to some other length
+keeps that length. A clip whose pass is longer than its timelines keeps it:
+**Fit to its longest timeline** in its right-click menu gives it the current
+pass. The
 placed timeline follows the host beat for beat: a 4-beat timeline fills 4
 host beats; stretch the clip (a Stretch drag of its right edge, Cmd+drag
 unless Stretch is the selected **Right edge** tool, or the Tempo field) to

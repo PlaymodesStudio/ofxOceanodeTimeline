@@ -557,6 +557,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
     trackJson["id"] = track.id;
     trackJson["name"] = track.name;
     trackJson["collapsed"] = track.collapsed;
+    if(track.unfoldedRowHeight > 0.0f) trackJson["unfoldedRowHeight"] = track.unfoldedRowHeight;
     trackJson["muted"] = track.muted;
     trackJson["solo"] = track.solo;
     trackJson["isWaveTrack"] = track.isWaveTrack;
@@ -572,6 +573,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         trackJson["macroGate"] = track.macroGate;
             trackJson["macroTimeline"] = track.macroTimeline;
         if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
+        if(!track.macroFoldedTimelines.empty()) trackJson["macroFoldedTimelines"] = track.macroFoldedTimelines;
         trackJson["macroPreRollMs"] = track.macroPreRollMs;
         trackJson["macroTailMs"] = track.macroTailMs;
     }
@@ -1005,6 +1007,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         track.isGlobalTrack = !track.isWaveTrack && trackJson.value("isGlobalTrack", false);
         track.name = sequence.makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
         track.collapsed = trackJson.value("collapsed", false);
+        track.unfoldedRowHeight = trackJson.value("unfoldedRowHeight", 0.0f);
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
         track.waveTrackHeight = trackJson.value("waveTrackHeight", 96.0f);
@@ -1024,6 +1027,10 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         track.macroTimeline = track.macroCanvas.empty() ? std::string() : trackJson.value("macroTimeline", std::string());
         if(!track.macroCanvas.empty() && track.macroTimeline.empty()) track.macroTimeline = "tl_1";
         track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
+        track.macroFoldedTimelines.clear();
+        if(!track.macroCanvas.empty() && trackJson.contains("macroFoldedTimelines") && trackJson["macroFoldedTimelines"].is_array())
+            for(const auto& folded : trackJson["macroFoldedTimelines"])
+                if(folded.is_string()) track.macroFoldedTimelines.push_back(folded.get<std::string>());
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
         track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));

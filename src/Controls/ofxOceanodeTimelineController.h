@@ -8,6 +8,7 @@
 #include "Editors/ofxOceanodeTimelineLaneEditors.h"
 #include "Timeline/ofxOceanodeTimeline.h"
 #include "imgui.h"
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
@@ -320,6 +321,23 @@ private:
     // invalidate the current track and every clip/lane reference below it.
     std::pair<std::string, std::string> breakClipLanesRequest;
     std::string duplicateTrackId; // deferred until iteration has finished
+    std::string saveMacroTrackId; // the macro track whose (library) Macro is saved, after the rows
+    // Tracks of unfolded macro timelines that are selected, by sequence and
+    // id (ids repeat between timelines). Apart from selectedTracks, which
+    // holds tracks of the timeline shown.
+    std::set<std::pair<const ofxOceanodeTimelineSequence*, std::string>> innerSelectedTracks;
+    // What an unfolded track's menu asks for, applied after the rows are drawn.
+    struct InnerTrackRequest {
+        enum class Kind { Duplicate, Remove, RemoveBinding } kind = Kind::Duplicate;
+        ofxOceanodeTimelineSequence* sequence = nullptr;
+        std::string trackId, bindingId;
+    };
+    std::vector<InnerTrackRequest> innerTrackRequests;
+    // Renaming one of those tracks, in its own dialog.
+    ofxOceanodeTimelineSequence* innerRenameSequence = nullptr;
+    std::string innerRenameTrackId;
+    char innerRenameName[128] = {};
+    bool requestInnerRename = false;
     // Folders and track order, also applied after the track iteration.
     struct TrackMoveRequest { std::string trackId, parentId; size_t index = 0; };
     std::vector<TrackMoveRequest> trackMoveRequests;
@@ -506,6 +524,15 @@ private:
     RowScope chanceDragScope;
     std::string editorRowTrackId, editorRowClipId;
     std::string editorRowGroup; // the unfolded rows it docks in (macro track ids)
+    // The frame openInnerClipEditor ran in: the editor docks under its row
+    // from the next frame on (it is not closed for not being docked yet).
+    int editorRowOpenedFrame = -1;
+    // A track's row of an unfolded timeline, resized from its bottom edge.
+    struct InnerResize {
+        ofxOceanodeTimelineSequence* sequence = nullptr;
+        std::string trackId;
+        float startY = 0.0f, startHeight = 0.0f;
+    } innerResize;
     bool innerEditorOpen() const {
         return editorState.clipEditorOpen && editorRowScope.sequence != nullptr &&
                editorState.editorTrackId == editorRowTrackId && editorState.editorClipId == editorRowClipId;
@@ -520,11 +547,59 @@ private:
         if(!innerEditorOpen() && editorState.editorTrackId == trackId) editorState.clipEditorOpen = false;
     }
     std::vector<std::pair<float, float>> editorScreenSpans;
-    // The sequence whose ids editorState holds.
+    // The sequence whose ids editorState holds: the unfolded timeline the
+    // editor's focus is in, else the timeline shown (never the row being
+    // drawn: an open row without the focus has its lanes drawn too).
     ofxOceanodeTimelineSequence& editorSequence(ofxOceanodeTimelineManager& timeline) {
         if(innerEditorOpen() && timeline.isLiveSequence(*editorRowScope.sequence)) return *editorRowScope.sequence;
-        return scope(timeline);
+        static ofxOceanodeTimelineSequence none;
+        return shownSequence != nullptr ? *shownSequence : none;
     }
+    // The rows of unfolded macro timelines that show their lanes: any number
+    // of them, in any timeline, each staying open until it is folded again.
+    // The one holding the editor's focus is also editorRowScope. at: where
+    // the row's lanes are drawn (the placement it was opened in); group: as
+    // editorRowGroup.
+    struct InnerOpenRow {
+        RowScope at;
+        std::string group, trackId;
+    };
+    std::vector<InnerOpenRow> innerOpenRows;
+    // Lane ids repeat between timelines, and the lanes of several timelines
+    // show at once under an unfolded macro track. What editorState keeps per
+    // lane (folded lanes, expanded LFO controls, heights) is therefore kept
+    // per unfolded timeline: an InnerLaneState swaps that timeline's in while
+    // its lanes are drawn or edited (the timeline shown keeps editorState's
+    // own), and tags the lane being resized (laneKeyTag).
+    struct LaneViewState {
+        std::set<std::string> collapsedLaneIds, expandedLfoControlKeys;
+        std::unordered_map<std::string, float> laneEditorHeights;
+    };
+    std::map<const ofxOceanodeTimelineSequence*, LaneViewState> innerLaneStates;
+    const ofxOceanodeTimelineSequence* activeLaneState = nullptr; // whose is swapped in (null: the shown timeline's)
+    void swapLaneState(const ofxOceanodeTimelineSequence* sequence) {
+        if(sequence == nullptr) return;
+        auto& kept = innerLaneStates[sequence];
+        std::swap(kept.collapsedLaneIds, editorState.collapsedLaneIds);
+        std::swap(kept.expandedLfoControlKeys, editorState.expandedLfoControlKeys);
+        std::swap(kept.laneEditorHeights, editorState.laneEditorHeights);
+    }
+    void activateLaneState(const ofxOceanodeTimelineSequence* sequence) {
+        if(sequence == activeLaneState) return;
+        swapLaneState(activeLaneState);   // back to the shown timeline's
+        swapLaneState(sequence);
+        activeLaneState = sequence;
+        editorState.laneKeyTag = sequence == nullptr ? std::string()
+            : "@" + std::to_string(reinterpret_cast<uintptr_t>(sequence)) + "/";
+    }
+    // sequence null: the timeline shown.
+    struct InnerLaneState {
+        ofxOceanodeTimelineController& controller;
+        const ofxOceanodeTimelineSequence* previous;
+        InnerLaneState(ofxOceanodeTimelineController& controller, const ofxOceanodeTimelineSequence* sequence)
+        : controller(controller), previous(controller.activeLaneState) { controller.activateLaneState(sequence); }
+        ~InnerLaneState() { controller.activateLaneState(previous); }
+    };
     void openInnerClipEditor(const RowScope& at, const std::string& trackId, const std::string& clipId,
                              const std::string& laneId);
     // An arrangement drag of a clip in an unfolded row (applied after the
@@ -544,12 +619,22 @@ private:
     InnerClipDrag innerDrag;
     // Right-clicked clip of an unfolded row (its menu is drawn with the row).
     RowScope innerMenuAt;
+    // The New Timeline Clip dialog asked from a row of an unfolded macro track:
+    // the placement it was asked in (sequence null: a clip of the scope's own),
+    // and the rows a clip editor it opens docks in. pendingStartBeat is then in
+    // that timeline's beats.
+    RowScope pendingClipScope;
+    std::string pendingClipGroup;
     std::string innerMenuTrackId, innerMenuClipId, innerMenuGroup;
     enum class InnerMenuRequest { None, Duplicate, Delete };
     InnerMenuRequest innerMenuRequest = InnerMenuRequest::None; // applied after the track iteration
     // Unfolded macro timelines drawn last frame: edits to them are recorded
     // in their own history, and undo steps whichever was edited last.
     std::vector<ofxOceanodeTimelineSequence*> unfoldedSequences, unfoldedSequencesDrawn;
+    // One pass of each macro track on screen (of the timeline shown and of
+    // those unfolded in it), as last seen: when it changes, the track's
+    // clips that lasted that pass follow (see the arrangement's draw).
+    std::map<std::pair<const ofxOceanodeTimelineSequence*, std::string>, double> macroPassSeen;
     std::vector<ofxOceanodeTimelineSequence*> historySequences(ofxOceanodeTimelineManager& timeline) const;
     std::vector<ofxOceanodeTimelineSequence*> undoOrder, redoOrder;
     // Clips of one track to merge into one (applied after the track iteration).
@@ -597,6 +682,9 @@ private:
     bool clipSettingsFocus = false;
     std::string clipSettingsTrackId, clipSettingsClipId;
     ofxOceanodeTimelineManager::TimelineRef clipSettingsRef;
+    // The unfolded macro timeline whose clip the settings window shows
+    // (sequence null: a clip of the timeline shown).
+    RowScope clipSettingsScope;
     ImVec2 clipSettingsAnchor;
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     float zoomAnchorViewportX = 0.0f;
@@ -637,11 +725,16 @@ private:
     // Global Track keyframes: asked for while the tracks are drawn, served
     // at the deferred edit point (adding one can make or grow a clip).
     bool requestGlobalKeyframe = false;
+    // The unfolded macro timeline the keyframe asked for, and the one edited,
+    // are in (sequence null: the scope's own): track ids repeat between
+    // timelines, and beats are that timeline's own.
+    RowScope globalKeyScope, globalKeyEditScope;
     std::string globalKeyTrackId;
     std::string globalKeyClipId;      // empty: the clip at the beat, or the nearest
     double globalKeyBeat = 0.0;
     // The keyframe a clip menu was opened on (-1: none), one to remove, and
-    // the one being dragged along its clip.
+    // the one being dragged along its clip. (A clip of an unfolded row's menu
+    // uses clipMenuGlobalKey and clipMenuBeat too, in its timeline's beats.)
     int clipMenuGlobalKey = -1;
     std::string globalKeyEditTrackId;
     std::string globalKeyEditClipId;

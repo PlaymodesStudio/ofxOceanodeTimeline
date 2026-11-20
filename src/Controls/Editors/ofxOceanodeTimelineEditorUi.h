@@ -22,6 +22,9 @@ inline void finishAbsoluteLayout(const ImVec2& position) {
     // Submit an item so an absolutely positioned child grows safely.
     ImGui::SetCursorScreenPos(position);
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
+    // What follows starts right there: rows stack with no gap between them
+    // (the item spacing would leave a strip of the window's background).
+    ImGui::SetCursorScreenPos(position);
 }
 
 inline void contextMenuSection(const char* label, bool separator = true) {

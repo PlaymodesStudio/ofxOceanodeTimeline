@@ -30,6 +30,11 @@ struct ofxOceanodeTimelineClipEditorState {
     // overlapping ImGui item. This keeps the editor canvas/child window from
     // stealing the active id after the drag has started.
     std::string resizingLaneId;
+    // Lane ids repeat between timelines, and the lanes of several timelines
+    // can show at once (the rows of an unfolded macro track): what goes in
+    // resizingLaneId is this tag (which timeline's lanes are being drawn)
+    // followed by the lane's key, so one handle resizes one lane.
+    std::string laneKeyTag;
     float laneResizeStartMouseY = 0.0f;
     float laneResizeStartHeight = 0.0f;
     bool clipEditorOpen = false;

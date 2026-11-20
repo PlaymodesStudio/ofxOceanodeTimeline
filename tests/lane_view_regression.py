@@ -122,9 +122,10 @@ int main() {
     frame(ImVec2(foldedChance.x,foldedChance.y+75),true); frame(ImVec2(foldedChance.x,foldedChance.y+75));
     assert(std::abs(model.getLane(track,first,a)->chance-0.5f)<0.001f);
     model.setLaneChance(track,first,a,1.0f); frame();
-    // White miniature curve lines span each clip's own X interval in all 3 rows.
+    // White miniature curve lines span each clip's own X interval in all 3 rows
+    // (folded lane rows stack with no gap between them).
     for(int row = 0; row < 3; ++row) {
-        const float top = 80 + row * (22 + ImGui::GetStyle().ItemSpacing.y);
+        const float top = 80 + row * 22;
         float minX = 1e9f, maxX = -1e9f;
         for(const auto* list : ImGui::GetDrawData()->CmdLists) for(const auto& vertex : list->VtxBuffer)
             if(vertex.col == IM_COL32(210, 110, 35, 200) && vertex.pos.y >= top && vertex.pos.y < top + 22) {
@@ -134,7 +135,7 @@ int main() {
         assert(std::abs(minX - expectedX) < 2 && std::abs(maxX - expectedX - 280) < 2);
     }
     const ImVec2 preview(ImGui::GetStyle().WindowPadding.x + ofxOceanodeTimelineEditorUi::labelWidth + 400,
-                         80 + 2 * (22 + ImGui::GetStyle().ItemSpacing.y) + 11);
+                         80 + 2 * 22 + 11);
     frame(preview); frame(preview, true); frame(preview);
     assert(ui.editorState.editorClipId == second && ui.editorState.editorLaneId == c);
     assert(model.toJson() == saved);
