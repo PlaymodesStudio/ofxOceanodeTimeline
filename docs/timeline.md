@@ -75,7 +75,12 @@ grabbed, moved or resized (the lane's **Live edit sound**, on by default). **+ L
 target together; “No target (assign later)” creates editable content without
 output. Lane properties scroll when a small editor height cannot fit them.
 Closing or folding the editor retains content. Right-click anywhere in a
-lane's left properties pad for **Duplicate lane** and **Delete lane**.
+lane's left properties pad for **Duplicate lane** and **Delete lane**. Right-click a
+target's row in the **Targets** list, checked or not, for that target's own
+menu: **Show in Canvas** opens the canvas its node is on (the macro it is
+in, when it is inside one) and centres on the node. A piano roll or drum
+grid lane, which has no such list, keeps **Show in canvas** in the lane's
+menu.
 **Delete lane and clip** explicitly removes the last lane and its containing clip.
 
 Several tracks can keep their lane editors open together. Each open track shows

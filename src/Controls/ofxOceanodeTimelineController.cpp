@@ -8397,20 +8397,25 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
             }
             // The node a target belongs to, on its canvas (opening the macro
             // it is in) and centred there. One target: an item; several: a
-            // submenu of them; none: disabled.
-            ImGui::Separator();
+            // submenu of them; none: disabled. Only for the lanes that pick
+            // their targets by role (piano roll, drum grid): the others list
+            // theirs in the Targets tab, where each has this in its own menu.
             std::vector<std::pair<std::string, ofxOceanodeAbstractParameter*>> laneTargets;
-            const auto resolver = timeline.resolverFor(scope(timeline));
-            for(const auto& bindingId : lane->bindingIds)
-                if(const auto* binding = timeline.getBinding(scope(timeline), track.id, bindingId))
-                    laneTargets.emplace_back(binding->parameterPath, resolver.find(binding->parameterPath));
-            if(laneTargets.size() == 1) {
+            const bool targetsByRole = ofxOceanodeTimelineLaneUsesNoteRoles(lane->type);
+            if(targetsByRole) {
+                ImGui::Separator();
+                const auto resolver = timeline.resolverFor(scope(timeline));
+                for(const auto& bindingId : lane->bindingIds)
+                    if(const auto* binding = timeline.getBinding(scope(timeline), track.id, bindingId))
+                        laneTargets.emplace_back(binding->parameterPath, resolver.find(binding->parameterPath));
+            }
+            if(targetsByRole && laneTargets.size() == 1) {
                 if(ImGui::MenuItem("Show in canvas", nullptr, false, laneTargets.front().second != nullptr))
                     container->showParameterInCanvas(*laneTargets.front().second);
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip(laneTargets.front().second != nullptr ? "Show %s's node in its canvas"
                                                                             : "%s is not in the patch", laneTargets.front().first.c_str());
-            } else if(laneTargets.size() > 1) {
+            } else if(targetsByRole && laneTargets.size() > 1) {
                 if(ImGui::BeginMenu("Show in canvas")) {
                     for(size_t i = 0; i < laneTargets.size(); ++i) {
                         ImGui::PushID(static_cast<int>(i));
@@ -8421,7 +8426,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     }
                     ImGui::EndMenu();
                 }
-            } else {
+            } else if(targetsByRole) {
                 ImGui::MenuItem("Show in canvas", nullptr, false, false);
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("This lane has no target yet");
             }
@@ -8681,6 +8686,29 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                                               ofxOceanodeTimelineOutside::absolutePath(targetCanvas, candidate.parameterPath).c_str(),
                                               candidate.missingTarget ? " (missing target)" : "");
                         else ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
+                    }
+                    // The target's own menu, from a right-click anywhere on its
+                    // row, checked or not (opened before the lane's, which
+                    // then stays shut: see drawLaneMenu).
+                    {
+                        const std::string targetMenuId = "##targetMenu" + candidate.id;
+                        const ImVec2 rowMin(ImGui::GetWindowPos().x, ImGui::GetItemRectMin().y);
+                        const ImVec2 rowMax(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetItemRectMax().y);
+                        if(ImGui::IsMouseReleased(ImGuiMouseButton_Right) && ImGui::IsWindowHovered() &&
+                           ImGui::IsMouseHoveringRect(rowMin, rowMax) &&
+                           !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+                            ImGui::OpenPopup(targetMenuId.c_str());
+                        if(ImGui::BeginPopup(targetMenuId.c_str())) {
+                            ImGui::TextDisabled("%s", compactParameterName(candidate.parameterPath).c_str());
+                            ImGui::Separator();
+                            // Its node, on its canvas (opening the macro it is in) and centred there.
+                            auto* shown = timeline.resolverFor(scope(timeline)).find(candidate.parameterPath);
+                            if(ImGui::MenuItem("Show in Canvas", nullptr, false, shown != nullptr) && shown != nullptr)
+                                container->showParameterInCanvas(*shown);
+                            if(shown == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s is not in the patch", candidate.parameterPath.c_str());
+                            ImGui::EndPopup();
+                        }
                     }
                     if(assigned && gateLane) {
                         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - removeReserve - chanceReserve +
