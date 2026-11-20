@@ -171,6 +171,69 @@ void ofxOceanodeTimelinePianoRollEditor::drawProperties(ofxOceanodeTimelineLaneE
 
 }
 
+const char* ofxOceanodeTimelinePianoRollEditor::extraTabLabel() const {
+    const auto& tools = ofxOceanodeTimelinePianoTools();
+    if(tools.empty()) return nullptr;
+    return tools.size() == 1 && !tools.front().tab.empty() ? tools.front().tab.c_str() : "Tools";
+}
+
+void ofxOceanodeTimelinePianoRollEditor::drawExtraTab(ofxOceanodeTimelineLaneEditorContext& context) {
+    for(const auto& tool : ofxOceanodeTimelinePianoTools()) {
+        ImGui::PushID(tool.name.c_str());
+        const auto open = pianoToolLanes.find(tool.name);
+        const bool here = open != pianoToolLanes.end() && open->second == context.lane.id;
+        if(ImGui::Button(((here ? "Close " : "Open ") + tool.name).c_str(), ImVec2(-FLT_MIN, 0.0f))) {
+            if(here) pianoToolLanes.erase(open);
+            else pianoToolLanes[tool.name] = context.lane.id;
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("In a window of its own: drag it by its title to float or dock it.");
+        if(!tool.description.empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", tool.description.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::PopID();
+    }
+}
+
+// The open tools' windows, for the lane each works on (they stay up whichever
+// tab the properties show, and while the lane is folded or out of sight).
+void ofxOceanodeTimelinePianoRollEditor::drawToolWindows(ofxOceanodeTimelineLaneEditorContext& context) {
+    if(pianoToolLanes.empty()) return;
+    auto& lane = context.lane;
+    for(const auto& tool : ofxOceanodeTimelinePianoTools()) {
+        auto open = pianoToolLanes.find(tool.name);
+        if(open == pianoToolLanes.end()) continue;
+        if(context.focused) open->second = lane.id;
+        if(open->second != lane.id || !tool.draw) continue;
+        bool keep = true;
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if(ImGui::Begin((tool.name + "###pianoTool" + tool.name).c_str(), &keep)) {
+            ImGui::TextDisabled("%s / %s", context.clip.name.c_str(), lane.name.c_str());
+            // (Only the lane in focus has a selection: see drawCanvas, which
+            // gives it to a lane newly in focus later in this frame.)
+            std::set<int> none;
+            const bool selecting = pianoSelectionLaneId == lane.id;
+            auto& selection = selecting ? pianoSelectedNoteIndices : none;
+            for(auto it = selection.begin(); it != selection.end();)
+                it = *it < 0 || *it >= static_cast<int>(lane.pianoNotes.size()) ? selection.erase(it) : std::next(it);
+            const auto before = lane.pianoNotes.size();
+            ofxOceanodeTimelinePianoToolContext toolContext{lane, selection, sourceDuration(context.clip)};
+            tool.draw(toolContext);
+            // Notes came or went: nothing may keep indices from before.
+            if(lane.pianoNotes.size() != before) {
+                pianoDragSnapshot.clear();
+                pianoValueSnapshot.clear();
+                pianoDragMode = PianoDragMode::None;
+                pianoDragNoteIndex = -1;
+                pianoNumericNoteIndex = -1;
+            }
+        }
+        ImGui::End();
+        if(!keep) pianoToolLanes.erase(tool.name);
+    }
+}
+
 void ofxOceanodeTimelinePianoRollEditor::drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) {
     auto* lane = &context.lane;
     static const char* const signs[] = {"+/-", "+", "-"};

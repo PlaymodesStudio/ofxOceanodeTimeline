@@ -1291,6 +1291,35 @@ public:
     virtual void releaseWaveClip(const std::string& trackId, const std::string& clipId) = 0;
 };
 
+// A note tool another addon gives the piano roll (ofxOceanodeSuperCollider's
+// arpeggiator, built on its ArpeggiatorBox engine): the roll's properties get
+// a tab that opens it in a window of its own, floating or docked. Like the
+// wave audio provider above, the timeline knows nothing about the tool: it
+// lends the window's contents the lane and its selection, and the tool writes
+// ordinary notes. With none registered the piano roll has no such tab.
+struct ofxOceanodeTimelinePianoToolContext {
+    ofxOceanodeTimelineLane& lane;      // the piano roll the window works on
+    std::set<int>& selection;           // its selected notes (indices into lane.pianoNotes);
+                                        // the tool leaves the notes it wrote selected
+    double contentBeats;                // the length of the clip's content (the notes' beats)
+};
+struct ofxOceanodeTimelinePianoTool {
+    std::string name;                   // the window's title ("Arpeggiator")
+    std::string tab;                    // the tab's label ("Arp")
+    std::string description;            // what it does, a line or two
+    std::function<void(ofxOceanodeTimelinePianoToolContext&)> draw;   // the window's contents (ImGui)
+};
+inline std::vector<ofxOceanodeTimelinePianoTool>& ofxOceanodeTimelinePianoTools() {
+    static std::vector<ofxOceanodeTimelinePianoTool> tools;
+    return tools;
+}
+// (Registering a name again replaces that tool.)
+inline void ofxOceanodeTimelineRegisterPianoTool(ofxOceanodeTimelinePianoTool tool) {
+    auto& tools = ofxOceanodeTimelinePianoTools();
+    for(auto& existing : tools) if(existing.name == tool.name) { existing = std::move(tool); return; }
+    tools.push_back(std::move(tool));
+}
+
 // Finds parameters by timeline path relative to the container a sequence
 // lives in: the root for the main timeline (absolute paths, as saved in
 // every file), a macro's container for that macro's sequence -- so one

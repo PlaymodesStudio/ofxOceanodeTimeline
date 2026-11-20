@@ -561,6 +561,7 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         # Macro timelines walk real macro nodes, which this mock container has
         # none of: no macro timeline is ever played here.
         (folder / "macro_stub.cpp").write_text(
+            '#include "Managers/ofxOceanodeContainer.h"\n'
             '#include "Timeline/ofxOceanodeTimeline.h"\n'
             'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
