@@ -1314,19 +1314,30 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
        (pianoDragMode == PianoDragMode::Move || pianoDragMode == PianoDragMode::Resize ||
         pianoDragMode == PianoDragMode::Stretch) &&
        pianoDragNoteIndex >= 0 && pianoDragNoteIndex < static_cast<int>(lane->pianoNotes.size())) {
-        const int monitorPitch = lane->pianoNotes[pianoDragNoteIndex].pitch;
-        if(editPreviewActive && editPreviewPitch != monitorPitch) {
-            // A new pitch strikes again: drop the gate for a frame so the
-            // instrument sees an edge, then sound the new pitch.
+        // The grabbed note first, then every other note the drag carries, so
+        // moving a chord sounds all of it (resizing sounds only the grabbed one).
+        std::vector<int> monitorPitches{lane->pianoNotes[pianoDragNoteIndex].pitch};
+        if(pianoDragMode == PianoDragMode::Move) {
+            for(const auto& entry : pianoDragSnapshot) {
+                if(entry.index < 0 || entry.index >= static_cast<int>(lane->pianoNotes.size())) continue;
+                const int notePitch = lane->pianoNotes[entry.index].pitch;
+                if(std::find(monitorPitches.begin(), monitorPitches.end(), notePitch) == monitorPitches.end())
+                    monitorPitches.push_back(notePitch);
+            }
+        }
+        if(editPreviewActive && editPreviewPitches != monitorPitches) {
+            // New pitches strike again: drop the gate for a frame so the
+            // instrument sees an edge, then sound them.
             timeline.clearLiveOverride(context.sequence, editPreviewTrackId, editPreviewGateId);
             editPreviewActive = false;
             editPreviewRetriggerFrame = ImGui::GetFrameCount();
         } else if(!editPreviewActive && ImGui::GetFrameCount() != editPreviewRetriggerFrame) {
-            timeline.setPianoKeyPreview(context.sequence, track.id, clip->id, lane->id, monitorPitch);
+            timeline.setPianoChordPreview(context.sequence, track.id, clip->id, lane->id, monitorPitches);
             editPreviewActive = true;
             editPreviewTrackId = track.id; editPreviewClipId = clip->id; editPreviewLaneId = lane->id;
             editPreviewGateId = lane->pianoGateBindingId; editPreviewPitchId = lane->pianoPitchBindingId;
-            editPreviewPitch = monitorPitch;
+            editPreviewPitch = monitorPitches.front();
+            editPreviewPitches = monitorPitches;
         }
     }
     const int paintField = pianoDragMode == PianoDragMode::Velocity ? 0
@@ -1431,6 +1442,7 @@ void ofxOceanodeTimelinePianoRollEditor::updateMonitoring(ofxOceanodeTimelineMan
     timeline.clearLiveOverride(sequence, editPreviewTrackId, editPreviewPitchId);
     editPreviewActive = false;
     editPreviewPitch = -1;
+    editPreviewPitches.clear();
 }
 
 void ofxOceanodeTimelinePianoRollEditor::clearSelection() {

@@ -1549,6 +1549,10 @@ public:
     void clearPianoKeyPreview(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     void setPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, int pitch);
     void clearPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId);
+    // Several keys at once (dragging a chord): each pitch in its own voice
+    // slot, the first one alone on a scalar target.
+    void setPianoChordPreview(const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::vector<int>& pitches);
+    void setPianoChordPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId, const std::vector<int>& pitches);
     void clear();
 
     static ofColor defaultTrackColor(size_t trackIndex);

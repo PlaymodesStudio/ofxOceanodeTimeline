@@ -38,6 +38,7 @@ private:
     std::string editPreviewTrackId, editPreviewClipId, editPreviewLaneId;
     std::string editPreviewGateId, editPreviewPitchId;
     int editPreviewPitch = -1;
+    std::vector<int> editPreviewPitches;   // what the drag sounds: the grabbed note first
     int editPreviewRetriggerFrame = -1;   // the frame the gate dropped to retrigger a dragged note
     // Piano-roll keyboard-strip "audition" state: while a key is held down,
     // the lane's Gate/Pitch bindings get a live override (see

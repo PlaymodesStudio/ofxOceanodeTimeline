@@ -750,6 +750,8 @@ int main() {
     close(monitorPitch,60); close(monitorGate,1);
     monitorFrame(265,256,false); close(monitorGate,0);
     monitorFrame(270,256,true); close(monitorGate,1);
+    // Moved to a new pitch: the gate drops for a frame (an edge), then 61 sounds.
+    monitorFrame(300,214,true); close(monitorGate,0);
     monitorFrame(300,214,true); close(monitorPitch,61); close(monitorGate,1);
     monitorFrame(300,214,false); close(monitorGate,0);
     // Grabbing an existing note by its end (resize) sounds it too.
@@ -764,6 +766,21 @@ int main() {
         assert(pianoEditor.pianoDragMode==ofxOceanodeTimelinePianoRollEditor::PianoDragMode::Resize);
         close(monitorPitch,grabbed.pitch); close(monitorGate,1);
         monitorFrame(endX,rowY,false); close(monitorGate,0);
+    }
+    // A chord on a polyphonic target: one voice per key, the gates of the rest closed.
+    ofParameter<std::vector<float>> chordPitch("Chord Pitch",{0,0,0},{0},{127}), chordGate("Chord Gate",{0,0,0},{0},{1});
+    ofxOceanodeParameter<std::vector<float>> cp,cg; cp.bindParameter(chordPitch); cg.bindParameter(chordGate);
+    {
+        owner.targets[cp.getEscapedName()]=&cp; owner.targets[cg.getEscapedName()]=&cg;
+        const auto cpb=model.addBinding(trackId,cp), cgb=model.addBinding(trackId,cg);
+        const auto cc=model.createClip(trackId,"Chord",8,4);
+        const auto cl=model.createLane(trackId,cc,"Chord",ofxOceanodeTimelineLaneType::PianoRoll);
+        model.addBindingToLane(trackId,cc,cl,cpb); model.addBindingToLane(trackId,cc,cl,cgb);
+        model.setPianoChordPreview(model.editSequence(),trackId,cc,cl,{64,60}); model.update();
+        const auto pitches=chordPitch.get(), gates=chordGate.get();
+        assert(pitches.size()>=3 && gates.size()>=3);
+        close(pitches[0],64); close(pitches[1],60); close(gates[0],1); close(gates[1],1); close(gates[2],0);
+        model.clearPianoKeyPreview(model.editSequence(),trackId,cc,cl); model.update();
     }
     monitor->pianoLiveEditSound=false;
     monitorFrame(310,214,true); model.update(); close(monitorGate,0);

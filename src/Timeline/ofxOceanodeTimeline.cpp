@@ -6067,6 +6067,11 @@ void ofxOceanodeTimelineManager::setPianoKeyPreview(const ofxOceanodeTimelineSeq
     if(auto* engine = syncedEnginePlaying(sequence)) engine->setPianoKeyPreview(trackId, clipId, laneId, pitch);
 }
 
+void ofxOceanodeTimelineManager::setPianoChordPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                      const std::string& clipId, const std::string& laneId, const std::vector<int>& pitches) {
+    if(auto* engine = syncedEnginePlaying(sequence)) engine->setPianoChordPreview(trackId, clipId, laneId, pitches);
+}
+
 void ofxOceanodeTimelineManager::clearPianoKeyPreview(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                       const std::string& clipId, const std::string& laneId) {
     if(auto* engine = enginePlaying(sequence)) engine->clearPianoKeyPreview(trackId, clipId, laneId);
@@ -6092,21 +6097,34 @@ std::string ofxOceanodeTimelineManager::absolutePathOf(const ofxOceanodeTimeline
 
 void ofxOceanodeTimelineManager::setPianoKeyPreview(const std::string& trackId, const std::string& clipId,
                                                     const std::string& laneId, int pitch) {
+    setPianoChordPreview(trackId, clipId, laneId, std::vector<int>{pitch});
+}
+
+void ofxOceanodeTimelineManager::setPianoChordPreview(const std::string& trackId, const std::string& clipId,
+                                                      const std::string& laneId, const std::vector<int>& pitches) {
     if(!isEngine()) {
         // Sounded by the engine playing the edit target.
-        if(auto* engine = syncedEngine(editTarget)) engine->setPianoKeyPreview(trackId, clipId, laneId, pitch);
+        if(auto* engine = syncedEngine(editTarget)) engine->setPianoChordPreview(trackId, clipId, laneId, pitches);
         return;
     }
+    if(pitches.empty()) return;
     const auto* track = getTrack(trackId);
     const auto* clip = getClip(trackId, clipId);
     const auto* lane = getLane(trackId, clipId, laneId);
     if(track == nullptr || clip == nullptr || lane == nullptr) return;
     ofxOceanodeTimelinePianoVoicing voicing;
     computeLaneVoicing(*track, *clip, *lane, voicing);
-    const int slot = voicing.kit ? pitch - kKitBaseNote : 0;
-    if(slot < 0 || (voicing.kit && slot >= voicing.outputWidth)) return;
+    // The slot each key sounds in: a kit's pad, else one voice per key.
+    std::vector<int> slots;
+    for(size_t i = 0; i < pitches.size(); ++i) {
+        const int slot = voicing.kit ? pitches[i] - kKitBaseNote : static_cast<int>(i);
+        if(slot < 0 || (voicing.kit && slot >= voicing.outputWidth)) continue;
+        slots.push_back(slot);
+    }
+    if(slots.empty()) return;
+    const int highestSlot = *std::max_element(slots.begin(), slots.end());
     auto width = [&](const ofxOceanodeTimelineParameterBinding& binding) {
-        size_t size = static_cast<size_t>(std::max({voicing.outputWidth, slot + 1, 2}));
+        size_t size = static_cast<size_t>(std::max({voicing.outputWidth, highestSlot + 1, 2}));
         if(auto* parameter = findParameterCached(binding.parameterPath)) {
             if(binding.valueType == typeid(std::vector<float>).name())
                 size = std::max(size, parameter->cast<std::vector<float>>().getParameter().get().size());
@@ -6119,21 +6137,37 @@ void ofxOceanodeTimelineManager::setPianoKeyPreview(const std::string& trackId, 
         return type == typeid(std::vector<float>).name() || type == typeid(std::vector<int>).name() ||
                type == typeid(std::vector<bool>).name();
     };
-    if(const auto* gate = getBinding(trackId, lane->pianoGateBindingId)) {
+    // A chord needs a voice per key on both gate and pitch; otherwise only the
+    // first key (the one grabbed) sounds, as a single key does.
+    const auto* gate = getBinding(trackId, lane->pianoGateBindingId);
+    const auto* pitchBinding = voicing.kit ? nullptr : getBinding(trackId, lane->pianoPitchBindingId);
+    const bool polyphonic = voicing.kit || (gate != nullptr && isVector(gate->valueType) &&
+        (pitchBinding == nullptr || isVector(pitchBinding->valueType)));
+    if(!polyphonic) slots.resize(1);
+    if(gate != nullptr) {
         const bool level = voicing.instrument && lane->pianoVelocityBindingId.empty() &&
             (gate->valueType == typeid(float).name() || gate->valueType == typeid(std::vector<float>).name());
         const std::string on = level ? automationText::formatFloat(lane->pianoDefaultVelocity) : std::string("1");
         std::string value = on;
         if(isVector(gate->valueType)) {
-            std::vector<std::string> slots(width(*gate), "0");
-            slots[slot] = on;
-            value = joinAutomationValues(slots);
+            std::vector<std::string> gateSlots(width(*gate), "0");
+            for(int slot : slots) if(slot < static_cast<int>(gateSlots.size())) gateSlots[slot] = on;
+            value = joinAutomationValues(gateSlots);
         }
         setLiveOverride(trackId, gate->id, value);
         playingPianoGatePaths.insert(gate->parameterPath);
     }
-    if(const auto* pitchBinding = getBinding(trackId, lane->pianoPitchBindingId); pitchBinding != nullptr && !voicing.kit)
-        setLiveOverride(trackId, pitchBinding->id, automationText::formatInt(pitch));   // a scalar: broadcast to every voice
+    if(pitchBinding != nullptr) {
+        if(slots.size() == 1) {
+            setLiveOverride(trackId, pitchBinding->id, automationText::formatInt(pitches.front()));   // a scalar: broadcast to every voice
+        } else {
+            // Voices past the chord keep its last key (their gates stay closed).
+            std::vector<std::string> pitchSlots(width(*pitchBinding), automationText::formatInt(pitches[slots.size() - 1]));
+            for(size_t i = 0; i < slots.size() && slots[i] < static_cast<int>(pitchSlots.size()); ++i)
+                pitchSlots[slots[i]] = automationText::formatInt(pitches[i]);
+            setLiveOverride(trackId, pitchBinding->id, joinAutomationValues(pitchSlots));
+        }
+    }
 }
 
 void ofxOceanodeTimelineManager::clearPianoKeyPreview(const std::string& trackId, const std::string& clipId,
