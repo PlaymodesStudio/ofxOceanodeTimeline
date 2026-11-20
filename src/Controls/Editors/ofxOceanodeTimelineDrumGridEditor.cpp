@@ -302,14 +302,11 @@ void drawRoleCombo(ofxOceanodeTimelineLaneEditorContext& context, const char* la
         ImGui::InputText("Search parameters", search, searchSize);
         std::vector<std::string> paths = context.targetPaths;
         if(paths.empty()) for(const auto& binding : track.bindings) paths.push_back(binding.parameterPath);
-        for(const auto& path : paths) {
-            if(search[0] && ofToLower(path).find(ofToLower(std::string(search))) == std::string::npos) continue;
-            const bool selected = currentBinding && currentBinding->parameterPath == path;
-            if(ImGui::Selectable(path.c_str(), selected)) {
-                context.requestedTargetPath = path;
-                context.requestedTargetRole = role;
-            }
-        }
+        // (A macro's timeline: a branch per canvas it reaches.)
+        if(ofxOceanodeTimelineTargetList(paths, context.targetPaths.empty() ? decltype(context.targetGroups){} : context.targetGroups,
+                                         search, currentBinding == nullptr ? std::string() : currentBinding->parameterPath,
+                                         context.requestedTargetPath))
+            context.requestedTargetRole = role;
         ImGui::EndCombo();
     }
 }

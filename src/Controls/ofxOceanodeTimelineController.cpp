@@ -8342,7 +8342,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     if(clip->lanes.empty()) return;
 
     const auto& availableTargets = patchTargetPaths();
-    // (A macro's timeline: the list's headings, one per canvas it reaches.)
+    // (A macro's timeline: the list's branches, one per canvas it reaches.)
     const auto targetGroups = patchTargets().groups;
     const auto* targetBase = timeline.resolverFor(scope(timeline)).base;
     const std::string targetCanvas = targetBase == nullptr ? std::string() : targetBase->getCanvasID();
@@ -8368,6 +8368,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     ofxOceanodeTimelineLaneEditorContext context{timeline, *container, scope(timeline), track, *clip, *lane,
                                                view, editorState.editorLaneId, isFocused, {}};
     context.targetPaths = availableTargets;
+    context.targetGroups = targetGroups;
     auto& laneEditor = laneEditors.forType(lane->type);
     auto drawLaneMenu = [&](bool propertiesPanel) {
         const std::string menuId = "##laneMenu" + lane->id;
@@ -8619,19 +8620,12 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 laneEditor.drawTargets(context);
             } else {
                 ImGui::SetNextItemWidth(-1.0f);
-                if(ImGui::BeginCombo("##addPatchTarget", "Add target...")) {
+                // (A macro's timeline: a branch per canvas it reaches, with room to unfold one.)
+                if(ImGui::BeginCombo("##addPatchTarget", "Add target...",
+                                     context.targetGroups.empty() ? ImGuiComboFlags_None : ImGuiComboFlags_HeightLarge)) {
                     ImGui::InputText("Search parameters", laneTargetSearch, sizeof(laneTargetSearch));
-                    size_t nextGroup = 0;
-                    const std::string* heading = nullptr;
-                    for(size_t index = 0; index < context.targetPaths.size(); ++index) {
-                        const auto& path = context.targetPaths[index];
-                        while(nextGroup < targetGroups.size() && targetGroups[nextGroup].first <= index)
-                            heading = &targetGroups[nextGroup++].second;
-                        if(laneTargetSearch[0] && ofToLower(path).find(ofToLower(std::string(laneTargetSearch))) == std::string::npos) continue;
-                        // (Shown once a parameter under it passes the search.)
-                        if(heading != nullptr) { ImGui::SeparatorText(heading->c_str()); heading = nullptr; }
-                        if(ImGui::Selectable(path.c_str())) context.requestedTargetPath = path;
-                    }
+                    ofxOceanodeTimelineTargetList(context.targetPaths, context.targetGroups, laneTargetSearch,
+                                                  std::string(), context.requestedTargetPath);
                     ImGui::EndCombo();
                 }
                 const bool toggleLane = isToggleLane(*lane);

@@ -501,10 +501,14 @@ folding one leaves the others as they are, and each stays open until its own
 arrow (or a double-click on one of its clips) folds it. The editor has everything it has in the timeline's own window:
 each lane's canvas and its **Targets** and **Lane** tabs (so **Add target...**
 gives the lane, and its track, a new target from here), tabbed in under the
-row. **Add target...** lists what that timeline can drive: the parameters of
-the nodes inside its macro (with the macro's canvas in front of each path),
-as the main timeline's lanes list those of the patch, and then, under a
-heading each, those of every canvas above the macro up to the main one.
+row. **Add target...** lists what that timeline can drive, one folded branch
+per place to look in: the parameters of the nodes inside its macro, then
+those of every canvas above the macro up to the main one. Each branch names
+its canvas and who saves a target taken from it; unfold the one to pick
+from (it stays unfolded for the next lane). Typing in **Search parameters**
+lists the matches of all of them at once, under the same headings. The
+piano roll's and the drum grid's target pickers are laid out the same way.
+The main timeline's lanes keep their plain list of the patch's parameters.
 
 A parameter taken from a canvas above the macro is an **outside target**.
 The lane drives it like any other, wherever the timeline plays (under a

@@ -624,8 +624,11 @@ first has the canvases above it take what is in memory
 entries of the definition it loaded, so each definition keeps its own.
 `retargetAllParameterPaths` and `removeBindingsOf` follow them by their path
 from the root. The controller lists the canvases of
-`targetCanvases(sequence)` in **Add target...** (`patchTargets`, with a
-heading per canvas).
+`targetCanvases(sequence)` in **Add target...** (`patchTargets`, whose
+`groups` say where each canvas starts in the list). Every target picker
+draws that list with `ofxOceanodeTimelineTargetList`
+(`ofxOceanodeTimelineLaneEditor.h`): a folded branch per canvas, or the
+matches of a search under a heading per canvas.
 
 ## Coordinates
 

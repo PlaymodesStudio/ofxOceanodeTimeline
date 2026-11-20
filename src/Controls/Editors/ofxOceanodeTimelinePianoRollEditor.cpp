@@ -85,15 +85,12 @@ void ofxOceanodeTimelinePianoRollEditor::drawTargets(ofxOceanodeTimelineLaneEdit
             ImGui::InputText("Search parameters", targetSearch, sizeof(targetSearch));
             std::vector<std::string> paths = context.targetPaths;
             if(paths.empty()) for(const auto& binding : track.bindings) paths.push_back(binding.parameterPath);
-            for(const auto& path : paths) {
-                if(targetSearch[0] && ofToLower(path).find(ofToLower(std::string(targetSearch))) == std::string::npos) continue;
-                const bool selected = currentBinding && currentBinding->parameterPath == path;
-                if(ImGui::Selectable(path.c_str(), selected)) {
-                    context.requestedTargetPath = path;
-                    context.requestedTargetRole = &roleId == &lane->pianoPitchBindingId ? ofxOceanodeTimelineTargetRole::Pitch
-                        : &roleId == &lane->pianoGateBindingId ? ofxOceanodeTimelineTargetRole::Gate : ofxOceanodeTimelineTargetRole::Velocity;
-                }
-            }
+            // (A macro's timeline: a branch per canvas it reaches.)
+            if(ofxOceanodeTimelineTargetList(paths, context.targetPaths.empty() ? decltype(context.targetGroups){} : context.targetGroups,
+                                             targetSearch, currentBinding == nullptr ? std::string() : currentBinding->parameterPath,
+                                             context.requestedTargetPath))
+                context.requestedTargetRole = &roleId == &lane->pianoPitchBindingId ? ofxOceanodeTimelineTargetRole::Pitch
+                    : &roleId == &lane->pianoGateBindingId ? ofxOceanodeTimelineTargetRole::Gate : ofxOceanodeTimelineTargetRole::Velocity;
             ImGui::EndCombo();
         }
     };
