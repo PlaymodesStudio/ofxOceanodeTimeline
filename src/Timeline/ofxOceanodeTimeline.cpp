@@ -1131,12 +1131,23 @@ bool ofxOceanodeTimelineManager::setMetronomeEnabled(bool enabled, const Timelin
 
 void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
     parameterTrackColorCache.clear();
+    // Only what a lane drives: a target its track merely keeps to choose
+    // from (unchecked in every lane's Targets list) is not marked.
+    auto driven = [](const ofxOceanodeTimelineTrack& track, const std::string& bindingId) {
+        for(const auto& clip : track.clips)
+            for(const auto& lane : clip.lanes)
+                if(std::find(lane.bindingIds.begin(), lane.bindingIds.end(), bindingId) != lane.bindingIds.end() ||
+                   lane.pianoPitchBindingId == bindingId || lane.pianoGateBindingId == bindingId ||
+                   lane.pianoVelocityBindingId == bindingId || lane.drumDurationBindingId == bindingId ||
+                   lane.drumFilterBindingId == bindingId || lane.drumStutterBindingId == bindingId) return true;
+        return false;
+    };
     // First track wins for a parameter published to more than one track
     // (the root canvas's timelines first, in order).
     for(const auto& timeline : rootTimelines.timelines)
         for(const auto& track : timeline->tracks)
             for(const auto& binding : track.bindings)
-                parameterTrackColorCache.emplace(binding.parameterPath, track.color);
+                if(driven(track, binding.id)) parameterTrackColorCache.emplace(binding.parameterPath, track.color);
     // A macro canvas's timelines hold paths relative to the macro: keyed
     // here by the parameter's path from the root.
     if(container != nullptr) {
@@ -1144,9 +1155,11 @@ void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
         for(const auto& entry : macroSequences)
             for(const auto& timeline : entry.timelines->timelines)
                 for(const auto& track : timeline->tracks)
-                    for(const auto& binding : track.bindings)
+                    for(const auto& binding : track.bindings) {
+                        if(!driven(track, binding.id)) continue;
                         if(auto* parameter = findTarget(*entry.address, binding.parameterPath))
                             parameterTrackColorCache.emplace(container->getTimelineParameterPath(*parameter), track.color);
+                    }
     }
     parameterTrackColorCacheFrame = static_cast<uint64_t>(ofGetFrameNum());
 }

@@ -61,8 +61,10 @@ restore individual connections without affecting other clips. The list is the
 track's: a target given to one lane is offered, unchecked, to its other lanes.
 The **-** at the right of a target takes it off this lane's list (the lane no
 longer drives it); the track's other lanes keep it, checked or not, as they
-have it. Once no lane of the track lists it, the track lets go of the target
-and its parameter is no longer highlighted in the canvas. **Add target...**
+have it. Once no lane of the track lists it, the track lets go of the
+target. A parameter is highlighted in the canvas, in its track's color, only
+while some lane drives it: one that is unchecked in every lane is not.
+**Add target...**
 gives it back to a lane that removed it. Piano role
 choosers also search the patch. Piano Roll targets are explicitly
 assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
