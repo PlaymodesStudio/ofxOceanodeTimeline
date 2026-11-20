@@ -1084,34 +1084,47 @@ void ofxOceanodeTimelineController::drawBlendModeOptions(ofxOceanodeTimelineMana
 }
 
 const std::vector<std::string>& ofxOceanodeTimelineController::patchTargetPaths() const {
-    // Walking every parameter of the patch is too much for every frame an
-    // editor is open. Reuse the list while the patch has the same nodes with
+    // What the timeline being edited can drive: the parameters of its own
+    // canvas (a timeline never reaches above its canvas). For the main
+    // timeline that is the patch; for a macro's timeline (shown on its own,
+    // or unfolded under a macro track) the nodes inside that macro.
+    const auto& timeline = container->getTimelineManager();
+    ofxOceanodeContainer* canvas = timeline.resolverFor(scope(timeline)).base;
+    if(canvas == nullptr) canvas = container.get();
+    auto& cache = patchTargetPathsCache[canvas];
+    // Walking every parameter of the canvas is too much for every frame an
+    // editor is open. Reuse the list while the canvas has the same nodes with
     // the same parameter counts (cheap to check), and at most for two seconds
     // (renames, flags).
     const uint64_t now = ofGetElapsedTimeMillis();
     uint64_t fingerprint = 1469598103934665603ULL;
-    for(auto* node : container->getAllModules()) {
+    for(auto* node : canvas->getAllModules()) {
         fingerprint = (fingerprint ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node))) * 1099511628211ULL;
         if(node != nullptr) fingerprint = (fingerprint ^ node->getParameters().size()) * 1099511628211ULL;
     }
-    if(patchTargetPathsValid && fingerprint == patchTargetPathsFingerprint && now - patchTargetPathsTime < 2000)
-        return patchTargetPathsCache;
+    if(cache.valid && fingerprint == cache.fingerprint && now - cache.time < 2000) return cache.paths;
     std::set<std::string> paths;
-    const auto& timeline = container->getTimelineManager();
-    for(auto* node : container->getAllModules()) {
+    for(auto* node : canvas->getAllModules()) {
         if(node == nullptr) continue;
         for(auto& entry : node->getParameters()) {
             auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
+            // (Paths from the patch's root, as bindClipTarget looks them up:
+            // a macro's parameters carry its canvas in front.)
             if(parameter && timeline.isStepLaneCompatible(*parameter) &&
                !(parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly))
                 paths.insert(container->getTimelineParameterPath(*parameter));
         }
     }
-    patchTargetPathsCache.assign(paths.begin(), paths.end());
-    patchTargetPathsTime = now;
-    patchTargetPathsFingerprint = fingerprint;
-    patchTargetPathsValid = true;
-    return patchTargetPathsCache;
+    cache.paths.assign(paths.begin(), paths.end());
+    cache.time = now;
+    cache.fingerprint = fingerprint;
+    cache.valid = true;
+    // Lists kept for canvases that are gone are dropped now and then.
+    if(patchTargetPathsCache.size() > 16) {
+        for(auto kept = patchTargetPathsCache.begin(); kept != patchTargetPathsCache.end();)
+            kept = kept->first != canvas && now - kept->second.time > 10000 ? patchTargetPathsCache.erase(kept) : std::next(kept);
+    }
+    return cache.paths;
 }
 
 void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManager& timeline) {

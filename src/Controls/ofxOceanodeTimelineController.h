@@ -99,10 +99,15 @@ private:
     std::vector<AudioFileDrop> pendingAudioDrops;
 
     const std::vector<std::string>& patchTargetPaths() const;
-    mutable std::vector<std::string> patchTargetPathsCache;
-    mutable uint64_t patchTargetPathsTime = 0;
-    mutable uint64_t patchTargetPathsFingerprint = 0;
-    mutable bool patchTargetPathsValid = false;
+    // (One list per canvas: the timeline shown and those unfolded in it
+    // belong to different ones, and their lanes are drawn in the same frame.)
+    struct PatchTargetPaths {
+        std::vector<std::string> paths;
+        uint64_t time = 0;
+        uint64_t fingerprint = 0;
+        bool valid = false;
+    };
+    mutable std::map<const ofxOceanodeContainer*, PatchTargetPaths> patchTargetPathsCache;
     struct TargetAssignment {
         std::string trackId, clipId, laneId, path;
         ofxOceanodeTimelineTargetRole role = ofxOceanodeTimelineTargetRole::Lane;
