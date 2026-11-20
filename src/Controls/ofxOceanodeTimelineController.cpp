@@ -8371,6 +8371,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     context.targetPaths = availableTargets;
     context.targetGroups = targetGroups;
     auto& laneEditor = laneEditors.forType(lane->type);
+    // (Here, not with the canvas: folded, or scrolled out of sight, the lane keeps its tool windows.)
+    laneEditor.drawToolWindows(context);
     auto drawLaneMenu = [&](bool propertiesPanel) {
         const std::string menuId = "##laneMenu" + lane->id;
         // The entire properties pad owns the menu, controls included, unless

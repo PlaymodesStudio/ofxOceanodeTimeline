@@ -16,6 +16,11 @@ public:
     void drawMutation(ofxOceanodeTimelineLaneEditorContext& context) override;
     bool hasRandomDeviation() const override { return true; }
     void drawRandomDeviation(ofxOceanodeTimelineLaneEditorContext& context) override;
+    // Note tools other addons registered (ofxOceanodeTimelinePianoTools): a
+    // tab that opens each in its own window.
+    const char* extraTabLabel() const override;
+    void drawExtraTab(ofxOceanodeTimelineLaneEditorContext& context) override;
+    void drawToolWindows(ofxOceanodeTimelineLaneEditorContext& context) override;
     void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                     const ofxOceanodeTimelineLaneCanvas& canvas) override;
     void clearSelection();
@@ -76,6 +81,9 @@ private:
     std::string mutationEditLaneId;
     int mutationEditGroup = 0;
     int mutationTabFrame = -1;
+    // Open tool windows: tool name -> the lane it works on. A window follows
+    // the piano roll in focus and stays while another kind of lane has it.
+    std::map<std::string, std::string> pianoToolLanes;
     enum class PianoNumericField { None, Velocity, Probability, Mutation };
     PianoNumericField pianoNumericField = PianoNumericField::None;
     int pianoNumericNoteIndex = -1;

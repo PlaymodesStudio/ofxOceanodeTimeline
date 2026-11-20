@@ -126,6 +126,9 @@ public:
     // An optional extra properties tab of the lane type (nullptr: none).
     virtual const char* extraTabLabel() const { return nullptr; }
     virtual void drawExtraTab(ofxOceanodeTimelineLaneEditorContext& context) {}
+    // Windows of its own a lane type keeps open (the piano roll's note tools),
+    // drawn every frame the lane is in the editor, whatever of it shows.
+    virtual void drawToolWindows(ofxOceanodeTimelineLaneEditorContext& context) {}
     virtual void drawPreview(const ofxOceanodeTimelineClipPreview& preview) const = 0;
     virtual void drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
                             const ofxOceanodeTimelineLaneCanvas& canvas) = 0;
