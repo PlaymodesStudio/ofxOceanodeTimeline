@@ -1419,8 +1419,8 @@ public:
 
     // ---- Macro tracks: clips that play a macro canvas's timeline ----
     // (Made by createTimelineTrack below, with the timeline placed.)
-    // A clip on a macro track. A content length of 0 uses the macro
-    // timeline's length (the end of its last clip, at least one bar).
+    // A clip on a macro track. A content length of 0 uses one pass of what
+    // the track plays (macroPassLength).
     std::string createMacroClip(const std::string& trackId, double startBeat, double durationBeats = 0.0);
     std::string createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                 double startBeat, double durationBeats = 0.0);
@@ -1449,6 +1449,12 @@ public:
     // One pass of a macro timeline: the end of its last clip, at least a bar
     // of its own meter.
     double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
+    // One pass of what a timeline track's clips play: the longest of those
+    // timelines (carriedTimelines), a bar of the host when there is none.
+    double macroPassLength(const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track);
+    // Gives a macro clip that pass as its content length. One lasting a
+    // whole number of passes is resized to as many. False: not a macro clip.
+    bool fitMacroClipToPass(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     // A timeline's beats per bar: the global meter for the root canvas's
     // default timeline while it is linked to the global transport, else its own.
     double beatsPerBarOf(const ofxOceanodeTimelineSequence& sequence) const;

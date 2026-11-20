@@ -8,6 +8,7 @@
 #include "Managers/ofxOceanodeContainer.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 size_t canvasDepth(const std::string& canvas) {
@@ -1052,10 +1053,9 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
                                                         double startBeat, double durationBeats) {
     const auto* track = getTrack(sequence, trackId);
     if(track == nullptr || !track->isMacroTrack()) return std::string();
-    auto* macroSequence = placedTimeline(sequence, *track);
-    // One pass of the placed timeline, in beats: it follows the host's tempo
-    // beat for beat (a bar of its own meter at least).
-    const double length = macroSequence == nullptr ? beatsPerBarOf(sequence) : macroTimelineLength(*macroSequence);
+    // One pass of what the track plays, in beats: it follows the host's tempo
+    // beat for beat.
+    const double length = macroPassLength(sequence, *track);
     const auto id = createClip(sequence, trackId, track->name, startBeat, durationBeats > 0.0 ? durationBeats : length);
     if(auto* clip = getClip(sequence, trackId, id)) {
         clip->contentDurationBeats = length;
@@ -1064,6 +1064,33 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
     }
     invalidateEvaluationIndexes();
     return id;
+}
+
+double ofxOceanodeTimelineManager::macroPassLength(const ofxOceanodeTimelineSequence& host,
+                                                   const ofxOceanodeTimelineTrack& track) {
+    // The longest of the timelines its clips play: a macro placed as a whole
+    // plays every timeline of the macro, whichever of them the track names.
+    double length = 0.0;
+    for(const auto* played : carriedTimelines(host, track)) length = std::max(length, macroTimelineLength(*played));
+    return length > 0.0 ? length : beatsPerBarOf(host);
+}
+
+bool ofxOceanodeTimelineManager::fitMacroClipToPass(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                    const std::string& clipId) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || !track->isMacroTrack()) return false;
+    // A clip lasting a whole number of passes (one, usually) keeps lasting
+    // as many; any other keeps its length, and repeats (or is cut) on the
+    // new pass.
+    const double passes = clip->durationBeats / std::max(1e-9, ofxOceanodeTimelineClipTime::cycleDuration(*clip));
+    const double wholePasses = std::round(passes);
+    clip->contentDurationBeats = macroPassLength(sequence, *track);
+    if(wholePasses >= 1.0 && std::abs(passes - wholePasses) < 1e-6)
+        clip->durationBeats = wholePasses * ofxOceanodeTimelineClipTime::cycleDuration(*clip);
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return true;
 }
 
 std::string ofxOceanodeTimelineManager::createMacroClip(const std::string& trackId, double startBeat, double durationBeats) {
