@@ -5,6 +5,7 @@ import controller_clarity_regression as controller
 native = controller.native
 native.fixture.CASES = native.fixture.CASES.split('int main()')[0] + r'''
 #include "Controls/Editors/ofxOceanodeTimelineLaneEditorUi.h"
+#include "ofxOceanodeColors.h"
 int main() {
     ofDisableDataPath(); ofSeedRandom();
     auto window = std::make_shared<ofAppNoWindow>(); ofGetMainLoop()->setCurrentWindow(window);
@@ -79,12 +80,14 @@ int main() {
         assert(!ui.editorState.collapsedLaneIds.count(a));
         assert(chancePanel->Scroll.y==0 && !chancePanel->ScrollbarY);
         assert(chancePanel->Size.y>=ImGui::GetTextLineHeight());
-        // Expanded curves retain their editor grid below the old cutoff.
+        // Expanded curves retain their editor grid below the old cutoff
+        // (in the theme's OC_CurveEditorLines colour).
         // The folded preview does not draw this grid.
+        const ImU32 gridColor=ImGui::ColorConvertFloat4ToU32(OceanodeColors::CurveEditorLines);
         bool editorGrid=false;
         for(const auto* list:ImGui::GetDrawData()->CmdLists)
             for(const auto& vertex:list->VtxBuffer)
-                editorGrid |= vertex.col==ofxOceanodeTimelineLaneEditorUi::kGrid &&
+                editorGrid |= vertex.col==gridColor &&
                               vertex.pos.y>=80 && vertex.pos.y<80+minimum;
         assert(editorGrid);
         frame(ImVec2(-100,-100),false,"header-height-lane");
