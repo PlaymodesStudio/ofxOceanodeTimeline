@@ -8632,15 +8632,21 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 const bool toggleLane = isToggleLane(*lane);
                 const bool gateLane = lane->type == ofxOceanodeTimelineLaneType::MultiGate;
                 constexpr float kChanceWidth = 64.0f;
+                std::string removeTargetId;   // (applied after the list: it may take the target off the track)
                 for(const auto& candidate : track.bindings) {
                     const bool assigned = std::find(lane->bindingIds.begin(), lane->bindingIds.end(), candidate.id) != lane->bindingIds.end();
+                    // Taken off this lane's list with its "-".
+                    if(!assigned && std::find(lane->hiddenBindingIds.begin(), lane->hiddenBindingIds.end(), candidate.id) !=
+                                    lane->hiddenBindingIds.end()) continue;
                     bool enabled = assigned;
-                    // One row each: checkbox and name, then (gates) the chance
-                    // and Inspect pinned to the right.
+                    // One row each: checkbox and name, then (gates) the chance,
+                    // Remove and Inspect pinned to the right (Inspect keeps
+                    // its place on the rows that have none).
                     const float chanceReserve = assigned && gateLane ? kChanceWidth + ImGui::GetStyle().ItemSpacing.x : 0.0f;
-                    const float inspectReserve = assigned ? smallButtonReserve("?") : 0.0f;
+                    const float inspectReserve = smallButtonReserve("?");
+                    const float removeReserve = smallButtonReserve("-");
                     const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() -
-                        ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - chanceReserve;
+                        ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - removeReserve - chanceReserve;
                     // A target outside the macro (a parameter of a canvas
                     // above it) says so: the macro does not save it.
                     const bool outside = ofxOceanodeTimelineOutside::isOutside(candidate.parameterPath);
@@ -8660,7 +8666,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                         else ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
                     }
                     if(assigned && gateLane) {
-                        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - chanceReserve + ImGui::GetStyle().ItemSpacing.x);
+                        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - removeReserve - chanceReserve +
+                                        ImGui::GetStyle().ItemSpacing.x);
                         const auto found = lane->targetProbability.find(candidate.parameterPath);
                         float chance = (found == lane->targetProbability.end() ? 1.0f : found->second) * 100.0f;
                         ImGui::SetNextItemWidth(kChanceWidth);
@@ -8672,6 +8679,13 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                                               "a block left out keeps it off.\n"
                                               "Ctrl/Cmd-click to type a value.", candidate.parameterPath.c_str());
                     }
+                    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - removeReserve + ImGui::GetStyle().ItemSpacing.x);
+                    if(ImGui::SmallButton(("-##removeTarget" + candidate.id).c_str())) removeTargetId = candidate.id;
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Remove %s from this lane's targets.\n"
+                                          "The track's other lanes keep it; once none of them\n"
+                                          "lists it, the track lets go of it.",
+                                          compactParameterName(candidate.parameterPath).c_str());
                     if(assigned) {
                         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve + ImGui::GetStyle().ItemSpacing.x);
                         if(ImGui::SmallButton(("?##inspect" + candidate.id).c_str())) {
@@ -8681,6 +8695,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Inspect what drives %s", candidate.parameterPath.c_str());
                     }
                 }
+                if(!removeTargetId.empty())
+                    timeline.removeTargetFromLaneList(scope(timeline), track.id, clip->id, lane->id, removeTargetId);
                 if(toggleLane) {
                     ImGui::Separator();
                     bool drivesSolo = lane->drivesTrackSolo;

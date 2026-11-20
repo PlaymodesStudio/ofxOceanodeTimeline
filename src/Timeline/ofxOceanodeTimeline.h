@@ -489,6 +489,10 @@ struct ofxOceanodeTimelineLane {
     std::string name;
     ofxOceanodeTimelineLaneType type = ofxOceanodeTimelineLaneType::Step;
     std::vector<std::string> bindingIds;
+    // Targets of its track taken off this lane's Targets list (the list's
+    // "-"): neither driven nor listed here, until this lane is given them
+    // again. The other lanes of the track keep them.
+    std::vector<std::string> hiddenBindingIds;
     bool muted = false;
     bool solo = false;
     // Dropdown lanes: the bound parameter's option names as the editor last
@@ -2172,6 +2176,12 @@ public:
                                const std::string& laneId, const std::string& bindingId);
     bool removeBindingFromLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                const std::string& laneId, const std::string& bindingId);
+    // The "-" of a lane's Targets list: the lane no longer drives the target
+    // nor lists it; the track's other lanes keep it as they have it. Once no
+    // lane of the track drives or lists it (and no note group holds it), the
+    // track lets go of it too.
+    bool removeTargetFromLaneList(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                                  const std::string& laneId, const std::string& bindingId);
     ofxOceanodeTimelineLane* getLane(const std::string& trackId, const std::string& clipId, const std::string& laneId);
     ofxOceanodeTimelineLane* getLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, const std::string& laneId);
     const ofxOceanodeTimelineLane* getLane(const std::string& trackId, const std::string& clipId, const std::string& laneId) const;
@@ -2912,6 +2922,9 @@ private:
     void removeClipFromGroups(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     void clearTimelineFlag(const ofxOceanodeTimelineTrack& track);
     void refreshTimelineFlag(const std::string& parameterPath);
+    // The same for a path as `sequence` keeps it (a macro's timeline: from
+    // its macro's canvas, "../" in front for a parameter outside it).
+    void refreshTimelineFlag(const ofxOceanodeTimelineSequence& sequence, const std::string& parameterPath);
     void releaseWaveClipIfNeeded(const std::string& trackId, const std::string& clipId);
 
     using ActiveValueMap = std::unordered_map<std::string,

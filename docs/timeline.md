@@ -57,7 +57,13 @@ track header's **+** opens a floating **Clip settings** window for shared timing
 and **Targets** contains its destinations. **Add target...** searches compatible
 parameters in the current patch; selecting a new parameter
 publishes it to the track automatically. Existing target checkboxes remove or
-restore individual connections without affecting other clips. Piano role
+restore individual connections without affecting other clips. The list is the
+track's: a target given to one lane is offered, unchecked, to its other lanes.
+The **-** at the right of a target takes it off this lane's list (the lane no
+longer drives it); the track's other lanes keep it, checked or not, as they
+have it. Once no lane of the track lists it, the track lets go of the target
+and its parameter is no longer highlighted in the canvas. **Add target...**
+gives it back to a lane that removed it. Piano role
 choosers also search the patch. Piano Roll targets are explicitly
 assigned to pitch, gate and velocity roles. Right-click a vertical keyboard key
 to select every note at that pitch in the piano-roll lane, including notes

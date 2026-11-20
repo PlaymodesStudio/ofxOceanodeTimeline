@@ -1023,7 +1023,12 @@ ofJson ofxOceanodeTimelineManager::outsideTargetsJson(const std::string& canvas,
                     ofJson roles = ofJson::array();
                     const auto slots = roleSlots(lane);
                     for(size_t i = 0; i < slots.size(); ++i) if(*slots[i] == binding.id) roles.push_back(kOutsideRoles[i]);
-                    if(roles.empty() && std::find(lane.bindingIds.begin(), lane.bindingIds.end(), binding.id) == lane.bindingIds.end()) continue;
+                    if(roles.empty() && std::find(lane.bindingIds.begin(), lane.bindingIds.end(), binding.id) == lane.bindingIds.end()) {
+                        // (A lane that took it off its Targets list.)
+                        if(std::find(lane.hiddenBindingIds.begin(), lane.hiddenBindingIds.end(), binding.id) != lane.hiddenBindingIds.end())
+                            link["hiddenIn"].push_back(ofJson{{"clip", clip.id}, {"lane", lane.id}});
+                        continue;
+                    }
                     ofJson use{{"clip", clip.id}, {"lane", lane.id}};
                     if(!roles.empty()) use["roles"] = roles;
                     const auto chance = lane.targetProbability.find(binding.parameterPath);
@@ -1128,6 +1133,16 @@ bool ofxOceanodeTimelineManager::adoptOutsideTargets(const MacroSequenceEntry& e
             const auto chance = use.find("probability");
             if(chance != use.end() && chance->is_number()) lane->targetProbability[path] = chance->get<float>();
         }
+        // The lanes that took it off their Targets list.
+        const auto hidden = link.find("hiddenIn");
+        if(hidden == link.end() || !hidden->is_array()) continue;
+        for(const auto& use : *hidden) {
+            if(!use.is_object()) continue;
+            auto* lane = getLane(*sequence, track->id, textOf(use, "clip"), textOf(use, "lane"));
+            if(lane == nullptr) continue;
+            auto has = [&](const std::vector<std::string>& ids) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+            if(!has(lane->bindingIds) && !has(lane->hiddenBindingIds)) lane->hiddenBindingIds.push_back(id);
+        }
     }
     return adopted;
 }
@@ -1146,6 +1161,8 @@ bool ofxOceanodeTimelineManager::stripOutsideTargets(ofxOceanodeTimelineSequence
         for(auto& clip : track.clips) for(auto& lane : clip.lanes) {
             lane.bindingIds.erase(std::remove_if(lane.bindingIds.begin(), lane.bindingIds.end(),
                 [&](const std::string& id) { return gone.count(id) > 0; }), lane.bindingIds.end());
+            lane.hiddenBindingIds.erase(std::remove_if(lane.hiddenBindingIds.begin(), lane.hiddenBindingIds.end(),
+                [&](const std::string& id) { return gone.count(id) > 0; }), lane.hiddenBindingIds.end());
             for(auto* slot : roleSlots(lane)) if(gone.count(*slot) > 0) slot->clear();
             for(auto chance = lane.targetProbability.begin(); chance != lane.targetProbability.end();)
                 chance = leaves(chance->first) ? lane.targetProbability.erase(chance) : std::next(chance);

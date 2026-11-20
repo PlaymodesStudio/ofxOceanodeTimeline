@@ -609,7 +609,8 @@ ordinary binding of the macro's sequence; only saving treats it apart.
 its `sequence.json`) with those whose parameter lives in it: the macro's
 canvas id below this canvas, its definition (a library Macro's folder, by
 its last two names), timeline, track, the binding (its path as this canvas
-has it) and the lanes that use it (with their note roles and chance). A
+has it), the lanes that use it (with their note roles and chance) and
+those that took it off their list (`hiddenIn`). A
 canvas keeps the array as read (`ofxOceanodeTimelineCanvas::outsideTargets`).
 The core loads the macros in a canvas before the canvas's own timelines, so
 `loadMacroSequence` and `loadPreset` end with `restoreOutsideTargets` for
@@ -629,6 +630,15 @@ from the root. The controller lists the canvases of
 draws that list with `ofxOceanodeTimelineTargetList`
 (`ofxOceanodeTimelineLaneEditor.h`): a folded branch per canvas, or the
 matches of a search under a heading per canvas.
+
+A lane's **Targets** list shows its track's bindings. Its **-**
+(`removeTargetFromLaneList`) detaches the binding from that lane and records
+it in the lane's `hiddenBindingIds` (saved as `"hiddenTargets"`), so only
+that lane stops listing it; `addBindingToLane` takes it out of that record.
+Once no lane of the track drives or lists the binding, and no note group
+holds it, `removeBinding` takes it off the track.
+`refreshTimelineFlag(sequence, path)` then clears the parameter's timelined
+flag by the path the sequence keeps (a macro's is not a path from the root).
 
 ## Coordinates
 

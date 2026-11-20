@@ -1238,6 +1238,9 @@ std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineSeque
             ofxOceanodeTimelineSyncLfoControlIds(lane);
             for(auto& binding : lane.bindingIds) remap(binding);
             lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), std::string()), lane.bindingIds.end());
+            for(auto& binding : lane.hiddenBindingIds) remap(binding);
+            lane.hiddenBindingIds.erase(std::remove(lane.hiddenBindingIds.begin(), lane.hiddenBindingIds.end(), std::string()),
+                                        lane.hiddenBindingIds.end());
             remap(lane.pianoPitchBindingId); remap(lane.pianoGateBindingId); remap(lane.pianoVelocityBindingId);
             remap(lane.drumDurationBindingId); remap(lane.drumFilterBindingId); remap(lane.drumStutterBindingId);
         }
@@ -1531,7 +1534,7 @@ bool ofxOceanodeTimelineManager::removeTrack(ofxOceanodeTimelineSequence& sequen
     sequence.tracks.erase(it);
     sequence.normalizeFolders(); // a removed folder's tracks move to the top level
     invalidateEvaluationIndexes();
-    for(const auto& path : affectedPaths) refreshTimelineFlag(path);
+    for(const auto& path : affectedPaths) refreshTimelineFlag(sequence, path);
     return true;
 }
 
@@ -2182,6 +2185,8 @@ bool ofxOceanodeTimelineManager::removeBinding(ofxOceanodeTimelineSequence& sequ
     for(auto& clip : track->clips) {
         for(auto& lane : clip.lanes) {
             lane.bindingIds.erase(std::remove(lane.bindingIds.begin(), lane.bindingIds.end(), bindingId), lane.bindingIds.end());
+            lane.hiddenBindingIds.erase(std::remove(lane.hiddenBindingIds.begin(), lane.hiddenBindingIds.end(), bindingId),
+                                        lane.hiddenBindingIds.end());
             if(lane.pianoPitchBindingId == bindingId) lane.pianoPitchBindingId.clear();
             if(lane.pianoGateBindingId == bindingId) lane.pianoGateBindingId.clear();
             if(lane.pianoVelocityBindingId == bindingId) lane.pianoVelocityBindingId.clear();
@@ -2193,7 +2198,7 @@ bool ofxOceanodeTimelineManager::removeBinding(ofxOceanodeTimelineSequence& sequ
     track->bindings.erase(it);
     normalizeNoteGroups(*track);
     invalidateEvaluationIndexes();
-    refreshTimelineFlag(parameterPath);
+    refreshTimelineFlag(sequence, parameterPath);
     return true;
 }
 
@@ -3911,6 +3916,9 @@ bool ofxOceanodeTimelineManager::addBindingToLane(ofxOceanodeTimelineSequence& s
     auto* lane = getLane(sequence, trackId, clipId, laneId);
     if(track == nullptr || lane == nullptr || !lane->lfoParameter.empty() ||
        getBinding(sequence, trackId, bindingId) == nullptr) return false;
+    // (Given to this lane again: back on its Targets list.)
+    lane->hiddenBindingIds.erase(std::remove(lane->hiddenBindingIds.begin(), lane->hiddenBindingIds.end(), bindingId),
+                                 lane->hiddenBindingIds.end());
     if(std::find(lane->bindingIds.begin(), lane->bindingIds.end(), bindingId) != lane->bindingIds.end()) return true;
     // An LFO lane's first target sets its output range to the parameter's
     // (an oscillator over 0..1 would barely move most parameters).
@@ -3990,6 +3998,37 @@ bool ofxOceanodeTimelineManager::removeBindingFromLane(ofxOceanodeTimelineSequen
         if(auto* engine = enginePlaying(sequence)) engine->dropStateCaptureOverride(trackId, bindingId);
     if(removed) invalidateSchedule();
     return removed;
+}
+
+bool ofxOceanodeTimelineManager::removeTargetFromLaneList(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                          const std::string& clipId, const std::string& laneId,
+                                                          const std::string& bindingId) {
+    auto* track = getTrack(sequence, trackId);
+    auto* lane = getLane(sequence, trackId, clipId, laneId);
+    if(track == nullptr || lane == nullptr || getBinding(sequence, trackId, bindingId) == nullptr) return false;
+    removeBindingFromLane(sequence, trackId, clipId, laneId, bindingId);
+    if(std::find(lane->hiddenBindingIds.begin(), lane->hiddenBindingIds.end(), bindingId) == lane->hiddenBindingIds.end())
+        lane->hiddenBindingIds.push_back(bindingId);
+    // Still some lane's: one that drives it, or one that lists it to choose
+    // from (a piano roll or a drum grid picks its targets by role, with no
+    // list to take one off).
+    auto has = [&](const std::vector<std::string>& ids) { return std::find(ids.begin(), ids.end(), bindingId) != ids.end(); };
+    bool kept = std::any_of(track->noteGroups.begin(), track->noteGroups.end(),
+                            [&](const auto& group) { return group.contains(bindingId); });
+    for(const auto& clip : track->clips) {
+        for(const auto& other : clip.lanes) {
+            if(kept) break;
+            const bool drives = has(other.bindingIds) || other.pianoPitchBindingId == bindingId ||
+                other.pianoGateBindingId == bindingId || other.pianoVelocityBindingId == bindingId ||
+                other.drumDurationBindingId == bindingId || other.drumFilterBindingId == bindingId ||
+                other.drumStutterBindingId == bindingId;
+            kept = drives || (!ofxOceanodeTimelineLaneUsesNoteRoles(other.type) && !has(other.hiddenBindingIds));
+        }
+    }
+    // No lane left with it: the track lets go of the target (and the
+    // parameter is no longer marked as driven by it).
+    if(!kept) removeBinding(sequence, trackId, bindingId);
+    return true;
 }
 
 ofxOceanodeTimelineLane* ofxOceanodeTimelineManager::getLane(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,

@@ -56,6 +56,30 @@ void ofxOceanodeTimelineManager::refreshTimelineFlag(const std::string& paramete
         parameter->setTimelined(isActive);
 }
 
+void ofxOceanodeTimelineManager::refreshTimelineFlag(const ofxOceanodeTimelineSequence& sequence, const std::string& parameterPath) {
+    if(container == nullptr) return;
+    if(sequence.base == nullptr || sequence.base == container) { refreshTimelineFlag(parameterPath); return; }
+    // A macro's timeline: the parameter its path leads to, still driven
+    // or not by any timeline of the patch.
+    auto* parameter = resolverFor(sequence).find(parameterPath);
+    if(parameter == nullptr) return;
+    const std::string absolute = container->getTimelineParameterPath(*parameter);
+    bool isActive = false;
+    for(const auto& timeline : rootTimelines.timelines)
+        for(const auto& track : timeline->tracks)
+            for(const auto& binding : track.bindings)
+                isActive = isActive || (!binding.bypass && binding.parameterPath == absolute);
+    pruneMacroSequences();
+    for(const auto& entry : macroSequences) {
+        if(isActive) break;
+        for(const auto& timeline : entry.timelines->timelines)
+            for(const auto& track : timeline->tracks)
+                for(const auto& binding : track.bindings)
+                    isActive = isActive || (!binding.bypass && findTarget(*entry.address, binding.parameterPath) == parameter);
+    }
+    parameter->setTimelined(isActive);
+}
+
 // The global history follows the canvas's gesture transactions and history
 // limits, but owns only the global transport's settings: markers, the tempo
 // lane, loop, meter, timebase, scheduling. Replaying it must not reload the

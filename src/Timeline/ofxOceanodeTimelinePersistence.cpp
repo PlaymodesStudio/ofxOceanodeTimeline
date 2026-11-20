@@ -698,6 +698,8 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             }
             laneJson["laneType"] = laneTypeToString(lane.type);
             laneJson["bindingIds"] = lane.bindingIds;
+            // (Targets of the track taken off this lane's list.)
+            if(!lane.hiddenBindingIds.empty()) laneJson["hiddenTargets"] = lane.hiddenBindingIds;
             laneJson["stepCount"] = lane.stepCount;
             laneJson["beatsPerStep"] = lane.beatsPerStep;
             laneJson["valueMin"] = lane.valueMin;
@@ -1277,6 +1279,18 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                                     lane.bindingIds.push_back(id);
                             }
                         }
+                        // Targets of the track taken off this lane's list (never one it drives).
+                        if(laneJson.contains("hiddenTargets") && laneJson["hiddenTargets"].is_array()) {
+                            for(const auto& bindingId : laneJson["hiddenTargets"]) {
+                                if(!bindingId.is_string()) continue;
+                                const std::string id = mapBinding(bindingId.get<std::string>());
+                                const bool belongsToTrack = std::any_of(track.bindings.begin(), track.bindings.end(),
+                                    [&](const auto& binding) { return binding.id == id; });
+                                auto listed = [&](const std::vector<std::string>& ids) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+                                if(belongsToTrack && !listed(lane.bindingIds) && !listed(lane.hiddenBindingIds))
+                                    lane.hiddenBindingIds.push_back(id);
+                            }
+                        }
                         auto validateRole = [&](std::string& roleId) {
                             const bool belongsToTrack = std::any_of(track.bindings.begin(), track.bindings.end(),
                                 [&](const auto& binding) { return binding.id == roleId; });
@@ -1812,6 +1826,12 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
                 if(!id.empty() && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
             }
             lane.bindingIds = std::move(ids);
+            std::vector<std::string> hidden;
+            for(const auto& old : lane.hiddenBindingIds) {
+                const auto id = mapped(old);
+                if(!id.empty() && std::find(hidden.begin(), hidden.end(), id) == hidden.end()) hidden.push_back(id);
+            }
+            lane.hiddenBindingIds = std::move(hidden);
             lane.pianoPitchBindingId = mapped(lane.pianoPitchBindingId);
             lane.pianoGateBindingId = mapped(lane.pianoGateBindingId);
             lane.pianoVelocityBindingId = mapped(lane.pianoVelocityBindingId);
