@@ -171,7 +171,8 @@ macro's entry (an `ofxOceanodeTimelineCanvas`) is made empty on first use,
 its timelines' binding paths are relative to the macro's container, and
 they are saved as `sequence.json` in the macro's own folder (its preset
 folder, or its library definition, through the core's
-`loadMacroPreset`/`saveMacroPreset` hooks). Copies of a library macro share
+`loadMacroPreset`/`saveMacroPreset` hooks), without their targets outside
+the macro (see Outside targets below). Copies of a library macro share
 one list; entries follow the macro's container through a `weak_ptr`, so a
 deleted macro's timelines go with it.
 
@@ -588,11 +589,43 @@ first timeline; the Window menu's **Timelines** list (`drawWindowMenuItems`)
 opens and closes the rest. A harness that draws the main controller as an
 editor itself (`drawnAsEditor`) gets the requests on it.
 
-A timeline never drives anything above its canvas: binding paths are
-relative to the timeline's canvas (`resolverFor(sequence).pathOf` refuses a
-parameter outside it), the parameter menu offers a parameter only to the
-timelines of its canvas and the canvases around it, and the piano-roll setup
-dialog lists the shown timeline's canvas only.
+Binding paths are relative to the timeline's canvas
+(`resolverFor(sequence).pathOf` refuses a parameter outside it), the
+parameter menu offers a parameter only to the timelines of its canvas and
+the canvases around it, and the piano-roll setup dialog lists the shown
+timeline's canvas only.
+
+Outside targets: a macro's timeline may drive a parameter of a canvas above
+its macro. Its binding path starts with one `"../"` per canvas up
+(`ofxOceanodeTimelineOutside`: `relativePath` writes it,
+`absolutePath` reads it; `ofxOceanodeTimelineResolver::outsidePathOf` and
+`find` use them, and `addBinding` falls back to `outsidePathOf`). Nothing
+else changes for playback: every engine plays a copy made absolute through
+`absolutePathIn`, which resolves the `"../"`. In memory such a binding is an
+ordinary binding of the macro's sequence; only saving treats it apart.
+`saveMacroSequence` writes the macro's timelines from copies without them
+(`stripOutsideTargets`), and each canvas writes an `"outsideTargets"` array
+(`outsideTargetsJson`: the root's in `timeline.json`, a macro canvas's in
+its `sequence.json`) with those whose parameter lives in it: the macro's
+canvas id below this canvas, its definition (a library Macro's folder, by
+its last two names), timeline, track, the binding (its path as this canvas
+has it) and the lanes that use it (with their note roles and chance). A
+canvas keeps the array as read (`ofxOceanodeTimelineCanvas::outsideTargets`).
+The core loads the macros in a canvas before the canvas's own timelines, so
+`loadMacroSequence` and `loadPreset` end with `restoreOutsideTargets` for
+the canvas just read: the macro timelines below it first lose the outside
+targets that reach this canvas (a library Macro's timelines can stay in
+memory from one project to the next), then `adoptOutsideTargets` puts each
+macro's entries (its canvas id and definition) back into its timelines.
+Entries for a macro that holds another definition now are written again as
+they are. A macro reloading on its own (another definition chosen for it)
+first has the canvases above it take what is in memory
+(`outsideTargetsJson` into their `outsideTargets`), then takes from them the
+entries of the definition it loaded, so each definition keeps its own.
+`retargetAllParameterPaths` and `removeBindingsOf` follow them by their path
+from the root. The controller lists the canvases of
+`targetCanvases(sequence)` in **Add target...** (`patchTargets`, with a
+heading per canvas).
 
 ## Coordinates
 

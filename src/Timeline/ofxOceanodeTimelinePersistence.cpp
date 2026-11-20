@@ -522,6 +522,10 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
         json["timelines"] = canvas["timelines"];
         json["nextTimelineNumber"] = canvas["nextTimelineNumber"];
     }
+    // What the timelines of the macros in this patch drive out here (never
+    // saved with those macros).
+    if(const auto outside = outsideTargetsJson(std::string(), rootTimelines); !outside.empty())
+        json["outsideTargets"] = outside;
     // A host's windows (a MacroMixer's) are its own, opened again by it.
     if(std::any_of(timelineWindows.begin(), timelineWindows.end(), [](const auto& window) { return window.hostLabel.empty(); })) {
         json["windows"] = ofJson::array();
@@ -552,6 +556,33 @@ ofJson ofxOceanodeTimelineManager::presetEditState() const {
 }
 
 // One track as timeline.json keeps it.
+ofJson ofxOceanodeTimelineManager::bindingToJson(const ofxOceanodeTimelineParameterBinding& binding) {
+    return {
+        {"id", binding.id},
+        {"parameterPath", binding.parameterPath},
+        {"valueType", binding.valueType},
+        {"defaultValue", binding.defaultValue},
+        {"mode", modeToString(binding.mode)},
+        {"laneType", laneTypeToString(binding.laneType)},
+        {"bypass", binding.bypass},
+        {"clampToRange", binding.clampToParameterRange},
+        {"rowHeight", binding.rowHeight},
+        {"valueScale", binding.valueScale}
+    };
+}
+
+// Everything but the id and the path, which the caller checks first.
+void ofxOceanodeTimelineManager::bindingFromJson(const ofJson& bindingJson, ofxOceanodeTimelineParameterBinding& binding) {
+    binding.valueType = bindingJson.value("valueType", std::string());
+    binding.defaultValue = bindingJson.value("defaultValue", std::string());
+    binding.mode = modeFromString(bindingJson.value("mode", std::string("Replace")));
+    binding.laneType = laneTypeFromString(bindingJson.value("laneType", std::string("Step")));
+    binding.valueScale = bindingJson.value("valueScale", std::string());
+    binding.bypass = bindingJson.value("bypass", false);
+    binding.clampToParameterRange = bindingJson.value("clampToRange", true);
+    binding.rowHeight = ofClamp(bindingJson.value("rowHeight", 28.0f), 20.0f, 300.0f);
+}
+
 ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& track) const {
     ofJson trackJson;
     trackJson["id"] = track.id;
@@ -590,20 +621,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         {"b", track.color.b}, {"a", track.color.a}
     };
     trackJson["bindings"] = ofJson::array();
-    for(const auto& binding : track.bindings) {
-        trackJson["bindings"].push_back({
-            {"id", binding.id},
-            {"parameterPath", binding.parameterPath},
-            {"valueType", binding.valueType},
-            {"defaultValue", binding.defaultValue},
-            {"mode", modeToString(binding.mode)},
-            {"laneType", laneTypeToString(binding.laneType)},
-            {"bypass", binding.bypass},
-            {"clampToRange", binding.clampToParameterRange},
-            {"rowHeight", binding.rowHeight},
-            {"valueScale", binding.valueScale}
-        });
-    }
+    for(const auto& binding : track.bindings) trackJson["bindings"].push_back(bindingToJson(binding));
     trackJson["noteGroups"] = ofJson::array();
     for(const auto& group : track.noteGroups) {
         trackJson["noteGroups"].push_back({
@@ -1097,14 +1115,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 }
                 binding.id = uniqueLoadedId(savedBindingId, "timeline_binding", sequence.nextBindingNumber, loadedBindingIds);
                 if(!savedBindingId.empty()) bindingRemap[savedBindingId] = binding.id;
-                binding.valueType = bindingJson.value("valueType", std::string());
-                binding.defaultValue = bindingJson.value("defaultValue", std::string());
-                binding.mode = modeFromString(bindingJson.value("mode", std::string("Replace")));
-                binding.laneType = laneTypeFromString(bindingJson.value("laneType", std::string("Step")));
-                binding.valueScale = bindingJson.value("valueScale", std::string());
-                binding.bypass = bindingJson.value("bypass", false);
-                binding.clampToParameterRange = bindingJson.value("clampToRange", true);
-                binding.rowHeight = ofClamp(bindingJson.value("rowHeight", 28.0f), 20.0f, 300.0f);
+                bindingFromJson(bindingJson, binding);
                 track.bindings.push_back(std::move(binding));
             }
         }
@@ -1866,6 +1877,13 @@ bool ofxOceanodeTimelineManager::savePreset(const std::string& presetFolderPath)
 
 bool ofxOceanodeTimelineManager::loadPreset(const std::string& presetFolderPath) {
     const std::string path = presetFolderPath + "/timeline.json";
+    // Once the file is read (or there is none): the macros of the project
+    // loaded before this, and what their timelines drive out here is kept
+    // in this file (see restoreOutsideTargets).
+    struct Restore {
+        ofxOceanodeTimelineManager& manager;
+        ~Restore() { manager.restoreOutsideTargets(std::string(), manager.rootTimelines); }
+    } restore{*this};
     if(!ofFile::doesFileExist(path)) {
         clear();
         return false;
@@ -1940,7 +1958,11 @@ uint64_t timelineIdNumber(const std::string& id) {
 void ofxOceanodeTimelineManager::canvasFromJson(ofxOceanodeTimelineCanvas& canvas, const ofJson& json) {
     canvas.timelines.clear();
     canvas.nextTimelineNumber = 1;
+    canvas.outsideTargets = ofJson::array();
     if(!json.is_object()) return;
+    // Kept as read: given to the macro timelines below once this canvas has
+    // loaded (see restoreOutsideTargets).
+    if(json.contains("outsideTargets") && json["outsideTargets"].is_array()) canvas.outsideTargets = json["outsideTargets"];
     if(json.contains("timelines") && json["timelines"].is_array()) {
         for(const auto& timelineJson : json["timelines"]) {
             if(!timelineJson.is_object()) continue;

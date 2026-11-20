@@ -1214,13 +1214,19 @@ void ofxOceanodeTimelineController::drawBlendModeOptions(ofxOceanodeTimelineMana
 }
 
 const std::vector<std::string>& ofxOceanodeTimelineController::patchTargetPaths() const {
+    return patchTargets().paths;
+}
+
+const ofxOceanodeTimelineController::PatchTargetPaths& ofxOceanodeTimelineController::patchTargets() const {
     // What the timeline being edited can drive: the parameters of its own
-    // canvas (a timeline never reaches above its canvas). For the main
-    // timeline that is the patch; for a macro's timeline (shown on its own,
-    // or unfolded under a macro track) the nodes inside that macro.
+    // canvas. For the main timeline that is the patch; for a macro's
+    // timeline (shown on its own, or unfolded under a macro track) the nodes
+    // inside that macro, then those of each canvas above it: targets outside
+    // the macro, which the canvas they live in saves, never the macro.
     const auto& timeline = container->getTimelineManager();
-    ofxOceanodeContainer* canvas = timeline.resolverFor(scope(timeline)).base;
-    if(canvas == nullptr) canvas = container.get();
+    auto canvases = timeline.targetCanvases(scope(timeline));
+    if(canvases.empty()) canvases.push_back(container.get());
+    ofxOceanodeContainer* canvas = canvases.front();
     auto& cache = patchTargetPathsCache[canvas];
     // Walking every parameter of the canvas is too much for every frame an
     // editor is open. Reuse the list while the canvas has the same nodes with
@@ -1228,24 +1234,36 @@ const std::vector<std::string>& ofxOceanodeTimelineController::patchTargetPaths(
     // (renames, flags).
     const uint64_t now = ofGetElapsedTimeMillis();
     uint64_t fingerprint = 1469598103934665603ULL;
-    for(auto* node : canvas->getAllModules()) {
+    for(auto* level : canvases) for(auto* node : level->getAllModules()) {
         fingerprint = (fingerprint ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node))) * 1099511628211ULL;
         if(node != nullptr) fingerprint = (fingerprint ^ node->getParameters().size()) * 1099511628211ULL;
     }
-    if(cache.valid && fingerprint == cache.fingerprint && now - cache.time < 2000) return cache.paths;
-    std::set<std::string> paths;
-    for(auto* node : canvas->getAllModules()) {
-        if(node == nullptr) continue;
-        for(auto& entry : node->getParameters()) {
-            auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
-            // (Paths from the patch's root, as bindClipTarget looks them up:
-            // a macro's parameters carry its canvas in front.)
-            if(parameter && timeline.isStepLaneCompatible(*parameter) &&
-               !(parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly))
-                paths.insert(container->getTimelineParameterPath(*parameter));
+    if(cache.valid && fingerprint == cache.fingerprint && now - cache.time < 2000) return cache;
+    cache.paths.clear();
+    cache.groups.clear();
+    for(auto* level : canvases) {
+        std::set<std::string> paths;
+        for(auto* node : level->getAllModules()) {
+            if(node == nullptr) continue;
+            for(auto& entry : node->getParameters()) {
+                auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
+                // (Paths from the patch's root, as bindClipTarget looks them up:
+                // a macro's parameters carry its canvas in front.)
+                if(parameter && timeline.isStepLaneCompatible(*parameter) &&
+                   !(parameter->getFlags() & ofxOceanodeParameterFlags_ReadOnly))
+                    paths.insert(container->getTimelineParameterPath(*parameter));
+            }
         }
+        // A heading per canvas, saying who saves a target taken from it.
+        if(canvases.size() > 1 && !paths.empty()) {
+            const std::string heading = level == canvas
+                ? "Inside " + timeline.getMacroSequenceLabel(*level) + "  (saved with the macro)"
+                : level == container.get() ? std::string("Main canvas  (saved with the project)")
+                : timeline.getMacroSequenceLabel(*level) + "  (saved with that macro)";
+            cache.groups.emplace_back(cache.paths.size(), heading);
+        }
+        cache.paths.insert(cache.paths.end(), paths.begin(), paths.end());
     }
-    cache.paths.assign(paths.begin(), paths.end());
     cache.time = now;
     cache.fingerprint = fingerprint;
     cache.valid = true;
@@ -1254,7 +1272,7 @@ const std::vector<std::string>& ofxOceanodeTimelineController::patchTargetPaths(
         for(auto kept = patchTargetPathsCache.begin(); kept != patchTargetPathsCache.end();)
             kept = kept->first != canvas && now - kept->second.time > 10000 ? patchTargetPathsCache.erase(kept) : std::next(kept);
     }
-    return cache.paths;
+    return cache;
 }
 
 void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManager& timeline) {
@@ -8324,6 +8342,10 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     if(clip->lanes.empty()) return;
 
     const auto& availableTargets = patchTargetPaths();
+    // (A macro's timeline: the list's headings, one per canvas it reaches.)
+    const auto targetGroups = patchTargets().groups;
+    const auto* targetBase = timeline.resolverFor(scope(timeline)).base;
+    const std::string targetCanvas = targetBase == nullptr ? std::string() : targetBase->getCanvasID();
     for(size_t laneIndex = 0; laneIndex < clip->lanes.size(); ++laneIndex) {
     auto* lane = &clip->lanes[laneIndex];
     auto focusLane = [&]() {
@@ -8599,8 +8621,15 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                 ImGui::SetNextItemWidth(-1.0f);
                 if(ImGui::BeginCombo("##addPatchTarget", "Add target...")) {
                     ImGui::InputText("Search parameters", laneTargetSearch, sizeof(laneTargetSearch));
-                    for(const auto& path : context.targetPaths) {
+                    size_t nextGroup = 0;
+                    const std::string* heading = nullptr;
+                    for(size_t index = 0; index < context.targetPaths.size(); ++index) {
+                        const auto& path = context.targetPaths[index];
+                        while(nextGroup < targetGroups.size() && targetGroups[nextGroup].first <= index)
+                            heading = &targetGroups[nextGroup++].second;
                         if(laneTargetSearch[0] && ofToLower(path).find(ofToLower(std::string(laneTargetSearch))) == std::string::npos) continue;
+                        // (Shown once a parameter under it passes the search.)
+                        if(heading != nullptr) { ImGui::SeparatorText(heading->c_str()); heading = nullptr; }
                         if(ImGui::Selectable(path.c_str())) context.requestedTargetPath = path;
                     }
                     ImGui::EndCombo();
@@ -8617,13 +8646,24 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     const float inspectReserve = assigned ? smallButtonReserve("?") : 0.0f;
                     const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() -
                         ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - chanceReserve;
-                    const std::string name = fitText(compactParameterName(candidate.parameterPath), nameWidth) +
-                        (candidate.missingTarget ? " (!)" : "");
+                    // A target outside the macro (a parameter of a canvas
+                    // above it) says so: the macro does not save it.
+                    const bool outside = ofxOceanodeTimelineOutside::isOutside(candidate.parameterPath);
+                    static const char* const kOutsideMark = " (out)";
+                    const std::string name = fitText(compactParameterName(candidate.parameterPath),
+                                                     nameWidth - (outside ? ImGui::CalcTextSize(kOutsideMark).x : 0.0f)) +
+                        (outside ? kOutsideMark : "") + (candidate.missingTarget ? " (!)" : "");
                     if(ImGui::Checkbox((name + "##target" + candidate.id).c_str(), &enabled)) {
                         if(enabled) timeline.addBindingToLane(scope(timeline), track.id, clip->id, lane->id, candidate.id);
                         else timeline.removeBindingFromLane(scope(timeline), track.id, clip->id, lane->id, candidate.id);
                     }
-                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
+                    if(ImGui::IsItemHovered()) {
+                        if(outside)
+                            ImGui::SetTooltip("%s%s\nOutside this macro: saved with the canvas it lives in,\nnot with the macro.",
+                                              ofxOceanodeTimelineOutside::absolutePath(targetCanvas, candidate.parameterPath).c_str(),
+                                              candidate.missingTarget ? " (missing target)" : "");
+                        else ImGui::SetTooltip("%s%s", candidate.parameterPath.c_str(), candidate.missingTarget ? " (missing target)" : "");
+                    }
                     if(assigned && gateLane) {
                         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - inspectReserve - chanceReserve + ImGui::GetStyle().ItemSpacing.x);
                         const auto found = lane->targetProbability.find(candidate.parameterPath);

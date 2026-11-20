@@ -104,10 +104,14 @@ private:
     // belong to different ones, and their lanes are drawn in the same frame.)
     struct PatchTargetPaths {
         std::vector<std::string> paths;
+        // A macro's timeline: where each canvas's parameters start in paths
+        // (its own first, then each canvas above it), with a heading.
+        std::vector<std::pair<size_t, std::string>> groups;
         uint64_t time = 0;
         uint64_t fingerprint = 0;
         bool valid = false;
     };
+    const PatchTargetPaths& patchTargets() const;
     mutable std::map<const ofxOceanodeContainer*, PatchTargetPaths> patchTargetPathsCache;
     struct TargetAssignment {
         std::string trackId, clipId, laneId, path;

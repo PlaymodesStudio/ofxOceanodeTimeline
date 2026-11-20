@@ -1291,12 +1291,36 @@ public:
 // lives in: the root for the main timeline (absolute paths, as saved in
 // every file), a macro's container for that macro's sequence -- so one
 // shared sequence reaches each copy's own parameters.
+// A macro timeline's target outside its macro: a parameter of a canvas above
+// it. Its path starts with one "../" for each canvas up, then goes on as that
+// canvas's own timelines would keep it ("../../Node/Param"). Such a target is
+// never saved with the macro: the canvas the parameter lives in keeps it,
+// under the Macro node the way down starts from (see outsideTargetsJson).
+namespace ofxOceanodeTimelineOutside {
+    // How many canvases up the path starts (0: a target inside the macro).
+    size_t levels(const std::string& path);
+    inline bool isOutside(const std::string& path) { return path.compare(0, 3, "../") == 0; }
+    // A path from the root as a timeline of `canvas` keeps it: inside the
+    // canvas the usual way, anywhere else with its "../".
+    std::string relativePath(const std::string& canvas, const std::string& absolutePath);
+    // And back: a path a timeline of `canvas` keeps, from the root.
+    std::string absolutePath(const std::string& canvas, const std::string& path);
+    // A canvas id's macros, from the root down (none for the root).
+    std::vector<std::string> canvasLevels(const std::string& canvas);
+    std::string joinLevels(const std::vector<std::string>& levels, size_t from, size_t to);
+}
+
 struct ofxOceanodeTimelineResolver {
     ofxOceanodeContainer* base = nullptr;
+    // The patch's root: where a target outside base is looked up from.
+    ofxOceanodeContainer* root = nullptr;
     ofxOceanodeAbstractParameter* find(const std::string& path) const;
-    // Empty when the parameter is not inside base: a sequence only drives
-    // what is inside the container it belongs to.
+    // Empty when the parameter is not inside base: what a sequence drives
+    // inside the container it belongs to.
     std::string pathOf(ofxOceanodeAbstractParameter& parameter) const;
+    // The "../" path of a parameter outside base (empty: inside it, or
+    // base is the root).
+    std::string outsidePathOf(ofxOceanodeAbstractParameter& parameter) const;
 };
 
 // How a timeline plays: its name, clock source (free, or linked to the
@@ -1424,6 +1448,11 @@ struct ofxOceanodeTimelineCanvas {
     uint64_t nextTimelineNumber = 1;
     // The container the timelines' paths are relative to (nullptr: the root).
     ofxOceanodeContainer* base = nullptr;
+    // The targets outside their macro of the macro timelines below this
+    // canvas whose parameters live in it, as its file had them (see
+    // ofxOceanodeTimelineManager::outsideTargetsJson): given to those
+    // timelines once this canvas has loaded.
+    ofJson outsideTargets = ofJson::array();
     ofxOceanodeTimelineSequence* find(const std::string& timelineId) const {
         for(const auto& timeline : timelines) if(timeline->timelineId == timelineId) return timeline.get();
         return nullptr;
@@ -1874,8 +1903,20 @@ public:
 
     // Resolves a sequence's binding paths (its base, else this timeline's root).
     ofxOceanodeTimelineResolver resolverFor(const ofxOceanodeTimelineSequence& sequence) const {
-        return {sequence.base != nullptr ? sequence.base : container};
+        return {sequence.base != nullptr ? sequence.base : container, container};
     }
+    // A sequence's target, by the path it keeps, looked up from its
+    // container (a target outside a macro from the root).
+    ofxOceanodeAbstractParameter* findTarget(const ofxOceanodeContainer& base, const std::string& path) const;
+    // The canvases a timeline can take targets from: its own first, then
+    // each one above it up to the root.
+    std::vector<ofxOceanodeContainer*> targetCanvases(const ofxOceanodeTimelineSequence& sequence) const;
+    // The outside targets to save with `canvas` ("" the root): those of the
+    // macro timelines below it whose parameters live in it, each under its
+    // macro (canvas id below this one), timeline and track, with the lanes
+    // that use it; and what `own` still keeps for a macro that holds another
+    // definition now.
+    ofJson outsideTargetsJson(const std::string& canvas, const ofxOceanodeTimelineCanvas& own) const;
 
     std::string addBinding(const std::string& trackId,
                           ofxOceanodeAbstractParameter& parameter,
@@ -2716,6 +2757,17 @@ private:
     Player* playerFor(const TimelineRef& ref) const;
     // The engine copy: paths and macro canvases made absolute from canvas.
     static void makeAbsolute(ofxOceanodeTimelineSequence& sequence, const std::string& canvas);
+    // Outside targets (see ofxOceanodeTimelineOutside). A canvas that has
+    // just loaded ("" the root; the macros in it loaded before it) gives the
+    // macro timelines below it the ones it keeps, in place of any they had
+    // from it. A saved macro leaves all of its own out (levels 0: every one;
+    // else only those that many canvases up).
+    void restoreOutsideTargets(const std::string& canvas, const ofxOceanodeTimelineCanvas& keeper);
+    bool adoptOutsideTargets(const MacroSequenceEntry& entry, const ofxOceanodeTimelineCanvas& keeper,
+                             size_t depth, const std::string& macro);
+    static bool stripOutsideTargets(ofxOceanodeTimelineSequence& sequence, size_t levels = 0);
+    static ofJson bindingToJson(const ofxOceanodeTimelineParameterBinding& binding);
+    static void bindingFromJson(const ofJson& json, ofxOceanodeTimelineParameterBinding& binding);
     static std::string absolutePathIn(const std::string& canvas, const std::string& path);
     // Content signature of one sequence (what a rebuild of its copy follows).
     uint64_t sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const;

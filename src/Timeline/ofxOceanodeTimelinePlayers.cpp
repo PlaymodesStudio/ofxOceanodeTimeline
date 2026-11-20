@@ -134,9 +134,9 @@ void ofxOceanodeTimelineManager::adoptPlaySettings(const ofxOceanodeTimelinePlay
 }
 
 // "Node/Param" is in the canvas itself, "Macro 2::Node/Param" further in.
+// "../Node/Param" is one canvas up (an outside target).
 std::string ofxOceanodeTimelineManager::absolutePathIn(const std::string& canvas, const std::string& path) {
-    if(canvas.empty() || canvas == "Canvas" || canvas == "0") return path;
-    return path.find("::") == std::string::npos ? canvas + "::" + path : canvas + " / " + path;
+    return ofxOceanodeTimelineOutside::absolutePath(canvas, path);
 }
 
 void ofxOceanodeTimelineManager::makeAbsolute(ofxOceanodeTimelineSequence& sequence, const std::string& canvas) {

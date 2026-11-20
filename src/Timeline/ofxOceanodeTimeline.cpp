@@ -1145,7 +1145,7 @@ void ofxOceanodeTimelineManager::rebuildParameterTrackColorCache() const {
             for(const auto& timeline : entry.timelines->timelines)
                 for(const auto& track : timeline->tracks)
                     for(const auto& binding : track.bindings)
-                        if(auto* parameter = entry.address->findTimelineParameter(binding.parameterPath))
+                        if(auto* parameter = findTarget(*entry.address, binding.parameterPath))
                             parameterTrackColorCache.emplace(container->getTimelineParameterPath(*parameter), track.color);
     }
     parameterTrackColorCacheFrame = static_cast<uint64_t>(ofGetFrameNum());
@@ -1166,11 +1166,22 @@ void ofxOceanodeTimelineManager::setContainer(ofxOceanodeContainer* owner) {
 }
 
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineResolver::find(const std::string& path) const {
-    return base == nullptr ? nullptr : base->findTimelineParameter(path);
+    if(base == nullptr) return nullptr;
+    if(!ofxOceanodeTimelineOutside::isOutside(path)) return base->findTimelineParameter(path);
+    // A target outside the macro: from the root, by its whole path.
+    if(root == nullptr || root == base) return nullptr;
+    const std::string absolute = ofxOceanodeTimelineOutside::absolutePath(base->getCanvasID(), path);
+    return ofxOceanodeTimelineOutside::isOutside(absolute) ? nullptr : root->findTimelineParameter(absolute);
 }
 
 std::string ofxOceanodeTimelineResolver::pathOf(ofxOceanodeAbstractParameter& parameter) const {
     return base == nullptr ? std::string() : base->getTimelineParameterPath(parameter, *base);
+}
+
+std::string ofxOceanodeTimelineResolver::outsidePathOf(ofxOceanodeAbstractParameter& parameter) const {
+    if(base == nullptr || root == nullptr || root == base) return std::string();
+    const std::string path = ofxOceanodeTimelineOutside::relativePath(base->getCanvasID(), root->getTimelineParameterPath(parameter));
+    return ofxOceanodeTimelineOutside::isOutside(path) ? path : std::string();
 }
 
 ofColor ofxOceanodeTimelineManager::defaultTrackColor(size_t trackIndex) {
@@ -1551,8 +1562,12 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
 
     // A gated macro's Active belongs to its macro track.
     if(isGatedMacroActive(parameter)) return std::string();
-    // Relative to the sequence's container; nothing outside it.
-    const std::string path = resolverFor(sequence).pathOf(parameter);
+    // Relative to the sequence's container. A macro's timeline may also
+    // drive a parameter of a canvas above its macro: an outside target
+    // ("../" for each canvas up), kept by that canvas, never by the macro.
+    const auto resolver = resolverFor(sequence);
+    std::string path = resolver.pathOf(parameter);
+    if(path.empty()) path = resolver.outsidePathOf(parameter);
     if(path.empty()) return std::string();
     // A parameter may be published to several tracks. Each track owns an
     // independent binding (and blend mode), while duplicate bindings inside
@@ -1634,8 +1649,13 @@ bool ofxOceanodeTimelineManager::bindClipTarget(ofxOceanodeTimelineSequence& seq
     // An LFO control sublane drives its oscillator, never a target.
     if(lane == nullptr || !lane->lfoParameter.empty() ||
        (role != Role::Lane && !ofxOceanodeTimelineLaneUsesNoteRoles(lane->type))) return false;
+    // The track's own target for it, by the path this timeline keeps (from
+    // its canvas; "../" in front for a parameter outside its macro).
+    const auto resolver = resolverFor(sequence);
+    std::string kept = resolver.pathOf(*parameter);
+    if(kept.empty()) kept = resolver.outsidePathOf(*parameter);
     std::string bindingId;
-    for(const auto& binding : track->bindings) if(binding.parameterPath == path) bindingId = binding.id;
+    for(const auto& binding : track->bindings) if(binding.parameterPath == kept) bindingId = binding.id;
     if(bindingId.empty()) bindingId = addBinding(sequence, trackId, *parameter);
     if(bindingId.empty()) return false;
     if(role == Role::Lane) {

@@ -503,7 +503,22 @@ each lane's canvas and its **Targets** and **Lane** tabs (so **Add target...**
 gives the lane, and its track, a new target from here), tabbed in under the
 row. **Add target...** lists what that timeline can drive: the parameters of
 the nodes inside its macro (with the macro's canvas in front of each path),
-as the main timeline's lanes list those of the patch. The right-click menu also renames, mutes, duplicates and
+as the main timeline's lanes list those of the patch, and then, under a
+heading each, those of every canvas above the macro up to the main one.
+
+A parameter taken from a canvas above the macro is an **outside target**.
+The lane drives it like any other, wherever the timeline plays (under a
+macro track or on its own), and the lane's **Targets** list marks it
+**(out)**. It is not saved with the macro: the canvas the parameter lives in
+saves it, under the Macro node the way down to the lane starts from (the
+project for a parameter of the main canvas, the macro around it for one of
+that macro's canvas). The macro itself stays as it was, so a library Macro
+keeps working in every project that uses it, and **Save Macro** leaves its
+outside targets out. Copies of the same library Macro share their timelines,
+and so their outside targets. A Macro node switched to another library Macro
+keeps the outside targets of the one it held, for when it is switched back. A track deleted from the macro takes its
+outside targets with it the next time the project is saved; a deleted lane
+leaves the target on its track. The right-click menu also renames, mutes, duplicates and
 deletes it. The rows' **M** and **S** mute and solo within the macro's
 timeline. Edits change the macro's timeline itself, so every macro clip
 playing it follows; moves and snapping are in that timeline's own beats.
