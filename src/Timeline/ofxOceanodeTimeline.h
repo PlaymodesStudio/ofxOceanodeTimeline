@@ -1511,6 +1511,12 @@ public:
     ofxOceanodeTimelineCanvas* getMacroTimelines(ofxOceanodeContainer& macroContainer);
     // How the editor names the macro: its title, else its canvas id.
     std::string getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const;
+    // The macro whose canvas this is comes from the Macro library (a "global"
+    // Macro, not a local one).
+    bool macroIsGlobal(ofxOceanodeContainer& macroContainer) const;
+    // Writes that Macro back to the library as it is now, its timelines
+    // included (what its node's own save does). False: local, or not found.
+    bool saveGlobalMacro(ofxOceanodeContainer& macroContainer);
     // Called with the macro's own preset or library folder (sequence.json).
     void loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder);
     bool saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const;

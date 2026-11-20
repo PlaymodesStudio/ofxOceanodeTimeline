@@ -97,6 +97,18 @@ std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContain
     return last == std::string::npos ? canvas : canvas.substr(last + 3);
 }
 
+bool ofxOceanodeTimelineManager::macroIsGlobal(ofxOceanodeContainer& macroContainer) const {
+    if(container == nullptr) return false;
+    auto* macro = owningMacro(*container, macroContainer);
+    return macro != nullptr && !macro->isLocal();
+}
+
+bool ofxOceanodeTimelineManager::saveGlobalMacro(ofxOceanodeContainer& macroContainer) {
+    if(container == nullptr) return false;
+    auto* macro = owningMacro(*container, macroContainer);
+    return macro != nullptr && !macro->isLocal() && macro->saveGlobalDefinition();
+}
+
 void ofxOceanodeTimelineManager::loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder) {
     if(container == nullptr) return;
     auto* macro = owningMacro(*container, macroContainer);
