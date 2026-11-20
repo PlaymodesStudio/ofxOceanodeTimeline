@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
+#include <string_view>
 #include <type_traits>
 #include "Timeline/ofxOceanodeTimelineInternal.h"
 
@@ -5452,12 +5453,18 @@ int ofxOceanodeTimelineManager::moveGlobalKeyframe(ofxOceanodeTimelineSequence& 
 void ofxOceanodeTimelineManager::rebuildGlobalChannels() {
     globalChannelsCache.clear();
     globalChannelsValid = true;
-    for(const auto& track : playedSequence.tracks) {
+    // The played timeline, then the copies of the timelines its clips place
+    // (forward and mirrored), outer ones first as collectMacroSources finds
+    // them: applyGlobalTracks gives a parameter to the first that moves it.
+    std::vector<const ofxOceanodeTimelineSequence*> sequences{&playedSequence};
+    for(const auto& played : playedMacros) sequences.push_back(played.sequence.get());
+    for(const auto* sequence : sequences) for(const auto& track : sequence->tracks) {
         if(!track.isGlobalTrack) continue;
         for(const auto& clip : track.clips) {
             const size_t count = clip.globalKeyframes.size();
             if(count < 2) continue;
             GlobalClipChannels entry;
+            entry.sequence = sequence;
             entry.track = &track;
             entry.clip = &clip;
             std::map<std::string, std::vector<const std::string*>> byPath;
@@ -5510,12 +5517,49 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
         globalLastApplied.clear();
         globalLoadCountSeen = loads;
     }
-    if(globalChannelsCache.empty()) return;
-    const double beat = playState().beatPosition;
+    if(globalChannelsCache.empty()) { globalPlacementSeen.clear(); return; }
+    const double playheadBeat = playState().beatPosition;
+    // A placed timeline's Global Track plays where a clip places the
+    // timeline, in the timeline's own beats (through the clip's repeats,
+    // stretch, offset and reverse). One placement per timeline, the first
+    // found (the outer, upper one), as collectActiveValues takes them.
+    struct PlacedAt { double beat = 0.0; bool started = false; };
+    std::unordered_map<const ofxOceanodeTimelineSequence*, PlacedAt> placedAt;
+    const bool anyPlaced = std::any_of(globalChannelsCache.begin(), globalChannelsCache.end(),
+                                       [&](const auto& entry) { return entry.sequence != &playedSequence; });
+    if(anyPlaced) {
+        std::unordered_map<std::string, uint64_t> seen;
+        for(const auto& placement : playedSequences(playContext, playheadBeat, playheadBeat)) {
+            const auto* played = playedMacroOf(*placement.sequence);
+            if(played == nullptr) continue; // the played timeline itself
+            // The macro clip and the repeat of it playing the timeline.
+            const uint64_t id = (placement.instanceKey * 0x9e3779b97f4a7c15ULL) ^ placement.passMix;
+            const std::string key = timeSourceId({played->canvas, played->timeline});
+            if(!seen.emplace(key, id).second) continue;
+            const auto before = globalPlacementSeen.find(key);
+            placedAt.emplace(placement.sequence, PlacedAt{placement.map.toSequence(playheadBeat),
+                                                          before == globalPlacementSeen.end() || before->second != id});
+        }
+        globalPlacementSeen = std::move(seen);
+    } else globalPlacementSeen.clear();
+    // The paths a Global Track already moves at this beat: where a placed
+    // timeline's and one of a timeline around it hold the same parameter,
+    // the outer one has it (the cache has the outer ones first).
+    std::unordered_set<std::string_view> moved;
     static const std::string floatType = typeid(float).name(), intType = typeid(int).name();
     static const std::string floatVectorType = typeid(std::vector<float>).name(), intVectorType = typeid(std::vector<int>).name();
     for(auto& entry : globalChannelsCache) {
         const auto& clip = *entry.clip;
+        double beat = playheadBeat;
+        if(entry.sequence != &playedSequence) {
+            const auto placed = placedAt.find(entry.sequence);
+            if(placed == placedAt.end()) continue; // no clip plays its timeline here
+            beat = placed->second.beat;
+            // Another clip (or repeat) playing it starts: what the track
+            // last wrote says nothing about the values now.
+            if(placed->second.started)
+                for(const auto& channel : entry.channels) globalLastApplied.erase(channel.path);
+        }
         if(clip.muted || !isTrackAudible(*entry.track)) continue;
         if(beat < clip.startBeat - kEpsilon || beat >= clip.startBeat + clip.durationBeats) continue;
         const double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, beat);
@@ -5581,6 +5625,8 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
             if(a < 0 && b >= count) continue;
             if(a < 0) a = b;       // before its first keyframe: held
             if(b >= count) b = a;  // after its last
+            // (Only kept while placed timelines have Global Tracks too.)
+            if(anyPlaced && !moved.insert(channel.path).second) continue;
             auto& last = globalLastApplied[channel.path];
             if(channel.kind == 1) {
                 const auto& from = channel.numbers[static_cast<size_t>(a)];
@@ -5611,7 +5657,11 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
                         if(!colorResolved) {
                             colorResolved = true;
                             movingColor = entry.track->color;
-                            if(const auto* source = primary->timelineFor(engineRef))
+                            // (A placed timeline's track: in the timeline it is kept in.)
+                            const auto* placedCopy = playedMacroOf(*entry.sequence);
+                            const TimelineRef sourceRef = placedCopy == nullptr ? engineRef
+                                : TimelineRef{placedCopy->canvas, placedCopy->timeline};
+                            if(const auto* source = primary->timelineFor(sourceRef))
                                 for(const auto& track : source->tracks)
                                     if(track.id == entry.track->id) { movingColor = track.color; break; }
                         }

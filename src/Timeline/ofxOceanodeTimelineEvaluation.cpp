@@ -1015,6 +1015,9 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
     restWhenInactiveCache.clear();
     continuouslyEvaluatedPathsCache.clear();
     stateCapturePathsCache.clear();
+    // (Its entries point into the played copies remade below.)
+    globalChannelsCache.clear();
+    globalChannelsValid = false;
     playback.clearRolls();
     rebuildPlayedMacros();
     const auto sequences = evaluatedSequences();

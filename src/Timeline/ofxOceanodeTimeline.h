@@ -2944,14 +2944,23 @@ private:
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
     };
     struct GlobalClipChannels {
+        // The played timeline's copy, or the copy of a timeline its clips
+        // place (a PlayedMacro's): that one plays where a clip places it.
+        const ofxOceanodeTimelineSequence* sequence = nullptr;
         const ofxOceanodeTimelineTrack* track = nullptr;
         const ofxOceanodeTimelineClip* clip = nullptr;
         std::vector<double> beats;
         std::vector<ofxOceanodeTimelineCurveTension> eases; // per keyframe: to the next one
         std::vector<GlobalChannel> channels;
     };
+    // The played timeline's clips first, then the placed timelines', outer
+    // ones first: an outer Global Track moving a parameter keeps it.
     std::vector<GlobalClipChannels> globalChannelsCache;
     bool globalChannelsValid = false;
+    // Which placement (macro clip and repeat) last played each placed
+    // timeline's Global Track, by timeSourceId: when another one starts, the
+    // track writes its values again (whatever happened in between).
+    std::unordered_map<std::string, uint64_t> globalPlacementSeen;
     // What a Global Track last computed for a path. A value is written only
     // when it differs from this, never because the parameter does: a
     // parameter stays editable by hand wherever the track's value holds
