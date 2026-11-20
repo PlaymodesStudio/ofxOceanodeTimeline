@@ -564,6 +564,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
     if(track.isWaveTrack) trackJson["waveTrackHeight"] = track.waveTrackHeight;
     trackJson["waveVolume"] = track.waveVolume;
     trackJson["waveVolumeAutomationEnabled"] = track.waveVolumeAutomationEnabled;
+    if(track.waveVolumeShapesWaveform) trackJson["waveVolumeShapesWaveform"] = true;
     if(track.latencyOffsetMs != 0.0f) trackJson["latencyOffsetMs"] = track.latencyOffsetMs;
     if(track.isFolder) trackJson["isFolder"] = true;
     if(!track.parentId.empty()) trackJson["parentId"] = track.parentId;
@@ -642,6 +643,14 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         clipJson["waveSourceStartBeat"] = clip.waveSourceStartBeat;
         clipJson["waveFileDurationBeats"] = clip.waveFileDurationBeats;
         clipJson["waveReverse"] = clip.waveReverse;
+        if(clip.waveTimestretch) clipJson["waveTimestretch"] = true;
+        if(clip.waveFadeInBeats > 0.0) clipJson["waveFadeInBeats"] = clip.waveFadeInBeats;
+        if(clip.waveFadeOutBeats > 0.0) clipJson["waveFadeOutBeats"] = clip.waveFadeOutBeats;
+        if(track.isWaveTrack) {
+            clipJson["waveFadeInTension"] = {{"inflection", clip.waveFadeInTension.inflection}, {"steepness", clip.waveFadeInTension.steepness}};
+            clipJson["waveFadeOutTension"] = {{"inflection", clip.waveFadeOutTension.inflection}, {"steepness", clip.waveFadeOutTension.steepness}};
+            clipJson["waveCrossfadeCurve"] = clip.waveCrossfadeCurve;
+        }
         if(!clip.globalKeyframes.empty()) {
             clipJson["globalKeyframes"] = ofJson::array();
             for(const auto& keyframe : clip.globalKeyframes) {
@@ -1012,6 +1021,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         // Track automation is always present for Wave Tracks. The old flag is
         // still read for compatibility, but it must not make legacy presets
         // lose the default automation lane.
+        track.waveVolumeShapesWaveform = trackJson.value("waveVolumeShapesWaveform", false);
         track.waveVolumeAutomationEnabled = track.isWaveTrack ||
             trackJson.value("waveVolumeAutomationEnabled", false);
         track.latencyOffsetMs = ofClamp(trackJson.value("latencyOffsetMs", 0.0f), -kMaxTrackLatencyOffsetMs, kMaxTrackLatencyOffsetMs);
@@ -1026,6 +1036,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
         track.macroTailMs = ofClamp(trackJson.value("macroTailMs", 500.0f), 0.0f, kMaxMacroGateMs);
+        // A file without it was written with straight segments (see below).
         track.waveVolumeInterpolation = trackJson.value("waveVolumeInterpolation", std::string("Linear"));
         if(trackJson.contains("waveVolumePoints") && trackJson["waveVolumePoints"].is_array()) {
             for(const auto& pointJson : trackJson["waveVolumePoints"]) {
@@ -1048,6 +1059,11 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
             }
         }
         track.waveVolumeTensions.resize(track.waveVolumePoints.size() > 1 ? track.waveVolumePoints.size() - 1 : 0);
+        // Straight segments are sigmoid ones left neutral: the same sound, and they can then be bent.
+        if(track.waveVolumeInterpolation == "Linear") {
+            track.waveVolumeInterpolation = "Sigmoid";
+            for(auto& tension : track.waveVolumeTensions) tension = ofxOceanodeTimelineCurveTension{};
+        }
         if(trackJson.contains("color") && trackJson["color"].is_object()) {
             const auto& colorJson = trackJson["color"];
             track.color = ofColor(
@@ -1115,6 +1131,16 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 clip.waveSourceStartBeat = std::max(0.0, clipJson.value("waveSourceStartBeat", 0.0));
                 clip.waveFileDurationBeats = std::max(0.0, clipJson.value("waveFileDurationBeats", 0.0));
                 clip.waveReverse = clipJson.value("waveReverse", false);
+                clip.waveTimestretch = clipJson.value("waveTimestretch", false);
+                clip.waveFadeInBeats = std::max(0.0, clipJson.value("waveFadeInBeats", 0.0));
+                clip.waveFadeOutBeats = std::max(0.0, clipJson.value("waveFadeOutBeats", 0.0));
+                for(const auto& side : {std::make_pair("waveFadeInTension", &clip.waveFadeInTension),
+                                        std::make_pair("waveFadeOutTension", &clip.waveFadeOutTension)}) {
+                    if(!clipJson.contains(side.first) || !clipJson[side.first].is_object()) continue;
+                    side.second->inflection = ofClamp(clipJson[side.first].value("inflection", 0.5f), 0.01f, 0.99f);
+                    side.second->steepness = ofClamp(clipJson[side.first].value("steepness", 2.0f), 0.1f, 10.0f);
+                }
+                clip.waveCrossfadeCurve = clipJson.value("waveCrossfadeCurve", std::string("Equal power"));
                 if(track.isGlobalTrack && clipJson.contains("globalKeyframes") && clipJson["globalKeyframes"].is_array()) {
                     for(const auto& keyframeJson : clipJson["globalKeyframes"]) {
                         if(!keyframeJson.is_object()) continue;

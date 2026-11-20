@@ -689,6 +689,31 @@ int main() {
     frame(); frame(1250,ImVec2(-100,-100),false,"lfo");
     ui.editorState.editorTrackId=wt; ui.editorState.editorClipId=wc;
     frame(); frame(1250,ImVec2(-100,-100),false,"audio");
+    {
+        // The track's volume curve is made of sigmoid segments: the handle on
+        // one bends it (sideways: where; up: how sharply), undone as a step.
+        auto* volumeTrack=model.getTrack(wt);
+        assert(volumeTrack->waveVolumeInterpolation=="Sigmoid" && volumeTrack->waveVolumePoints.size()==2 && volumeTrack->waveVolumeTensions.size()==1);
+        assert(volumeTrack->waveVolumeTensions[0].inflection==0.5f && volumeTrack->waveVolumeTensions[0].steepness==1.0f);
+        ImVec2 sum(0,0); int count=0; float left=1e9f, right=-1e9f;
+        for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer) {
+            if(v.col==IM_COL32(30,32,40,255)) { sum.x+=v.pos.x; sum.y+=v.pos.y; ++count; }
+            if(v.col==IM_COL32(255,220,90,235)) { left=std::min(left,v.pos.x); right=std::max(right,v.pos.x); }
+        }
+        assert(count>0 && right-left>60.0f);
+        const ImVec2 handle(sum.x/count,sum.y/count);
+        assert(handle.x>left && handle.x<right);
+        frame(1250,handle,false); frame(1250,handle,true);
+        for(int i=1;i<=5;++i) frame(1250,ImVec2(handle.x+(right-left)*0.2f*i/5.0f,handle.y-30.0f*i/5.0f),true);
+        frame(1250,ImVec2(handle.x+(right-left)*0.2f,handle.y-30.0f),false); frame();
+        volumeTrack=model.getTrack(wt);
+        assert(volumeTrack->waveVolumeTensions[0].inflection>0.55f && volumeTrack->waveVolumeTensions[0].steepness>1.1f);
+        assert(volumeTrack->waveVolumePoints.size()==2);
+        assert(model.undoTimelineEdit());
+        volumeTrack=model.getTrack(wt);
+        assert(volumeTrack->waveVolumeTensions[0].inflection==0.5f && volumeTrack->waveVolumeTensions[0].steepness==1.0f);
+        frame(1250,ImVec2(-100,-100),false);
+    }
     ui.editorState.clipEditorOpen=false;
     ui.targetInspectorOpen=true; ui.inspectedTargetPath=model.getBinding(t,cutoff)->parameterPath;
     frame(); frame(1250,ImVec2(-100,-100),false,"inspector");
@@ -867,6 +892,171 @@ int main() {
     assert(imported.waveFileDurationMs==1000 && !imported.repeatContent);
     assert(std::abs(imported.startBeat-expectedBeat)<1e-6);
     assert(std::abs(imported.durationBeats-owner->getTransportState().bpm/60.0)<1e-6);
+    {
+        // Its waveform: one shape in the clip's ink a channel, in the plot
+        // area under the title, with a warm cap where the gain clips it.
+        auto* shown=&model.getTrack(wt)->clips.back();
+        const auto kept=*shown;
+        shown->waveNumChannels=2; shown->waveformPeaks.assign(2*512*2,0.0f);
+        for(int ch=0;ch<2;++ch) for(int bin=0;bin<512;++bin) {
+            const float level=std::exp(-bin/(ch==0?140.0f:60.0f))*(0.55f+0.45f*std::sin(bin*0.37f+ch));
+            shown->waveformPeaks[(ch*512+bin)*2]=-level*0.8f; shown->waveformPeaks[(ch*512+bin)*2+1]=level;
+        }
+        shown->waveGain=1.4f;
+        auto inked=[&](ImU32 color) {
+            int count=0;
+            for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer) count+=v.col==color;
+            return count;
+        };
+        const auto c=model.getTrack(wt)->color;
+        // The dropped clip is selected: its ink is lifted like its fill.
+        auto lit=[](unsigned char v) { return static_cast<int>(v+(255-v)*0.45f); };
+        assert(ui.selectedClips.count({wt,shown->id})>0);
+        const ImU32 ink=IM_COL32(lit(c.r),lit(c.g),lit(c.b),235), cap=IM_COL32(255,132,92,235);
+        frame(1250,ImVec2(-100,-100),false,"waveform");
+        const int forward=inked(ink);
+        assert(forward>=2*2*20 && inked(cap)>0);
+        float titleBottom=0, top=1e9f;
+        for(const auto& rect:ui.clipScreenRects) if(rect.clipId==shown->id) titleBottom=rect.y1+6.0f+ImGui::GetTextLineHeight();
+        for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer) if(v.col==ink) top=std::min(top,v.pos.y);
+        assert(titleBottom>0 && top>=titleBottom);
+        shown->waveReverse=true; frame(1250,ImVec2(-100,-100),false,"waveform_reversed");
+        assert(inked(ink)==forward);
+        shown->waveReverse=false;
+        {
+            // Fade handles in the plot area's top corners: dragged inward they
+            // set the fades, which the clip's volume then goes through.
+            auto clipRect=[&] { for(const auto& rect:ui.clipScreenRects) if(rect.clipId==shown->id) return rect; assert(false); return ui.clipScreenRects.front(); };
+            frame();
+            const auto rect=clipRect();
+            const float plotTop=rect.y1+6.0f+ImGui::GetTextLineHeight()+1.0f;
+            auto drag=[&](ImVec2 from,ImVec2 to) {
+                frame(1250,from,false); frame(1250,from,true);
+                for(int i=1;i<=5;++i) frame(1250,ImVec2(from.x+(to.x-from.x)*i/5.0f,from.y+(to.y-from.y)*i/5.0f),true);
+                frame(1250,to,false); frame();
+            };
+            const float clipWidth=rect.x2-rect.x1;
+            // The highest the waveform's ink reaches in a slice of the clip (fractions of its width).
+            auto inkTop=[&](float from,float to) {
+                float top=1e9f;
+                for(const auto* list:ImGui::GetDrawData()->CmdLists) for(const auto& v:list->VtxBuffer)
+                    if(v.col==ink && v.pos.x>rect.x1+clipWidth*from && v.pos.x<rect.x1+clipWidth*to) top=std::min(top,v.pos.y);
+                return top;
+            };
+            const float unfaded=inkTop(0.01f,0.1f);
+            drag(ImVec2(rect.x1+3.0f,plotTop+4.0f),ImVec2(rect.x1+3.0f+clipWidth*0.3f,plotTop+20.0f));
+            assert(ui.fadeDragClipId.empty());
+            const double length=shown->durationBeats, in=shown->waveFadeInBeats;
+            assert(in>length*0.15 && in<length*0.45 && shown->waveFadeOutBeats==0.0);
+            drag(ImVec2(rect.x2-3.0f,plotTop+4.0f),ImVec2(rect.x2-3.0f-clipWidth*0.4f,plotTop+4.0f));
+            const double out=shown->waveFadeOutBeats;
+            assert(out>length*0.25 && out<length*0.55 && shown->waveFadeInBeats==in);
+            const auto* waveTrack=model.getTrack(wt);
+            const float flat=model.evaluateWaveTrackVolume(*waveTrack,shown->startBeat);
+            assert(model.evaluateWaveClipVolume(*waveTrack,*shown,shown->startBeat)==0.0f);
+            assert(std::abs(model.evaluateWaveClipVolume(*waveTrack,*shown,shown->startBeat+in*0.5)-flat*0.5f)<1e-4f);
+            assert(std::abs(model.evaluateWaveClipVolume(*waveTrack,*shown,shown->startBeat+(in+length-out)*0.5)-flat)<1e-6f);
+            // An S by default: slower than a line near silence.
+            const float nearEnd=model.evaluateWaveClipVolume(*waveTrack,*shown,shown->startBeat+length-out*0.25);
+            assert(nearEnd>0.0f && nearEnd<flat*0.2f);
+            // The fades shape the waveform, whatever the track's volume does.
+            frame();
+            assert(inkTop(0.01f,0.1f)>unfaded+3.0f);
+            // The bend handle on a fade's curve: sideways moves the bend, up sharpens it; double-click straightens.
+            {
+                const float x1=rect.x1-1.0f, inX=x1+(clipWidth+2.0f)*static_cast<float>(in/length);
+                const ImVec2 bend(x1+(inX-x1)*0.5f,(plotTop+rect.y2)*0.5f);
+                drag(bend,ImVec2(bend.x+(inX-x1)*0.2f,bend.y-15.0f));
+                assert(ui.fadeDragClipId.empty() && !ui.fadeTensionDrag);
+                assert(std::abs(shown->waveFadeInTension.inflection-0.7f)<0.03f && shown->waveFadeInTension.steepness>2.2f);
+                assert(shown->waveFadeInBeats==in && shown->waveFadeOutTension.steepness==2.0f);
+                const ImVec2 moved(x1+(inX-x1)*shown->waveFadeInTension.inflection,
+                    rect.y2-ofxOceanodeTimelineCurve::sigmoidFlex(shown->waveFadeInTension.inflection,shown->waveFadeInTension.inflection,shown->waveFadeInTension.steepness)*(rect.y2-plotTop));
+                frame(1250,ImVec2(-100,-100),false); io.MouseClickedTime[0]=-1.0;
+                frame(1250,moved,true); frame(1250,moved,false); frame(1250,moved,true); frame(1250,moved,false); frame();
+                assert(shown->waveFadeInTension.inflection==0.5f && shown->waveFadeInTension.steepness==1.0f);
+                assert(std::abs(model.evaluateWaveClipVolume(*waveTrack,*shown,shown->startBeat+in*0.25)-flat*0.25f)<1e-4f);
+            }
+            // A fade cannot cross the other.
+            assert(model.setWaveClipFades(model.editSequence(),wt,shown->id,length,out) && std::abs(shown->waveFadeInBeats-(length-out))<1e-9);
+            model.setWaveClipFades(model.editSequence(),wt,shown->id,in,out);
+            // The gain knob, left of the chance knob: dragged up, louder.
+            const float knobY=rect.y1+(6.0f+ImGui::GetTextLineHeight())*0.5f;
+            const ImVec2 gainKnob(rect.x2+1.0f-31.0f,knobY);
+            const float gainBefore=shown->waveGain;
+            drag(gainKnob,ImVec2(gainKnob.x,gainKnob.y-30.0f));
+            assert(ui.gainDragClipId.empty() && shown->waveGain>gainBefore+0.5f && shown->chance==1.0f);
+            // Pressed again at once: a double-click, back to unity.
+            frame(1250,gainKnob,true); frame(1250,gainKnob,false); frame();
+            assert(shown->waveGain==1.0f && ui.gainDragClipId.empty());
+            // The track's volume curve over the clip, and the waveform drawn
+            // as loud as it plays when asked to.
+            auto* editTrack=model.getTrack(wt);
+            const auto keptTrack=*editTrack;
+            editTrack->waveVolumePoints={{shown->startBeat,1.0f},{shown->startBeat+length*0.5,0.3f},{shown->startBeat+length,0.9f}};
+            editTrack->waveVolumeTensions.assign(2,ofxOceanodeTimelineCurveTension{});
+            frame(1250,ImVec2(-100,-100),false,"waveform_fades");
+            assert(inked(IM_COL32(255,220,90,220))>0);
+            const float asFile=inkTop(0.0f,1.0f);
+            editTrack->waveVolumeShapesWaveform=true;
+            frame(1250,ImVec2(-100,-100),false,"waveform_played");
+            assert(inkTop(0.0f,1.0f)>asFile+1.0f); // the volume curve pulls it down
+            {
+                // A second clip over this one's end: the two crossfade over
+                // the overlap, in the crossfade's own colour, with no handles there.
+                editTrack->waveVolumeShapesWaveform=false;
+                const auto firstId=shown->id;
+                auto copy=*shown;
+                const auto secondId=model.createClip(wt,"Second",copy.startBeat+length*0.7,length);
+                auto* second=model.getClip(wt,secondId);
+                const auto placed=*second;
+                *second=copy; second->id=placed.id; second->name=placed.name; second->startBeat=placed.startBeat;
+                second->waveFadeInBeats=0.0; second->waveFadeOutBeats=0.0;
+                shown=model.getClip(wt,firstId);
+                const auto* crossTrack=model.getTrack(wt);
+                const auto a=ofxOceanodeTimelineWaveform::resolveFades(*crossTrack,*shown), b=ofxOceanodeTimelineWaveform::resolveFades(*crossTrack,*second);
+                assert(a.crossOut && !a.crossIn && b.crossIn && a.crossOutClipId==secondId); // (the track's other clip may follow the second)
+                assert(std::abs(a.out-length*0.3)<1e-9 && std::abs(b.in-length*0.3)<1e-9);
+                frame(1250,ImVec2(-100,-100),false,"waveform_crossfade");
+                assert(inked(IM_COL32(255,150,200,230))>0);
+                {
+                    // A right-click in the overlap: the clip menu, with the crossfade's curve.
+                    const auto r=clipRect();
+                    const ImVec2 inOverlap(r.x2-8.0f,(plotTop+r.y2)*0.5f);
+                    frame(1250,inOverlap,false);
+                    io.AddMouseButtonEvent(1,true); frame(1250,inOverlap,false);
+                    io.AddMouseButtonEvent(1,false); frame(1250,inOverlap,false); frame(1250,inOverlap,false,"waveform_crossfade_menu");
+                    ImGui::ClosePopupsOverWindow(nullptr,false); frame();
+                }
+                model.removeClip(wt,secondId);
+                shown=model.getClip(wt,firstId);
+                editTrack=model.getTrack(wt);
+                editTrack->waveVolumeShapesWaveform=true;
+                frame();
+            }
+            const auto saved=model.toJson();
+            const auto fadeIn=shown->waveFadeInBeats, fadeOut=shown->waveFadeOutBeats;
+            const auto shownId=shown->id;
+            *editTrack=keptTrack;
+            shown=&model.getTrack(wt)->clips.back();
+            // Fades and the flag are saved.
+            bool savedFades=false, savedFlag=false;
+            for(const auto& trackJson:saved["timelines"][0]["tracks"]) {
+                savedFlag|=trackJson.value("waveVolumeShapesWaveform",false);
+                for(const auto& clipJson:trackJson["clips"]) if(clipJson["id"]==shownId)
+                    savedFades=clipJson.value("waveFadeInBeats",0.0)==fadeIn && clipJson.value("waveFadeOutBeats",0.0)==fadeOut;
+            }
+            assert(savedFades && savedFlag);
+            // Each drag was a step of its own: undone, back to the clip without fades.
+            int steps=0;
+            do { assert(model.undoTimelineEdit()); shown=&model.getTrack(wt)->clips.back(); ++steps; } while(shown->waveFadeInBeats>0.0);
+            assert(steps>=3 && shown->waveFadeOutBeats==0.0 && shown->waveGain==gainBefore);
+        }
+        // A cache of another shape draws nothing rather than reading past it.
+        shown->waveformPeaks.resize(7); frame();
+        assert(inked(ink)==0);
+        *shown=kept; frame();
+    }
     assert(model.undoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips);
     assert(model.redoTimelineEdit()); assert(model.getTrack(wt)->clips.size()==originalClips+1);
     const auto trackCount=model.editSequence().tracks.size();

@@ -19,4 +19,10 @@ private:
     std::string waveVolumeDragTrackId;
     int waveVolumeValuePointIndex = -1;
     float waveVolumeNumericValue = 1.0f;
+    // The bend of a segment being dragged (as a Curve lane's): sideways moves
+    // it along the segment, up and down sets how sharp it is.
+    int waveVolumeBendSegment = -1;
+    std::string waveVolumeBendTrackId;
+    float waveVolumeBendStartX = 0.0f, waveVolumeBendStartY = 0.0f, waveVolumeBendWidth = 1.0f;
+    float waveVolumeBendStartInflection = 0.5f, waveVolumeBendStartSteepness = 1.0f;
 };

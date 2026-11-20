@@ -247,6 +247,23 @@ private:
     std::string chanceDragClipId;
     float chanceDragStartMouseY = 0.0f;
     float chanceDragStartValue = 1.0f;
+    // A wave clip's gain knob being dragged (its travel, 0..1, at the start).
+    std::string gainDragTrackId;
+    std::string gainDragClipId;
+    float gainDragStartMouseY = 0.0f;
+    float gainDragStartTravel = 0.5f;
+    // A wave clip's fade handle being dragged (out: the fade at its end), and
+    // the screen x of beat zero in its row.
+    std::string fadeDragTrackId;
+    std::string fadeDragClipId;
+    bool fadeDragOut = false;
+    float fadeDragOriginX = 0.0f;
+    // The bend of a fade's curve being dragged: sideways moves it along the
+    // fade (over its width), up and down sets how sharp it is.
+    bool fadeTensionDrag = false;
+    ImVec2 fadeTensionDragStart;
+    float fadeTensionDragWidth = 1.0f, fadeTensionDragHeight = 1.0f;
+    ofxOceanodeTimelineCurveTension fadeTensionDragInitial;
     float labelWidthDragStart = 0.0f; // left-column resize handle in the ruler
     double dragOffsetBeats = 0.0;
     double dragInitialContentDuration = 4.0;

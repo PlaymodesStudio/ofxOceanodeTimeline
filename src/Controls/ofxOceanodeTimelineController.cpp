@@ -234,6 +234,45 @@ bool chanceKnob(float left, float right, float top, float bottom, ImVec2& center
     return radius >= 4.0f && right - left >= radius * 2.0f + kEdgePixels + 24.0f;
 }
 
+// A wave clip's gain knob sits left of its chance knob, when both fit.
+bool waveGainKnob(float left, float right, float top, float bottom, ImVec2& center, float& radius) {
+    if(!chanceKnob(left, right, top, bottom, center, radius)) return false;
+    center.x -= radius * 2.0f + 4.0f;
+    return right - left >= radius * 4.0f + kEdgePixels + 44.0f;
+}
+// The knob's travel (0..1) for a gain of 0..4: unity is half way, so cutting
+// has as much room as boosting.
+float waveGainTravel(float gain) {
+    gain = ofClamp(gain, 0.0f, 4.0f);
+    return gain <= 1.0f ? gain * 0.5f : 0.5f + (gain - 1.0f) / 6.0f;
+}
+float waveGainAtTravel(float travel) {
+    travel = ofClamp(travel, 0.0f, 1.0f);
+    return travel <= 0.5f ? travel * 2.0f : 1.0f + (travel - 0.5f) * 6.0f;
+}
+std::string waveGainText(float gain) {
+    char text[48];
+    if(gain <= 0.0f) std::snprintf(text, sizeof(text), "x0.00 (silent)");
+    else std::snprintf(text, sizeof(text), "x%.2f (%+.1f dB)", gain, 20.0f * std::log10(gain));
+    return text;
+}
+// A pointer knob in its own colour (the chance knob is a filling pie): an arc
+// from the bottom left up to the gain, straight up at unity.
+void drawWaveGainKnob(ImDrawList* dl, float gain, bool active, const ImVec2& center, float radius) {
+    constexpr float pi = 3.14159265358979323846f;
+    const float a0 = pi * 0.75f, travel = waveGainTravel(gain), a1 = a0 + pi * 1.5f * travel;
+    const bool changed = std::abs(gain - 1.0f) > 1e-4f;
+    const ImU32 color = changed || active ? IM_COL32(90, 215, 255, 240) : IM_COL32(150, 215, 240, 150);
+    dl->AddCircleFilled(center, radius, IM_COL32(18, 18, 22, changed || active ? 200 : 110));
+    if(travel > 0.0f) {
+        dl->PathArcTo(center, radius - 1.5f, a0, a1, 20);
+        dl->PathStroke(color, ImDrawFlags_None, 2.0f);
+    }
+    dl->AddLine(center, ImVec2(center.x + std::cos(a1) * (radius - 1.0f), center.y + std::sin(a1) * (radius - 1.0f)),
+                IM_COL32(255, 255, 255, changed || active ? 255 : 170), 1.5f);
+    dl->AddCircle(center, radius, active ? IM_COL32(255, 255, 255, 240) : IM_COL32(150, 215, 240, 150), 20, 1.0f);
+}
+
 // Parameter rows are indented under their track header by half the clip
 // editor's indent (20 px), so the hierarchy reads track > row > editor.
 constexpr float kParameterRowIndent = 10.0f;
@@ -251,6 +290,79 @@ using ofxOceanodeTimelineClipTime::sourceDuration;
 using ofxOceanodeTimelineClipTime::sourceToTimelineBeat;
 using ofxOceanodeTimelineClipTime::stretch;
 using ofxOceanodeTimelineClipTime::timelineToSourceBeat;
+
+// A wave clip's sound between x1 and x2 (the clip's ends, on screen or not),
+// drawn over [left, right] x [top, bottom]: each channel in its own band, as
+// one shape from the lowest to the highest sample under every pixel column
+// (never thinner than a pixel, so silence reads as a line). Where the clip's
+// gain pushes the sound over full scale the column ends in a warm cap.
+// level: what else scales the sound along the clip (0 at its start, 1 at its
+// end), when it is drawn as loud as it plays.
+void drawWaveClipWaveform(ImDrawList* dl, const ofxOceanodeTimelineClip& clip, float bpm,
+                          float x1, float x2, float left, float right, float top, float bottom, ImU32 ink,
+                          const std::function<float(double)>* level = nullptr) {
+    const int channels = clip.waveNumChannels;
+    if(ofxOceanodeTimelineWaveform::binCount(clip.waveformPeaks, channels) <= 0) return;
+    left = std::max({left, x1, dl->GetClipRectMin().x});
+    right = std::min({right, x2, dl->GetClipRectMax().x});
+    if(!(x2 > x1) || right <= left || bottom - top < 2.0f) return;
+    double start = 0.0, span = 0.0;
+    if(!ofxOceanodeTimelineWaveform::slice(clip, bpm, start, span)) return;
+
+    struct Column { float top, bottom; };
+    static std::vector<Column> columns;
+    const float firstX = std::floor(left);
+    const int count = static_cast<int>(std::ceil(right) - firstX);
+    if(count <= 0) return;
+    const double perPixel = 1.0 / (static_cast<double>(x2) - x1);
+    const ImU32 clipped = IM_COL32(255, 132, 92, (ink >> IM_COL32_A_SHIFT) & 0xFF);
+    const ImVec2 uv = dl->_Data->TexUvWhitePixel;
+    const float bandHeight = (bottom - top) / channels;
+    for(int ch = 0; ch < channels; ++ch) {
+        const float mid = top + (ch + 0.5f) * bandHeight;
+        const float half = std::max(1.0f, bandHeight * 0.5f - 1.0f);
+        columns.clear();
+        for(int i = 0; i < count; ++i) {
+            const float x = firstX + i;
+            const double n0 = std::clamp((static_cast<double>(x) - x1) * perPixel, 0.0, 1.0);
+            const double n1 = std::max(n0 + 1e-9, std::clamp((x + 1.0 - x1) * perPixel, 0.0, 1.0));
+            float low = 0.0f, high = 0.0f;
+            ofxOceanodeTimelineWaveform::range(clip.waveformPeaks, channels, ch,
+                start + (clip.waveReverse ? 1.0 - n1 : n0) * span,
+                start + (clip.waveReverse ? 1.0 - n0 : n1) * span, low, high);
+            const float gain = clip.waveGain * (level != nullptr ? (*level)((n0 + n1) * 0.5) : 1.0f);
+            low *= gain;
+            high *= gain;
+            float y1 = mid - ofClamp(high, -1.0f, 1.0f) * half;
+            float y2 = mid - ofClamp(low, -1.0f, 1.0f) * half;
+            if(y2 - y1 < 1.0f) { y1 = (y1 + y2) * 0.5f - 0.5f; y2 = y1 + 1.0f; }
+            columns.push_back({y1, y2});
+            if(high > 1.001f) dl->AddRectFilled(ImVec2(x, mid - half - 1.0f), ImVec2(x + 1.0f, mid - half + 1.0f), clipped);
+            if(low < -1.001f) dl->AddRectFilled(ImVec2(x, mid + half - 1.0f), ImVec2(x + 1.0f, mid + half + 1.0f), clipped);
+        }
+        if(count == 1) {
+            dl->AddRectFilled(ImVec2(firstX, columns[0].top), ImVec2(firstX + 1.0f, columns[0].bottom), ink);
+            continue;
+        }
+        // One strip through the columns' centres: two vertices a column.
+        dl->PrimReserve((count - 1) * 6, count * 2);
+        const unsigned int base = dl->_VtxCurrentIdx;
+        for(int i = 0; i < count; ++i) {
+            const float x = firstX + i + 0.5f;
+            dl->PrimWriteVtx(ImVec2(x, columns[static_cast<size_t>(i)].top), uv, ink);
+            dl->PrimWriteVtx(ImVec2(x, columns[static_cast<size_t>(i)].bottom), uv, ink);
+        }
+        for(int i = 0; i + 1 < count; ++i) {
+            const unsigned int a = base + static_cast<unsigned int>(i) * 2;
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a));
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a + 1));
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a + 3));
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a));
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a + 3));
+            dl->PrimWriteIdx(static_cast<ImDrawIdx>(a + 2));
+        }
+    }
+}
 
 // Where a macro clip plays its macro's timeline, one placement per repeat
 // and segment (the content from the offset, then from 0 up to the offset):
@@ -537,7 +649,7 @@ double droppedWaveDurationSeconds(const std::string& path) {
             bits = u32() >> 16;
         } else if(std::memcmp(chunk, "data", 4) == 0) {
             if(!sampleRate || !channels || channels > 16 ||
-               (bits != 8 && bits != 16 && bits != 24 && bits != 32)) return 0.0;
+               (bits != 8 && bits != 16 && bits != 24 && bits != 32 && bits != 64)) return 0.0;
             return double(size / (channels * (bits / 8))) / sampleRate;
         }
         file.seekg(next);
@@ -856,6 +968,7 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
         : original.waveSourceStartBeat + sourceSplit;
     rightClip->waveFileDurationBeats = original.waveFileDurationBeats;
     rightClip->waveReverse = original.waveReverse;
+    rightClip->waveTimestretch = original.waveTimestretch;
     rightClip->waveNumChannels = original.waveNumChannels;
     rightClip->waveFileDurationMs = original.waveFileDurationMs;
     rightClip->waveformPeaks = original.waveformPeaks;
@@ -864,6 +977,12 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
     rightClip->repeatContent = false;
     // The slice starts with the original's chance and then rolls on its own.
     rightClip->chance = original.chance;
+    // Each fade stays at the end it was on.
+    rightClip->waveFadeInBeats = 0.0;
+    rightClip->waveFadeInTension = original.waveFadeInTension;
+    rightClip->waveFadeOutTension = original.waveFadeOutTension;
+    rightClip->waveCrossfadeCurve = original.waveCrossfadeCurve;
+    rightClip->waveFadeOutBeats = std::min(original.waveFadeOutBeats, rightClip->durationBeats);
 
     std::vector<ofxOceanodeTimelineLane> leftLanes;
     leftLanes.reserve(original.lanes.size());
@@ -883,6 +1002,8 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
 
     if(auto* leftClip = timeline.getClip(scope(timeline), trackId, clipId)) {
         leftClip->durationBeats = leftTimelineDuration;
+        leftClip->waveFadeInBeats = std::min(original.waveFadeInBeats, leftTimelineDuration);
+        leftClip->waveFadeOutBeats = 0.0;
         leftClip->contentDurationBeats = sourceSplit;
         if(original.waveReverse)
             leftClip->waveSourceStartBeat = original.waveSourceStartBeat + sourceLength - sourceSplit;
@@ -2418,6 +2539,52 @@ void ofxOceanodeTimelineController::draw() {
             chanceDragScope = {};
         }
     }
+    // Gain knob drag: 150 px of travel covers the knob (Shift: 4x finer).
+    if(!gainDragClipId.empty()) {
+        auto* clip = timeline.getClip(scope(timeline), gainDragTrackId, gainDragClipId);
+        if(clip != nullptr && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const float pixelsPerUnit = ImGui::GetIO().KeyShift ? 600.0f : 150.0f;
+            const float gain = waveGainAtTravel(gainDragStartTravel + (gainDragStartMouseY - ImGui::GetIO().MousePos.y) / pixelsPerUnit);
+            clip->waveGain = std::round(gain * 100.0f) / 100.0f;
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            ImGui::SetTooltip("Clip gain: %s", waveGainText(clip->waveGain).c_str());
+        } else {
+            gainDragClipId.clear();
+            gainDragTrackId.clear();
+        }
+    }
+    // Fade handle drag: the fade ends where the mouse is, on the grid; its
+    // bend follows the mouse along the fade and gets sharper upward.
+    if(!fadeDragClipId.empty()) {
+        auto* clip = timeline.getClip(scope(timeline), fadeDragTrackId, fadeDragClipId);
+        if(clip != nullptr && ImGui::IsMouseDown(ImGuiMouseButton_Left) && fadeTensionDrag) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            auto& tension = fadeDragOut ? clip->waveFadeOutTension : clip->waveFadeInTension;
+            // A fade out's curve runs from its silent end, at the clip's right.
+            const float along = (mouse.x - fadeTensionDragStart.x) / fadeTensionDragWidth * (fadeDragOut ? -1.0f : 1.0f);
+            tension.inflection = ofClamp(fadeTensionDragInitial.inflection + along, 0.01f, 0.99f);
+            const float steepnessDelta = -(mouse.y - fadeTensionDragStart.y) / std::max(1.0f, fadeTensionDragHeight / 3.0f);
+            tension.steepness = ofClamp(fadeTensionDragInitial.steepness * std::exp(steepnessDelta * 0.5f), 0.1f, 10.0f);
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            ImGui::SetTooltip("Fade %s curve: bend at %d%%, steepness %.2f", fadeDragOut ? "out" : "in",
+                              static_cast<int>(std::round(tension.inflection * 100.0f)), tension.steepness);
+        } else if(clip != nullptr && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const double raw = beatAtOffset(ImGui::GetIO().MousePos.x - fadeDragOriginX);
+            const double beat = ImGui::GetIO().KeyShift ? raw : snapBeat(raw);
+            const double end = clip->startBeat + clip->durationBeats;
+            timeline.setWaveClipFades(scope(timeline), fadeDragTrackId, fadeDragClipId,
+                fadeDragOut ? clip->waveFadeInBeats : beat - clip->startBeat,
+                fadeDragOut ? end - beat : clip->waveFadeOutBeats);
+            const double beats = fadeDragOut ? clip->waveFadeOutBeats : clip->waveFadeInBeats;
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            ImGui::SetTooltip("Fade %s: %.2f beats (%.2f s)", fadeDragOut ? "out" : "in", beats,
+                              beats * 60.0 / std::max(1.0f, transportState.bpm));
+        } else {
+            fadeDragClipId.clear();
+            fadeDragTrackId.clear();
+            fadeTensionDrag = false;
+        }
+    }
 
     trackHeaderRows.clear();
     const auto& arrangement = scope(timeline);
@@ -2560,6 +2727,13 @@ void ofxOceanodeTimelineController::draw() {
             // A macro inside: a bar (its own content is a click away).
             dl->AddRectFilled(ImVec2(x1, contentTop), ImVec2(x2, y2),
                 IM_COL32(color.r, color.g, color.b, innerClip.muted ? 50 : 160));
+        } else if(innerTrack.isWaveTrack) {
+            // Its sound, lighter than the fill when there is no dark plot area behind it.
+            const int white = chrome && contentTop > y1 ? 0 : 110;
+            drawWaveClipWaveform(dl, placed, transportState.bpm, originX + beatOffset(placed.startBeat),
+                                 originX + beatOffset(placedEnd), x1, x2, contentTop + 1.0f, y2 - 1.0f,
+                                 IM_COL32(color.r + (255 - color.r) * white / 255, color.g + (255 - color.g) * white / 255,
+                                          color.b + (255 - color.b) * white / 255, 235));
         } else {
             // Its lanes in bands, as many as fit (at least the first).
             std::vector<const ofxOceanodeTimelineLane*> shownLanes;
@@ -3593,6 +3767,64 @@ void ofxOceanodeTimelineController::draw() {
             auto lit = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * lift); };
             return IM_COL32(lit(track.color.r), lit(track.color.g), lit(track.color.b), alpha);
         };
+        // A wave clip's plot area (under its title band; the whole clip in a
+        // row too low to have one) and the fades it plays with. A fade of
+        // the clip's own has a handle at the top of the plot area where it
+        // ends, and one on its curve where it bends; a crossfade has neither.
+        struct WaveFadeLayout {
+            float top = 0.0f, bottom = 0.0f, x1 = 0.0f, x2 = 0.0f, inX = 0.0f, outX = 0.0f;
+            bool handles = false;
+            ofxOceanodeTimelineWaveform::Fades fades;
+            float inHandle() const { return std::max(x1 + 4.0f, std::min(x2 - 4.0f, inX)); }
+            float outHandle() const { return std::max(x1 + 4.0f, std::min(x2 - 4.0f, outX)); }
+            // How loud a fade is (0..1) at a position through it (0 its silent end).
+            float shape(bool out, float position) const {
+                if(out ? fades.crossOut : fades.crossIn)
+                    return ofxOceanodeTimelineWaveform::crossfadeShape(out ? fades.outCurve : fades.inCurve, position);
+                const auto& tension = out ? fades.outTension : fades.inTension;
+                return ofxOceanodeTimelineCurve::sigmoidFlex(position, tension.inflection, tension.steepness);
+            }
+            // A point of a fade's curve on screen.
+            ImVec2 curvePoint(bool out, float position) const {
+                const float x = out ? x2 - (x2 - outX) * position : x1 + (inX - x1) * position;
+                return ImVec2(x, bottom - shape(out, position) * (bottom - top));
+            }
+            bool bendHandle(bool out) const {
+                return handles && !(out ? fades.crossOut : fades.crossIn) && (out ? x2 - outX : inX - x1) >= 24.0f;
+            }
+            ImVec2 bendPoint(bool out) const {
+                return curvePoint(out, ofClamp((out ? fades.outTension : fades.inTension).inflection, 0.01f, 0.99f));
+            }
+            // The handle at a point: 1 fade in, 2 fade out (their lengths),
+            // 3 and 4 their bends, 0 none.
+            int handleAt(const ImVec2& point) const {
+                if(!handles) return 0;
+                if(point.y >= top - 1.0f && point.y <= top + 9.0f) {
+                    const float in = fades.crossIn ? 1e9f : std::abs(point.x - inHandle());
+                    const float out = fades.crossOut ? 1e9f : std::abs(point.x - outHandle());
+                    if(std::min(in, out) <= 6.0f) return in < out || (in == out && point.x <= inHandle()) ? 1 : 2;
+                }
+                for(int side = 0; side < 2; ++side) {
+                    if(!bendHandle(side == 1)) continue;
+                    const ImVec2 at = bendPoint(side == 1);
+                    if(std::abs(point.x - at.x) <= 7.0f && std::abs(point.y - at.y) <= 7.0f) return 3 + side;
+                }
+                return 0;
+            }
+        };
+        auto waveFadeLayout = [&](const ofxOceanodeTimelineClip& clip, const ImVec2& min, const ImVec2& max) {
+            WaveFadeLayout layout;
+            layout.bottom = max.y - 3.0f;
+            const float titleBottom = std::min(layout.bottom, min.y + 9.0f + ImGui::GetTextLineHeight());
+            layout.top = layout.bottom - titleBottom >= 12.0f ? titleBottom + 1.0f : min.y + 4.0f;
+            layout.fades = ofxOceanodeTimelineWaveform::resolveFades(track, clip);
+            layout.x1 = min.x + beatOffset(clip.startBeat);
+            layout.x2 = min.x + beatOffset(clip.startBeat + clip.durationBeats);
+            layout.inX = min.x + beatOffset(clip.startBeat + layout.fades.in);
+            layout.outX = min.x + beatOffset(clip.startBeat + clip.durationBeats - layout.fades.out);
+            layout.handles = layout.x2 - layout.x1 >= 28.0f && layout.bottom - layout.top >= 16.0f;
+            return layout;
+        };
         auto drawClip = [&](const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane* lane,
                             const ImVec2& min, const ImVec2& max, bool drawChrome = true,
                             bool drawContent = true) {
@@ -3633,7 +3865,11 @@ void ofxOceanodeTimelineController::draw() {
                 float knobRadius = 0.0f;
                 const bool knob = chanceKnob(left, right, min.y, max.y, knobCenter, knobRadius);
                 // Right-hand chrome (group marker, then the knob) ends here.
-                const float chromeLeft = knob ? knobCenter.x - knobRadius - 3.0f : right - 3.0f;
+                ImVec2 gainCenter;
+                float gainRadius = 0.0f;
+                const bool gainKnob = track.isWaveTrack && waveGainKnob(left, right, min.y, max.y, gainCenter, gainRadius);
+                const float chromeLeft = gainKnob ? gainCenter.x - gainRadius - 3.0f
+                    : knob ? knobCenter.x - knobRadius - 3.0f : right - 3.0f;
                 if(const auto* group = timeline.getGroupForClip(scope(timeline), track.id, clip.id)) {
                     // Colour by a hash of the group id so every member of
                     // the same group reads as one thing across every track
@@ -3796,49 +4032,93 @@ void ofxOceanodeTimelineController::draw() {
                 return;
             }
             if(track.isWaveTrack) {
-                dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
-                if(clip.waveNumChannels > 0 && !clip.waveformPeaks.empty()) {
-                    constexpr int kMiniPointsPerChannel = 2000;
-                    const double miniContent = sourceDuration(clip);
-                    const double fileContent = std::max(miniContent + clip.waveSourceStartBeat,
-                        clip.waveFileDurationBeats > 0.0
-                            ? clip.waveFileDurationBeats
-                            : clip.waveFileDurationMs > 0.0
-                            ? clip.waveFileDurationMs * std::max(1.0f, transportState.bpm) / 60000.0
-                            : miniContent);
-                    const double sourceStart = ofClamp(clip.waveSourceStartBeat / fileContent, 0.0, 1.0);
-                    const double sourceSpan = ofClamp(miniContent / fileContent, 0.0, 1.0 - sourceStart);
-                    const int miniCycles = clip.repeatContent
-                        ? std::max(1, static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip)))) : 1;
-                    const int channels = std::max(1, clip.waveNumChannels);
-                    const float channelHeight = (max.y - min.y - 6.0f) / channels;
-                    for(int cycle = firstVisibleCycle; cycle < miniCycles && cycle <= lastVisibleCycle; ++cycle) {
-                        for(int ch = 0; ch < channels; ++ch) {
-                            const float channelTop = min.y + 3.0f + ch * channelHeight;
-                            const float midY = channelTop + channelHeight * 0.5f;
-                            const float half = channelHeight * 0.45f;
-                            for(int pt = 0; pt < kMiniPointsPerChannel; pt += 4) {
-                                const double sourceBeatAtPoint = miniContent * (static_cast<double>(pt) / kMiniPointsPerChannel);
-                                const float x = min.x + beatOffset(sourceToTimelineBeat(clip, sourceBeatAtPoint, cycle));
-                                if(x < left || x > right) continue;
-                                const double normalizedPoint = static_cast<double>(pt) / kMiniPointsPerChannel;
-                                const double filePoint = clip.waveReverse
-                                    ? sourceStart + (1.0 - normalizedPoint) * sourceSpan
-                                    : sourceStart + normalizedPoint * sourceSpan;
-                                const int peakPoint = ofClamp(static_cast<int>(filePoint * (kMiniPointsPerChannel - 1)),
-                                                              0, kMiniPointsPerChannel - 1);
-                                const size_t index = static_cast<size_t>(ch) * kMiniPointsPerChannel + peakPoint;
-                                if(index >= clip.waveformPeaks.size()) continue;
-                                const float peak = ofClamp(clip.waveformPeaks[index] * clip.waveGain, -1.0f, 1.0f);
-                                dl->AddLine(ImVec2(x, midY), ImVec2(x, midY - peak * half), clipInk(clip, 170), 1.0f);
-                            }
+                const auto layout = waveFadeLayout(clip, min, max);
+                const float top = layout.top, bottom = layout.bottom;
+                dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, bottom), true);
+                // As loud as its fades leave it, and through the track's
+                // volume too when the track asks for that.
+                const std::function<float(double)> played = [&](double position) {
+                    const double local = position * clip.durationBeats;
+                    return ofxOceanodeTimelineWaveform::fadeGain(layout.fades, clip, local) *
+                        (track.waveVolumeShapesWaveform ? timeline.evaluateWaveTrackVolume(track, clip.startBeat + local) : 1.0f);
+                };
+                drawWaveClipWaveform(dl, clip, transportState.bpm, x1, x2, left + 1.0f, right - 1.0f,
+                                     top, bottom - 1.0f, clipInk(clip, clip.muted ? 90 : 235), &played);
+                const int dim = clip.muted ? 2 : 1;
+                // The track's volume curve over the clip: the top of the plot
+                // area is unity, or the curve's highest point when above it.
+                if(track.waveVolumeAutomationEnabled && !track.waveVolumePoints.empty() && right - left > 4.0f) {
+                    float ceiling = 1.0f;
+                    for(const auto& point : track.waveVolumePoints) ceiling = std::max(ceiling, point.value);
+                    auto volumeY = [&](float value) { return bottom - 1.0f - ofClamp(value / ceiling, 0.0f, 1.0f) * (bottom - top - 2.0f); };
+                    const ImU32 curveColor = IM_COL32(255, 220, 90, 220 / dim);
+                    static std::vector<ImVec2> curve;
+                    curve.clear();
+                    const float from = std::max(left, dl->GetClipRectMin().x), to = std::min(right, dl->GetClipRectMax().x);
+                    for(float x = from; x < to + 2.0f; x += 2.0f) {
+                        const float px = std::min(x, to);
+                        curve.push_back(ImVec2(px, volumeY(timeline.evaluateWaveTrackVolume(track, beatAtOffset(px - min.x)))));
+                    }
+                    if(curve.size() > 1) dl->AddPolyline(curve.data(), static_cast<int>(curve.size()), curveColor, ImDrawFlags_None, 1.5f);
+                    for(const auto& point : track.waveVolumePoints) {
+                        const float px = min.x + beatOffset(point.beat);
+                        if(px >= from && px <= to) dl->AddCircleFilled(ImVec2(px, volumeY(point.value)), 2.5f, curveColor);
+                    }
+                }
+                // Its fades: what they silence darkened and the curve as a line
+                // (a crossfade's in its own colour), then the handles of its
+                // own fades (brighter under the mouse).
+                const bool dragging = fadeDragClipId == clip.id && fadeDragTrackId == track.id;
+                const int hovered = dragging ? (fadeTensionDrag ? 3 : 1) + (fadeDragOut ? 1 : 0)
+                    : fadeDragClipId.empty() && clipDragMode == ClipDragMode::None && hoverRect(min, max)
+                        ? layout.handleAt(ImGui::GetIO().MousePos) : 0;
+                for(int side = 0; side < 2; ++side) {
+                    const bool out = side == 1;
+                    const float width = out ? layout.x2 - layout.outX : layout.inX - layout.x1;
+                    if(width <= 0.5f) continue;
+                    const int steps = static_cast<int>(ofClamp(width / 3.0f, 2.0f, 48.0f));
+                    static std::vector<ImVec2> ramp;
+                    ramp.clear();
+                    for(int i = 0; i <= steps; ++i) ramp.push_back(layout.curvePoint(out, static_cast<float>(i) / steps));
+                    // One strip between the top and the curve (separate quads show their seams).
+                    {
+                        const ImVec2 uv = dl->_Data->TexUvWhitePixel;
+                        const ImU32 shade = IM_COL32(0, 0, 0, 120);
+                        dl->PrimReserve(steps * 6, (steps + 1) * 2);
+                        const unsigned int base = dl->_VtxCurrentIdx;
+                        for(int i = 0; i <= steps; ++i) {
+                            dl->PrimWriteVtx(ImVec2(ramp[i].x, top), uv, shade);
+                            dl->PrimWriteVtx(ramp[i], uv, shade);
                         }
+                        for(int i = 0; i < steps; ++i) {
+                            const unsigned int a = base + static_cast<unsigned int>(i) * 2;
+                            for(unsigned int index : {a, a + 1, a + 3, a, a + 3, a + 2}) dl->PrimWriteIdx(static_cast<ImDrawIdx>(index));
+                        }
+                    }
+                    const bool cross = out ? layout.fades.crossOut : layout.fades.crossIn;
+                    dl->AddPolyline(ramp.data(), static_cast<int>(ramp.size()),
+                                    cross ? IM_COL32(255, 150, 200, 230 / dim) : IM_COL32(255, 255, 255, 210 / dim), ImDrawFlags_None, 1.5f);
+                    if(layout.bendHandle(out)) {
+                        const bool lit = hovered == 3 + side;
+                        dl->AddCircleFilled(layout.bendPoint(out), 3.5f, IM_COL32(255, 255, 255, lit ? 255 : 150 / dim));
+                        dl->AddCircle(layout.bendPoint(out), 3.5f, IM_COL32(0, 0, 0, lit ? 220 : 110));
+                    }
+                }
+                if(layout.handles) {
+                    for(int side = 1; side <= 2; ++side) {
+                        if(side == 1 ? layout.fades.crossIn : layout.fades.crossOut) continue;
+                        const float x = side == 1 ? layout.inHandle() : layout.outHandle();
+                        const ImVec2 a(x - 3.5f, top + 1.0f), b(x + 3.5f, top + 8.0f);
+                        dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, hovered == side ? 255 : 120 / dim));
+                        dl->AddRect(a, b, IM_COL32(0, 0, 0, hovered == side ? 220 : 110));
                     }
                 }
                 dl->PopClipRect();
                 ImVec2 knobCenter;
                 float knobRadius = 0.0f;
                 if(chanceKnob(left, right, min.y, max.y, knobCenter, knobRadius)) drawClipChanceKnob(clip, knobCenter, knobRadius);
+                if(waveGainKnob(left, right, min.y, max.y, knobCenter, knobRadius))
+                    drawWaveGainKnob(dl, clip.waveGain, gainDragClipId == clip.id && gainDragTrackId == track.id, knobCenter, knobRadius);
                 return;
             }
             const auto previewView = editorView(timeline, transportState.bpm, endBeat);
@@ -3982,6 +4262,71 @@ void ofxOceanodeTimelineController::draw() {
                             chanceDragClipId = clip.id;
                             chanceDragStartMouseY = mouse.y;
                             chanceDragStartValue = clip.chance;
+                        }
+                    }
+                    return;
+                }
+            }
+            // A wave clip's gain knob, left of the chance knob.
+            if(track.isWaveTrack && clipDragMode == ClipDragMode::None && gainDragClipId.empty()) {
+                ImVec2 gainCenter;
+                float gainRadius = 0.0f;
+                const bool gainKnob = waveGainKnob(std::max(min.x, x1), std::min(max.x, x2), min.y, max.y, gainCenter, gainRadius);
+                const float dx = mouse.x - gainCenter.x, dy = mouse.y - gainCenter.y;
+                if(gainKnob && dx * dx + dy * dy <= (gainRadius + 2.0f) * (gainRadius + 2.0f)) {
+                    ImGui::SetTooltip("Clip gain: %s\nHow loud this clip plays (its waveform follows).\nDrag up/down to set (Shift: fine). Double-click: x1.",
+                                      waveGainText(clip.waveGain).c_str());
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                    if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
+                        clipInteractionClaimedThisFrame = true;
+                        anyClipInteractionClaimedThisFrame = true;
+                        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                            if(auto* edited = timeline.getClip(scope(timeline), track.id, clip.id)) edited->waveGain = 1.0f;
+                        } else {
+                            gainDragTrackId = track.id;
+                            gainDragClipId = clip.id;
+                            gainDragStartMouseY = mouse.y;
+                            gainDragStartTravel = waveGainTravel(clip.waveGain);
+                        }
+                    }
+                    return;
+                }
+            }
+            // A wave clip's fade handles, before its edges: they sit in its corners.
+            if(track.isWaveTrack && clipDragMode == ClipDragMode::None && fadeDragClipId.empty()) {
+                const auto layout = waveFadeLayout(clip, min, max);
+                if(const int handle = layout.handleAt(mouse)) {
+                    const bool out = handle == 2 || handle == 4, bend = handle >= 3;
+                    const auto& tension = out ? clip.waveFadeOutTension : clip.waveFadeInTension;
+                    if(bend) {
+                        ImGui::SetTooltip("Fade %s curve: bend at %d%%, steepness %.2f\nDrag sideways: where it bends. Up / down: how sharply.\nDouble-click: a straight line.",
+                                          out ? "out" : "in", static_cast<int>(std::round(tension.inflection * 100.0f)), tension.steepness);
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+                    } else {
+                        ImGui::SetTooltip("Fade %s: %.2f beats\nDrag to set (Shift: no snap). Double-click: none.", out ? "out" : "in",
+                                          out ? clip.waveFadeOutBeats : clip.waveFadeInBeats);
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                    }
+                    if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
+                        clipInteractionClaimedThisFrame = true;
+                        anyClipInteractionClaimedThisFrame = true;
+                        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                            if(!bend) {
+                                timeline.setWaveClipFades(scope(timeline), track.id, clip.id,
+                                    out ? clip.waveFadeInBeats : 0.0, out ? 0.0 : clip.waveFadeOutBeats);
+                            } else if(auto* edited = timeline.getClip(scope(timeline), track.id, clip.id)) {
+                                (out ? edited->waveFadeOutTension : edited->waveFadeInTension) = ofxOceanodeTimelineCurveTension{};
+                            }
+                        } else {
+                            fadeDragTrackId = track.id;
+                            fadeDragClipId = clip.id;
+                            fadeDragOut = out;
+                            fadeDragOriginX = min.x;
+                            fadeTensionDrag = bend;
+                            fadeTensionDragStart = mouse;
+                            fadeTensionDragInitial = tension;
+                            fadeTensionDragWidth = std::max(1.0f, out ? layout.x2 - layout.outX : layout.inX - layout.x1);
+                            fadeTensionDragHeight = std::max(1.0f, layout.bottom - layout.top);
                         }
                     }
                     return;
@@ -4304,6 +4649,36 @@ void ofxOceanodeTimelineController::draw() {
                 bool reverse = menuEditClip != nullptr && menuEditClip->waveReverse;
                 if(ImGui::MenuItem("Reverse", nullptr, reverse) && menuEditClip != nullptr)
                     menuEditClip->waveReverse = !reverse;
+                const bool timestretch = menuEditClip != nullptr && menuEditClip->waveTimestretch;
+                if(ImGui::MenuItem("Timestretch (keep pitch)", nullptr, timestretch) && menuEditClip != nullptr)
+                    menuEditClip->waveTimestretch = !timestretch;
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Stretching the clip changes its speed. Off: like tape, the pitch follows.\nOn: stretched in time (granular), the pitch stays.");
+                // As loud as it goes without clipping: the gain knob follows.
+                const float menuPeak = ofxOceanodeTimelineWaveform::peak(clip, transportState.bpm);
+                if(ImGui::MenuItem("Normalize sound", nullptr, false, menuPeak > 1e-6f))
+                    timeline.normalizeWaveClip(scope(timeline), track.id, clip.id);
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    if(menuPeak > 1e-6f)
+                        ImGui::SetTooltip("Sets the clip gain so its loudest peak reaches full scale: %s%s",
+                                          waveGainText(std::min(4.0f, 1.0f / menuPeak)).c_str(), 1.0f / menuPeak > 4.0f ? " (the most the gain goes)" : "");
+                    else ImGui::SetTooltip("This clip has no sound to measure");
+                }
+                // Where it overlaps a neighbour the two crossfade: the curve
+                // of the crossfade nearest the click (kept by the clip coming in).
+                const auto menuFades = ofxOceanodeTimelineWaveform::resolveFades(track, clip);
+                const double toCrossIn = std::abs(clipMenuHitBeat - clip.startBeat);
+                const double toCrossOut = std::abs(clip.startBeat + clip.durationBeats - clipMenuHitBeat);
+                const bool menuCrossOut = menuFades.crossOut && (!menuFades.crossIn || toCrossOut < toCrossIn);
+                auto* incoming = menuCrossOut ? timeline.getClip(scope(timeline), track.id, menuFades.crossOutClipId)
+                               : menuFades.crossIn ? menuEditClip : nullptr;
+                if(ImGui::BeginMenu("Crossfade curve", incoming != nullptr)) {
+                    for(const auto& curve : ofxOceanodeTimelineWaveform::crossfadeCurves())
+                        if(ImGui::MenuItem(curve.c_str(), nullptr, incoming->waveCrossfadeCurve == curve)) incoming->waveCrossfadeCurve = curve;
+                    ImGui::EndMenu();
+                }
+                if(incoming == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Overlap this clip with another on its track: they crossfade over the overlap");
                 contextMenuSection("Automation");
                 if(ImGui::MenuItem("Edit track volume automation")) {
                     timeline.createWaveVolumeLane(scope(timeline), track.id, clip.id);
@@ -6782,9 +7157,25 @@ void ofxOceanodeTimelineController::drawWaveClipProperties(ofxOceanodeTimelineMa
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::DragFloat("##wavePlaybackRate", &clip.wavePlaybackRate, 0.01f, 0.1f, 4.0f, "%.2fx");
     ImGui::Checkbox("Reverse", &clip.waveReverse);
+    ImGui::Checkbox("Timestretch (keep pitch)", &clip.waveTimestretch);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Stretching the clip changes its speed. Off: like tape, the pitch follows.\nOn: stretched in time (granular), the pitch stays.");
     ImGui::TextUnformatted("Clip gain");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::DragFloat("##waveGain", &clip.waveGain, 0.01f, 0.0f, 4.0f, "%.2f");
+    // Fades, also dragged by the handles in the clip's top corners.
+    float fadeIn = static_cast<float>(clip.waveFadeInBeats), fadeOut = static_cast<float>(clip.waveFadeOutBeats);
+    const float fadeMax = static_cast<float>(clip.durationBeats);
+    ImGui::TextUnformatted("Fade in / out (beats)");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f - 2.0f);
+    const bool fadeInEdited = ImGui::DragFloat("##waveFadeIn", &fadeIn, 0.01f, 0.0f, fadeMax, "%.2f");
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::SetNextItemWidth(-1.0f);
+    const bool fadeOutEdited = ImGui::DragFloat("##waveFadeOut", &fadeOut, 0.01f, 0.0f, fadeMax, "%.2f");
+    // The one not edited keeps its exact length.
+    if(fadeInEdited || fadeOutEdited)
+        timeline.setWaveClipFades(scope(timeline), track.id, clip.id, fadeInEdited ? fadeIn : clip.waveFadeInBeats,
+                                  fadeOutEdited ? fadeOut : clip.waveFadeOutBeats);
     ImGui::TextWrapped("Clip gain affects this sample. Track volume affects all clips.");
     ImGui::Separator();
 }

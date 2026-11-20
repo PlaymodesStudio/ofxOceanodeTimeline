@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -827,8 +828,29 @@ struct ofxOceanodeTimelineClip {
     // current transport tempo every frame.
     double waveFileDurationBeats = 0.0;
     bool waveReverse = false;
+    // A clip longer or shorter than its sound plays it faster or slower.
+    // Off, that is tape speed: the pitch follows. On, the audio backend
+    // stretches it in time and keeps its pitch (when it can: see
+    // ofxOceanodeTimelineWaveAudioProvider::setWaveClipTimestretch).
+    bool waveTimestretch = false;
+    // Fades at the clip's two ends, in timeline beats of the visible clip:
+    // the volume rises from silence over the first and falls to it over the
+    // second (see ofxOceanodeTimelineWaveform::fadeGain).
+    double waveFadeInBeats = 0.0;
+    double waveFadeOutBeats = 0.0;
+    // Each fade's curve: a sigmoid segment, as a Curve lane's (an S by
+    // default; inflection 0.5 with steepness 1 is a straight line).
+    ofxOceanodeTimelineCurveTension waveFadeInTension{0.5f, 2.0f};
+    ofxOceanodeTimelineCurveTension waveFadeOutTension{0.5f, 2.0f};
+    // Where this clip starts over an earlier clip of its track that is still
+    // sounding, the two crossfade over the overlap: this names the curve
+    // (one of ofxOceanodeTimelineWaveform::crossfadeCurves()).
+    std::string waveCrossfadeCurve = "Equal power";
     int waveNumChannels = 0;
     double waveFileDurationMs = 0.0;
+    // The file's envelope: for each channel, a run of [min, max] pairs over
+    // equal slices of the whole file (see ofxOceanodeTimelineWaveform).
+    // Rebuilt from the file by reloadWaveform, never saved.
     std::vector<float> waveformPeaks;
     std::vector<ofxOceanodeTimelineLane> lanes;
     // A Global Track's clip: the patch states it interpolates between,
@@ -840,6 +862,88 @@ inline bool ofxOceanodeTimelineClipHasLfoLane(const ofxOceanodeTimelineClip& cli
     for(const auto& lane : clip.lanes)
         if(ofxOceanodeTimelineIsLfoLane(lane.type)) return true;
     return false;
+}
+
+struct ofxOceanodeTimelineTrack;
+// A wave clip's envelope cache (ofxOceanodeTimelineClip::waveformPeaks):
+// channels x bins x [min, max], each bin an equal slice of the whole file.
+namespace ofxOceanodeTimelineWaveform {
+    // Bins per channel for a long file; a file with fewer frames gets one per frame.
+    constexpr int kMaxBins = 4096;
+    // Bins per channel in a cache, 0 when it does not have this layout.
+    inline int binCount(const std::vector<float>& peaks, int channels) {
+        if(channels <= 0 || peaks.empty() || peaks.size() % (static_cast<size_t>(channels) * 2) != 0) return 0;
+        return static_cast<int>(peaks.size() / (static_cast<size_t>(channels) * 2));
+    }
+    // The lowest and highest sample of a channel between two positions in the
+    // file (0..1, from < to). A span wider than a bin takes every bin it
+    // touches; a narrower one is interpolated between bins, so a zoomed-in
+    // waveform is a smooth shape rather than steps. False when there is no data.
+    inline bool range(const std::vector<float>& peaks, int channels, int channel,
+                      double from, double to, float& low, float& high) {
+        const int bins = binCount(peaks, channels);
+        if(bins <= 0 || channel < 0 || channel >= channels || !(to > from)) return false;
+        const float* data = peaks.data() + static_cast<size_t>(channel) * bins * 2;
+        from = std::max(0.0, std::min(1.0, from));
+        to = std::max(0.0, std::min(1.0, to));
+        if((to - from) * bins >= 1.0) {
+            const int first = std::min(bins - 1, static_cast<int>(from * bins));
+            const int last = std::max(first, std::min(bins - 1, static_cast<int>(std::ceil(to * bins)) - 1));
+            low = data[first * 2]; high = data[first * 2 + 1];
+            for(int bin = first + 1; bin <= last; ++bin) {
+                low = std::min(low, data[bin * 2]);
+                high = std::max(high, data[bin * 2 + 1]);
+            }
+            return true;
+        }
+        // Bin values sit at their bins' centres.
+        auto at = [&](double position, float& lo, float& hi) {
+            const double p = std::max(0.0, std::min(static_cast<double>(bins - 1), position * bins - 0.5));
+            const int a = static_cast<int>(p), b = std::min(bins - 1, a + 1);
+            const float t = static_cast<float>(p - a);
+            lo = data[a * 2] + (data[b * 2] - data[a * 2]) * t;
+            hi = data[a * 2 + 1] + (data[b * 2 + 1] - data[a * 2 + 1]) * t;
+        };
+        float lowEnd = 0.0f, highEnd = 0.0f;
+        at(from, low, high);
+        at(to, lowEnd, highEnd);
+        low = std::min(low, lowEnd);
+        high = std::max(high, highEnd);
+        return true;
+    }
+    // The slice of its file a clip plays, as the audio pass maps it: where it
+    // starts and how much it spans, in fractions of the file. bpm: for a
+    // clip whose file length in beats is not known yet. False when empty.
+    bool slice(const ofxOceanodeTimelineClip& clip, float bpm, double& start, double& span);
+    // The loudest sample (0..1 for a file within full scale) of that slice,
+    // in any channel, before the clip's gain.
+    float peak(const ofxOceanodeTimelineClip& clip, float bpm);
+    // A clip's fade lengths as they apply: inside the clip, never overlapping.
+    inline void fades(const ofxOceanodeTimelineClip& clip, double& in, double& out) {
+        const double length = std::max(0.0, clip.durationBeats);
+        in = std::max(0.0, std::min(clip.waveFadeInBeats, length));
+        out = std::max(0.0, std::min(clip.waveFadeOutBeats, length - in));
+    }
+    // The fades a clip plays with on its track. An end that overlaps
+    // another clip crossfades with it over the overlap (replacing the clip's
+    // own fade there); the other end keeps the clip's own fade.
+    struct Fades {
+        double in = 0.0, out = 0.0;               // beats, inside the clip, never overlapping
+        bool crossIn = false, crossOut = false;   // that end is a crossfade
+        std::string inCurve, outCurve;            // the crossfade's curve
+        std::string crossOutClipId;               // the clip coming in over this one's end
+        ofxOceanodeTimelineCurveTension inTension, outTension;
+    };
+    // The curves a crossfade can take, the default first.
+    const std::vector<std::string>& crossfadeCurves();
+    // How far in the incoming clip is (0..1) at a position through a
+    // crossfade; the outgoing one is at the same curve read from the end.
+    float crossfadeShape(const std::string& curve, float position);
+    Fades resolveFades(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip);
+    // What fades leave of a clip's volume (0..1) at a beat counted from its start.
+    float fadeGain(const Fades& fades, const ofxOceanodeTimelineClip& clip, double localBeat);
+    // The same with the clip's own fades alone (no neighbours).
+    float fadeGain(const ofxOceanodeTimelineClip& clip, double localBeat);
 }
 
 // Canonical conversion between source beats (the data stored in a clip) and
@@ -1061,7 +1165,12 @@ struct ofxOceanodeTimelineTrack {
     // timeline-beat space and affect every clip on this Wave Track.
     float waveVolume = 1.0f;
     bool waveVolumeAutomationEnabled = true;
-    std::string waveVolumeInterpolation = "Linear";
+    // Draws the clips' waveforms through the track's volume curve too (their
+    // gain and fades always show).
+    bool waveVolumeShapesWaveform = false;
+    // Sigmoid: each segment bends by its tension (a straight line when
+    // neutral, which is what "Linear" in older files becomes).
+    std::string waveVolumeInterpolation = "Sigmoid";
     std::vector<ofxOceanodeTimelineCurvePoint> waveVolumePoints;
     std::vector<ofxOceanodeTimelineCurveTension> waveVolumeTensions;
     // Latency correction, milliseconds: shifts when this track's scheduled
@@ -1154,6 +1263,11 @@ struct ofxOceanodeTimelineViewState {
 class ofxOceanodeTimelineWaveAudioProvider {
 public:
     virtual ~ofxOceanodeTimelineWaveAudioProvider() = default;
+    // Called before each updateWaveClip: whether that clip keeps its pitch
+    // when it plays at another speed than its file's (see
+    // ofxOceanodeTimelineClip::waveTimestretch). A backend that cannot
+    // ignores it and plays the clip at tape speed.
+    virtual void setWaveClipTimestretch(const std::string& trackId, const std::string& clipId, bool timestretch) {}
     // Called once per frame for every clip on every Wave track. inactive is
     // sent too, which lets a backend stop voices as the playhead leaves a
     // clip without needing a separate begin/end-frame callback.
@@ -2118,8 +2232,8 @@ public:
     bool fitMultiCurvesToTarget(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                 const std::string& laneId);
     // Recomputes waveNumChannels/waveFileDurationMs/waveformPeaks from
-    // whatever waveFilePath currently points at (WAV files only, matching
-    // the old standalone Wave Track node's own reader). Pure file IO, no
+    // whatever waveFilePath currently points at (WAV files only: PCM 8 to
+    // 32 bit and 32/64 bit float). Pure file IO, no
     // SuperCollider dependency -- safe to call unconditionally regardless
     // of whether a wave audio provider is registered. Called automatically
     // by fromJson()/loadPreset() for every wave clip, and by the controller
@@ -2134,6 +2248,19 @@ public:
     // what the audio provider asks for.
     float evaluateWaveClipVolume(const std::string& trackId, const std::string& clipId,
                                  double beat) const;
+    // The same for a clip of any timeline (beat: of that timeline): its
+    // track's volume there, through the clip's fades.
+    float evaluateWaveClipVolume(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip,
+                                 double beat) const;
+    float evaluateWaveTrackVolume(const ofxOceanodeTimelineTrack& track, double beat) const;
+    // Sets a wave clip's gain to the most its loudest sample takes without
+    // going over full scale (at most the gain's range, x4). False when the
+    // clip is silent or has no waveform.
+    bool normalizeWaveClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
+    // Sets a wave clip's fade lengths (timeline beats), kept inside the clip
+    // and off each other: the one being changed stops at the other.
+    bool setWaveClipFades(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                          double fadeInBeats, double fadeOutBeats);
     // Opens/prepares the track-wide volume envelope for a Wave Track, seeding
     // a flat one from the track's gain if it has none yet. Named for the
     // per-clip lane this replaced; it creates no lane, and the returned

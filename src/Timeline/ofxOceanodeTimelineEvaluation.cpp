@@ -2459,6 +2459,9 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
             hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
+            hash.add(clip.waveFadeInBeats); hash.add(clip.waveFadeOutBeats); hash.add(clip.waveCrossfadeCurve); hash.add(clip.waveTimestretch);
+            hash.add(clip.waveFadeInTension.inflection); hash.add(clip.waveFadeInTension.steepness);
+            hash.add(clip.waveFadeOutTension.inflection); hash.add(clip.waveFadeOutTension.steepness);
             // (A keyframe's stamp changes whenever its values do.)
             hash.add(clip.globalKeyframes.size());
             for(const auto& keyframe : clip.globalKeyframes) {
