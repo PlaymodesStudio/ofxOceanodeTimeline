@@ -1436,6 +1436,14 @@ public:
     // same canvas or of a canvas inside it, never one that (through its own
     // timeline tracks) plays host. Its id, empty when refused.
     std::string createTimelineTrack(ofxOceanodeTimelineSequence& host, const TimelineRef& placed);
+    // The name of a track placing a timeline of the macro whose canvas this
+    // is: "MT:" and the title the macro's node shows in its header (its
+    // local name, or the library Macro's; without one, the canvas's last step).
+    std::string macroTrackName(const std::string& canvas) const;
+    // Gives the macro tracks of `host` still named that way ("MT:...") the
+    // current name of their macro, and their clips named after the track
+    // with them. A track renamed by hand is left alone. True: one changed.
+    bool syncMacroTrackNames(ofxOceanodeTimelineSequence& host);
     // A timeline clip whose speed was changed (a Stretch edit, Cmd+drag on its
     // right edge): its timeline at its natural speed again, as many repeats
     // as it had (a one-shot fitted to the clip goes back to its own length).

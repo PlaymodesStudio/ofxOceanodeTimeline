@@ -1040,7 +1040,12 @@ std::string ofxOceanodeTimelineManager::createTimelineTrack(ofxOceanodeTimelineS
     else if(placed.canvas.rfind(hostRef.canvas + " / ", 0) == 0) relative = placed.canvas.substr(hostRef.canvas.size() + 3);
     else return std::string(); // a timeline outside the host's canvas
     if(timelineReaches(placed, hostRef)) return std::string(); // it would play itself
-    const auto id = createTrack(host, timelineName(placed));
+    // A macro's timeline: the track is named after the macro ("MT:" + the
+    // title its node shows in its header: its local name, or the library
+    // Macro's; without one, the last step of its canvas), since it holds
+    // every timeline of that macro. Another timeline of the host's own canvas
+    // keeps its name.
+    const auto id = createTrack(host, relative != "." ? macroTrackName(placed.canvas) : timelineName(placed));
     if(auto* track = getTrack(host, id)) {
         track->macroCanvas = relative;
         track->macroTimeline = placed.timeline;
@@ -1064,6 +1069,39 @@ std::string ofxOceanodeTimelineManager::createMacroClip(ofxOceanodeTimelineSeque
     }
     invalidateEvaluationIndexes();
     return id;
+}
+
+std::string ofxOceanodeTimelineManager::macroTrackName(const std::string& canvas) const {
+    std::string macroName;
+    if(auto* macroCanvas = canvasContainer(canvas)) macroName = getMacroSequenceLabel(*macroCanvas);
+    if(macroName.empty()) {
+        const auto lastStep = canvas.rfind(" / ");
+        macroName = lastStep == std::string::npos ? canvas : canvas.substr(lastStep + 3);
+    }
+    return "MT:" + macroName;
+}
+
+bool ofxOceanodeTimelineManager::syncMacroTrackNames(ofxOceanodeTimelineSequence& host) {
+    TimelineRef hostRef;
+    if(!refOf(host, hostRef)) return false;
+    bool changed = false;
+    for(auto& track : host.tracks) {
+        // (Its own name, "MT:...": a track renamed by hand keeps the name it was given.)
+        if(!track.isMacroTrack() || track.macroCanvas == "." || track.name.rfind("MT:", 0) != 0) continue;
+        const std::string canvas = rootCanvas(hostRef.canvas) ? track.macroCanvas : hostRef.canvas + " / " + track.macroCanvas;
+        if(canvasContainer(canvas) == nullptr) continue;   // its macro is gone: the name stays
+        // Unique among the host's tracks, as every track name is (a second
+        // track of the same macro keeps its numbered name).
+        const std::string previous = track.name;
+        track.name.clear();
+        const std::string name = host.makeUniqueTrackName(macroTrackName(canvas));
+        track.name = previous;
+        if(name == previous) continue;
+        for(auto& clip : track.clips) if(clip.name == previous) clip.name = name;
+        track.name = name;
+        changed = true;
+    }
+    return changed;
 }
 
 double ofxOceanodeTimelineManager::macroPassLength(const ofxOceanodeTimelineSequence& host,
