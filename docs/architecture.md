@@ -130,9 +130,22 @@ it does bound ones, and blends the destination's track in through the
 parameter's automation filter. While a filter is set the track writes on
 every pass, and once more after it is cleared, so the parameter lands on the
 track's value when the morph ends.
-A path with a binding, or driven by an outer timeline, is left to it. Only
-the played timeline's own Global Track plays: one inside a macro timeline
-placed by a macro clip does not yet.
+A path with a binding, or driven by an outer timeline, is left to it.
+
+The Global Track of a timeline placed by a macro clip plays where the clip
+plays the timeline: `rebuildGlobalChannels` also makes the channels of every
+played copy (`playedMacros`, forward and mirrored; their keyframe paths are
+absolute, `makeAbsolute`), and `applyGlobalTracks` reads each copy at the
+beat its placement maps the playhead to (`playedSequences` at the playhead,
+one placement per timeline, the first found, as the value walk takes them),
+so repeats, stretch, content offset and reverse apply. Outside the macro
+clips nothing is written and the parameters stay where they are. When
+another clip or repeat starts playing the timeline (`globalPlacementSeen`),
+the track forgets what it last wrote and writes its values again. The cache
+holds the played timeline's clips first, then the placed timelines' with the
+outer ones first: where two Global Tracks move the same parameter at the
+same beat (a host's keyframes hold the parameters of the macros in it too),
+the outer one has it and the inner one leaves it alone.
 
 A keyframe's values are a shared, never-edited map with a stamp that changes
 with them, so engine copies and undo snapshots share the data and
@@ -224,8 +237,59 @@ steps the shown timeline's own history, or the global settings'. With no
 timeline on the shown canvas, the window shows how to make one
 (`drawEmptyState`); once the canvas has one, it is shown.
 
-An unfolded macro track (`macroUnfolded`, saved with the track) draws its
-macro's tracks as rows under it (`drawUnfoldedRows` in the controller). Each
+A new macro clip's content length is `macroPassLength`: the longest of the
+timelines the track's clips play (`carriedTimelines`), not the length of the
+one the track names; `fitMacroClipToPass` gives a clip that pass. Its
+track is named by `macroTrackName` ("MT:" and the macro node's title), which
+`syncMacroTrackNames` keeps current for tracks still named that way. The
+controller, between gestures, fits every macro clip on screen whose content
+is shorter than the pass, and (keeping the pass last seen in `macroPassSeen`)
+the clips that lasted the old pass when it gets shorter.
+
+An unfolded macro track (`macroUnfolded`, saved with the track) draws the
+timelines its clips play (`carriedTimelines`: the one placed, then those
+carried) as a header row each, with that timeline's tracks as rows under it
+(`drawUnfoldedRows` in the controller). A timeline whose id is in the track's
+`macroFoldedTimelines` (saved too) shows only its header, with a preview of
+its tracks. The timeline's folders are rows as well, folded by the folder
+track's own `collapsed`; a timeline's header and a folder's row draw their
+preview with the same `drawSummary`. A track's row has no further view of
+its own: its arrow (like a double-click on one of its clips) opens the clip
+editor, which docks under the row (`dockInnerEditor`). The rows showing their
+lanes are kept in `innerOpenRows` (sequence, group, track and the placement
+they were opened in), so any number stay open; `editorRowScope` is only the
+one holding the editor's focus, and `editorSequence()` never follows a row
+that is merely being drawn. The targets a lane offers (`patchTargetPaths`)
+are the parameters of the canvas its sequence belongs to
+(`resolverFor(scope()).base`), one cached list per canvas, as root paths for
+`bindClipTarget`. Tracks of unfolded timelines are selected in
+`innerSelectedTracks` (sequence and id), apart from `selectedTracks`; their
+menu applies edits to the inner sequence directly, or through
+`innerTrackRequests` (duplicate, remove, remove a binding) and its own rename
+dialog after the rows are drawn. **Save Macro** on a macro track calls
+`saveGlobalMacro` (the macro node's `saveGlobalDefinition`) for a library
+Macro, also after the rows. Lane ids repeat between timelines
+(`timeline_lane_N` in each), so a docked row's lane editor is drawn inside
+`PushID(rowId)`, and what `editorState` keeps per lane (folded lanes,
+expanded LFO controls, heights) is kept per unfolded timeline: an
+`InnerLaneState` swaps that timeline's `LaneViewState` in while its lanes are
+drawn or edited, and sets `laneKeyTag` for the lane being resized. It is closed when no row docked it in a
+frame, except in the frame `openInnerClipEditor` ran (`editorRowOpenedFrame`):
+a gesture opens it after its row decided what to dock. Rows are resized from
+their bottom edge by `rowResizeEdge` (`innerResize`): the track's
+`unfoldedRowHeight` (saved; 0 the default). With the editor docked under a
+row, `drawEditorSeparator` (a line `kEditorSeparatorHeight` high, in the
+track's colour) is that handle, as for a track of the timeline shown. Every
+level is tabbed in by `kIndentStep` (`kFolderIndent`, `kUnfoldedIndent`,
+`kClipEditorIndent` plus `clipEditorExtraIndent` under an unfolded row), and
+a row's indentation is drawn by `drawGutter`: one strip per level the row is
+inside, in that level's header colour. The levels are passed down
+`drawUnfoldedRows` (`outerLevels`) and, for the lanes of a docked clip editor
+and an LFO lane's controls, set in `gutterLevels` by a `GutterScope`. The clip settings window follows `clipSettingsScope` for a clip
+of an unfolded row. A new clip asked from one of these
+rows keeps its placement in `pendingClipScope`: the New Timeline Clip dialog
+(`drawClipPopup`) runs under that `rowScope`, so `createNewClip` writes to the
+macro's sequence. Each
 macro clip repeat and offset segment is a placement (`macroClipPlacements`,
 shared with the macro clip's own preview): a time map from the macro
 timeline's beats to the beats shown, composed through nested unfolded macro
@@ -236,6 +300,16 @@ draws sequence beat b at `offset + b * ratio`), so the model calls and lane
 editors are the ordinary ones. Requests the clip editor defers (lanes,
 targets, rename) go to the edited clip's sequence. Unfolded sequences are
 recorded in their own history, and undo steps the timeline edited last.
+A Wave clip's waveform is drawn by `drawWaveform`, which takes the time map
+too, for its own track and for `drawPlacedClip` alike.
+A Global Track's keyframes are drawn and hit-tested by one set of routines
+(`drawGlobalKeys`, `hitGlobalKeys`, `handleGlobalKeys`) taking the time map,
+so its own track (the identity) and an unfolded row (the placement's map)
+share them; the keyframe asked for or edited carries its placement
+(`globalKeyScope`, `globalKeyEditScope`) to the deferred edit point, which
+applies it under that `rowScope`. Each call of `drawUnfoldedRows` also knows
+the placement the playhead is in (`outerAtPlayhead`, on screen or not): that
+is where a row's **+ Key** stores its keyframe.
 
 Clips and Targets are session-only projections of the same model, selected by
 `targetsView` in the controller. Clips draws one arrangement rectangle per clip;

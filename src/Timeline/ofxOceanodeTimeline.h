@@ -1136,6 +1136,9 @@ struct ofxOceanodeTimelineTrack {
     std::string name;
     ofColor color = ofColor(65, 165, 245, 255);
     bool collapsed = false;
+    // The height of its row under an unfolded macro track, dragged from that
+    // row's bottom edge (0: the default one).
+    float unfoldedRowHeight = 0.0f;
     bool muted = false;
     bool solo = false;
     std::vector<ofxOceanodeTimelineParameterBinding> bindings;
@@ -1201,6 +1204,10 @@ struct ofxOceanodeTimelineTrack {
     // Unfolded: the editor shows the macro's tracks as rows under this one,
     // with its clips where this track's clips play them, editable in place.
     bool macroUnfolded = false;
+    // Unfolded, each timeline its clips play (the one placed, then those of
+    // the same macro they carry) has a row of its own with its tracks under
+    // it: the ids of the timelines whose tracks are folded away again.
+    std::vector<std::string> macroFoldedTimelines;
     float macroPreRollMs = 100.0f;
     float macroTailMs = 500.0f;
 };
@@ -1533,8 +1540,8 @@ public:
 
     // ---- Macro tracks: clips that play a macro canvas's timeline ----
     // (Made by createTimelineTrack below, with the timeline placed.)
-    // A clip on a macro track. A content length of 0 uses the macro
-    // timeline's length (the end of its last clip, at least one bar).
+    // A clip on a macro track. A content length of 0 uses one pass of what
+    // the track plays (macroPassLength).
     std::string createMacroClip(const std::string& trackId, double startBeat, double durationBeats = 0.0);
     std::string createMacroClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                 double startBeat, double durationBeats = 0.0);
@@ -1550,6 +1557,14 @@ public:
     // same canvas or of a canvas inside it, never one that (through its own
     // timeline tracks) plays host. Its id, empty when refused.
     std::string createTimelineTrack(ofxOceanodeTimelineSequence& host, const TimelineRef& placed);
+    // The name of a track placing a timeline of the macro whose canvas this
+    // is: "MT:" and the title the macro's node shows in its header (its
+    // local name, or the library Macro's; without one, the canvas's last step).
+    std::string macroTrackName(const std::string& canvas) const;
+    // Gives the macro tracks of `host` still named that way ("MT:...") the
+    // current name of their macro, and their clips named after the track
+    // with them. A track renamed by hand is left alone. True: one changed.
+    bool syncMacroTrackNames(ofxOceanodeTimelineSequence& host);
     // A timeline clip whose speed was changed (a Stretch edit, Cmd+drag on its
     // right edge): its timeline at its natural speed again, as many repeats
     // as it had (a one-shot fitted to the clip goes back to its own length).
@@ -1563,6 +1578,12 @@ public:
     // One pass of a macro timeline: the end of its last clip, at least a bar
     // of its own meter.
     double macroTimelineLength(const ofxOceanodeTimelineSequence& macroSequence) const;
+    // One pass of what a timeline track's clips play: the longest of those
+    // timelines (carriedTimelines), a bar of the host when there is none.
+    double macroPassLength(const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track);
+    // Gives a macro clip that pass as its content length. One lasting a
+    // whole number of passes is resized to as many. False: not a macro clip.
+    bool fitMacroClipToPass(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     // A timeline's beats per bar: the global meter for the root canvas's
     // default timeline while it is linked to the global transport, else its own.
     double beatsPerBarOf(const ofxOceanodeTimelineSequence& sequence) const;
@@ -1611,6 +1632,12 @@ public:
     ofxOceanodeTimelineCanvas* getMacroTimelines(ofxOceanodeContainer& macroContainer);
     // How the editor names the macro: its title, else its canvas id.
     std::string getMacroSequenceLabel(ofxOceanodeContainer& macroContainer) const;
+    // The macro whose canvas this is comes from the Macro library (a "global"
+    // Macro, not a local one).
+    bool macroIsGlobal(ofxOceanodeContainer& macroContainer) const;
+    // Writes that Macro back to the library as it is now, its timelines
+    // included (what its node's own save does). False: local, or not found.
+    bool saveGlobalMacro(ofxOceanodeContainer& macroContainer);
     // Called with the macro's own preset or library folder (sequence.json).
     void loadMacroSequence(ofxOceanodeContainer& macroContainer, const std::string& folder);
     bool saveMacroSequence(const ofxOceanodeContainer& macroContainer, const std::string& folder) const;
@@ -3071,14 +3098,23 @@ private:
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
     };
     struct GlobalClipChannels {
+        // The played timeline's copy, or the copy of a timeline its clips
+        // place (a PlayedMacro's): that one plays where a clip places it.
+        const ofxOceanodeTimelineSequence* sequence = nullptr;
         const ofxOceanodeTimelineTrack* track = nullptr;
         const ofxOceanodeTimelineClip* clip = nullptr;
         std::vector<double> beats;
         std::vector<ofxOceanodeTimelineCurveTension> eases; // per keyframe: to the next one
         std::vector<GlobalChannel> channels;
     };
+    // The played timeline's clips first, then the placed timelines', outer
+    // ones first: an outer Global Track moving a parameter keeps it.
     std::vector<GlobalClipChannels> globalChannelsCache;
     bool globalChannelsValid = false;
+    // Which placement (macro clip and repeat) last played each placed
+    // timeline's Global Track, by timeSourceId: when another one starts, the
+    // track writes its values again (whatever happened in between).
+    std::unordered_map<std::string, uint64_t> globalPlacementSeen;
     // What a Global Track last computed for a path. A value is written only
     // when it differs from this, never because the parameter does: a
     // parameter stays editable by hand wherever the track's value holds

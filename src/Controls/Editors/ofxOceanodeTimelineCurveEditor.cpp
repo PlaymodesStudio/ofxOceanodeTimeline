@@ -1,6 +1,7 @@
 #include "ofxOceanodeTimelineCurveEditor.h"
 #include "ofxOceanodeTimelineLaneEditorUi.h"
 #include "ofxOceanodeContainer.h"
+#include "ofxOceanodeColors.h"
 #include "ofxOceanodeParameter.h"
 #include <algorithm>
 #include <cmath>
@@ -117,6 +118,8 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
                                            0.0f, 1.0f);
         return curveBottom - visibleValue * (curveBottom - curveTop);
     };
+    // The editor's grid: the theme's OC_CurveEditorLines (a bar's line is thicker).
+    const ImU32 editorLines = ImGui::ColorConvertFloat4ToU32(OceanodeColors::CurveEditorLines);
     if(curveSnapLevels(*lane) >= 2) {
         const int levels = curveSnapLevels(*lane);
         for(int row = 0; row <= levels; ++row) {
@@ -129,7 +132,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
             if(db >= ofxOceanodeTimelineScale::topDb(*lane) - 0.5f) continue;
             const float y = curveValueToY(ofxOceanodeTimelineScale::dbToNormalized(*lane, db));
             dl->AddLine(ImVec2(timelineMin.x, y), ImVec2(editorMax.x, y),
-                        db == 0.0f ? IM_COL32(150, 150, 150, 170) : IM_COL32(75, 75, 75, 120));
+                        db == 0.0f ? IM_COL32(150, 150, 150, 170) : editorLines);
             char dbLabel[16];
             std::snprintf(dbLabel, sizeof(dbLabel), "%g dB", db);
             if(y - ImGui::GetTextLineHeight() > curveTop + ImGui::GetTextLineHeight() &&
@@ -139,7 +142,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     } else {
         for(int row = 0; row <= 4; ++row) {
             const float y = curveTop + (curveBottom - curveTop) * row / 4.0f;
-            dl->AddLine(ImVec2(timelineMin.x, y), ImVec2(editorMax.x, y), IM_COL32(75, 75, 75, 120));
+            dl->AddLine(ImVec2(timelineMin.x, y), ImVec2(editorMax.x, y), editorLines);
         }
     }
     char curveMaxLabel[32];
@@ -163,7 +166,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         const float x = timelineMin.x + beatOffset(beat);
         const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
         if(bar || beatOffset(beat + curveGrid) - beatOffset(beat) >= 4.0f)
-            dl->AddLine(ImVec2(x, curveTop), ImVec2(x, curveBottom), bar ? kBar : kGrid, bar ? 1.5f : 1.0f);
+            dl->AddLine(ImVec2(x, curveTop), ImVec2(x, curveBottom), editorLines, bar ? 1.5f : 1.0f);
     }
     // Points stay in beat order; an edit that moves one past a neighbour is
     // reordered here. Stable, so two points on one beat (a vertical step)

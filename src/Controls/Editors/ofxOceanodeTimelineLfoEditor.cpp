@@ -13,7 +13,7 @@ using namespace ofxOceanodeTimelineClipTime;
 
 namespace {
 // Control sublanes sit this much further in than the lanes of the clip.
-constexpr float kControlIndent = 14.0f;
+constexpr float kControlIndent = kIndentStep;
 constexpr float kDefaultControlHeight = 110.0f;
 constexpr float kCollapsedRowHeight = 22.0f;
 
@@ -154,7 +154,10 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
     const double content = sourceDuration(clip);
     const double sourcePerTimeline = 1.0 / std::max(1e-9, effectiveStretch(clip));
     const ImU32 ink = IM_COL32(track.color.r, track.color.g, track.color.b, 235);
-    const float indent = kClipEditorIndent + kControlIndent;
+    const float indent = kClipEditorIndent + clipEditorExtraIndent + kControlIndent;
+    // The controls are one level inside their lane: its header colour ends their indentation.
+    std::vector<ImU32> controlLevels = gutterLevels;
+    controlLevels.push_back(laneHeaderColor(track.color));
     bool anyCanvasHovered = false;
 
     for(auto& control : lfoLane.lfoControls) {
@@ -190,6 +193,7 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
             const float zoneLeft = rowMin.x + kLabelWidth;
             const float originX = zoneLeft - timelineScrollX;
             ImDrawList* dl = ImGui::GetWindowDrawList();
+            drawGutter(dl, rowMin, rowMax.y, indent, controlLevels);
             dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), ImVec2(zoneLeft, rowMax.y), mutedTrackColor(track.color, 0.16f, 0.28f));
             ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + indent, rowMin.y + 2.0f));
             if(foldButton(("##lfoControlExpand" + key).c_str(), false)) editorState.expandedLfoControlKeys.insert(key);
@@ -244,6 +248,7 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
         const bool canvasHovered = !overChance && ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= zoneLeft;
         anyCanvasHovered = anyCanvasHovered || canvasHovered;
 
+        drawGutter(dl, rowMin, rowMax.y, indent, controlLevels);
         dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), rowMax, mutedTrackColor(track.color, 0.10f, 0.22f));
         dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), ImVec2(zoneLeft, rowMax.y),
                           mutedTrackColor(track.color, focused ? 0.27f : 0.20f, 0.40f));
@@ -253,17 +258,18 @@ void ofxOceanodeTimelineLfoEditor::drawControls(ofxOceanodeTimelineLaneEditorCon
         {
             const ImVec2 handleMin(rowMin.x + indent, rowMax.y - kLaneResizeHandleHeight), handleMax(rowMax.x, rowMax.y);
             const bool resizeHovered = hoverRect(handleMin, handleMax);
+            const std::string resizeKey = editorState.laneKeyTag + key;
             if(resizeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                editorState.resizingLaneId = key;
+                editorState.resizingLaneId = resizeKey;
                 editorState.laneResizeStartMouseY = ImGui::GetIO().MousePos.y;
                 editorState.laneResizeStartHeight = height;
             }
-            const bool resizeActive = editorState.resizingLaneId == key && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            const bool resizeActive = editorState.resizingLaneId == resizeKey && ImGui::IsMouseDown(ImGuiMouseButton_Left);
             if(resizeHovered || resizeActive) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             if(resizeActive)
                 editorState.laneEditorHeights[key] = ofClamp(editorState.laneResizeStartHeight + ImGui::GetIO().MousePos.y -
                                                              editorState.laneResizeStartMouseY, laneEditorMinHeight(), kLaneEditorMaxHeight);
-            if(editorState.resizingLaneId == key && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) editorState.resizingLaneId.clear();
+            if(editorState.resizingLaneId == resizeKey && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) editorState.resizingLaneId.clear();
             const float separatorY = rowMax.y - kLaneResizeHandleHeight * 0.5f;
             dl->AddLine(ImVec2(handleMin.x, separatorY), ImVec2(handleMax.x, separatorY),
                         resizeActive ? IM_COL32(205, 205, 215, 235) : resizeHovered ? IM_COL32(160, 160, 170, 205) : IM_COL32(80, 80, 86, 110),

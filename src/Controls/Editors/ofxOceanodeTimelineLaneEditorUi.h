@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <set>
 #include "ofxOceanodeTimelineEditorView.h"
 #include "ofxOceanodeTimelineEditorUi.h"
@@ -100,7 +101,69 @@ float smallButtonReserve(const char* label);
 bool pitchClassKeyboard(const char* id, int& mask, ImU32 onColor, float height = 34.0f);
 // Text shortened with "..." to fit maxWidth.
 std::string fitText(const std::string& text, float maxWidth);
+// One level of indentation in the left column, the same at every level: a
+// folder's tracks, the rows of an unfolded macro track, a clip editor's
+// lanes under their track, an LFO lane's controls under it.
+constexpr float kIndentStep = 12.0f;
 // Indentation of a clip editor's lane rows under the track.
-constexpr float kClipEditorIndent = 10.0f;
+constexpr float kClipEditorIndent = kIndentStep;
+// Added to it while the clip editor is docked under a row that is itself
+// tabbed in (a track inside a folder, a row of an unfolded macro track).
+inline float clipEditorExtraIndent = 0.0f;
+// The header colours of the levels the rows being drawn are inside,
+// outermost first (a folder, a macro track, one of its timelines, a track
+// for its lanes...). A row's indentation is one strip per level, each in
+// that level's header colour: down the left edge, a level's colour runs the
+// whole height of what it holds, and shows what every row belongs to.
+inline std::vector<ImU32> gutterLevels;
+// Fills a row's indentation (`indent` wide, from rowMin down to `bottom`)
+// with those strips. The last level takes what is left of the indentation.
+inline void drawGutter(ImDrawList* dl, const ImVec2& rowMin, float bottom, float indent,
+                       const std::vector<ImU32>& levels = gutterLevels) {
+    for(size_t level = 0; level < levels.size(); ++level) {
+        const float x1 = rowMin.x + level * kIndentStep;
+        const float x2 = level + 1 == levels.size() ? rowMin.x + indent : std::min(rowMin.x + indent, x1 + kIndentStep);
+        if(x2 <= x1) break;
+        dl->AddRectFilled(ImVec2(x1, rowMin.y), ImVec2(x2, bottom), levels[level]);
+    }
+}
+// The colour of text drawn on `background`: near black on a light one, near
+// white on a dark one (by its perceived brightness, leaning to white as the
+// rest of the editor is dark).
+inline ImU32 readableTextColor(ImU32 background) {
+    const float brightness = 0.299f * ((background >> IM_COL32_R_SHIFT) & 0xFF) + 0.587f * ((background >> IM_COL32_G_SHIFT) & 0xFF) +
+                             0.114f * ((background >> IM_COL32_B_SHIFT) & 0xFF);
+    return brightness >= 150.0f ? IM_COL32(15, 15, 18, 255) : IM_COL32(245, 250, 255, 255);
+}
+// What a translucent `top` looks like over an opaque `under`.
+inline ImU32 blendOver(ImU32 top, ImU32 under) {
+    const float alpha = ((top >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
+    auto channel = [&](int shift) {
+        return static_cast<int>(((top >> shift) & 0xFF) * alpha + ((under >> shift) & 0xFF) * (1.0f - alpha));
+    };
+    return IM_COL32(channel(IM_COL32_R_SHIFT), channel(IM_COL32_G_SHIFT), channel(IM_COL32_B_SHIFT), 255);
+}
+// A lane's header: its track's header colour (the innermost level the lane
+// is inside), 25% darker.
+inline ImU32 laneHeaderColor(const ofColor& trackColor) {
+    const ImU32 track = gutterLevels.empty() ? mutedTrackColor(trackColor, 0.27f, 0.42f) : gutterLevels.back();
+    auto channel = [&](int shift) { return static_cast<int>(((track >> shift) & 0xFF) * 0.75f); };
+    return IM_COL32(channel(IM_COL32_R_SHIFT), channel(IM_COL32_G_SHIFT), channel(IM_COL32_B_SHIFT), 255);
+}
+// The levels (and the indentation that goes with them) of the lanes drawn
+// while it lives.
+struct GutterScope {
+    std::vector<ImU32> previousLevels;
+    float previousIndent;
+    GutterScope(std::vector<ImU32> levels, float extraIndent)
+    : previousLevels(std::move(gutterLevels)), previousIndent(clipEditorExtraIndent) {
+        gutterLevels = std::move(levels);
+        clipEditorExtraIndent = extraIndent;
+    }
+    ~GutterScope() {
+        gutterLevels = std::move(previousLevels);
+        clipEditorExtraIndent = previousIndent;
+    }
+};
 void drawDivision(ofxOceanodeTimelineLane& lane);
 }
