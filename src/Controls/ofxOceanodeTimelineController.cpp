@@ -1514,7 +1514,7 @@ void ofxOceanodeTimelineController::drawSynthNavigation(ofxOceanodeTimelineManag
     std::vector<SynthTarget> targets;
     for(const auto& id : bindingIds) {
         const auto* binding = timeline.getBinding(scope(timeline), track.id, id);
-        auto* parameter = binding == nullptr ? nullptr : container->findTimelineParameter(binding->parameterPath);
+        auto* parameter = binding == nullptr ? nullptr : timeline.resolverFor(scope(timeline)).find(binding->parameterPath);
         auto* model = parameter == nullptr ? nullptr : parameter->getNodeModel();
         ofxOceanodeTimelineInstrument instrument;
         if(model == nullptr || !model->getTimelineInstrument(instrument)) continue;
@@ -5990,7 +5990,7 @@ void ofxOceanodeTimelineController::draw() {
                         }
                         {
                             const auto* pitchMember = timeline.getBinding(scope(timeline), track.id, groupMembers.front());
-                            auto* canvasParameter = pitchMember == nullptr ? nullptr : container->findTimelineParameter(pitchMember->parameterPath);
+                            auto* canvasParameter = pitchMember == nullptr ? nullptr : timeline.resolverFor(scope(timeline)).find(pitchMember->parameterPath);
                             if(ImGui::MenuItem("Show in Canvas", nullptr, false, canvasParameter != nullptr) && canvasParameter != nullptr)
                                 container->showParameterInCanvas(*canvasParameter);
                         }
@@ -6192,7 +6192,8 @@ void ofxOceanodeTimelineController::draw() {
                     contextMenuSection("Navigation");
                     {
                         // Same as the Custom GUI's "Show in Canvas": select the owning node and centre on it.
-                        auto* boundParameter = container->findTimelineParameter(binding.parameterPath);
+                        // (By the path its timeline keeps: a macro's is from the macro's canvas.)
+                        auto* boundParameter = timeline.resolverFor(scope(timeline)).find(binding.parameterPath);
                         if(ImGui::MenuItem("Show in Canvas", nullptr, false, boundParameter != nullptr) && boundParameter != nullptr)
                             container->showParameterInCanvas(*boundParameter);
                     }
@@ -8037,7 +8038,7 @@ void ofxOceanodeTimelineController::drawTargetInspector(ofxOceanodeTimelineManag
             ImGui::Text("At beat %.3f", transport.beatPosition);
             ImGui::SameLine();
             if(ImGui::SmallButton("Show in Canvas"))
-                if(auto* parameter = container->findTimelineParameter(inspectedTargetPath)) container->showParameterInCanvas(*parameter);
+                if(auto* parameter = timeline.resolverFor(scope(timeline)).find(inspectedTargetPath)) container->showParameterInCanvas(*parameter);
             ImGui::TextWrapped("Lanes combine inside a clip; latest-starting contributing clip wins per target on a track (later clip order breaks ties). Track outputs then combine in track order.");
             bool hasBase = false;
             for(const auto& binding : explanation.bindings) {
