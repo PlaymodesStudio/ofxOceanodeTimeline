@@ -520,8 +520,9 @@ The main timeline's lanes keep their plain list of the patch's parameters.
 
 A parameter taken from a canvas above the macro is an **outside target**.
 The lane drives it like any other, wherever the timeline plays (under a
-macro track or on its own), and the lane's **Targets** list marks it
-**(out)**. It is not saved with the macro: the canvas the parameter lives in
+macro track or on its own), and the lane's **Targets** list names, after
+the parameter, the canvas it lives in: **(Canvas)** for the main canvas,
+else that macro's title. It is not saved with the macro: the canvas the parameter lives in
 saves it, under the Macro node the way down to the lane starts from (the
 project for a parameter of the main canvas, the macro around it for one of
 that macro's canvas). The macro itself stays as it was, so a library Macro

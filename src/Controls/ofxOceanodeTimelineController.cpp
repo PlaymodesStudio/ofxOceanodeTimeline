@@ -8648,12 +8648,29 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
                     const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() -
                         ImGui::GetStyle().ItemInnerSpacing.x - inspectReserve - removeReserve - chanceReserve;
                     // A target outside the macro (a parameter of a canvas
-                    // above it) says so: the macro does not save it.
+                    // above it) says where it lives: "Canvas" for the main
+                    // one, else that macro's name. The macro does not save it.
                     const bool outside = ofxOceanodeTimelineOutside::isOutside(candidate.parameterPath);
-                    static const char* const kOutsideMark = " (out)";
+                    std::string outsideMark;
+                    if(outside) {
+                        const std::string absolute = ofxOceanodeTimelineOutside::absolutePath(targetCanvas, candidate.parameterPath);
+                        const size_t canvasEnd = absolute.find("::");
+                        std::string where = "Canvas";
+                        if(canvasEnd != std::string::npos) {
+                            // (The macro's title; its canvas's own name while the target is missing.)
+                            const std::string canvasId = absolute.substr(0, canvasEnd);
+                            const size_t last = canvasId.rfind(" / ");
+                            where = last == std::string::npos ? canvasId : canvasId.substr(last + 3);
+                            if(container->findTimelineParameter(absolute) != nullptr)
+                                if(auto* home = container->getContainerForCanvasID(canvasId); home != nullptr && home != container.get())
+                                    where = timeline.getMacroSequenceLabel(*home);
+                        }
+                        // (The parameter's own name keeps at least half of the row.)
+                        outsideMark = " (" + fitText(where, std::max(0.0f, nameWidth * 0.5f - ImGui::CalcTextSize(" ()").x)) + ")";
+                    }
                     const std::string name = fitText(compactParameterName(candidate.parameterPath),
-                                                     nameWidth - (outside ? ImGui::CalcTextSize(kOutsideMark).x : 0.0f)) +
-                        (outside ? kOutsideMark : "") + (candidate.missingTarget ? " (!)" : "");
+                                                     nameWidth - (outside ? ImGui::CalcTextSize(outsideMark.c_str()).x : 0.0f)) +
+                        outsideMark + (candidate.missingTarget ? " (!)" : "");
                     if(ImGui::Checkbox((name + "##target" + candidate.id).c_str(), &enabled)) {
                         if(enabled) timeline.addBindingToLane(scope(timeline), track.id, clip->id, lane->id, candidate.id);
                         else timeline.removeBindingFromLane(scope(timeline), track.id, clip->id, lane->id, candidate.id);
