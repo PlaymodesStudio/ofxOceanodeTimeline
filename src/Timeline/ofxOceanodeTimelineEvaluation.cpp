@@ -2039,10 +2039,33 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                         }
                         const auto& notes = *playedNotes;
                         const double noteGap = retriggerGap(track, lane, clip);
+                        // The timeline loop wraps back onto a note at its start
+                        // while its slot still sounds the note running to the
+                        // loop end (legato across the wrap): after the first
+                        // pass, that note waits the gap too, or the gate never
+                        // closes and the instrument does not strike again.
+                        // Source beats map to timeline beats linearly around the
+                        // playhead (clipSourceBeat's inverse within this repeat).
+                        const double timelinePerSource = placement.map.ratio / std::max(kEpsilon, sourcePerTimelineBeat(clip));
+                        auto timelineBeatOf = [&](double noteSourceBeat) {
+                            return beatPosition + (noteSourceBeat - sourceBeat) * timelinePerSource;
+                        };
+                        const bool loopWraps = loopEnabled && context.pass > 0 &&
+                            loopEndBeat > loopStartBeat + kEpsilon && beatPosition >= loopStartBeat - kEpsilon &&
+                            beatPosition < loopEndBeat;
+                        auto loopRetrigger = [&](size_t n) {
+                            if(!loopWraps || voicing->slot[n] < 0) return false;
+                            if(std::abs(timelineBeatOf(notes[n].startBeat) - loopStartBeat) > 1e-6) return false;
+                            const auto& slotNotes = voicing->slotNotes[voicing->slot[n]];
+                            return std::any_of(slotNotes.begin(), slotNotes.end(), [&](size_t other) {
+                                return timelineBeatOf(voicing->end[other]) >= loopEndBeat - 1e-6;
+                            });
+                        };
                         // Where a note's gate opens: after the retrigger gap when
                         // its slot was still busy, so the instrument sees an edge.
                         auto openAt = [&](size_t n) {
-                            const bool gap = voicing->retrigger[n] || (voicing->wrapRetrigger[n] && pianoCycle > 0.0);
+                            const bool gap = voicing->retrigger[n] || (voicing->wrapRetrigger[n] && pianoCycle > 0.0) ||
+                                             loopRetrigger(n);
                             return notes[n].startBeat + (gap ? noteGap : 0.0);
                         };
                         const int slotCount = static_cast<int>(voicing->slotNotes.size());
