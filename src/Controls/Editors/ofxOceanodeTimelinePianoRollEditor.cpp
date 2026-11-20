@@ -981,17 +981,74 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
             pianoSelectedNoteIndices.clear();
         }
     }
+    auto noteUnderMouse = [&]() {
+        for(int i = static_cast<int>(lane->pianoNotes.size()) - 1; i >= 0; --i) {
+            const auto& note = lane->pianoNotes[i];
+            if(atPitch(note, pitch) && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats)
+                return i;
+        }
+        return -1;
+    };
+    // Within this many beats of a note's end, a press resizes instead of moving.
+    const double edgeThreshold = std::max(grid * 0.2,
+        std::abs(beatAtOffset(mouse.x - timelineMin.x + 6.0f) - timelineBeat));
+    auto onRightEdge = [&](const auto& note) {
+        return std::abs(sourceBeat - note.startBeat - note.durationBeats) <= edgeThreshold;
+    };
+    // Hover cursor: what a press here would do. Cmd (ImGui's Ctrl on macOS)
+    // toggles a note in the selection or marquee-selects on empty space,
+    // Shift stretches, Alt (Option) duplicates, the right edge resizes, the
+    // body moves. ImGui has no copy/select cursors, so those get a small
+    // badge drawn beside the pointer.
+    if(hovered && pianoDragMode == PianoDragMode::None && !pianoMarqueeActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const auto& io = ImGui::GetIO();
+        const int hoverIndex = noteUnderMouse();
+        auto* fg = ImGui::GetForegroundDrawList();
+        const ImVec2 badge(mouse.x + 14.0f, mouse.y + 14.0f);
+        const ImU32 badgeBack = IM_COL32(40, 40, 40, 230), badgeInk = IM_COL32(255, 255, 255, 255);
+        if(io.KeyCtrl) {
+            fg->AddRectFilled(ImVec2(badge.x - 6.0f, badge.y - 5.0f), ImVec2(badge.x + 6.0f, badge.y + 5.0f), badgeBack, 2.0f);
+            if(hoverIndex >= 0) {
+                // toggle: a filled note inside the badge
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                fg->AddRectFilled(ImVec2(badge.x - 3.5f, badge.y - 2.0f), ImVec2(badge.x + 3.5f, badge.y + 2.0f), IM_COL32(250, 210, 90, 255));
+            } else {
+                // marquee: an outlined box
+                fg->AddRect(ImVec2(badge.x - 3.5f, badge.y - 2.5f), ImVec2(badge.x + 3.5f, badge.y + 2.5f), IM_COL32(250, 210, 90, 255));
+            }
+        } else if(hoverIndex >= 0) {
+            if(io.KeyShift || onRightEdge(lane->pianoNotes[hoverIndex])) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            } else {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+                if(io.KeyAlt) {
+                    // duplicate: a + badge
+                    fg->AddCircleFilled(badge, 6.0f, badgeBack);
+                    fg->AddLine(ImVec2(badge.x - 3.5f, badge.y), ImVec2(badge.x + 3.5f, badge.y), badgeInk, 1.5f);
+                    fg->AddLine(ImVec2(badge.x, badge.y - 3.5f), ImVec2(badge.x, badge.y + 3.5f), badgeInk, 1.5f);
+                }
+            }
+        }
+    }
+    // Alt-dragging copies: keep the + badge on the pointer until release.
+    if(pianoDragMode == PianoDragMode::Move && ImGui::IsMouseDown(ImGuiMouseButton_Left) && pianoDragDuplicating) {
+        auto* fg = ImGui::GetForegroundDrawList();
+        const ImVec2 badge(mouse.x + 14.0f, mouse.y + 14.0f);
+        fg->AddCircleFilled(badge, 6.0f, IM_COL32(40, 40, 40, 230));
+        fg->AddLine(ImVec2(badge.x - 3.5f, badge.y), ImVec2(badge.x + 3.5f, badge.y), IM_COL32(255, 255, 255, 255), 1.5f);
+        fg->AddLine(ImVec2(badge.x, badge.y - 3.5f), ImVec2(badge.x, badge.y + 3.5f), IM_COL32(255, 255, 255, 255), 1.5f);
+    }
+    // During a drag the cursor keeps showing the gesture.
+    if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if(pianoDragMode == PianoDragMode::Resize || pianoDragMode == PianoDragMode::Stretch)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        else if(pianoDragMode == PianoDragMode::Move) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
     if(hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         pianoDragNoteIndex = -1;
         pianoInsertionDrag = false;
-        int hitIndex = -1;
-        for(int i = static_cast<int>(lane->pianoNotes.size()) - 1; i >= 0; --i) {
-            const auto& note = lane->pianoNotes[i];
-            if(atPitch(note, pitch) && sourceBeat >= note.startBeat && sourceBeat <= note.startBeat + note.durationBeats) {
-                hitIndex = i;
-                break;
-            }
-        }
+        pianoDragDuplicating = false;
+        const int hitIndex = noteUnderMouse();
         const bool ctrlDown = ImGui::GetIO().KeyCtrl;
         if(hitIndex >= 0) {
             if(ctrlDown) {
@@ -1012,10 +1069,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                 // and drag it together.
                 const auto& note = lane->pianoNotes[hitIndex];
                 pianoDragNoteIndex = hitIndex;
-                const double edgeThreshold = std::max(grid * 0.2,
-                    std::abs(beatAtOffset(mouse.x - timelineMin.x + 6.0f) - timelineBeat));
-                pianoDragMode = std::abs(sourceBeat - note.startBeat - note.durationBeats) <= edgeThreshold
-                    ? PianoDragMode::Resize : PianoDragMode::Move;
+                pianoDragMode = onRightEdge(note) ? PianoDragMode::Resize : PianoDragMode::Move;
                 pianoDragBeatOffset = sourceBeat - note.startBeat;
                 if(ImGui::GetIO().KeyShift) {
                     // Shift+drag: stretch the selection (every note when the
@@ -1036,6 +1090,15 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                     }
                     pianoStretchOrigin = origin == std::numeric_limits<double>::max() ? 0.0 : origin;
                     pianoStretchGrab = std::max(sourceBeat, pianoStretchOrigin + grid * 0.25);
+                } else if(pianoDragMode == PianoDragMode::Resize) {
+                    // Right-edge drag: every selected note grows or shrinks
+                    // by the same amount as the one grabbed.
+                    pianoDragSnapshot.clear();
+                    for(int index : pianoSelectedNoteIndices) {
+                        if(index < 0 || index >= static_cast<int>(lane->pianoNotes.size())) continue;
+                        const auto& n = lane->pianoNotes[index];
+                        pianoDragSnapshot.push_back({index, n.startBeat, n.pitch, n.durationBeats});
+                    }
                 } else if(pianoDragMode == PianoDragMode::Move) {
                     pianoDragSnapshot.clear();
                     for(int index : pianoSelectedNoteIndices) {
@@ -1052,6 +1115,7 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
                         // "note" and hitIndex must not be dereferenced
                         // into lane->pianoNotes again after this point --
                         // push_back below can reallocate the vector.
+                        pianoDragDuplicating = true;
                         std::unordered_map<int, int> originalToDuplicate;
                         for(int index : pianoSelectedNoteIndices) {
                             if(index < 0 || index >= static_cast<int>(lane->pianoNotes.size())) continue;
@@ -1199,7 +1263,18 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         auto& note = lane->pianoNotes[pianoDragNoteIndex];
         if(pianoDragMode == PianoDragMode::Resize) {
             const double end = lane->pianoSnapToGrid ? std::round(sourceBeat / grid) * grid : sourceBeat;
-            note.durationBeats = std::max(grid, end - note.startBeat);
+            const double anchorDuration = std::max(grid, end - note.startBeat);
+            const auto anchorEntry = std::find_if(pianoDragSnapshot.begin(), pianoDragSnapshot.end(),
+                [&](const auto& entry) { return entry.index == pianoDragNoteIndex; });
+            if(pianoInsertionDrag || pianoDragSnapshot.size() <= 1 || anchorEntry == pianoDragSnapshot.end()) {
+                note.durationBeats = anchorDuration;
+            } else {
+                const double delta = anchorDuration - anchorEntry->durationBeats;
+                for(const auto& entry : pianoDragSnapshot) {
+                    if(entry.index < 0 || entry.index >= static_cast<int>(lane->pianoNotes.size())) continue;
+                    lane->pianoNotes[entry.index].durationBeats = std::max(grid, entry.durationBeats + delta);
+                }
+            }
         } else if(pianoDragMode == PianoDragMode::Move) {
             // Move every selected note by the same delta from where it
             // started the drag, rather than snapping each one straight
@@ -1240,7 +1315,13 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
         pianoDragMode == PianoDragMode::Stretch) &&
        pianoDragNoteIndex >= 0 && pianoDragNoteIndex < static_cast<int>(lane->pianoNotes.size())) {
         const int monitorPitch = lane->pianoNotes[pianoDragNoteIndex].pitch;
-        if(!editPreviewActive || editPreviewPitch != monitorPitch) {
+        if(editPreviewActive && editPreviewPitch != monitorPitch) {
+            // A new pitch strikes again: drop the gate for a frame so the
+            // instrument sees an edge, then sound the new pitch.
+            timeline.clearLiveOverride(context.sequence, editPreviewTrackId, editPreviewGateId);
+            editPreviewActive = false;
+            editPreviewRetriggerFrame = ImGui::GetFrameCount();
+        } else if(!editPreviewActive && ImGui::GetFrameCount() != editPreviewRetriggerFrame) {
             timeline.setPianoKeyPreview(context.sequence, track.id, clip->id, lane->id, monitorPitch);
             editPreviewActive = true;
             editPreviewTrackId = track.id; editPreviewClipId = clip->id; editPreviewLaneId = lane->id;

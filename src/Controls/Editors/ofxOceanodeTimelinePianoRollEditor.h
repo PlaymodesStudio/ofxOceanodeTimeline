@@ -33,10 +33,12 @@ public:
 private:
     char targetSearch[128] = {};
     bool pianoInsertionDrag = false;
+    bool pianoDragDuplicating = false;   // this Move drag started with Alt and drags copies
     bool editPreviewActive = false;
     std::string editPreviewTrackId, editPreviewClipId, editPreviewLaneId;
     std::string editPreviewGateId, editPreviewPitchId;
     int editPreviewPitch = -1;
+    int editPreviewRetriggerFrame = -1;   // the frame the gate dropped to retrigger a dragged note
     // Piano-roll keyboard-strip "audition" state: while a key is held down,
     // the lane's Gate/Pitch bindings get a live override (see
     // ofxOceanodeTimelineManager::setLiveOverride) so the bound parameters
