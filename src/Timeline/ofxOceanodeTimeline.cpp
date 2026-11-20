@@ -1178,6 +1178,66 @@ void ofxOceanodeTimelineManager::setContainer(ofxOceanodeContainer* owner) {
     for(const auto& path : parameterPaths) refreshTimelineFlag(path);
 }
 
+// ---- Paths of targets outside a macro ----
+// Plain text work on canvas ids and parameter paths: no macro node involved,
+// so it lives here, with the resolver, rather than with the macro timelines.
+
+namespace {
+bool outsideRootCanvas(const std::string& canvas) { return canvas.empty() || canvas == "Canvas" || canvas == "0"; }
+}
+
+size_t ofxOceanodeTimelineOutside::levels(const std::string& path) {
+    size_t count = 0;
+    while(path.compare(count * 3, 3, "../") == 0) ++count;
+    return count;
+}
+
+std::vector<std::string> ofxOceanodeTimelineOutside::canvasLevels(const std::string& canvas) {
+    std::vector<std::string> result;
+    if(outsideRootCanvas(canvas)) return result;
+    size_t from = 0;
+    for(size_t cut = canvas.find(" / "); cut != std::string::npos; cut = canvas.find(" / ", from)) {
+        result.push_back(canvas.substr(from, cut - from));
+        from = cut + 3;
+    }
+    result.push_back(canvas.substr(from));
+    return result;
+}
+
+std::string ofxOceanodeTimelineOutside::joinLevels(const std::vector<std::string>& levels, size_t from, size_t to) {
+    std::string result;
+    for(size_t i = from; i < to && i < levels.size(); ++i) result += (result.empty() ? "" : " / ") + levels[i];
+    return result;
+}
+
+std::string ofxOceanodeTimelineOutside::relativePath(const std::string& canvas, const std::string& absolutePath) {
+    const size_t separator = absolutePath.find("::");
+    const auto from = canvasLevels(canvas);
+    const auto to = canvasLevels(separator == std::string::npos ? std::string() : absolutePath.substr(0, separator));
+    const std::string local = separator == std::string::npos ? absolutePath : absolutePath.substr(separator + 2);
+    size_t common = 0;
+    while(common < from.size() && common < to.size() && from[common] == to[common]) ++common;
+    std::string result;
+    for(size_t i = common; i < from.size(); ++i) result += "../";
+    const std::string below = joinLevels(to, common, to.size());
+    return result + (below.empty() ? local : below + "::" + local);
+}
+
+// "Node/Param" is in the canvas itself, "Macro 2::Node/Param" further in,
+// "../Node/Param" in the canvas above.
+std::string ofxOceanodeTimelineOutside::absolutePath(const std::string& canvas, const std::string& path) {
+    if(outsideRootCanvas(canvas)) return path; // (a "../" left here leads nowhere)
+    if(isOutside(path)) {
+        const size_t cut = canvas.rfind(" / ");
+        return absolutePath(cut == std::string::npos ? std::string() : canvas.substr(0, cut), path.substr(3));
+    }
+    return path.find("::") == std::string::npos ? canvas + "::" + path : canvas + " / " + path;
+}
+
+ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findTarget(const ofxOceanodeContainer& base, const std::string& path) const {
+    return ofxOceanodeTimelineResolver{const_cast<ofxOceanodeContainer*>(&base), container}.find(path);
+}
+
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineResolver::find(const std::string& path) const {
     if(base == nullptr) return nullptr;
     if(!ofxOceanodeTimelineOutside::isOutside(path)) return base->findTimelineParameter(path);
