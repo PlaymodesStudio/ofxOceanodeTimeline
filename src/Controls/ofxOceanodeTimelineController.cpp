@@ -3101,6 +3101,7 @@ void ofxOceanodeTimelineController::draw() {
         // clips carry: the rows of each, under the track.
         if(level > 16) return;
         const auto carried = timeline.carriedTimelines(outer, macroTrack);
+        const float macroBlockTop = ImGui::GetCursorScreenPos().y;   // just under the macro track's own row
         for(size_t carriedIndex = 0; carriedIndex < carried.size(); ++carriedIndex) {
             auto* inner = carried[carriedIndex];
             ofxOceanodeTimelineManager::TimelineRef innerRef;
@@ -3153,6 +3154,36 @@ void ofxOceanodeTimelineController::draw() {
                 return found;
             };
             const std::vector<RowPlacement> placements = placementsOf(outerPlacements, visibleFrom, visibleTo);
+            // Where each macro clip starts and ends: a dashed hairline down
+            // this timeline's rows and their lanes, drawn over them once they
+            // are all in. The timelines stack, so the lines run from under
+            // the macro track's header to its last row or lane.
+            struct AtScopeEnd { std::function<void()> run; ~AtScopeEnd() { run(); } };
+            const AtScopeEnd spanEdges{[&, blockTop = ImGui::GetCursorScreenPos().y]() {
+                const float blockBottom = ImGui::GetCursorScreenPos().y;
+                if(blockBottom <= blockTop) return;
+                const ImU32 edge = IM_COL32(macroTrack.color.r, macroTrack.color.g, macroTrack.color.b, 150);
+                // (One device pixel wide.)
+                const float hair = 1.0f / std::max(1.0f, ImGui::GetIO().DisplayFramebufferScale.x);
+                constexpr float kDash = 4.0f, kPeriod = 8.0f;
+                std::vector<float> drawn;   // (a repeat ends where the next starts: one line)
+                dl->PushClipRect(ImVec2(zoneLeft, blockTop), ImVec2(windowRight, blockBottom), true);
+                for(const auto& placement : placements) {
+                    for(const double beat : {placement.from, placement.to}) {
+                        const float x = std::round(unfoldedOriginX + beatOffset(beat));
+                        if(x < zoneLeft || x > windowRight || std::find(drawn.begin(), drawn.end(), x) != drawn.end()) continue;
+                        drawn.push_back(x);
+                        // (Dashes counted from the macro track's first row: they
+                        // carry on from one timeline's rows to the next.)
+                        const float phase = std::fmod(blockTop - macroBlockTop, kPeriod);
+                        for(float y = blockTop - phase; y < blockBottom; y += kPeriod) {
+                            const float y0 = std::max(y, blockTop), y1 = std::min(y + kDash, blockBottom);
+                            if(y1 > y0) dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + hair, y1), edge);
+                        }
+                    }
+                }
+                dl->PopClipRect();
+            }};
             // The placement the playhead is in, on screen or not (none: no
             // clip plays this timeline there): where "+ Key" stores a keyframe.
             const double playheadBeat = transportState.beatPosition;
@@ -3182,7 +3213,6 @@ void ofxOceanodeTimelineController::draw() {
                     if(right <= left) continue;
                     dl->AddRectFilled(ImVec2(left, rowMin.y + inset), ImVec2(std::max(left + 1.0f, right - (inset > 0.0f ? 1.0f : 0.0f)), rowMax.y - inset),
                                       IM_COL32(macroTrack.color.r, macroTrack.color.g, macroTrack.color.b, placement.muted ? bandAlpha / 3 : bandAlpha));
-                    dl->AddLine(ImVec2(left, rowMin.y), ImVec2(left, rowMax.y), IM_COL32(macroTrack.color.r, macroTrack.color.g, macroTrack.color.b, 110));
                     if(!withTracks) continue;
                     size_t thinCount = 0;
                     for(const auto& shownTrack : placement.shown->tracks) if(summarized(*placement.shown, shownTrack)) ++thinCount;
@@ -3577,15 +3607,9 @@ void ofxOceanodeTimelineController::draw() {
                 // Clips, wherever a placement plays them.
                 struct Hit { size_t placement; std::string clipId; float x1, x2; };
                 std::vector<Hit> hits;
+                // (The row keeps its own background over the macro clips' spans;
+                // spanEdges marks where each starts and ends.)
                 dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), rowMax, true);
-                for(const auto& placement : placements) {
-                    const float x1 = std::max(zoneLeft, unfoldedOriginX + beatOffset(placement.from));
-                    const float x2 = std::min(rowMax.x, unfoldedOriginX + beatOffset(placement.to));
-                    if(x2 <= x1) continue;
-                    dl->AddRectFilled(ImVec2(x1, rowMin.y), ImVec2(x2, rowMax.y),
-                                      IM_COL32(macroTrack.color.r, macroTrack.color.g, macroTrack.color.b, placement.muted ? 10 : 26));
-                    dl->AddLine(ImVec2(x1, rowMin.y), ImVec2(x1, rowMax.y), IM_COL32(macroTrack.color.r, macroTrack.color.g, macroTrack.color.b, 110));
-                }
                 for(size_t p = 0; p < placements.size(); ++p) {
                     const auto& placement = placements[p];
                     const float left = std::max(zoneLeft, unfoldedOriginX + beatOffset(placement.from));
@@ -8249,6 +8273,10 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     // frame would let them stomp on each other's notes/points. Click a
     // lane's header (or its canvas) to focus it before editing it.
     const float clipIndent = kClipEditorIndent + clipEditorExtraIndent;   // (tabbed in further under an unfolded row)
+    // A lane's background: under a macro track, the same as its track's row
+    // (the row's colour carries on down its lanes).
+    const ImU32 laneBackground = rowScope != nullptr ? mutedTrackColor(track.color, 0.09f)
+                                                     : mutedTrackColor(track.color, 0.13f, 0.26f);
     if(focusedTrack && clip->id == editorState.editorClipId) {
         if(requestAddLanePopup) {
             requestAddLanePopup = false;
@@ -8465,6 +8493,8 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
         ImDrawList* rowDl = ImGui::GetWindowDrawList();
         // (Its indentation: a strip per level it is inside, the track's last.)
         drawGutter(rowDl, rowMin, rowMax.y, clipIndent);
+        // The lane's own background along the whole row, as when it is unfolded.
+        rowDl->AddRectFilled(ImVec2(rowZoneLeft, rowMin.y), rowMax, laneBackground);
         rowDl->AddRectFilled(ImVec2(rowMin.x + clipIndent, rowMin.y), ImVec2(rowZoneLeft, rowMax.y), laneHeaderColor(track.color));
         ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 5.0f + clipIndent, rowMin.y + 2.0f));
         if(foldButton(("##laneExpand" + lane->id).c_str(), false)) editorState.collapsedLaneIds.erase(lane->id);
@@ -8491,7 +8521,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
             const int last = clip->repeatContent ? std::max(first, static_cast<int>(std::floor(
                 (beatAtOffset(right - originX) - clip->startBeat) / cycle))) : 0;
             rowDl->PushClipRect(ImVec2(rowZoneLeft, rowMin.y), rowMax, true);
-            rowDl->AddRectFilled(ImVec2(left, rowMin.y), ImVec2(right, rowMax.y), mutedTrackColor(track.color, 0.13f, 0.26f));
+            rowDl->AddRectFilled(ImVec2(left, rowMin.y), ImVec2(right, rowMax.y), laneBackground);
             const float lift = selectedClips.count({track.id, clip->id}) > 0 ? 0.45f : 0.0f;
             auto lit = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * lift); };
             const ImU32 ink = IM_COL32(lit(track.color.r), lit(track.color.g), lit(track.color.b), 255);
@@ -8559,8 +8589,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     // is inside, each in that level's header colour (the track's own last).
     // The editor and its properties panel sit tabbed in under the track's header.
     drawGutter(dl, editorMin, editorMax.y, clipIndent);
-    dl->AddRectFilled(ImVec2(editorMin.x + clipIndent, editorMin.y), editorMax,
-                      mutedTrackColor(track.color, 0.13f, 0.26f));
+    dl->AddRectFilled(ImVec2(editorMin.x + clipIndent, editorMin.y), editorMax, laneBackground);
     // The lane's header: its track's header colour, 25% darker.
     dl->AddRectFilled(ImVec2(editorMin.x + clipIndent, editorMin.y), ImVec2(zoneLeft, editorMax.y),
                       laneHeaderColor(track.color));
