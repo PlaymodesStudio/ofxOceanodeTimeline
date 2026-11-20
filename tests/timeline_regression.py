@@ -561,6 +561,7 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
         # Macro timelines walk real macro nodes, which this mock container has
         # none of: no macro timeline is ever played here.
         (folder / "macro_stub.cpp").write_text(
+            '#include "Managers/ofxOceanodeContainer.h"\n'
             '#include "Timeline/ofxOceanodeTimeline.h"\n'
             'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::macroNodeParameter('
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
@@ -584,7 +585,14 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'ofxOceanodeContainer* ofxOceanodeTimelineManager::canvasContainer(const std::string& canvas) const '
             '{ return canvas.empty() || canvas == "Canvas" || canvas == "0" ? container : nullptr; }\n'
             'ofxOceanodeTimelineCanvas* ofxOceanodeTimelineManager::getMacroTimelines(ofxOceanodeContainer&) { return nullptr; }\n'
-            'std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContainer&) const { return std::string(); }\n')
+            'std::string ofxOceanodeTimelineManager::getMacroSequenceLabel(ofxOceanodeContainer&) const { return std::string(); }\n'
+            # One canvas: no target is outside it, and every path is its own.
+            'std::string ofxOceanodeTimelineOutside::relativePath(const std::string&, const std::string& path) { return path; }\n'
+            'std::string ofxOceanodeTimelineOutside::absolutePath(const std::string&, const std::string& path) { return path; }\n'
+            'ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findTarget(const ofxOceanodeContainer& base, '
+            'const std::string& path) const { return base.findTimelineParameter(path); }\n'
+            'ofJson ofxOceanodeTimelineManager::outsideTargetsJson(const std::string&, const ofxOceanodeTimelineCanvas&) const '
+            '{ return ofJson::array(); }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(inject_fixture(cases) + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
