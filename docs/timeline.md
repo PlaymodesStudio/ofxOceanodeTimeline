@@ -637,9 +637,10 @@ the track's defaults. They are stored on the later clip.
   overlap is entered from the incoming source (scrubbing backwards), the morph
   runs on two graphs; the window says which is running and why.
 
-**Source window.** Double-click a clip outside an overlap (or **Source...**,
-or the settings button on the track's pad): the source's folder, problems,
-checks, kept-out nodes, **Refresh** and **Save Source**.
+**Source window.** Double-click a clip outside an overlap (or **Source...**
+in the clip's menu): the source's folder, problems, checks, kept-out nodes,
+**Refresh** and **Save Source**. The button on the track's pad opens the
+track's menu, the same one a right-click on its header opens.
 
 **Pre-loading.** A source loads when the playhead reaches its clip, which can
 stall that frame. **Pre-load next source (s)** in the track's menu loads the
@@ -647,7 +648,7 @@ next clip's source that long before the clip starts. Loaded ahead, the source
 runs silent: its portals publish, it takes GPU memory and its synths may
 start. It is off by default, and is not used for a Morph set to run in place.
 
-**Unfolding.** The track's arrow (or **Unfold its sources here**) shows the
+**Unfolding.** The arrow on the track's header shows the
 sources under the track. The sources playing at the playhead (one, or the two
 of a transition) show their tracks as a macro track does: editable in place.
 The other sources show dimmed, read-only rows with their clips as bars; a

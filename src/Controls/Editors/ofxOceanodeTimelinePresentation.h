@@ -83,11 +83,14 @@ inline bool drawClipTiming(ofxOceanodeTimelineManager& timeline, ofxOceanodeTime
         } else ImGui::TextWrapped("%s", label);
         ImGui::SetNextItemWidth(-FLT_MIN);
     };
-    field("Chance (%)", "Chance");
-    float chance = clip.chance * 100.0f;
-    if(ImGui::SliderFloat("##chance", &chance, 0.0f, 100.0f, "%.0f%%"))
-        changed = timeline.setClipChance(sequence, track.id, clip.id, std::round(chance) / 100.0f) || changed;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Probability that the whole clip plays.\nRolled again each time the clip starts (play, seek, every loop pass).");
+    // (A Macro Morphing Track's clips always play: no chance.)
+    if(!track.isMorphTrack) {
+        field("Chance (%)", "Chance");
+        float chance = clip.chance * 100.0f;
+        if(ImGui::SliderFloat("##chance", &chance, 0.0f, 100.0f, "%.0f%%"))
+            changed = timeline.setClipChance(sequence, track.id, clip.id, std::round(chance) / 100.0f) || changed;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Probability that the whole clip plays.\nRolled again each time the clip starts (play, seek, every loop pass).");
+    }
     field("Start (beats)", "Start");
     double start = clip.startBeat;
     if(ImGui::InputDouble("##start", &start, rows ? 0.0 : view.editIncrement(), 1, "%.3f") && std::isfinite(start)) {

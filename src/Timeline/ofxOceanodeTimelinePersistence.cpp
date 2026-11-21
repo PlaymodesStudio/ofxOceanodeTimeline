@@ -1203,6 +1203,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 if(track.isMorphTrack) {
                     clip.morphSource = clipJson.value("morphSource", std::string());
                     clip.reversed = false; // a source's graph only runs forwards
+                    clip.chance = 1.0f;    // its clips always play
                     if(clipJson.contains("morphIn") && clipJson["morphIn"].is_object()) {
                         const auto& transition = clipJson["morphIn"];
                         clip.morphIn.morph = transition.value("morph", false);

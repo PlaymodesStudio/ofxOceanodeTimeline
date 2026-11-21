@@ -4788,6 +4788,8 @@ bool ofxOceanodeTimelineManager::setLaneSolo(ofxOceanodeTimelineSequence& sequen
 bool ofxOceanodeTimelineManager::setClipChance(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId, float chance) {
     auto* clip = getClip(sequence, trackId, clipId);
     chance = ofClamp(chance, 0.0f, 1.0f);
+    // (A Macro Morphing Track's clips always play.)
+    if(const auto* track = getTrack(sequence, trackId); track != nullptr && track->isMorphTrack) chance = 1.0f;
     if(clip == nullptr || clip->chance == chance) return false;
     clip->chance = chance;
     // The roll reads the clip's chance, so it changes now; follow the

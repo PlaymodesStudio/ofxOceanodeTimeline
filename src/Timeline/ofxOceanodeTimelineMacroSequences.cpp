@@ -106,7 +106,13 @@ ofJson ofxOceanodeTimelineManager::morphSourceEditsJson() const {
         const auto& document = entry.second;
         if(!document.timelines || morphDocumentSignature(document) == document.savedSignature) continue;
         ofJson item = canvasToJson(*document.timelines);
-        item["folder"] = document.folder;
+        // The folder as its engine names it (relative to the data folder, as
+        // the track's state does), so the project reads the same on another
+        // machine; the path it was loaded from only when no engine has it.
+        std::string folder = document.folder;
+        for(const auto& spelled : morphSourceFolders())
+            if(libraryKey(spelled) == entry.first) { folder = spelled; break; }
+        item["folder"] = folder;
         item["macroFile"] = document.macroFile;
         edits.push_back(std::move(item));
     }

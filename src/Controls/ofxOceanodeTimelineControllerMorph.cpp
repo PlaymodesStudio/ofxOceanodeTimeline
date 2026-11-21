@@ -9,6 +9,7 @@
 #include "Managers/ofxOceanodeContainer.h"
 #include "MacroMixerGui.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -159,10 +160,12 @@ void ofxOceanodeTimelineController::drawMorphOverlaps(const ofxOceanodeTimelineM
     const bool windowHere = morphTransitionOpen && morphWindowRef == morphRefHere(timeline);
     const float top = laneMin.y + 3.0f, bottom = max.y - 3.0f;
     if(bottom <= top) return;
-    // The track's colour, lifted: brighter than the two clips under it.
+    // The inverse of the track's colour (each channel 255 - c), so a
+    // crossfade stands apart from the two clips under it; lifted for its lines.
+    const ofColor inverse(255 - track.color.r, 255 - track.color.g, 255 - track.color.b);
     auto lifted = [&](float lift, int alpha) {
         auto channel = [&](unsigned char c) { return static_cast<int>(c + (255 - c) * lift); };
-        return IM_COL32(channel(track.color.r), channel(track.color.g), channel(track.color.b), alpha);
+        return IM_COL32(channel(inverse.r), channel(inverse.g), channel(inverse.b), alpha);
     };
     for(const auto& overlap : ofxOceanodeTimelineManager::morphOverlaps(track)) {
         const float x1 = laneMin.x + beatOffset(overlap.fromBeat);
@@ -174,8 +177,17 @@ void ofxOceanodeTimelineController::drawMorphOverlaps(const ofxOceanodeTimelineM
         const bool edited = windowHere && morphTransitionClipId == overlap.laterClipId;
         const bool hovered = clipDragMode == ClipDragMode::None && !ImGui::IsAnyItemActive() &&
                              hoverRect(ImVec2(x1, top), ImVec2(x2, bottom));
-        const ImU32 fill = lifted(0.35f, edited ? 150 : hovered ? 125 : 95);
-        const ImU32 line = lifted(0.75f, edited || hovered ? 255 : 200);
+        // A double-click anywhere on the box opens the transition, whichever
+        // of the two clips' own handles (an edge, the chance knob) is under
+        // the mouse: those take the click before the clip's body does.
+        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoverRect(ImVec2(x1, top), ImVec2(x2, bottom))) {
+            anyClipInteractionClaimedThisFrame = true;
+            // (The clip under it may have asked for its source on this click.)
+            if(morphSourceFocus) morphSourceOpen = morphSourceFocus = false;
+            openMorphTransition(timeline, overlap.laterClipId);
+        }
+        const ImU32 fill = lifted(0.0f, edited ? 190 : hovered ? 165 : 135);
+        const ImU32 line = lifted(0.5f, edited || hovered ? 255 : 210);
         dl->AddRectFilled(ImVec2(x1, top), ImVec2(x2, bottom), fill);
         dl->PushClipRect(ImVec2(x1, top), ImVec2(x2, bottom), true);
         dl->AddLine(ImVec2(x1, top), ImVec2(x2, bottom), line, 1.0f);
@@ -243,8 +255,57 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
         if(!focus) return;
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         ImGui::SetNextWindowPos(ImVec2(mouse.x + 16.0f, mouse.y + 8.0f), ImGuiCond_Always);
+        // (Asked for: shown whole, even if it was left collapsed to its title bar.)
+        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
         ImGui::SetNextWindowFocus();
         focus = false;
+    };
+    // Each of these windows is an OS window of its own, kept above the
+    // application's: opened under the mouse, a click on the timeline would
+    // otherwise send it behind.
+    auto onTop = []() {
+        static ImGuiWindowClass floating;
+        floating.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost | ImGuiViewportFlags_NoAutoMerge;
+        ImGui::SetNextWindowClass(&floating);
+    };
+    // ImGui resizes a window from its four edges and its two lower corners:
+    // these are the two upper ones. Called right after Begin.
+    auto upperCorners = []() {
+        struct Drag { ImGuiID window = 0; int corner = 0; ImVec2 mouse, pos, size; };
+        static Drag drag;
+        constexpr float kZone = 9.0f;
+        const ImVec2 minimum(360.0f, 120.0f);
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if(window == nullptr || window->Collapsed) return;
+        const ImVec2 pos = window->Pos, size = window->Size;
+        // (Laid out outside the content: the cursor and the content's extent are put back.)
+        const ImVec2 cursor = window->DC.CursorPos, cursorMax = window->DC.CursorMaxPos, previousLine = window->DC.CursorPosPrevLine;
+        ImGui::PushClipRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), false);
+        for(int corner = 0; corner < 2; ++corner) {
+            const bool left = corner == 0;
+            ImGui::SetCursorScreenPos(ImVec2(left ? pos.x : pos.x + size.x - kZone, pos.y));
+            ImGui::PushID(corner);
+            ImGui::InvisibleButton("##upperCorner", ImVec2(kZone, kZone));
+            ImGui::PopID();
+            const bool active = ImGui::IsItemActive();
+            if(ImGui::IsItemHovered() || active) ImGui::SetMouseCursor(left ? ImGuiMouseCursor_ResizeNWSE : ImGuiMouseCursor_ResizeNESW);
+            if(ImGui::IsItemActivated()) drag = {window->ID, corner, ImGui::GetIO().MousePos, pos, size};
+            if(active && drag.window == window->ID && drag.corner == corner) {
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const float dx = mouse.x - drag.mouse.x, dy = mouse.y - drag.mouse.y;
+                // The opposite lower corner stays where it is.
+                const float width = std::max(minimum.x, left ? drag.size.x - dx : drag.size.x + dx);
+                const float height = std::max(minimum.y, drag.size.y - dy);
+                const float x = left ? drag.pos.x + drag.size.x - width : drag.pos.x;
+                const float y = drag.pos.y + drag.size.y - height;
+                ImGui::SetWindowPos(window, ImVec2(x, y), ImGuiCond_Always);
+                ImGui::SetWindowSize(window, ImVec2(width, height), ImGuiCond_Always);
+            }
+        }
+        ImGui::PopClipRect();
+        window->DC.CursorPos = cursor;
+        window->DC.CursorMaxPos = cursorMax;
+        window->DC.CursorPosPrevLine = previousLine;
     };
     auto wrapped = [](const ImVec4* color, const std::string& text) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kMorphWrapWidth);
@@ -259,7 +320,9 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
         const std::string title = "Macro Morphing Routers - " + timeline.timelineName(morphWindowRef) +
                                   "###timelineMorphRouters" + ofToString(windowId);
         ImGui::SetNextWindowSizeConstraints(ImVec2(360.0f, 120.0f), ImVec2(FLT_MAX, FLT_MAX));
+        onTop();
         if(ImGui::Begin(title.c_str(), &morphRoutersOpen, windowFlags)) {
+            upperCorners();
             if(!status.empty()) wrapped(&kMorphWarning, status);
             if(!timeline.morphHasPublisher(sequence))
                 wrapped(nullptr, "No Timeline node points at this timeline: the routers appear as the ports of a "
@@ -287,7 +350,9 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
             const std::string title = "Morphing Source - " + (sourceName.empty() ? clip->name : sourceName) +
                                       "###timelineMorphSource" + ofToString(windowId);
             ImGui::SetNextWindowSizeConstraints(ImVec2(360.0f, 120.0f), ImVec2(FLT_MAX, FLT_MAX));
+            onTop();
             if(ImGui::Begin(title.c_str(), &morphSourceOpen, windowFlags)) {
+                upperCorners();
                 if(!status.empty()) wrapped(&kMorphWarning, status);
                 const auto revision = engine != nullptr ? engine->macro(clip->morphSource) : MacroMixerRuntime::Revision();
                 if(engine == nullptr) ImGui::TextDisabled("The track's engine is not available.");
@@ -339,7 +404,9 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
             const std::string title = "Transition - " + (earlier != nullptr ? earlier->name + " > " : std::string()) + clip->name +
                                       "###timelineMorphTransition" + ofToString(windowId);
             ImGui::SetNextWindowSizeConstraints(ImVec2(360.0f, 120.0f), ImVec2(FLT_MAX, FLT_MAX));
+            onTop();
             if(ImGui::Begin(title.c_str(), &morphTransitionOpen, windowFlags)) {
+                upperCorners();
                 if(overlapping) ImGui::TextDisabled("Over the overlap: %.2f beats", overlap.toBeat - overlap.fromBeat);
                 else wrapped(&kMorphWarning, "This clip does not overlap the clip before it: it starts with a hard switch. "
                                               "These settings are kept for when it does.");

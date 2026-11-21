@@ -487,6 +487,7 @@ std::string ofxOceanodeTimelineManager::addMorphSource(ofxOceanodeTimelineSequen
     }
     // As a macro clip: its content is one pass of the source's timeline, repeated.
     if(auto* clip = getClip(sequence, trackId, clipId)) {
+        clip->name = source->name();   // (not its id, which the clip keeps in morphSource)
         clip->contentDurationBeats = length;
         clip->contentStretch = 1.0;
         clip->repeatContent = true;
@@ -521,6 +522,7 @@ void ofxOceanodeTimelineManager::applyMorphAnswers(const TimelineRef& ref, Morph
             if(!(length > 0.0)) length = 8.0 * beatsPerBarOf(*sequence);
             const auto clipId = appendMorphClip(*sequence, trackId, source->id(), length);
             if(auto* clip = getClip(*sequence, trackId, clipId)) {
+                clip->name = source->name();
                 clip->contentDurationBeats = length;
                 clip->contentStretch = 1.0;
                 clip->repeatContent = true;
@@ -625,12 +627,9 @@ void ofxOceanodeTimelineManager::presentMorphScene(const TimelineRef& ref, const
         const auto at = morphSceneAt(track, beat);
         const auto* origin = at.originClipId.empty() ? nullptr : sequence.findClip(track.id, at.originClipId);
         const auto* target = at.targetClipId.empty() ? nullptr : sequence.findClip(track.id, at.targetClipId);
-        // As its timeline's engine rolls a clip's chance.
-        const auto* player = engineFor(ref);
-        const auto& context = player != nullptr ? player->playContext : playContext;
+        // (No chance on this track's clips: a value left in a file is not rolled.)
         const auto silent = [&](const ofxOceanodeTimelineClip* clip) {
-            return clip == nullptr || clip->muted || clip->morphSource.empty() ||
-                   (clip->chance < 1.0f && ofxOceanodeTimelineClipChanceSilenced(*clip, context));
+            return clip == nullptr || clip->muted || clip->morphSource.empty();
         };
         // A silent clip plays nothing: the other one of an overlap is alone.
         if(silent(origin)) { origin = silent(target) ? nullptr : target; target = nullptr; }
