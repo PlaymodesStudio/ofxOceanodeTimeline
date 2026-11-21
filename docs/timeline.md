@@ -45,6 +45,27 @@ groups, audio settings and track volume automation are copied. Clip groups
 within the track are copied independently; links to other tracks stay with
 the original. The copy is selected, and duplication can be undone.
 
+**Copy track** (or **Copy folder**, or Cmd+C with tracks selected) copies
+tracks to paste into this or any other timeline, in any Timeline window:
+right-click a track there and choose **Paste track after this**, or press
+Cmd+V (after the selected track, else at the end) or the toolbar's **Paste**.
+The pasted tracks keep their targets, clips, note groups and clip groups, and
+do not depend on the timeline they came from, which can then be removed. Into
+a macro's timeline (or out of one) the targets' paths are rebased, so they
+still reach the same parameters. A Macro Morphing Track is never copied; a
+Global Track goes only to a timeline of its own canvas without one; a track
+playing another timeline stays in that canvas, and never plays the timeline
+it is pasted into. Beats are copied as beats: the pasted clips play at the
+receiving timeline's tempo and loop.
+
+**Copy clip** (in a clip's menu, or Cmd+C with clips selected) copies clips
+with their targets. **Paste clip here** in a track's or a target row's menu
+pastes them from the clicked beat, keeping their spacing; Cmd+V pastes them
+onto the selected track at the playhead, or onto a new track when none is
+selected. The track takes the copied clips' targets it lacks (and their note
+group); targets it already has are reused. Audio clips go only on audio
+tracks, automation clips only on automation tracks. Every paste can be undone.
+
 The **Clips** view is the default arrangement: each clip appears once, with a
 content/target summary and miniature previews. **Targets** shows parameter
 rows instead. A clip affecting several parameters appears on several target

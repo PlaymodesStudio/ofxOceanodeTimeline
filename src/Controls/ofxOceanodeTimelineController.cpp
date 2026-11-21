@@ -1283,7 +1283,8 @@ void ofxOceanodeTimelineController::beginHistoryGesture(ofxOceanodeTimelineManag
     if(!historyKey && (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1) ||
        ImGui::IsAnyItemActive() || ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
        ImGui::IsKeyPressed(ImGuiKey_Backspace, false) || ImGui::IsKeyPressed(ImGuiKey_S, false) ||
-       ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
+       ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+       ((io.KeyCtrl || io.KeySuper) && ImGui::IsKeyPressed(ImGuiKey_V, false)))) {
         // The global transport's settings, and each timeline open in the
         // editor or unfolded in it (each keeps its own history).
         timeline.beginGlobalEdit();
@@ -2283,6 +2284,21 @@ void ofxOceanodeTimelineController::draw() {
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("New track with an audio file. Wave tracks play on the timeline's own transport\n"
                           "(a relative timeline's only while it previews).");
+    {
+        const auto& copiedNow = timeline.trackClipboard();
+        if(copiedNow.kind != ofxOceanodeTimelineManager::TrackClipboard::Kind::None && shownSequence != nullptr) {
+            ImGui::SameLine();
+            if(ImGui::Button("Paste##pasteCopied")) pasteAtSelection(timeline, transportState.beatPosition);
+            if(ImGui::IsItemHovered()) {
+                const bool clips = copiedNow.kind == ofxOceanodeTimelineManager::TrackClipboard::Kind::Clips;
+                const std::string what = ofToString(copiedNow.count) + (clips ? " clip" : " track") + (copiedNow.count == 1 ? "" : "s");
+                ImGui::SetTooltip(clips ? "Paste the %s copied (Cmd+V): onto the selected track at the playhead,\n"
+                                          "or onto a new track when none is selected."
+                                        : "Paste the %s copied (Cmd+V): after the selected track, or at the end.",
+                                  what.c_str());
+            }
+        }
+    }
     ImGui::PopStyleVar(3);
     {
         // Stop just short of the next row (the style's item spacing below the rows).
@@ -2322,6 +2338,23 @@ void ofxOceanodeTimelineController::draw() {
        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
         keyboardClipDeletionRequests.assign(selectedClips.begin(), selectedClips.end());
         selectedClips.clear();
+    }
+    // Cmd+C / Cmd+V: the selected clips (else tracks), to any timeline's
+    // selection. Like Delete, only while the arrangement has the keyboard:
+    // the clip editor's piano roll copies its notes with the same keys.
+    {
+        const auto& keys = ImGui::GetIO();
+        // (Over the clip editor the keys are its own: a piano roll pastes notes at the mouse.)
+        const bool overEditor = std::any_of(editorScreenSpans.begin(), editorScreenSpans.end(), [&](const auto& span) {
+            return keys.MousePos.y >= span.first && keys.MousePos.y <= span.second;
+        });
+        if((keys.KeyCtrl || keys.KeySuper) && !keys.KeyShift && !keys.KeyAlt && !overEditor &&
+           ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+           !keys.WantTextInput && !ImGui::IsAnyItemActive() && !lastClickInEditor &&
+           !(editorState.clipEditorOpen && laneEditors.hasNoteSelection(editorState.editorLaneId))) {
+            if(ImGui::IsKeyPressed(ImGuiKey_C, false)) copySelection(timeline);
+            else if(ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteAtSelection(timeline, transportState.beatPosition);
+        }
     }
     // Grouping/ungrouping is reachable two ways, per the request that
     // prompted this: a toolbar button here for whatever is currently
@@ -4259,6 +4292,9 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 drawTrackArrangeMenu(timeline, track);
                 if(ImGui::MenuItem("Duplicate folder")) duplicateTrackId = track.id;
+                if(ImGui::MenuItem("Copy folder", "Cmd+C")) copyTracksAt(timeline, track.id);
+                if(const auto label = pasteLabel(timeline, false, false); !label.empty())
+                    if(ImGui::MenuItem((label + " after this").c_str())) trackPaste = {true, false, track.id, 0.0};
                 contextMenuSection("Remove");
                 if(ImGui::MenuItem("Delete folder (keep its tracks)")) {
                     requestFolderDeletion = true; folderDeletionId = track.id; folderDeletionKeepsTracks = true;
@@ -4732,6 +4768,12 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 ImGui::CloseCurrentPopup();
             }
+            if(const auto label = pasteLabel(timeline, true, true); !label.empty() && !track.isMorphTrack) {
+                if(ImGui::MenuItem(label.c_str())) {
+                    trackPaste = {true, true, track.id, snapBeat(pendingWaveClipBeat)};
+                    ImGui::CloseCurrentPopup();
+                }
+            }
             if(!track.isMorphTrack && ImGui::MenuItem("Load clip from disk...")) {
                 clipFileRequest = ClipFileRequest::Load;
                 clipFileTrackId = track.id;
@@ -4834,6 +4876,19 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::MenuItem("Duplicate track")) {
                 duplicateTrackId = track.id;
                 ImGui::CloseCurrentPopup();
+            }
+            if(!track.isMorphTrack) {
+                const bool several = selectedTracks.size() > 1 && selectedTracks.count(track.id) > 0;
+                const std::string copyLabel = several ? "Copy " + ofToString(selectedTracks.size()) + " tracks" : "Copy track";
+                if(ImGui::MenuItem(copyLabel.c_str(), "Cmd+C")) copyTracksAt(timeline, track.id);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Copies the track with its targets and clips, to paste into this or any other timeline.");
+            }
+            if(const auto label = pasteLabel(timeline, false, false); !label.empty()) {
+                if(ImGui::MenuItem((label + " after this").c_str())) {
+                    trackPaste = {true, false, track.id, 0.0};
+                    ImGui::CloseCurrentPopup();
+                }
             }
             if(ImGui::MenuItem("Remove track")) {
                 trackDeletionId = track.id;
@@ -5889,6 +5944,15 @@ void ofxOceanodeTimelineController::draw() {
                         ? "One clip spanning them all. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
                         : "Wave, state-capture, macro and morphing clips, and clips with an LFO lane, cannot be merged.");
             }
+            if(!track.isMorphTrack) {
+                contextMenuSection("Copy");
+                const bool several = selectedClips.size() > 1 && selectedClips.count({track.id, clip.id}) > 0;
+                const std::string copyLabel = several ? "Copy " + ofToString(selectedClips.size()) + " clips" : "Copy clip";
+                if(ImGui::MenuItem(copyLabel.c_str(), "Cmd+C")) copyClipsAt(timeline, track.id, clip.id);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Copies with its targets: paste it on a track of this or any other timeline\n"
+                                      "(right-click the track where it should start), and the track takes the targets it lacks.");
+            }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete clip")) {
                 clipDeletionTrackId = track.id;
@@ -6469,6 +6533,12 @@ void ofxOceanodeTimelineController::draw() {
                         }
                     }
                     contextMenuSection("Create");
+                    if(const auto label = pasteLabel(timeline, true, true); !label.empty()) {
+                        if(ImGui::MenuItem(label.c_str())) {
+                            trackPaste = {true, true, track.id, pendingStartBeat};
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
                     if(ImGui::MenuItem("New clip here")) {
                         pendingTrackId = track.id;
                         pendingClipBindingId = binding.id;
@@ -7021,6 +7091,7 @@ void ofxOceanodeTimelineController::draw() {
             if(auto* macroCanvas = timeline.findMacroContainer(scope(timeline), *macroTrack)) timeline.saveGlobalMacro(*macroCanvas);
     }
 
+    serviceTrackPaste(timeline);
     if(!duplicateTrackId.empty()) {
         const auto id = timeline.duplicateTrack(scope(timeline), duplicateTrackId);
         duplicateTrackId.clear();
@@ -7807,9 +7878,110 @@ void ofxOceanodeTimelineController::draw() {
     }
     drawClipRenamePopup(timeline);
     drawClipImportPopup(timeline);
+    drawPasteNoticePopup();
     drawClipSettingsWindow(timeline, endBeat);
     drawMorphWindows(timeline);
     finishHistoryGesture(timeline);
+}
+
+// ---- Copy and paste of tracks and clips ----
+
+void ofxOceanodeTimelineController::copyTracksAt(ofxOceanodeTimelineManager& timeline, const std::string& trackId) {
+    std::vector<std::string> ids{trackId};
+    if(selectedTracks.size() > 1 && selectedTracks.count(trackId) > 0) ids.assign(selectedTracks.begin(), selectedTracks.end());
+    timeline.copyTracks(scope(timeline), ids);
+}
+
+void ofxOceanodeTimelineController::copyClipsAt(ofxOceanodeTimelineManager& timeline, const std::string& trackId,
+                                                const std::string& clipId) {
+    std::vector<std::pair<std::string, std::string>> clips{{trackId, clipId}};
+    if(selectedClips.size() > 1 && selectedClips.count({trackId, clipId}) > 0) clips.assign(selectedClips.begin(), selectedClips.end());
+    timeline.copyClips(scope(timeline), clips);
+}
+
+std::string ofxOceanodeTimelineController::pasteLabel(const ofxOceanodeTimelineManager& timeline, bool clips, bool here) const {
+    using Kind = ofxOceanodeTimelineManager::TrackClipboard::Kind;
+    const auto& copied = timeline.trackClipboard();
+    if(copied.kind != (clips ? Kind::Clips : Kind::Tracks) || copied.count <= 0) return std::string();
+    const std::string noun = clips ? "clip" : "track";
+    std::string label = copied.count == 1 ? "Paste " + noun : "Paste " + ofToString(copied.count) + " " + noun + "s";
+    return here ? label + " here" : label;
+}
+
+void ofxOceanodeTimelineController::copySelection(ofxOceanodeTimelineManager& timeline) {
+    if(!selectedClips.empty())
+        timeline.copyClips(scope(timeline), {selectedClips.begin(), selectedClips.end()});
+    else if(!selectedTracks.empty())
+        timeline.copyTracks(scope(timeline), {selectedTracks.begin(), selectedTracks.end()});
+}
+
+void ofxOceanodeTimelineController::pasteAtSelection(ofxOceanodeTimelineManager& timeline, double playheadBeat) {
+    using Kind = ofxOceanodeTimelineManager::TrackClipboard::Kind;
+    const auto kind = timeline.trackClipboard().kind;
+    if(kind == Kind::None || shownSequence == nullptr) return;
+    const auto& tracks = scope(timeline).tracks;
+    if(kind == Kind::Tracks) {
+        // After the last selected track (at the end when none is).
+        std::string after;
+        for(const auto& track : tracks) if(selectedTracks.count(track.id) > 0) after = track.id;
+        trackPaste = {true, false, after, 0.0};
+        return;
+    }
+    // Onto the first selected track, else the first selected clip's; at the playhead.
+    std::string onto;
+    for(const auto& track : tracks)
+        if(!track.isFolder && selectedTracks.count(track.id) > 0) { onto = track.id; break; }
+    if(onto.empty())
+        for(const auto& track : tracks) {
+            for(const auto& clip : track.clips)
+                if(selectedClips.count({track.id, clip.id}) > 0) { onto = track.id; break; }
+            if(!onto.empty()) break;
+        }
+    trackPaste = {true, true, onto, snapBeat(std::max(0.0, playheadBeat))};
+}
+
+void ofxOceanodeTimelineController::serviceTrackPaste(ofxOceanodeTimelineManager& timeline) {
+    if(!trackPaste.pending) return;
+    const auto request = trackPaste;
+    trackPaste = {};
+    if(shownSequence == nullptr) return;
+    auto& sequence = scope(timeline);
+    std::string skipped;
+    if(request.clips) {
+        const auto made = timeline.pasteClips(sequence, request.trackId, request.beat, &skipped);
+        if(!made.empty()) {
+            selectedTracks.clear();
+            selectedClips = {made.begin(), made.end()};
+        }
+        if(!skipped.empty())
+            pasteNotice = "Not pasted: " + skipped + ".\n\nAudio clips go on an audio track, automation clips on an "
+                          "automation track; a macro's clips on a track playing the same macro, keyframes on "
+                          "the Global Track of the timeline's own canvas.";
+    } else {
+        const auto made = timeline.pasteTracks(sequence, request.trackId, &skipped);
+        if(!made.empty()) {
+            selectedClips.clear();
+            selectedTracks = {made.begin(), made.end()};
+        }
+        if(!skipped.empty())
+            pasteNotice = "Not pasted: " + skipped + ".\n\nA timeline has one Global Track, of its own canvas; "
+                          "a track playing a timeline stays in that timeline's canvas, and never plays the "
+                          "timeline it is in (nor one that plays it).";
+    }
+    if(!skipped.empty()) requestPasteNoticePopup = true;
+}
+
+void ofxOceanodeTimelineController::drawPasteNoticePopup() {
+    if(requestPasteNoticePopup) { ImGui::OpenPopup("Paste##trackPasteNotice"); requestPasteNoticePopup = false; }
+    centerNextModal();
+    if(ImGui::BeginPopupModal("Paste##trackPasteNotice", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+        ImGui::TextUnformatted(pasteNotice.c_str());
+        ImGui::PopTextWrapPos();
+        if(ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 }
 
 void ofxOceanodeTimelineController::serviceClipFileRequest(ofxOceanodeTimelineManager& timeline) {

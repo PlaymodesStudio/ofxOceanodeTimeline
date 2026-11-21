@@ -2020,6 +2020,44 @@ public:
     std::vector<TimelineRef> pasteClipboardAutomation(const ClipboardPasteRequest& request);
     // What tells one preset from another: its path, or, never saved, this run.
     static std::string clipboardPresetIdentity();
+    // ---- Copied tracks and clips (any timeline to any other) ----
+    // A copy by value, shared by every Timeline window: the timeline it came
+    // from may be gone by the paste. Paths are kept as the copied timeline
+    // has them and rebased onto the canvas pasted into.
+    struct TrackClipboard {
+        enum class Kind { None, Tracks, Clips };
+        Kind kind = Kind::None;
+        std::string canvas;  // the copied timeline's canvas ("" the root)
+        std::string timeline; // ...and its id (a timeline track may not play the one it is in)
+        // Tracks: each copied track (a folder followed by its contents).
+        // Clips: the tracks the clips are on (their bindings and note
+        // groups), holding only the copied clips.
+        std::vector<ofxOceanodeTimelineTrack> tracks;
+        std::vector<ofxOceanodeTimelineClipGroup> groups; // among the copied clips
+        double firstBeat = 0.0; // Clips: where the earliest one starts
+        int count = 0;          // tracks or clips copied
+    };
+    // Copies tracks (a folder with its contents; never the Macro Morphing
+    // Track: its sources belong to its timeline). Returns how many.
+    int copyTracks(const ofxOceanodeTimelineSequence& sequence, const std::vector<std::string>& trackIds);
+    // Copies clips with their tracks' targets (not a Macro Morphing Track's).
+    int copyClips(const ofxOceanodeTimelineSequence& sequence,
+                  const std::vector<std::pair<std::string, std::string>>& clips);
+    const TrackClipboard& trackClipboard() const { return copied; }
+    // Pastes the copied tracks after `afterTrackId` (in its folder; empty:
+    // at the end), with their targets, clips, note groups and clip groups.
+    // A track that cannot be in that timeline is left out (a second Global
+    // Track, a timeline track playing the timeline itself or from another
+    // canvas). Returns the new tracks' ids, the top-level ones first.
+    std::vector<std::string> pasteTracks(ofxOceanodeTimelineSequence& sequence, const std::string& afterTrackId,
+                                         std::string* skipped = nullptr);
+    // Pastes the copied clips onto a track from `startBeat`, keeping their
+    // spacing; the targets the track lacks are added to it. trackId empty:
+    // onto new tracks (one per copied clip's track) at the end. A clip that
+    // cannot go on that track (audio onto automation...) is left out.
+    // Returns the new clips (track id, clip id).
+    std::vector<std::pair<std::string, std::string>> pasteClips(ofxOceanodeTimelineSequence& sequence,
+        const std::string& trackId, double startBeat, std::string* skipped = nullptr);
     // A parameter's right-click "Add to Timeline": a new clip driving it on
     // a track of that timeline (a new track when trackId is empty), a new
     // lane driving it in one of the track's clips, or one more target of an
@@ -3029,6 +3067,14 @@ private:
     bool newTimelineRequested = false;
     ClipboardPasteRequest pendingClipboardPaste;
     bool clipboardPasteRequested = false;
+    TrackClipboard copied;
+    // A copied track or clip as the timeline pasted into keeps it: paths
+    // rebased from the copied canvas onto `canvas`, targets looked up.
+    void rebaseCopiedTrack(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,
+                           const std::string& canvas) const;
+    // Whether a copied track can be in `sequence` (of `ref`).
+    bool copiedTrackFits(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,
+                         const TimelineRef& ref);
     ParameterClipRequest pendingParameterClip;
     bool parameterClipRequested = false;
     std::vector<std::unique_ptr<Player>> players;

@@ -342,6 +342,31 @@ private:
     // invalidate the current track and every clip/lane reference below it.
     std::pair<std::string, std::string> breakClipLanesRequest;
     std::string duplicateTrackId; // deferred until iteration has finished
+    // Copy and paste of tracks and clips, between any timelines (the
+    // clipboard is the manager's: every Timeline window shares it). A copy
+    // is made at once; a paste waits until the rows are drawn, like the
+    // duplicate above.
+    struct TrackPasteRequest {
+        bool pending = false;
+        bool clips = false;    // copied clips (else tracks)
+        std::string trackId;   // tracks: after it; clips: onto it ("" new tracks)
+        double beat = 0.0;     // clips: where the first one starts
+    };
+    TrackPasteRequest trackPaste;
+    std::string pasteNotice; // what a paste left out, shown in a popup
+    bool requestPasteNoticePopup = false;
+    // This track, or every selected track when it is one of them.
+    void copyTracksAt(ofxOceanodeTimelineManager& timeline, const std::string& trackId);
+    // This clip, or every selected clip when it is one of them.
+    void copyClipsAt(ofxOceanodeTimelineManager& timeline, const std::string& trackId, const std::string& clipId);
+    // "Paste track" / "Paste 3 clips here" (the menus' items), empty when
+    // nothing of that kind is copied.
+    std::string pasteLabel(const ofxOceanodeTimelineManager& timeline, bool clips, bool here) const;
+    // Cmd+C, Cmd+V and the toolbar's Paste: from and to the selection.
+    void copySelection(ofxOceanodeTimelineManager& timeline);
+    void pasteAtSelection(ofxOceanodeTimelineManager& timeline, double playheadBeat);
+    void serviceTrackPaste(ofxOceanodeTimelineManager& timeline);
+    void drawPasteNoticePopup();
     std::string saveMacroTrackId; // the macro track whose (library) Macro is saved, after the rows
     // Tracks of unfolded macro timelines that are selected, by sequence and
     // id (ids repeat between timelines). Apart from selectedTracks, which

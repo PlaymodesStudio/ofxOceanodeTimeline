@@ -10,7 +10,9 @@
 #include "Nodes/ofxOceanodeMorph.h"
 #include "Timeline/ofxOceanodeTimelineInternal.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -952,6 +954,331 @@ ofxOceanodeTimelineManager::pasteClipboardAutomation(const ClipboardPasteRequest
         sequence->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp(); // the editor fits it like a loaded one
         sequenceHistories.erase(sequence);
         made.push_back(ref);
+    }
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return made;
+}
+
+// ---- Copied tracks and clips ----
+
+namespace {
+// Every binding a lane drives or plays a note role on.
+std::vector<std::string*> laneBindingSlots(ofxOceanodeTimelineLane& lane) {
+    std::vector<std::string*> slots;
+    for(auto& id : lane.bindingIds) slots.push_back(&id);
+    for(auto& id : lane.hiddenBindingIds) slots.push_back(&id);
+    for(auto* role : {&lane.pianoPitchBindingId, &lane.pianoGateBindingId, &lane.pianoVelocityBindingId,
+                      &lane.drumDurationBindingId, &lane.drumFilterBindingId, &lane.drumStutterBindingId})
+        slots.push_back(role);
+    return slots;
+}
+std::string normalizedCanvas(const std::string& canvas) {
+    return ofxOceanodeTimelineManager::normalizedRef({canvas, std::string()}).canvas;
+}
+} // namespace
+
+int ofxOceanodeTimelineManager::copyTracks(const ofxOceanodeTimelineSequence& sequence,
+                                           const std::vector<std::string>& trackIds) {
+    TrackClipboard clipboard;
+    clipboard.kind = TrackClipboard::Kind::Tracks;
+    TimelineRef ref;
+    if(refOf(sequence, ref)) { clipboard.canvas = normalizedCanvas(ref.canvas); clipboard.timeline = ref.timeline; }
+    const std::set<std::string> chosen(trackIds.begin(), trackIds.end());
+    // A track chosen, or inside a folder chosen.
+    auto included = [&](const ofxOceanodeTimelineTrack& track) {
+        for(const auto* at = &track; at != nullptr; at = at->parentId.empty() ? nullptr : sequence.findTrack(at->parentId))
+            if(chosen.count(at->id) > 0) return true;
+        return false;
+    };
+    std::set<std::string> kept;
+    for(const auto& track : sequence.tracks) {
+        if(track.isMorphTrack || !included(track)) continue;
+        clipboard.tracks.push_back(track);
+        kept.insert(track.id);
+    }
+    if(clipboard.tracks.empty()) return 0;
+    for(auto& track : clipboard.tracks)
+        for(auto& binding : track.bindings) { binding.hasLiveOverride = false; binding.liveOverrideValue.clear(); }
+    for(const auto& group : sequence.clipGroups) {
+        auto members = group.members;
+        members.erase(std::remove_if(members.begin(), members.end(),
+            [&](const auto& member) { return kept.count(member.first) == 0; }), members.end());
+        if(members.size() > 1) clipboard.groups.push_back({group.id, members});
+    }
+    clipboard.count = static_cast<int>(std::count_if(clipboard.tracks.begin(), clipboard.tracks.end(),
+                                                     [](const auto& track) { return !track.isFolder; }));
+    if(clipboard.count == 0) clipboard.count = static_cast<int>(clipboard.tracks.size());
+    copied = std::move(clipboard);
+    return static_cast<int>(copied.tracks.size());
+}
+
+int ofxOceanodeTimelineManager::copyClips(const ofxOceanodeTimelineSequence& sequence,
+                                          const std::vector<std::pair<std::string, std::string>>& clips) {
+    TrackClipboard clipboard;
+    clipboard.kind = TrackClipboard::Kind::Clips;
+    TimelineRef ref;
+    if(refOf(sequence, ref)) { clipboard.canvas = normalizedCanvas(ref.canvas); clipboard.timeline = ref.timeline; }
+    const std::set<std::pair<std::string, std::string>> chosen(clips.begin(), clips.end());
+    double first = std::numeric_limits<double>::max();
+    for(const auto& track : sequence.tracks) {
+        if(track.isMorphTrack || track.isFolder) continue;
+        ofxOceanodeTimelineTrack portable = track;
+        portable.clips.clear();
+        for(const auto& clip : track.clips)
+            if(chosen.count({track.id, clip.id}) > 0) portable.clips.push_back(clip);
+        if(portable.clips.empty()) continue;
+        // Only the targets the copied clips use.
+        std::set<std::string> used;
+        for(auto& clip : portable.clips) {
+            clip.isStateCapture = false; // never a capture's destination where it lands
+            first = std::min(first, clip.startBeat);
+            for(auto& lane : clip.lanes)
+                for(auto* slot : laneBindingSlots(lane)) if(!slot->empty()) used.insert(*slot);
+        }
+        portable.bindings.erase(std::remove_if(portable.bindings.begin(), portable.bindings.end(),
+            [&](const auto& binding) { return used.count(binding.id) == 0; }), portable.bindings.end());
+        for(auto& binding : portable.bindings) { binding.hasLiveOverride = false; binding.liveOverrideValue.clear(); }
+        for(auto& group : portable.noteGroups)
+            for(auto* role : {&group.pitchBindingId, &group.gateBindingId, &group.velocityBindingId,
+                              &group.durationBindingId, &group.filterBindingId, &group.stutterBindingId})
+                if(used.count(*role) == 0) role->clear();
+        portable.noteGroups.erase(std::remove_if(portable.noteGroups.begin(), portable.noteGroups.end(),
+            [](const auto& group) { return group.members().empty(); }), portable.noteGroups.end());
+        portable.parentId.clear();
+        clipboard.count += static_cast<int>(portable.clips.size());
+        clipboard.tracks.push_back(std::move(portable));
+    }
+    if(clipboard.tracks.empty()) return 0;
+    clipboard.firstBeat = first;
+    for(const auto& group : sequence.clipGroups) {
+        auto members = group.members;
+        members.erase(std::remove_if(members.begin(), members.end(),
+            [&](const auto& member) { return chosen.count(member) == 0; }), members.end());
+        if(members.size() > 1) clipboard.groups.push_back({group.id, members});
+    }
+    copied = std::move(clipboard);
+    return copied.count;
+}
+
+void ofxOceanodeTimelineManager::rebaseCopiedTrack(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,
+                                                   const std::string& canvas) const {
+    const std::string to = normalizedCanvas(canvas);
+    auto rebase = [&](const std::string& path) {
+        if(path.empty() || to == copied.canvas) return path;
+        return ofxOceanodeTimelineOutside::relativePath(to, ofxOceanodeTimelineOutside::absolutePath(copied.canvas, path));
+    };
+    const auto resolver = resolverFor(sequence);
+    for(auto& binding : track.bindings) {
+        binding.parameterPath = rebase(binding.parameterPath);
+        binding.missingTarget = container != nullptr && resolver.find(binding.parameterPath) == nullptr;
+    }
+    for(auto& clip : track.clips)
+        for(auto& lane : clip.lanes) {
+            std::decay_t<decltype(lane.targetProbability)> moved;
+            for(const auto& [path, chance] : lane.targetProbability) moved[rebase(path)] = chance;
+            lane.targetProbability = std::move(moved);
+        }
+}
+
+bool ofxOceanodeTimelineManager::copiedTrackFits(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,
+                                                 const TimelineRef& ref) {
+    if(track.isMorphTrack) return false;
+    const bool sameCanvas = normalizedCanvas(ref.canvas) == copied.canvas;
+    // Keyframes of the whole patch: its own canvas's, one track per timeline.
+    if(track.isGlobalTrack) return sameCanvas && globalTrackOf(sequence) == nullptr;
+    if(track.isMacroTrack()) {
+        // What it plays is named from the copied canvas.
+        if(!sameCanvas) return false;
+        if(track.macroCanvas == ".") {
+            // Another timeline of this canvas: never this one, nor one that plays it.
+            if(track.macroTimeline.empty() || ref.timeline.empty()) return false;
+            const TimelineRef played{ref.canvas, track.macroTimeline};
+            if(played.timeline == ref.timeline || timelineReaches(played, ref)) return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::string> ofxOceanodeTimelineManager::pasteTracks(ofxOceanodeTimelineSequence& sequence,
+    const std::string& afterTrackId, std::string* skipped) {
+    std::vector<std::string> made;
+    if(copied.kind != TrackClipboard::Kind::Tracks) return made;
+    TimelineRef ref;
+    if(!refOf(sequence, ref)) ref = {copied.canvas, std::string()};
+    const auto clipboard = copied; // pasting may run while the clipboard is replaced
+    std::string parent;
+    std::string previous; // the track the next one goes after
+    if(const auto* after = getTrack(sequence, afterTrackId)) {
+        parent = after->parentId;
+        previous = after->id;
+    }
+    std::map<std::string, std::string> tracks;
+    std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> clips;
+    std::set<std::string> dropped;
+    std::vector<std::string> left;
+    for(const auto& source : clipboard.tracks) {
+        // A folder left out takes its contents with it.
+        if(!source.parentId.empty() && dropped.count(source.parentId) > 0) { dropped.insert(source.id); continue; }
+        if(!copiedTrackFits(source, sequence, ref)) { dropped.insert(source.id); left.push_back(source.name); continue; }
+        auto track = source;
+        rebaseCopiedTrack(track, sequence, ref.canvas);
+        const auto folder = tracks.find(source.parentId);
+        track.parentId = folder != tracks.end() ? folder->second : parent;
+        size_t index = sequence.tracks.size();
+        if(const auto* before = previous.empty() ? nullptr : getTrack(sequence, previous))
+            index = static_cast<size_t>(before - sequence.tracks.data()) + 1;
+        const auto id = insertTrackCopy(sequence, std::move(track), source.name, index);
+        if(id.empty()) { dropped.insert(source.id); left.push_back(source.name); continue; }
+        tracks[source.id] = id;
+        const auto& pasted = getTrack(sequence, id)->clips;
+        for(size_t i = 0; i < source.clips.size() && i < pasted.size(); ++i)
+            clips[{source.id, source.clips[i].id}] = {id, pasted[i].id};
+        previous = id;
+        made.push_back(id);
+    }
+    for(const auto& group : clipboard.groups) {
+        std::vector<std::pair<std::string, std::string>> members;
+        for(const auto& member : group.members)
+            if(const auto found = clips.find(member); found != clips.end()) members.push_back(found->second);
+        if(members.size() > 1) groupClips(sequence, members);
+    }
+    for(const auto& id : made)
+        if(const auto* track = getTrack(sequence, id))
+            for(const auto& binding : track->bindings) refreshTimelineFlag(sequence, binding.parameterPath);
+    if(skipped != nullptr) {
+        skipped->clear();
+        for(const auto& name : left) *skipped += (skipped->empty() ? "" : ", ") + name;
+    }
+    invalidateEvaluationIndexes();
+    invalidateSchedule();
+    return made;
+}
+
+std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::pasteClips(ofxOceanodeTimelineSequence& sequence,
+    const std::string& trackId, double startBeat, std::string* skipped) {
+    std::vector<std::pair<std::string, std::string>> made;
+    if(copied.kind != TrackClipboard::Kind::Clips || !std::isfinite(startBeat)) return made;
+    TimelineRef ref;
+    if(!refOf(sequence, ref)) ref = {copied.canvas, std::string()};
+    const auto clipboard = copied;
+    const double shift = std::max(0.0, startBeat) - clipboard.firstBeat;
+    const bool sameCanvas = normalizedCanvas(ref.canvas) == clipboard.canvas;
+    std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> clips;
+    std::vector<std::string> left;
+    for(const auto& source : clipboard.tracks) {
+        auto track = source;
+        rebaseCopiedTrack(track, sequence, ref.canvas);
+        for(auto& clip : track.clips) clip.startBeat = std::max(0.0, clip.startBeat + shift);
+        if(trackId.empty()) {
+            // Onto a track of their own, as the copied one was.
+            if(!copiedTrackFits(source, sequence, ref)) { left.push_back(source.name); continue; }
+            const auto id = insertTrackCopy(sequence, std::move(track), source.name, sequence.tracks.size());
+            if(id.empty()) { left.push_back(source.name); continue; }
+            const auto& pasted = getTrack(sequence, id)->clips;
+            for(size_t i = 0; i < source.clips.size() && i < pasted.size(); ++i) {
+                clips[{source.id, source.clips[i].id}] = {id, pasted[i].id};
+                made.emplace_back(id, pasted[i].id);
+            }
+            continue;
+        }
+        auto* destination = getTrack(sequence, trackId);
+        if(destination == nullptr || destination->isFolder) return made;
+        // Audio onto audio, keyframes onto keyframes, a macro's passes onto
+        // a track playing the same one; automation onto automation.
+        const bool fits = !destination->isMorphTrack &&
+            destination->isWaveTrack == track.isWaveTrack && destination->isGlobalTrack == track.isGlobalTrack &&
+            destination->isMacroTrack() == track.isMacroTrack() &&
+            (!track.isGlobalTrack || sameCanvas) &&
+            (!track.isMacroTrack() || (sameCanvas && destination->macroCanvas == track.macroCanvas &&
+                                       destination->macroTimeline == track.macroTimeline));
+        if(!fits) { left.push_back(source.name); continue; }
+        // The copied targets on the destination: the binding it has for the
+        // same parameter, or a copy of the copied one.
+        std::map<std::string, std::string> bindings;
+        std::set<std::string> added;
+        for(const auto& binding : track.bindings) {
+            destination = getTrack(sequence, trackId);
+            std::string id;
+            for(const auto& existing : destination->bindings)
+                if(existing.parameterPath == binding.parameterPath) { id = existing.id; break; }
+            if(id.empty()) {
+                auto copy = binding;
+                copy.id = sequence.makeUniqueBindingId();
+                ++sequence.nextBindingNumber;
+                id = copy.id;
+                destination->bindings.push_back(std::move(copy));
+                added.insert(id);
+            }
+            bindings[binding.id] = id;
+        }
+        destination = getTrack(sequence, trackId);
+        auto mapped = [&](const std::string& id) {
+            const auto found = bindings.find(id);
+            return found == bindings.end() ? std::string() : found->second;
+        };
+        // A note group the destination does not play yet comes along.
+        for(const auto& group : track.noteGroups) {
+            auto copy = group;
+            bool fresh = true;
+            for(auto* role : {&copy.pitchBindingId, &copy.gateBindingId, &copy.velocityBindingId,
+                              &copy.durationBindingId, &copy.filterBindingId, &copy.stutterBindingId}) {
+                *role = mapped(*role);
+                if(!role->empty() && (added.count(*role) == 0 || findNoteGroupForBinding(*destination, *role) != nullptr)) fresh = false;
+            }
+            if(!fresh || copy.members().empty()) continue;
+            size_t number = 1;
+            do { copy.id = "timeline_notes_" + ofToString(number++); }
+            while(getNoteGroup(sequence, trackId, copy.id) != nullptr);
+            destination->noteGroups.push_back(std::move(copy));
+        }
+        for(auto& clip : track.clips) {
+            for(auto& lane : clip.lanes) {
+                for(auto* slot : laneBindingSlots(lane)) *slot = mapped(*slot);
+                for(auto* list : {&lane.bindingIds, &lane.hiddenBindingIds}) {
+                    std::vector<std::string> unique;
+                    for(const auto& id : *list)
+                        if(!id.empty() && std::find(unique.begin(), unique.end(), id) == unique.end()) unique.push_back(id);
+                    *list = std::move(unique);
+                }
+            }
+            const std::string sourceClipId = clip.id;
+            const std::string id = createClip(sequence, trackId, clip.name, clip.startBeat, clip.durationBeats);
+            auto* pasted = getClip(sequence, trackId, id);
+            if(pasted == nullptr) { left.push_back(clip.name); continue; }
+            auto copy = clip;
+            copy.id = id;
+            copy.name = pasted->name;
+            copy.startBeat = pasted->startBeat;
+            // Lanes one at a time: makeUniqueLaneId() only avoids ids already in the timeline.
+            auto lanes = std::move(copy.lanes);
+            copy.lanes.clear();
+            *pasted = std::move(copy);
+            for(auto& lane : lanes) {
+                lane.id = sequence.makeUniqueLaneId();
+                ++sequence.nextLaneNumber;
+                ofxOceanodeTimelineSyncLfoControlIds(lane);
+                if(auto* target = getClip(sequence, trackId, id)) target->lanes.push_back(std::move(lane));
+            }
+            clips[{source.id, sourceClipId}] = {trackId, id};
+            made.emplace_back(trackId, id);
+        }
+        for(const auto& id : added)
+            if(const auto* binding = getBinding(sequence, trackId, id)) refreshTimelineFlag(sequence, binding->parameterPath);
+    }
+    for(const auto& group : clipboard.groups) {
+        std::vector<std::pair<std::string, std::string>> members;
+        for(const auto& member : group.members)
+            if(const auto found = clips.find(member); found != clips.end()) members.push_back(found->second);
+        if(members.size() > 1) groupClips(sequence, members);
+    }
+    if(trackId.empty())
+        for(const auto& [track, clip] : made)
+            if(const auto* pasted = getTrack(sequence, track))
+                for(const auto& binding : pasted->bindings) refreshTimelineFlag(sequence, binding.parameterPath);
+    if(skipped != nullptr) {
+        skipped->clear();
+        for(const auto& name : left) *skipped += (skipped->empty() ? "" : ", ") + name;
     }
     invalidateEvaluationIndexes();
     invalidateSchedule();
