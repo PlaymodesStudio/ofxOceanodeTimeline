@@ -8,6 +8,7 @@
 #include "ofxOceanodeTransport.h"
 #include "ofxOceanodeScheduling.h"
 #include "ofxOceanodeTimelineMetronome.h"
+#include "Nodes/MacroMixerMixing.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -30,6 +31,8 @@ class ofxOceanodeContainer;
 class ofxOceanodeNode;
 class ofxOceanodeNodeModel;
 class ofxOceanodeNodeMacro;
+class MacroMixerRuntime;
+namespace MacroMixerGui { struct Action; struct State; }
 struct ofxOceanodeTimelineInstrument;
 
 // How a binding's per-frame value should combine with whatever other
@@ -775,6 +778,32 @@ struct ofxOceanodeTimelineGlobalKeyframe {
     }
 };
 
+// The transition into a clip of a Macro Morphing Track, from the clip it
+// overlaps (ofxOceanodeTimelineClip::morphIn): what the MacroMixer node asks
+// for when it starts one. Its length is the overlap, its progress the
+// playhead's position in it. Kept on the later clip, so it follows that clip
+// when the clips are moved.
+struct ofxOceanodeTimelineMorphTransition {
+    bool morph = false;      // Morph; off: Mix
+    float biPow = 0.0f;      // the shape of the progress, -1..1 (the node's Bi Pow; 0: linear)
+    float logBlend = 1.0f;   // the amount of log blending of a morph, 0..1 (the node's Log Blend)
+    // The morph policies of this transition and the mix policy of each
+    // router it overrides, as the track's engine reads them (null: the
+    // track's defaults). JSON, so the model needs no mixer header.
+    ofJson morphPolicies;
+    ofJson routerOverrides;
+    // Changes whenever the two JSON values do, so a signature hashes the
+    // stamp instead of them (see setMorphTransition). Not saved.
+    uint64_t stamp = 0;
+    static uint64_t nextStamp() {
+        static std::atomic<uint64_t> counter{0};
+        return ++counter;
+    }
+    bool isDefault() const {
+        return !morph && biPow == 0.0f && logBlend == 1.0f && morphPolicies.is_null() && routerOverrides.is_null();
+    }
+};
+
 struct ofxOceanodeTimelineClip {
     std::string id;
     std::string name;
@@ -802,6 +831,12 @@ struct ofxOceanodeTimelineClip {
     // itself is shared and stays as written). Other clips reverse by
     // rewriting their content (reverseClip); Wave clips use waveReverse.
     bool reversed = false;
+    // A clip of a Macro Morphing Track (ofxOceanodeTimelineTrack::isMorphTrack)
+    // plays one source of the track's engine: that source's id there. Where
+    // it overlaps the clip before it, the two are in transition: morphIn says
+    // how. No lanes.
+    std::string morphSource;
+    ofxOceanodeTimelineMorphTransition morphIn;
     bool muted = false; // Preserve content while removing this clip from playback.
     // Probability (0..1) that the whole clip plays. Rolled again every time
     // the clip starts: each play/seek and each loop pass. The result is not
@@ -1214,6 +1249,37 @@ struct ofxOceanodeTimelineTrack {
     std::vector<std::string> macroFoldedTimelines;
     float macroPreRollMs = 100.0f;
     float macroTailMs = 500.0f;
+    // Macro Morphing Track (createMorphTrack): the MacroMixer node laid out
+    // in time. Each clip plays one source of the track's engine
+    // (ofxOceanodeTimelineClip::morphSource) and the overlap of two
+    // neighbouring clips is the transition between them. Not a macro track
+    // (macroCanvas stays empty); no bindings, and its clips no lanes. A
+    // timeline has at most one. It unfolds with macroUnfolded and
+    // macroFoldedTimelines, as a macro track does.
+    bool isMorphTrack = false;
+    // Its engine's state (routers, sources, kept-out nodes, default
+    // policies) as the engine saves it. Opaque here.
+    ofJson morphState;
+    // Changes whenever morphState does, so a signature hashes the stamp
+    // instead of the state (see setMorphState). Not saved.
+    uint64_t morphStateStamp = 0;
+};
+// Two neighbouring clips of a Macro Morphing Track that overlap: the
+// transition from the earlier one into the later one, over these beats.
+struct ofxOceanodeTimelineMorphOverlap {
+    std::string earlierClipId;
+    std::string laterClipId;
+    double fromBeat = 0.0;  // the later clip's start
+    double toBeat = 0.0;    // the earlier clip's end
+};
+// What a Macro Morphing Track holds at a beat: no clip (a gap: both ids
+// empty), one clip (the origin alone), or two in transition, with how far
+// through their overlap the beat is (0 at its start, towards 1 at its end:
+// linear, before the transition's Bi Pow).
+struct ofxOceanodeTimelineMorphScene {
+    std::string originClipId;
+    std::string targetClipId;
+    float position = 0.0f;
 };
 constexpr float kMaxMacroGateMs = 5000.0f;
 constexpr float kMaxTrackLatencyOffsetMs = 250.0f;
@@ -1603,6 +1669,115 @@ public:
     template<typename Fn> void forEachTimeline(Fn&& fn) {
         for(auto& [ref, sequence] : allTimelineSequences()) fn(ref, *sequence);
     }
+
+    // ---- Macro Morphing Track: macro sources in time, overlaps as transitions ----
+    // (ofxOceanodeTimelineTrack::isMorphTrack. The model only: the engine
+    // that plays the sources keeps its state in the track's morphState.)
+    // A timeline has at most one: the id of the new track, empty when the
+    // timeline already has one.
+    std::string createMorphTrack(const std::string& requestedName = "Macro Morphing");
+    std::string createMorphTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Macro Morphing");
+    // A timeline's Macro Morphing Track (nullptr: none).
+    ofxOceanodeTimelineTrack* morphTrackOf(ofxOceanodeTimelineSequence& sequence);
+    const ofxOceanodeTimelineTrack* morphTrackOf(const ofxOceanodeTimelineSequence& sequence) const;
+    // A clip playing the source `sourceId` of the track's engine, named
+    // after it. The timing is held to the overlap rules below (the nearest
+    // valid one); empty when the clip fits nowhere near there.
+    std::string createMorphClip(const std::string& trackId, const std::string& sourceId,
+                                double startBeat, double durationBeats);
+    std::string createMorphClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                const std::string& sourceId, double startBeat, double durationBeats);
+    // The same after the track's last clip, overlapping it by overlapSeconds
+    // at the tempo there (never more than half of the shorter of the two
+    // clips); at beat 0 on an empty track.
+    std::string appendMorphClip(const std::string& trackId, const std::string& sourceId,
+                                double durationBeats, double overlapSeconds = 4.0);
+    std::string appendMorphClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                const std::string& sourceId, double durationBeats, double overlapSeconds = 4.0);
+    // The overlap rules of a Macro Morphing Track's clips, which
+    // setClipTiming, resizeClipEnd, trimClipStart, createClip, duplicateClip
+    // and importClip keep by holding a clip at the nearest valid timing: in
+    // start order, a clip overlaps only the clip before it and the one after
+    // it (at most two play at any beat), and neither its start nor its end
+    // comes within kMorphMinOffsetBeats of a neighbour's (none lies inside
+    // another). A move takes a clip past a neighbour when it fits beyond it
+    // at its length and that is nearer to where it was asked to go.
+    static constexpr double kMorphMinOffsetBeats = 1.0 / 24.0;
+    // The transitions of a track: its neighbouring clips that overlap, in
+    // start order. Clips that only touch are a hard switch: no entry.
+    static std::vector<ofxOceanodeTimelineMorphOverlap> morphOverlaps(const ofxOceanodeTimelineTrack& track);
+    // What the track holds at a beat (a clip runs from its start up to, not
+    // including, its end). Muted clips count: muting is playback's matter.
+    static ofxOceanodeTimelineMorphScene morphSceneAt(const ofxOceanodeTimelineTrack& track, double beat);
+    // The track's engine state and a clip's transition are JSON: set through
+    // these, their stamps follow (a signature hashes the stamps). False:
+    // not a Macro Morphing Track, or no such clip.
+    bool setMorphState(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const ofJson& state);
+    bool setMorphTransition(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
+                            const ofxOceanodeTimelineMorphTransition& transition);
+    // ---- Macro Morphing Track: the engine playing its sources ----
+    // (ofxOceanodeTimelineMorph.cpp. Kept by the primary, one per timeline
+    // that has the track; every frame it is told the scene at the timeline's
+    // playhead: MacroMixerRuntime::present.)
+    // The engine of a timeline's morph track; null without one. Created
+    // lazily, with the timeline's canvas container as parent.
+    MacroMixerRuntime* morphEngine(const ofxOceanodeTimelineSequence& sequence);
+    const MacroMixerRuntime* morphEngine(const ofxOceanodeTimelineSequence& sequence) const;
+    // Applies a panel's action to the engine (MacroMixerGui::apply) and
+    // stores the engine's state in the track (setMorphState). Clips whose
+    // source was removed are removed with it. The caller wraps it in a
+    // history gesture. Inside a transition, an edit the engine refuses there
+    // releases the playing sources first (they load again on the next frame).
+    bool applyMorphAction(ofxOceanodeTimelineSequence& sequence, const MacroMixerGui::Action& action,
+                          MacroMixerGui::State& state, std::string& error);
+    // Imports a folder as a source (reusing an already imported one) and
+    // appends a clip for it with the default 4 s overlap: one pass of the
+    // source's first timeline long, 8 bars when it has none. The clip id,
+    // or empty with the reason in error.
+    std::string addMorphSource(ofxOceanodeTimelineSequence& sequence, const std::string& folder, std::string& error);
+    // A source's name (its id while unknown), what the engine has to say
+    // (why a scene is not ready, a failure; empty when fine) and whether
+    // some Timeline node points at this timeline (its routers reach the patch).
+    std::string morphSourceName(const ofxOceanodeTimelineSequence& sequence, const std::string& sourceId) const;
+    std::string morphEngineStatus(const ofxOceanodeTimelineSequence& sequence) const;
+    bool morphHasPublisher(const ofxOceanodeTimelineSequence& sequence) const;
+    // For the Timeline nodes pointing at the timeline. The engine's Output
+    // routers by router id, read once per frame (a Trigger is consumed by
+    // the read), for every node to publish; null without an engine.
+    using MorphValues = std::map<std::string, MacroMixerMixing::Value>;
+    const MorphValues* morphOutputs(const ofxOceanodeTimelineSequence& sequence) const;
+    // Called by such a node on every update: it publishes the routers.
+    void noteMorphPublisher(const ofxOceanodeTimelineSequence& sequence);
+    // Called by such a node from its draw, with the GL context current: the
+    // engine's graphs draw once per frame (the first call), and the outputs
+    // are read again (textures are rendered there).
+    void drawMorphEngine(const ofxOceanodeTimelineSequence& sequence);
+    // Called by such a node on its update, once its inputs are written: the
+    // engine updates there (once per frame, the first call), so what the
+    // node's inputs hold reaches the sources in the same frame. A timeline
+    // no node points at is updated by the frame pass instead.
+    void updateMorphEngine(const ofxOceanodeTimelineSequence& sequence);
+    // Called on the host's draw, before the nodes': every engine not drawn
+    // yet this frame draws (a timeline no Timeline node points at too).
+    void drawMorphEngines();
+    // Something a Macro Morphing Track refused, said where no editor is at
+    // hand (a node's menu): the next editor drawn shows it.
+    void reportMorphError(const std::string& message);
+    std::string takeMorphError();
+    // ---- Macro Morphing Track: its sources' own timelines ----
+    // Every graph built from a source's folder plays the same timelines, kept
+    // here from the first load on (a source document): edits are heard at
+    // once, outlive the graph (rebuilt each time the source comes to play)
+    // and reach the folder only with saveMorphSource.
+    // The timelines of the track's sources that are live now (the ones its
+    // clips place), each with its source's id: the rows the track unfolds.
+    std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> morphLiveTimelines(
+        const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track);
+    // Whether a source's timelines differ from what its folder holds.
+    bool morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId);
+    // Writes a source's timelines into its folder (the file they were read
+    // from). False, with the reason: nothing was written.
+    bool saveMorphSource(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, std::string& error);
 
     // ---- Macro tracks: clips that play a macro canvas's timeline ----
     // (Made by createTimelineTrack below, with the timeline placed.)
@@ -2580,7 +2755,7 @@ private:
     // 16: the loop is each timeline's own (the top-level "loop", the global
     // transport's until then, is read into the root canvas's timelines
     // linked to it).
-    static constexpr int kPresetVersion = 16;
+    static constexpr int kPresetVersion = 17;
     // The global transport's settings for the global history: typed copies
     // of what the JSON would reload lossily, and the JSON a step compares.
     struct TimelineState {
@@ -2637,6 +2812,11 @@ private:
         // macro is placed as a whole, so the clips placing this other
         // timeline of it (its id) carry it too. Empty: placed by its own tracks.
         std::string inheritsFrom;
+        // A timeline of a live source of a Macro Morphing Track: the source's
+        // id in the track's engine, and the timeline holding the track (its
+        // timeSourceId). The track's clips of that source place it.
+        std::string morphSource;
+        std::string morphHost;
     };
     std::vector<PlayedMacro> playedMacros;
     // A macro timeline the main timeline reaches: through the macro track
@@ -2649,6 +2829,8 @@ private:
         int parent = -1;
         size_t trackIndex = 0;
         std::string inheritsFrom; // as PlayedMacro has it
+        std::string morphSource;  // as PlayedMacro has them
+        std::string morphHost;
     };
     std::vector<MacroSource> collectMacroSources() const;
     // The timeline of a macro that encapsulation moves tracks into: its
@@ -2944,6 +3126,10 @@ private:
     static ofJson upgradeTimelineDocument(ofJson json, bool macroFile);
     std::string insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
     std::string insertTrackCopy(ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack copy, const std::string& name, size_t index);
+    // How many beats of a timeline the `seconds` ending at `beat` take, at
+    // its tempo there: its own when it plays free, else the global
+    // transport's (through the tempo lane when one plays).
+    double beatsInSecondsBefore(const ofxOceanodeTimelineSequence& sequence, double beat, double seconds) const;
     // Engine state keyed by ids (wave voices, state-capture overrides,
     // driven solos) exists for the sequence an engine plays: its copy, in
     // playedSequence. The primary keeps the timelines there and plays none.
@@ -3383,6 +3569,79 @@ private:
     std::set<std::string> scheduledBackendPaths;
     // Not owned -- see setWaveAudioProvider above.
     ofxOceanodeTimelineWaveAudioProvider* waveAudioProvider = nullptr;
+
+    // ---- Macro Morphing Track engines (ofxOceanodeTimelineMorph.cpp) ----
+    // The primary's: an engine (a manager playing a copy) has none and asks
+    // its primary. One per timeline that has a Macro Morphing Track.
+    struct MorphEngine;
+    // A live graph of a timeline's morph engine: the source it plays and
+    // the canvas of the Macro holding it (where its timelines live).
+    struct MorphGraph {
+        std::string source;
+        const ofxOceanodeContainer* canvas = nullptr;
+        std::string canvasId;
+    };
+    std::vector<MorphGraph> morphGraphsOf(const TimelineRef& ref) const;
+    // The timelines of those graphs' canvases, each with the timeline
+    // holding the morph track: they play where its clips place them.
+    std::vector<std::pair<TimelineRef, TimelineRef>> morphPlacedTimelines() const;
+    MorphEngine* findMorphEngine(const ofxOceanodeTimelineSequence& sequence) const;
+    // The engine of the timeline `ref`, whose morph track this is, made
+    // when it has none. follow: an engine whose track's state was replaced
+    // behind it (an undo, a redo, a load) is restored from it; its playing
+    // sources go, so only the frame pass asks for that.
+    MorphEngine* ensureMorphEngine(const TimelineRef& ref, const ofxOceanodeTimelineTrack& track, bool follow);
+    // Once per frame, before the players run: the engines there should be,
+    // each told the scene at its timeline's playhead. After them: each
+    // engine's update and its outputs.
+    void presentMorphScenes();
+    void updateMorphEngines();
+    // One engine's update and outputs, once per frame.
+    void updateMorphEngineNow(MorphEngine& engine);
+    // Releases the engines (rootOnly: those of the root canvas's timelines).
+    void releaseMorphEngines(bool rootOnly);
+    void releaseMorphEngine(const TimelineRef& ref);
+    // The engine's live graphs changed: indexes, placements and schedules follow.
+    void noteMorphGraphs(MorphEngine& engine);
+    // Writes the engine's state into its track when it differs.
+    void storeMorphState(ofxOceanodeTimelineSequence& sequence, MorphEngine& engine);
+    // The answers of the blocked-node dialog, and the sources waiting on them.
+    void applyMorphAnswers(const TimelineRef& ref, MorphEngine& engine);
+    // The scene a morph track holds now, for its engine (see presentMorphScenes).
+    void presentMorphScene(const TimelineRef& ref, const ofxOceanodeTimelineSequence& sequence,
+                           const ofxOceanodeTimelineTrack& track, MorphEngine& engine);
+    // Where a morph track's scene is read: the timeline's playhead; a
+    // dependent timeline's where a clip places it or its preview plays
+    // (false: nowhere, nothing plays).
+    bool morphPlayheadBeat(const TimelineRef& ref, double& beat);
+    // One pass of the first timeline saved in a source folder, in beats (0: none).
+    double morphSourceLength(const std::string& folder);
+    // Whether a Macro still owns this canvas (a macro's container).
+    bool macroCanvasAlive(const ofxOceanodeContainer& canvas) const;
+    // A source's timelines, by its folder (one spelling per folder).
+    struct MorphDocument {
+        std::shared_ptr<ofxOceanodeTimelineCanvas> timelines;
+        std::string folder;
+        bool macroFile = false;          // read from sequence.json (else the preset's timeline.json)
+        uint64_t savedSignature = 0;     // as last read from or written to the folder
+        uint64_t seenSignature = 0;      // as last looked at (seenAt)
+        float seenAt = -1.0f;
+    };
+    std::map<std::string, MorphDocument> morphDocuments;
+    std::map<std::string, std::string> morphDocumentKeys;   // a folder as spelled -> its key
+    MorphDocument* morphDocumentOf(const std::string& folder);
+    uint64_t morphDocumentSignature(const MorphDocument& document) const;
+    void dropMorphDocument(const std::string& folder);
+    // The folders of every engine's sources, as the engines spell them.
+    std::vector<std::string> morphSourceFolders() const;
+    std::string morphSourceFolder(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const;
+    uint64_t morphFrame = 0;
+    std::string morphError;
+    float morphErrorAt = 0.0f;
+    // The frame a Timeline node last published each timeline's routers.
+    std::map<TimelineRef, uint64_t> morphPublishers;
+    // Last: released first, while everything their graphs call back into is there.
+    std::map<TimelineRef, std::shared_ptr<MorphEngine>> morphEngines;
 };
 
 class ofxOceanode;

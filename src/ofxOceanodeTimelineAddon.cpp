@@ -1,6 +1,7 @@
 #include "Nodes/ofxOceanodeNodeMacro.h"
 #include "ofxOceanodeTimeline.h"
 #include "ofxOceanode.h"
+#include "ofxOceanodeShared.h"
 #include "ofxOceanodeTimelineController.h"
 #include "lfoTrack.h"
 #include "timelineTransport.h"
@@ -25,6 +26,7 @@ public:
     void evaluateAutomation() override { manager.evaluateAutomation(); }
     void applyAutomation() override { manager.applyAutomation(); }
     void endParameterCache() override { manager.endParameterCache(); }
+    void draw() override { manager.drawMorphEngines(); }
     bool loadPreset(const std::string& path) override { return manager.loadPreset(path); }
     bool savePreset(const std::string& path) const override { return manager.savePreset(path); }
     bool getPlayOnPresetLoad() const override { return manager.getPlayOnPresetLoad(); }
@@ -411,6 +413,56 @@ public:
                     hostItems(own.front());
                     ImGui::EndMenu();
                 } else if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            }
+            {
+                // A clip of a timeline's Macro Morphing Track playing this
+                // macro as a source: its saved folder (the one holding its
+                // modules.json), loaded there as a graph of its own. Any
+                // timeline that has such a track takes it.
+                const char* tip = "Add this macro, as it was last saved, to the sources of a Macro Morphing Track:\n"
+                                  "a clip after its last one, overlapping it.";
+                std::string folder, why;
+                if(!macro->isLocal()) {
+                    folder = macro->getCurrentMacroPath();
+                    if(folder.empty()) why = "This macro of the library has no folder: save it first.";
+                } else {
+                    // A local macro is saved with its preset, in a folder of
+                    // its own there (inside the macro around it, when it
+                    // has one): the folder it last saved to or loaded from.
+                    folder = macro->getLocalPresetPath();
+                    if(folder.empty()) why = "A local macro is saved with the preset: save the preset first.";
+                }
+                if(why.empty() && !ofFile::doesFileExist(folder + "/modules.json"))
+                    why = macro->isLocal() ? "A local macro is saved with the preset: save the preset first."
+                                           : "The macro's folder has no modules.json: save the macro first.";
+                std::vector<TimelineRef> morphHosts;
+                for(const auto& ref : manager.allTimelines())
+                    if(auto* sequence = manager.timelineFor(ref))
+                        if(manager.morphTrackOf(*sequence) != nullptr) morphHosts.push_back(ref);
+                auto addSourceTo = [&](const TimelineRef& host) {
+                    ImGui::CloseCurrentPopup();
+                    auto* sequence = manager.timelineFor(host);
+                    if(sequence == nullptr) return;
+                    std::string error;
+                    const std::string clipId = manager.addMorphSource(*sequence, ofFilePath::getAbsolutePath(folder), error);
+                    if(clipId.empty()) {
+                        // (No error: a node blocks the source, and its dialog is asking.)
+                        // Shown by the timeline editor, as the track's own menu does.
+                        if(!error.empty()) manager.reportMorphError(error);
+                    } else manager.requestTimelineScope(host);
+                };
+                if(ImGui::BeginMenu("Add to Timeline Macro Morphing Track", why.empty() && !morphHosts.empty())) {
+                    for(const auto& host : morphHosts) {
+                        const std::string label = timelineLabel(host) + "##morphHost" + ofxOceanodeTimelineManager::timeSourceId(host);
+                        if(ImGui::MenuItem(label.c_str())) addSourceTo(host);
+                    }
+                    ImGui::EndMenu();
+                } else if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    if(!why.empty()) ImGui::SetTooltip("%s", why.c_str());
+                    else if(morphHosts.empty())
+                        ImGui::SetTooltip("No timeline has a Macro Morphing Track: add one from a timeline's menu first.\n%s", tip);
+                    else ImGui::SetTooltip("%s", tip);
+                }
             }
             perTimeline("Free tempo for its timeline",
                         "The timeline gets its own transport: play, stop and seek it by itself,\n"

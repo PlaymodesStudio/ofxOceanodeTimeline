@@ -729,6 +729,24 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
         }
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("A track whose clips play that timeline: place, repeat, stretch and offset them like any clip.");
+        {
+            // A Macro Morphing Track, empty: its sources are added from its
+            // own menu. A timeline has one at most.
+            const bool exists = timeline.timelineExists(shown);
+            const bool hasOne = exists && timeline.morphTrackOf(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline))) != nullptr;
+            if(ImGui::MenuItem("Add Macro Morphing Track", nullptr, false, exists && !hasOne)) {
+                auto& host = scope(timeline);
+                beginHistoryGesture(timeline);
+                const auto trackId = timeline.createMorphTrack(host);
+                if(!trackId.empty()) { selectedClips.clear(); selectedTracks = {trackId}; }
+                finishHistoryGesture(timeline);
+            }
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", hasOne
+                    ? "This timeline already has a Macro Morphing Track: a timeline holds one at most."
+                    : "A track whose clips each play a macro folder (a source); where two clips overlap,\n"
+                      "one mixes or morphs into the other. Add its sources from the track's menu.");
+        }
         if(ImGui::MenuItem("Load clip...", nullptr, false, timeline.timelineExists(shown))) {
             // At the shown timeline's playhead, on the one selected track if any.
             const auto shownTransport = timeline.transportFor(shown);

@@ -591,7 +591,38 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             '{ return ofJson::array(); }\n'
             'void ofxOceanodeTimelineManager::restoreOutsideTargets(const std::string&, const ofxOceanodeTimelineCanvas&) {}\n'
             'std::vector<ofxOceanodeContainer*> ofxOceanodeTimelineManager::targetCanvases(const ofxOceanodeTimelineSequence&) const '
-            '{ return container == nullptr ? std::vector<ofxOceanodeContainer*>{} : std::vector<ofxOceanodeContainer*>{container}; }\n')
+            '{ return container == nullptr ? std::vector<ofxOceanodeContainer*>{} : std::vector<ofxOceanodeContainer*>{container}; }\n'
+            # A Macro Morphing Track's engine loads real Macros
+            # (ofxOceanodeTimelineMorph.cpp): here a morph track has none, and
+            # plays nothing.
+            'void ofxOceanodeTimelineManager::presentMorphScenes() {}\n'
+            'void ofxOceanodeTimelineManager::updateMorphEngines() {}\n'
+            'void ofxOceanodeTimelineManager::releaseMorphEngines(bool) {}\n'
+            'std::vector<ofxOceanodeTimelineManager::MorphGraph> ofxOceanodeTimelineManager::morphGraphsOf(const TimelineRef&) const '
+            '{ return {}; }\n'
+            'std::vector<std::pair<ofxOceanodeTimelineManager::TimelineRef, ofxOceanodeTimelineManager::TimelineRef>> '
+            'ofxOceanodeTimelineManager::morphPlacedTimelines() const { return {}; }\n'
+            'MacroMixerRuntime* ofxOceanodeTimelineManager::morphEngine(const ofxOceanodeTimelineSequence&) { return nullptr; }\n'
+            'const MacroMixerRuntime* ofxOceanodeTimelineManager::morphEngine(const ofxOceanodeTimelineSequence&) const '
+            '{ return nullptr; }\n'
+            'bool ofxOceanodeTimelineManager::applyMorphAction(ofxOceanodeTimelineSequence&, const MacroMixerGui::Action&, '
+            'MacroMixerGui::State&, std::string&) { return false; }\n'
+            'std::string ofxOceanodeTimelineManager::addMorphSource(ofxOceanodeTimelineSequence&, const std::string&, std::string&) '
+            '{ return std::string(); }\n'
+            'std::string ofxOceanodeTimelineManager::morphSourceName(const ofxOceanodeTimelineSequence&, const std::string& sourceId) const '
+            '{ return sourceId; }\n'
+            'std::string ofxOceanodeTimelineManager::morphEngineStatus(const ofxOceanodeTimelineSequence&) const { return std::string(); }\n'
+            'bool ofxOceanodeTimelineManager::morphHasPublisher(const ofxOceanodeTimelineSequence&) const { return false; }\n'
+            'const ofxOceanodeTimelineManager::MorphValues* ofxOceanodeTimelineManager::morphOutputs('
+            'const ofxOceanodeTimelineSequence&) const { return nullptr; }\n'
+            'void ofxOceanodeTimelineManager::noteMorphPublisher(const ofxOceanodeTimelineSequence&) {}\n'
+            'void ofxOceanodeTimelineManager::drawMorphEngine(const ofxOceanodeTimelineSequence&) {}\n'
+            'void ofxOceanodeTimelineManager::updateMorphEngine(const ofxOceanodeTimelineSequence&) {}\n'
+            'void ofxOceanodeTimelineManager::drawMorphEngines() {}\n'
+            'void ofxOceanodeTimelineManager::reportMorphError(const std::string&) {}\n'
+            'std::string ofxOceanodeTimelineManager::takeMorphError() { return std::string(); }\n'
+            'std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> ofxOceanodeTimelineManager::morphLiveTimelines('
+            'const ofxOceanodeTimelineSequence&, const ofxOceanodeTimelineTrack&) { return {}; }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(inject_fixture(cases) + "\n" + parameter_source[destructor_start:destructor_end])
         binary = folder / "regression"
@@ -600,7 +631,8 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
                    "-fsanitize=address,undefined", "-fno-sanitize=vptr", "-fno-omit-frame-pointer", "-DOF_NO_FMOD",
                    "-I" + str(folder), *["-I" + str(path) for path in includes], str(cpp),
                    *[str(path) for path in sorted((ADDON / "src/Timeline").glob("*.cpp"))
-                     if path.name != "ofxOceanodeTimelineMacroSequences.cpp"], str(folder / "macro_stub.cpp"),
+                     if path.name not in ("ofxOceanodeTimelineMacroSequences.cpp", "ofxOceanodeTimelineMorph.cpp")],
+                   str(folder / "macro_stub.cpp"),
                    str(ADDON / "src/Controls/Editors/ofxOceanodeTimelineEditorView.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeScheduling.cpp"),
                    str(ROOT / "src/Managers/ofxOceanodeTransport.cpp"),

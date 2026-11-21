@@ -1281,6 +1281,8 @@ std::string ofxOceanodeTimelineManager::createTrack(ofxOceanodeTimelineSequence&
 
 std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineSequence& sequence, ofxOceanodeTimelineTrack copy,
     const std::string& name, size_t index) {
+    // A timeline has one Macro Morphing Track: no copy of it beside another.
+    if(copy.isMorphTrack && morphTrackOf(sequence) != nullptr) return std::string();
     const auto id = createTrack(sequence, name);
     copy.name = getTrack(sequence, id)->name;
     copy.id = id;
@@ -1329,6 +1331,8 @@ std::string ofxOceanodeTimelineManager::duplicateTrack(ofxOceanodeTimelineSequen
     const std::string sourceId = trackId; // caller may pass the track's own id by reference
     const auto* source = getTrack(sequence, sourceId);
     if(source == nullptr) return {};
+    // Its copy would be the timeline's second Macro Morphing Track.
+    if(source->isMorphTrack) return {};
     const auto groups = sequence.clipGroups;
     std::vector<std::string> originals;
     for(const auto& clip : source->clips) originals.push_back(clip.id);
@@ -1401,6 +1405,213 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::bre
     }
     removeClip(sequence, sourceId, sourceClipId);
     return result;
+}
+
+namespace {
+
+// A Macro Morphing Track's clips in play order (by start, then id), whatever
+// order the track keeps them in; `exceptId` left out.
+std::vector<const ofxOceanodeTimelineClip*> morphOrder(const ofxOceanodeTimelineTrack& track,
+                                                       const std::string& exceptId = std::string()) {
+    std::vector<const ofxOceanodeTimelineClip*> order;
+    for(const auto& clip : track.clips)
+        if(exceptId.empty() || clip.id != exceptId) order.push_back(&clip);
+    std::stable_sort(order.begin(), order.end(), [](const auto* a, const auto* b) {
+        return a->startBeat != b->startBeat ? a->startBeat < b->startBeat : a->id < b->id;
+    });
+    return order;
+}
+
+double morphEnd(const ofxOceanodeTimelineClip& clip) { return clip.startBeat + clip.durationBeats; }
+
+// The timing nearest to the one asked that keeps a Macro Morphing Track's
+// overlap rules (see kMorphMinOffsetBeats), for the clip `clipId`: one of the
+// track's, or one about to be added (an id no clip has). anchorBeat says
+// where it sits among the others (its start now; for a new one, the start
+// asked): it is never taken past a neighbour. keepLength: a move, which
+// keeps the length while that fits. False, with nothing changed: no valid
+// timing there.
+bool fitMorphTiming(const ofxOceanodeTimelineTrack& track, const std::string& clipId, double anchorBeat,
+                    bool keepLength, double& startBeat, double& durationBeats) {
+    const double offset = ofxOceanodeTimelineManager::kMorphMinOffsetBeats;
+    const double minimumLength = 1.0 / 24.0;
+    const auto others = morphOrder(track, clipId);
+    size_t next = 0;
+    while(next < others.size() && (others[next]->startBeat < anchorBeat ||
+                                   (others[next]->startBeat == anchorBeat && others[next]->id < clipId))) ++next;
+    const auto* before = next > 0 ? others[next - 1] : nullptr;
+    const auto* twoBefore = next > 1 ? others[next - 2] : nullptr;
+    const auto* after = next < others.size() ? others[next] : nullptr;
+    const auto* twoAfter = next + 1 < others.size() ? others[next + 1] : nullptr;
+    // Between two clips that overlap each other, three would play at once.
+    if(before != nullptr && after != nullptr && after->startBeat < morphEnd(*before) - kEpsilon) return false;
+    const double infinity = std::numeric_limits<double>::infinity();
+    double startLow = 0.0, startHigh = infinity, endLow = 0.0, endHigh = infinity;
+    if(before != nullptr) {
+        startLow = std::max(startLow, before->startBeat + offset);
+        endLow = morphEnd(*before) + offset;
+    }
+    if(twoBefore != nullptr) startLow = std::max(startLow, morphEnd(*twoBefore));
+    if(after != nullptr) {
+        startHigh = after->startBeat - offset;
+        endHigh = morphEnd(*after) - offset;
+    }
+    if(twoAfter != nullptr) endHigh = std::min(endHigh, twoAfter->startBeat);
+    startHigh = std::min(startHigh, endHigh - minimumLength);
+    if(startLow > startHigh + kEpsilon || endLow > endHigh + kEpsilon) return false;
+    double start = std::max(0.0, startBeat);
+    const double length = std::max(minimumLength, durationBeats);
+    if(keepLength) {
+        const double low = std::max(startLow, endLow - length), high = std::min(startHigh, endHigh - length);
+        if(low <= high + kEpsilon) {
+            startBeat = std::max(low, std::min(start, high));
+            durationBeats = length;
+            return true;
+        }
+    }
+    start = std::max(startLow, std::min(start, startHigh));
+    const double end = std::max(std::max(endLow, start + minimumLength), std::min(start + length, endHigh));
+    startBeat = start;
+    durationBeats = end - start;
+    return true;
+}
+
+// Whether a clip of a Macro Morphing Track can be cut at a beat: where it
+// plays alone, clear of its neighbours by the minimum offset, so that the
+// two halves keep the overlap rules.
+bool morphSplitAllowed(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineClip& clip, double beat) {
+    const double offset = ofxOceanodeTimelineManager::kMorphMinOffsetBeats;
+    if(beat < clip.startBeat + offset - kEpsilon || beat > morphEnd(clip) - offset + kEpsilon) return false;
+    for(const auto& other : track.clips) {
+        if(other.id == clip.id) continue;
+        if(beat > other.startBeat - offset + kEpsilon && beat < morphEnd(other) + offset - kEpsilon) return false;
+    }
+    return true;
+}
+} // namespace
+
+std::string ofxOceanodeTimelineManager::createMorphTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    if(morphTrackOf(sequence) != nullptr) return std::string();
+    const auto trackId = createTrack(sequence, requestedName);
+    if(auto* track = getTrack(sequence, trackId)) track->isMorphTrack = true;
+    return trackId;
+}
+
+ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::morphTrackOf(ofxOceanodeTimelineSequence& sequence) {
+    for(auto& track : sequence.tracks) if(track.isMorphTrack) return &track;
+    return nullptr;
+}
+
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::morphTrackOf(const ofxOceanodeTimelineSequence& sequence) const {
+    for(const auto& track : sequence.tracks) if(track.isMorphTrack) return &track;
+    return nullptr;
+}
+
+std::string ofxOceanodeTimelineManager::createMorphClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                        const std::string& sourceId, double startBeat, double durationBeats) {
+    const auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || !track->isMorphTrack || sourceId.empty() ||
+       !std::isfinite(startBeat) || !std::isfinite(durationBeats)) return std::string();
+    // (createClip holds the timing to the track's overlap rules.)
+    const auto id = createClip(sequence, trackId, sourceId, startBeat, durationBeats);
+    auto* clip = getClip(sequence, trackId, id);
+    if(clip == nullptr) return std::string();
+    clip->morphSource = sourceId;
+    invalidateSchedule();
+    return id;
+}
+
+double ofxOceanodeTimelineManager::beatsInSecondsBefore(const ofxOceanodeTimelineSequence& sequence, double beat,
+                                                        double seconds) const {
+    if(!(seconds > 0.0) || !(beat > 0.0)) return 0.0;
+    const auto root = container != nullptr ? container->getRootTransport() : nullptr;
+    const float rootBpm = root != nullptr ? std::max(1.0f, root->getState().bpm) : 120.0f;
+    const auto& play = sequence.play;
+    if(!play.free) {
+        // The global transport's tempo: its lane when one plays.
+        const double from = secondsToBeat(std::max(0.0, beatToSeconds(beat, rootBpm) - seconds), rootBpm);
+        return std::max(0.0, std::min(beat, beat - from));
+    }
+    // Free: its own tempo (with a tempo lane, the last point at or before the beat).
+    float bpm = play.followClockTempo ? rootBpm * play.tempoRatio : play.bpm;
+    if(play.bpmAutomationEnabled && !play.bpmPoints.empty()) {
+        bpm = play.bpmPoints.front().value;
+        for(const auto& point : play.bpmPoints) if(point.beat <= beat) bpm = point.value;
+    }
+    return std::min(beat, seconds * static_cast<double>(std::max(1.0f, bpm)) / 60.0);
+}
+
+std::string ofxOceanodeTimelineManager::appendMorphClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                        const std::string& sourceId, double durationBeats,
+                                                        double overlapSeconds) {
+    const auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || !track->isMorphTrack || !std::isfinite(durationBeats)) return std::string();
+    const ofxOceanodeTimelineClip* last = nullptr;
+    for(const auto& clip : track->clips)
+        if(last == nullptr || morphEnd(clip) > morphEnd(*last)) last = &clip;
+    if(last == nullptr) return createMorphClip(sequence, trackId, sourceId, 0.0, durationBeats);
+    const double length = std::max(1.0 / 24.0, durationBeats);
+    const double end = morphEnd(*last);
+    double overlap = std::isfinite(overlapSeconds) ? beatsInSecondsBefore(sequence, end, overlapSeconds) : 0.0;
+    overlap = std::max(0.0, std::min(overlap, 0.5 * std::min(last->durationBeats, length)));
+    return createMorphClip(sequence, trackId, sourceId, end - overlap, length);
+}
+
+std::vector<ofxOceanodeTimelineMorphOverlap> ofxOceanodeTimelineManager::morphOverlaps(const ofxOceanodeTimelineTrack& track) {
+    std::vector<ofxOceanodeTimelineMorphOverlap> overlaps;
+    if(!track.isMorphTrack) return overlaps;
+    const auto order = morphOrder(track);
+    for(size_t i = 1; i < order.size(); ++i) {
+        const auto& earlier = *order[i - 1];
+        const auto& later = *order[i];
+        const double from = later.startBeat, to = std::min(morphEnd(earlier), morphEnd(later));
+        if(to - from > kEpsilon) overlaps.push_back({earlier.id, later.id, from, to});
+    }
+    return overlaps;
+}
+
+ofxOceanodeTimelineMorphScene ofxOceanodeTimelineManager::morphSceneAt(const ofxOceanodeTimelineTrack& track, double beat) {
+    ofxOceanodeTimelineMorphScene scene;
+    if(!track.isMorphTrack) return scene;
+    // The last two clips playing at the beat, in start order (a valid track has no more).
+    const ofxOceanodeTimelineClip* origin = nullptr;
+    const ofxOceanodeTimelineClip* target = nullptr;
+    for(const auto* clip : morphOrder(track)) {
+        if(beat < clip->startBeat || beat >= morphEnd(*clip)) continue;
+        if(target != nullptr) origin = target;
+        if(origin == nullptr) origin = clip; else target = clip;
+    }
+    if(origin == nullptr) return scene;
+    scene.originClipId = origin->id;
+    if(target == nullptr) return scene;
+    scene.targetClipId = target->id;
+    const double from = target->startBeat, to = std::min(morphEnd(*origin), morphEnd(*target));
+    scene.position = to - from > kEpsilon
+        ? static_cast<float>(std::max(0.0, std::min(1.0, (beat - from) / (to - from)))) : 1.0f;
+    return scene;
+}
+
+bool ofxOceanodeTimelineManager::setMorphState(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                               const ofJson& state) {
+    auto* track = getTrack(sequence, trackId);
+    if(track == nullptr || !track->isMorphTrack) return false;
+    track->morphState = state;
+    track->morphStateStamp = ofxOceanodeTimelineMorphTransition::nextStamp();
+    invalidateEvaluationIndexes();
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setMorphTransition(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                    const std::string& clipId,
+                                                    const ofxOceanodeTimelineMorphTransition& transition) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || !track->isMorphTrack) return false;
+    clip->morphIn = transition;
+    clip->morphIn.biPow = ofClamp(clip->morphIn.biPow, -1.0f, 1.0f);
+    clip->morphIn.stamp = ofxOceanodeTimelineMorphTransition::nextStamp();
+    invalidateEvaluationIndexes();
+    return true;
 }
 
 std::string ofxOceanodeTimelineManager::createWaveTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
@@ -1634,7 +1845,7 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
                                                    ofxOceanodeTimelineAutomationMode mode) {
     auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack || track->isGlobalTrack || track->isFolder || track->isMacroTrack() ||
-       container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
+       track->isMorphTrack || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
     // A gated macro's Active belongs to its macro track.
     if(isGatedMacroActive(parameter)) return std::string();
@@ -2561,6 +2772,11 @@ std::string ofxOceanodeTimelineManager::createClip(ofxOceanodeTimelineSequence& 
     auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isFolder) return std::string();
 
+    // A Macro Morphing Track keeps its overlap rules: the clip goes to the
+    // nearest valid timing, or nowhere.
+    if(track->isMorphTrack && !fitMorphTiming(*track, std::string(), std::max(0.0, startBeat), true, startBeat, durationBeats))
+        return std::string();
+
     ofxOceanodeTimelineClip clip;
     clip.id = sequence.makeUniqueClipId();
     clip.name = ofxOceanodeTimelineSequence::makeUniqueClipName(*track, requestedName);
@@ -3086,6 +3302,9 @@ bool ofxOceanodeTimelineManager::reverseClip(ofxOceanodeTimelineSequence& sequen
     const auto* track = getTrack(sequence, trackId);
     auto* clip = getClip(sequence, trackId, clipId);
     if(track == nullptr || clip == nullptr) return false;
+    // A Macro Morphing Track's clip plays a source's graph, which only runs
+    // forwards (a macro clip, below, reverses the timeline it plays).
+    if(track->isMorphTrack) return false;
     if(track->isWaveTrack) clip->waveReverse = !clip->waveReverse;
     else if(track->isMacroTrack()) {
         // The macro's timeline is shared: the clip plays it backwards instead.
@@ -3104,7 +3323,8 @@ bool ofxOceanodeTimelineManager::reverseClip(const std::string& trackId, const s
 std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    const std::string& firstClipId, const std::string& secondClipId) {
     const auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || firstClipId == secondClipId) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || track->isMorphTrack ||
+       firstClipId == secondClipId) return std::string();
     const auto* first = getClip(sequence, trackId, firstClipId);
     const auto* second = getClip(sequence, trackId, secondClipId);
     if(first == nullptr || second == nullptr) return std::string();
@@ -3339,7 +3559,8 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
 std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                    const std::vector<std::string>& clipIds) {
     const auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || clipIds.size() < 2) return std::string();
+    if(track == nullptr || track->isWaveTrack || track->isMacroTrack() || track->isMorphTrack ||
+       clipIds.size() < 2) return std::string();
     // Everything is checked first, so a refusal never leaves a partial merge.
     struct Entry { std::string id; double start; size_t order; };
     std::vector<Entry> entries;
@@ -3379,12 +3600,25 @@ std::string ofxOceanodeTimelineManager::splitClip(ofxOceanodeTimelineSequence& s
     // Keep the original/left half as the track's capture destination. The
     // right half is an ordinary editable curve clip after the split.
     right.isStateCapture = false;
+    // A Macro Morphing Track's clip is cut where it plays alone. Both halves
+    // play its source and meet without a transition: the left one keeps the
+    // transition into the clip, the right one starts with the default.
+    const bool morphTrack = track->isMorphTrack;
+    if(morphTrack) {
+        if(!morphSplitAllowed(*track, original, timelineBeat)) return std::string();
+        right.morphIn = ofxOceanodeTimelineMorphTransition();
+    }
 
     // Splitting dissolves a clip group: the halves become independent.
     if(getGroupForClip(sequence, trackId, clipId) != nullptr) ungroupClip(sequence, trackId, clipId);
 
+    // (There the left half shrinks first: the right one is placed by the overlap rules.)
+    if(morphTrack) if(auto* leftClip = getClip(sequence, trackId, clipId)) *leftClip = left;
     const std::string rightId = createClip(sequence, trackId, original.name, right.startBeat, right.durationBeats);
-    if(rightId.empty()) return std::string();
+    if(rightId.empty()) {
+        if(morphTrack) if(auto* leftClip = getClip(sequence, trackId, clipId)) *leftClip = original;
+        return std::string();
+    }
     auto* rightClip = getClip(sequence, trackId, rightId);
     const std::string rightName = rightClip->name;
     auto rightLanes = std::move(right.lanes);
@@ -3421,6 +3655,11 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
     const auto* sourceClip = getClip(sequence, srcTrackId, clipId);
     if(srcTrack == nullptr || dstTrack == nullptr || sourceClip == nullptr) return std::string();
     if(srcTrack->isWaveTrack != dstTrack->isWaveTrack) return std::string();
+    // A Macro Morphing Track's clip stays on its track (a source belongs to
+    // that track's engine), and nothing else comes onto it.
+    if(srcTrack->isMorphTrack != dstTrack->isMorphTrack) return std::string();
+    const bool morphTrack = dstTrack->isMorphTrack;
+    if(morphTrack && (srcTrackId != dstTrackId || !dstBindingId.empty())) return std::string();
     // A value copy: createClip below may reallocate the source track's clips.
     ofxOceanodeTimelineClip copy = *sourceClip;
     // A duplicate is ordinary automation; otherwise the next capture would
@@ -3520,6 +3759,8 @@ std::string ofxOceanodeTimelineManager::duplicateClip(ofxOceanodeTimelineSequenc
     copy.id = newId;
     copy.name = newClip->name;
     copy.startBeat = std::max(0.0, newStartBeat);
+    // (Placed by the track's overlap rules; refused above when it fits nowhere there.)
+    if(morphTrack) { copy.startBeat = newClip->startBeat; copy.durationBeats = newClip->durationBeats; }
     // Lanes go in one at a time: makeUniqueLaneId() only avoids ids already
     // in the timeline, so ids handed out before insertion could repeat.
     auto lanes = std::move(copy.lanes);
@@ -3587,6 +3828,12 @@ bool ofxOceanodeTimelineManager::trimClipStart(ofxOceanodeTimelineSequence& sequ
     ofxOceanodeTimelineClip base = *clip;
     newStartBeat = std::max(0.0, newStartBeat);
     const double end = base.startBeat + base.durationBeats;
+    if(track->isMorphTrack) {
+        // Held to the track's overlap rules (the end stays where it is).
+        double start = newStartBeat, length = end - newStartBeat;
+        if(!fitMorphTiming(*track, clipId, base.startBeat, false, start, length)) return false;
+        newStartBeat = start;
+    }
     if(newStartBeat >= end - 1.0 / 96.0) return false;
     if(newStartBeat < base.startBeat) {
         // Growing to the left: only repeating content can (it is the same
@@ -3621,6 +3868,9 @@ bool ofxOceanodeTimelineManager::extendClipStart(ofxOceanodeTimelineSequence& se
     if(track == nullptr || clip == nullptr || track->isWaveTrack) return false;
     newStartBeat = std::max(0.0, newStartBeat);
     if(newStartBeat >= clip->startBeat - 1e-9) return trimClipStart(sequence, trackId, clipId, newStartBeat);
+    // A Macro Morphing Track's clip has no content of its own to extend: it
+    // grows by repeats, within the overlap rules.
+    if(track->isMorphTrack) return trimClipStart(sequence, trackId, clipId, newStartBeat);
     bakeContentOffset(*clip);
 
     const double stretch = ofxOceanodeTimelineClipTime::stretch(*clip);
@@ -3837,7 +4087,8 @@ std::string ofxOceanodeTimelineManager::createLane(ofxOceanodeTimelineSequence& 
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return std::string();
     if(type == ofxOceanodeTimelineLaneType::Wave) return std::string();
-    if(const auto* owner = getTrack(sequence, trackId); owner != nullptr && owner->isMacroTrack()) return std::string();
+    if(const auto* owner = getTrack(sequence, trackId); owner != nullptr && (owner->isMacroTrack() || owner->isMorphTrack))
+        return std::string();
     ofxOceanodeTimelineLane lane;
     lane.id = sequence.makeUniqueLaneId();
     lane.name = requestedName.empty() ? "Lane" : requestedName;
@@ -4247,11 +4498,37 @@ bool ofxOceanodeTimelineManager::setClipTiming(ofxOceanodeTimelineSequence& sequ
                                                double startBeat, double durationBeats) {
     auto* clip = getClip(sequence, trackId, clipId);
     if(clip == nullptr) return false;
+    const auto* track = getTrack(sequence, trackId);
+    if(track != nullptr && track->isMorphTrack) {
+        // A Macro Morphing Track holds its clips to its overlap rules: the
+        // nearest valid timing (a move keeps the length). False, with the
+        // clip left as it is, when its neighbours leave it none.
+        const bool move = std::abs(std::max(1.0 / 24.0, durationBeats) - clip->durationBeats) <= 1e-9;
+        if(!std::isfinite(startBeat) || !std::isfinite(durationBeats)) return false;
+        double fitStart = startBeat, fitLength = durationBeats;
+        bool fitted = fitMorphTiming(*track, clipId, clip->startBeat, move, fitStart, fitLength);
+        if(move) {
+            // Past a neighbour: among the clips where it was asked to go,
+            // when it fits there at its length and that is nearer to the
+            // start asked than staying on its side.
+            const double asked = std::max(0.0, startBeat);
+            double pastStart = startBeat, pastLength = durationBeats;
+            if(fitMorphTiming(*track, clipId, asked, true, pastStart, pastLength) &&
+               std::abs(pastLength - clip->durationBeats) <= 1e-9 &&
+               (!fitted || std::abs(pastStart - asked) < std::abs(fitStart - asked) - 1e-9)) {
+                fitStart = pastStart;
+                fitLength = pastLength;
+                fitted = true;
+            }
+        }
+        if(!fitted) return false;
+        startBeat = fitStart;
+        durationBeats = fitLength;
+    }
     const double previousStart = clip->startBeat, previousDuration = clip->durationBeats;
     clip->startBeat = std::max(0.0, startBeat);
     clip->durationBeats = std::max(1.0 / 24.0, durationBeats);
     // Resizing a Wave clip stretches its complete source over the new length.
-    const auto* track = getTrack(sequence, trackId);
     if(track != nullptr && track->isWaveTrack) normalizeWaveClipMapping(*clip);
     // A clip dragged while playing moves notes already queued ahead.
     if(clip->startBeat != previousStart || clip->durationBeats != previousDuration) invalidateSchedule();
@@ -4576,8 +4853,10 @@ bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequ
     const double ratio = ofxOceanodeTimelineClipTime::effectiveStretch(*clip);
     const double previousDuration = std::max(1.0 / 24.0, clip->durationBeats);
     duration = std::max(1.0 / 24.0, duration);
-    setClipTiming(sequence, trackId, clipId, clip->startBeat, duration);
+    if(!setClipTiming(sequence, trackId, clipId, clip->startBeat, duration)) return false;
     const auto* track = getTrack(sequence, trackId);
+    // (A Macro Morphing Track may have held the end back for the clip's neighbours.)
+    if(track != nullptr && track->isMorphTrack) duration = clip->durationBeats;
     if(track != nullptr && track->isWaveTrack) {
         // Audio always stretches its full slice, independent of the global tool.
     } else if(operation == ofxOceanodeTimelineEndEdit::Repeat) {
@@ -5259,7 +5538,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Timelines playing on their own first: the main timeline then applies
     // over them on any path both drive.
     if(!isEngine()) {
+        // Each Macro Morphing Track's engine is told its scene first (a
+        // source that is not live loads here), so the timelines of its
+        // sources play in this pass; it updates once they have written.
+        presentMorphScenes();
         updatePlayers();
+        updateMorphEngines();
         updateTimeSources();
         if(metronome) {
             // It follows its timeline: that one's transport (a new one when
@@ -6216,6 +6500,8 @@ void ofxOceanodeTimelineManager::clear() {
     // they write nothing more of it (over what a preset load just set).
     for(auto& player : players)
         if(player->ref.canvas.empty()) player->awaitingSync = true;
+    // Their Macro Morphing Tracks' engines go with them (the sources stop).
+    releaseMorphEngines(true);
     rootTimelines = {};
     playedSequence.tracks.clear();
     invalidateEvaluationIndexes();
@@ -6344,6 +6630,20 @@ void ofxOceanodeTimelineManager::setTimeSignature(int numerator, int denominator
 
 std::string ofxOceanodeTimelineManager::createTrack(const std::string& requestedName) {
     return createTrack(editSequence(), requestedName);
+}
+
+std::string ofxOceanodeTimelineManager::createMorphTrack(const std::string& requestedName) {
+    return createMorphTrack(editSequence(), requestedName);
+}
+
+std::string ofxOceanodeTimelineManager::createMorphClip(const std::string& trackId, const std::string& sourceId,
+                                                        double startBeat, double durationBeats) {
+    return createMorphClip(editSequence(), trackId, sourceId, startBeat, durationBeats);
+}
+
+std::string ofxOceanodeTimelineManager::appendMorphClip(const std::string& trackId, const std::string& sourceId,
+                                                        double durationBeats, double overlapSeconds) {
+    return appendMorphClip(editSequence(), trackId, sourceId, durationBeats, overlapSeconds);
 }
 
 std::string ofxOceanodeTimelineManager::insertTrackCopy(ofxOceanodeTimelineTrack copy, const std::string& name, size_t index) {

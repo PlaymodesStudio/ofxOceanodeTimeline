@@ -25,8 +25,10 @@ float ofxOceanodeTimelineLaneEditors::keyboardReserve(ofxOceanodeTimelineLaneTyp
         ? kPianoKeyboardWidth + kPianoScrollbarWidth + 9.0f : 0.0f;
 }
 float ofxOceanodeTimelineLaneEditors::defaultHeight(ofxOceanodeTimelineLaneType type) {
-    if(type == ofxOceanodeTimelineLaneType::DrumGrid) return 320.0f;
-    if(type == ofxOceanodeTimelineLaneType::Lfo) return 230.0f;
-    if(type == ofxOceanodeTimelineLaneType::MultiCurve) return 212.0f; // a Curve plus its tab strip
-    return type == ofxOceanodeTimelineLaneType::PianoRoll ? 480.0f : 190.0f;
+    // An unfolded lane starts compact (half of what it used to open at):
+    // drag its bottom edge for more room.
+    if(type == ofxOceanodeTimelineLaneType::DrumGrid) return 160.0f;
+    if(type == ofxOceanodeTimelineLaneType::Lfo) return 115.0f;
+    if(type == ofxOceanodeTimelineLaneType::MultiCurve) return 106.0f; // a Curve plus its tab strip
+    return type == ofxOceanodeTimelineLaneType::PianoRoll ? 240.0f : 95.0f;
 }

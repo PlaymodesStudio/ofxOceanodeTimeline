@@ -634,9 +634,21 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
         const double to = outer.map.toSequence(std::min(toBeat, outer.windowTo));
         if(to < from - kEpsilon) continue;
         const auto outerContext = outer.contextFrom(context);
+        // The timeline this placement plays, as a Macro Morphing Track's
+        // sources name the one holding their track.
+        std::string morphHost;
+        bool morphHostKnown = false;
         for(const auto& track : outer.sequence->tracks) {
-            if(!track.isMacroTrack() || !isTrackAudible(track)) continue;
-            if(playedMacroAt(track) == nullptr) continue;
+            // A Macro Morphing Track places, clip by clip, the timelines of
+            // the source each clip plays while that source is live.
+            const bool morphTrack = track.isMorphTrack;
+            if((!track.isMacroTrack() && !morphTrack) || !isTrackAudible(track)) continue;
+            if(!morphTrack && playedMacroAt(track) == nullptr) continue;
+            if(morphTrack && !morphHostKnown) {
+                const auto* host = playedMacroOf(*outer.sequence);
+                morphHost = host == nullptr ? timeSourceId(engineRef) : timeSourceId({host->canvas, host->timeline});
+                morphHostKnown = true;
+            }
             const size_t firstOfTrack = result.size();
             double latestStart = -std::numeric_limits<double>::infinity();
             for(const auto& clip : track.clips) {
@@ -645,8 +657,10 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 const double end = start + std::max(1.0 / 24.0, clip.durationBeats);
                 if(atBeat ? (from < start - kEpsilon || from >= end - kEpsilon)
                           : (end < from - kEpsilon || start > to + kEpsilon)) continue;
-                // Where two clips overlap the later one plays, as on any track.
-                if(atBeat) {
+                // Where two clips overlap the later one plays, as on any track
+                // (a Macro Morphing Track plays both: the overlap is their
+                // transition, and each drives its own source).
+                if(atBeat && !morphTrack) {
                     if(start < latestStart) continue;
                     latestStart = start;
                     result.resize(firstOfTrack);
@@ -663,14 +677,24 @@ std::vector<ofxOceanodeTimelineManager::PlayedSequence> ofxOceanodeTimelineManag
                 // A reversed clip plays the mirrored copy, its content read
                 // from the end of this clip's content (sequence beat z here is
                 // mirrorLength - content + z there).
-                const auto* played = playedMacroAt(track, clip.reversed);
-                if(played == nullptr) continue;
+                const auto* played = morphTrack ? nullptr : playedMacroAt(track, clip.reversed);
+                if(played == nullptr && !morphTrack) continue;
                 // The clip places the track's timeline and, a macro placed as
                 // a whole, the timelines of that macro no track places.
-                std::vector<const PlayedMacro*> carried{played};
-                for(const auto& other : playedMacros)
-                    if(&other != played && other.reversed == played->reversed && other.canvas == played->canvas &&
-                       other.inheritsFrom == played->timeline) carried.push_back(&other);
+                std::vector<const PlayedMacro*> carried;
+                if(morphTrack) {
+                    // (Nothing while its source is not live.)
+                    if(clip.morphSource.empty()) continue;
+                    for(const auto& other : playedMacros)
+                        if(other.reversed == clip.reversed && other.morphSource == clip.morphSource &&
+                           other.morphHost == morphHost) carried.push_back(&other);
+                    if(carried.empty()) continue;
+                } else {
+                    carried.push_back(played);
+                    for(const auto& other : playedMacros)
+                        if(&other != played && other.reversed == played->reversed && other.canvas == played->canvas &&
+                           other.inheritsFrom == played->timeline) carried.push_back(&other);
+                }
                 const double windowStart = std::max(from, start), windowEnd = std::min(to, end);
                 const int64_t firstCycle = clip.repeatContent
                     ? static_cast<int64_t>(std::floor((windowStart - start) / cycle + 1e-9)) : 0;
@@ -878,6 +902,8 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         played.canvas = source.canvas;
         played.timeline = source.timeline;
         played.inheritsFrom = source.inheritsFrom;
+        played.morphSource = source.morphSource;
+        played.morphHost = source.morphHost;
         played.sequence = std::make_unique<ofxOceanodeTimelineSequence>(*source.sequence);
         played.sequence->base = nullptr; // its paths are absolute now
         makeAbsolute(*played.sequence, source.canvas);
@@ -891,6 +917,8 @@ void ofxOceanodeTimelineManager::rebuildPlayedMacros() {
         mirrored.canvas = played.canvas;
         mirrored.timeline = played.timeline;
         mirrored.inheritsFrom = played.inheritsFrom;
+        mirrored.morphSource = played.morphSource;
+        mirrored.morphHost = played.morphHost;
         mirrored.outerLatencyMs = played.outerLatencyMs;
         mirrored.reversed = true;
         mirrored.mirrorLength = macroTimelineLength(*source.sequence);
@@ -927,7 +955,7 @@ void ofxOceanodeTimelineManager::mirrorSequence(ofxOceanodeTimelineSequence& seq
     for(auto& track : sequence.tracks)
         for(auto& clip : track.clips) {
             clip.startBeat = length - clip.startBeat - std::max(1.0 / 24.0, clip.durationBeats);
-            if(track.isMacroTrack()) {
+            if(track.isMacroTrack() || track.isMorphTrack) {
                 clip.contentOffsetBeats = reversedContentOffset(clip, ofxOceanodeTimelineClipTime::contentOffset(clip));
                 clip.reversed = !clip.reversed;
             } else if(!track.isWaveTrack) mirrorClipContent(clip);
@@ -2459,6 +2487,8 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         hash.add(isEngine() ? isTrackSoloed(track) : track.solo);
         hash.add(track.isFolder); hash.add(track.parentId);
         hash.add(track.macroGate); hash.add(track.macroPreRollMs); hash.add(track.macroTailMs);
+        // (The stamp changes whenever the engine state does.)
+        hash.add(track.isMorphTrack); hash.add(track.morphStateStamp);
         hash.add(track.waveVolume); hash.add(track.waveVolumeAutomationEnabled); hash.add(track.waveVolumeInterpolation);
         hash.add(track.waveVolumePoints.size());
         for(const auto& point : track.waveVolumePoints) { hash.add(point.beat); hash.add(point.value); }
@@ -2482,6 +2512,8 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.id); hash.add(clip.startBeat); hash.add(clip.durationBeats);
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
             hash.add(clip.reversed); hash.add(clip.macroSnapshot);
+            hash.add(clip.morphSource); hash.add(clip.morphIn.morph); hash.add(clip.morphIn.biPow);
+            hash.add(clip.morphIn.logBlend); hash.add(clip.morphIn.stamp);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
             hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);

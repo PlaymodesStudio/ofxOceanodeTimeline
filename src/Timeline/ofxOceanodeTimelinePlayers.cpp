@@ -350,6 +350,10 @@ void ofxOceanodeTimelineManager::refreshPlacedTimelines() const {
         const std::string canvas = entry.address->getCanvasID();
         for(const auto& timeline : entry.timelines->timelines) scan(*timeline, canvas, timeline->timelineId);
     }
+    // The timelines of a Macro Morphing Track's live sources play where the
+    // track's clips place them, never on their own (one a timeline track of
+    // its own canvas places stays that one's).
+    for(const auto& placed : morphPlacedTimelines()) placedTimelines.emplace(placed.first, placed.second);
     // A macro placed from outside is placed as a whole: its timelines no
     // track places follow the clips placing the first of its timelines a
     // timeline outside it places (not one that, through its own timeline
@@ -939,6 +943,35 @@ std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager:
         const std::string baseCanvas = parent < 0 ? std::string() : sources[static_cast<size_t>(parent)].canvas;
         for(size_t trackIndex = 0; trackIndex < sequence.tracks.size(); ++trackIndex) {
             const auto& track = sequence.tracks[trackIndex];
+            if(track.isMorphTrack) {
+                // A Macro Morphing Track: the timelines of its engine's live
+                // graphs (the sources playing now), each graph a canvas of
+                // its own. Its clips place the ones no timeline track of
+                // that canvas places; those reach the rest below.
+                const TimelineRef hostRef = parent < 0 ? engineRef
+                    : normalizedRef({sources[static_cast<size_t>(parent)].macroContainer->getCanvasID(),
+                                     sources[static_cast<size_t>(parent)].timeline});
+                const std::string hostKey = parent < 0 ? rootKey : keys[static_cast<size_t>(parent)];
+                if(!owner->placedTimelinesValid) owner->refreshPlacedTimelines();
+                for(const auto& graph : owner->morphGraphsOf(hostRef)) {
+                    const ofxOceanodeTimelineCanvas* list = nullptr;
+                    for(const auto& entry : entries) if(entry.address == graph.canvas) list = entry.timelines.get();
+                    if(list == nullptr) continue; // a source without timelines
+                    for(const auto& timeline : list->timelines) {
+                        if(sources.size() >= kMaximumSources) break;
+                        const auto placer = owner->placedTimelines.find(TimelineRef{graph.canvasId, timeline->timelineId});
+                        if(placer == owner->placedTimelines.end() || placer->second != hostRef) continue;
+                        const std::string key = keyOf(graph.canvasId, timeline->timelineId);
+                        if(std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
+                        MacroSource source{graph.canvas, graph.canvasId, timeline->timelineId, timeline.get(), parent, trackIndex};
+                        source.morphSource = graph.source;
+                        source.morphHost = hostKey;
+                        sources.push_back(source);
+                        keys.push_back(key);
+                    }
+                }
+                continue;
+            }
             if(!track.isMacroTrack()) continue;
             const std::string canvas = track.macroCanvas == "."
                 ? baseCanvas : baseCanvas.empty() ? track.macroCanvas : baseCanvas + " / " + track.macroCanvas;

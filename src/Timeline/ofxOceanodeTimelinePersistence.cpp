@@ -609,6 +609,13 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         trackJson["macroPreRollMs"] = track.macroPreRollMs;
         trackJson["macroTailMs"] = track.macroTailMs;
     }
+    if(track.isMorphTrack) {
+        trackJson["isMorphTrack"] = true;
+        // (Its engine's state, as the engine wrote it.)
+        if(!track.morphState.is_null()) trackJson["morphState"] = track.morphState;
+        if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
+        if(!track.macroFoldedTimelines.empty()) trackJson["macroFoldedTimelines"] = track.macroFoldedTimelines;
+    }
     trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
     trackJson["waveVolumePoints"] = ofJson::array();
     for(const auto& point : track.waveVolumePoints)
@@ -654,6 +661,19 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         if(clip.contentOffsetBeats != 0.0) clipJson["contentOffsetBeats"] = clip.contentOffsetBeats;
         if(clip.macroSnapshot >= 0) clipJson["macroSnapshot"] = clip.macroSnapshot;
         if(clip.reversed) clipJson["reversed"] = true;
+        if(track.isMorphTrack) {
+            if(!clip.morphSource.empty()) clipJson["morphSource"] = clip.morphSource;
+            // The transition into the clip: only what is not the default.
+            if(!clip.morphIn.isDefault()) {
+                ofJson transition = ofJson::object();
+                if(clip.morphIn.morph) transition["morph"] = true;
+                if(clip.morphIn.biPow != 0.0f) transition["biPow"] = clip.morphIn.biPow;
+                if(clip.morphIn.logBlend != 1.0f) transition["logBlend"] = clip.morphIn.logBlend;
+                if(!clip.morphIn.morphPolicies.is_null()) transition["morphPolicies"] = clip.morphIn.morphPolicies;
+                if(!clip.morphIn.routerOverrides.is_null()) transition["routerOverrides"] = clip.morphIn.routerOverrides;
+                clipJson["morphIn"] = std::move(transition);
+            }
+        }
         clipJson["muted"] = clip.muted;
         clipJson["chance"] = clip.chance;
         clipJson["isStateCapture"] = clip.isStateCapture;
@@ -1056,9 +1076,25 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         // (A file before version 15 left it out for the canvas's then-default timeline: "tl_1" now.)
         track.macroTimeline = track.macroCanvas.empty() ? std::string() : trackJson.value("macroTimeline", std::string());
         if(!track.macroCanvas.empty() && track.macroTimeline.empty()) track.macroTimeline = "tl_1";
-        track.macroUnfolded = !track.macroCanvas.empty() && trackJson.value("macroUnfolded", false);
+        // A Macro Morphing Track: a timeline has one. A file with more keeps
+        // its first; the others load as ordinary tracks, without their
+        // sources (their clips stay where they were).
+        track.isMorphTrack = !track.isWaveTrack && !track.isGlobalTrack && !track.isFolder && track.macroCanvas.empty() &&
+                             trackJson.value("isMorphTrack", false);
+        if(track.isMorphTrack && std::any_of(sequence.tracks.begin(), sequence.tracks.end(),
+                                             [](const auto& loaded) { return loaded.isMorphTrack; })) {
+            track.isMorphTrack = false;
+            ofLogWarning("ofxOceanodeTimeline")
+                << "A timeline has one Macro Morphing Track: \"" << track.name << "\" was loaded as an ordinary track.";
+        }
+        if(track.isMorphTrack && trackJson.contains("morphState")) {
+            track.morphState = trackJson["morphState"];
+            track.morphStateStamp = ofxOceanodeTimelineMorphTransition::nextStamp();
+        }
+        const bool unfolds = !track.macroCanvas.empty() || track.isMorphTrack;
+        track.macroUnfolded = unfolds && trackJson.value("macroUnfolded", false);
         track.macroFoldedTimelines.clear();
-        if(!track.macroCanvas.empty() && trackJson.contains("macroFoldedTimelines") && trackJson["macroFoldedTimelines"].is_array())
+        if(unfolds && trackJson.contains("macroFoldedTimelines") && trackJson["macroFoldedTimelines"].is_array())
             for(const auto& folded : trackJson["macroFoldedTimelines"])
                 if(folded.is_string()) track.macroFoldedTimelines.push_back(folded.get<std::string>());
         track.macroPreRollMs = ofClamp(trackJson.value("macroPreRollMs", 100.0f), 0.0f, kMaxMacroGateMs);
@@ -1144,6 +1180,20 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 clip.contentOffsetBeats = ofxOceanodeTimelineClipTime::contentOffset(clip);
                 clip.macroSnapshot = clipJson.value("macroSnapshot", -1);
                 clip.reversed = clipJson.value("reversed", false);
+                if(track.isMorphTrack) {
+                    clip.morphSource = clipJson.value("morphSource", std::string());
+                    clip.reversed = false; // a source's graph only runs forwards
+                    if(clipJson.contains("morphIn") && clipJson["morphIn"].is_object()) {
+                        const auto& transition = clipJson["morphIn"];
+                        clip.morphIn.morph = transition.value("morph", false);
+                        clip.morphIn.biPow = ofClamp(transition.value("biPow", 0.0f), -1.0f, 1.0f);
+                        clip.morphIn.logBlend = transition.contains("logBlend") && transition["logBlend"].is_number()
+                            ? ofClamp(transition["logBlend"].get<float>(), 0.0f, 1.0f) : 1.0f;
+                        if(transition.contains("morphPolicies")) clip.morphIn.morphPolicies = transition["morphPolicies"];
+                        if(transition.contains("routerOverrides")) clip.morphIn.routerOverrides = transition["routerOverrides"];
+                        clip.morphIn.stamp = ofxOceanodeTimelineMorphTransition::nextStamp();
+                    }
+                }
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.waveFilePath = clipJson.value("waveFilePath", std::string());
                 clip.waveGain = ofClamp(clipJson.value("waveGain", 1.0f), 0.0f, 4.0f);
@@ -1655,6 +1705,9 @@ ofJson ofxOceanodeTimelineManager::exportClip(const ofxOceanodeTimelineSequence&
     portable.color = track->color;
     portable.isWaveTrack = track->isWaveTrack;
     portable.isGlobalTrack = track->isGlobalTrack;
+    // (A Macro Morphing Track's clip names a source of its track's engine:
+    // the engine's state stays with the track.)
+    portable.isMorphTrack = track->isMorphTrack;
     portable.clips.push_back(*clip);
     portable.clips.front().startBeat = 0.0;
     // A reusable capture must not become the destination track's live capture buffer.
@@ -1771,6 +1824,13 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
         if(!trackId.empty() && (destination == nullptr || destination->isWaveTrack != source.isWaveTrack)) {
             clipFileError(error, "Choose an audio track for audio clips, or an automation track for other clips."); return {};
         }
+        // A morphing clip plays a source of its track's engine: it goes on a
+        // Macro Morphing Track only, never on a track made for it (a timeline
+        // has one, and a new one would have no sources), and nothing else does.
+        if(source.isMorphTrack != (destination != nullptr && destination->isMorphTrack)) {
+            clipFileError(error, source.isMorphTrack ? "Choose the Macro Morphing Track for a morphing clip."
+                                                     : "A Macro Morphing Track takes morphing clips only."); return {};
+        }
         // Explicit mappings only: never connect an imported clip merely because
         // a different project happens to reuse the original parameter names.
         for(const auto& binding : source.bindings) {
@@ -1864,9 +1924,17 @@ std::pair<std::string, std::string> ofxOceanodeTimelineManager::importClip(const
             }
         }
         const auto id = createClip(destinationId, copy.name, std::max(0.0, startBeat), copy.durationBeats);
+        if(getClip(destinationId, id) == nullptr) {
+            // (A Macro Morphing Track places a clip by its overlap rules, or not at all.)
+            clipFileError(error, "There is no room for the clip there."); return {};
+        }
         copy.id = id;
         copy.name = getClip(destinationId, id)->name;
         copy.startBeat = std::max(0.0, startBeat);
+        if(source.isMorphTrack) {
+            copy.startBeat = getClip(destinationId, id)->startBeat;
+            copy.durationBeats = getClip(destinationId, id)->durationBeats;
+        }
         auto lanes = std::move(copy.lanes);
         copy.lanes.clear();
         *getClip(destinationId, id) = std::move(copy);

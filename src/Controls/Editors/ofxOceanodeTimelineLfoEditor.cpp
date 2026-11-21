@@ -14,7 +14,7 @@ using namespace ofxOceanodeTimelineClipTime;
 namespace {
 // Control sublanes sit this much further in than the lanes of the clip.
 constexpr float kControlIndent = kIndentStep;
-constexpr float kDefaultControlHeight = 110.0f;
+constexpr float kDefaultControlHeight = 48.0f;
 constexpr float kCollapsedRowHeight = 22.0f;
 
 // Draws f(sourceBeat) (0..1) over the timeline from x0 to x1 the way the

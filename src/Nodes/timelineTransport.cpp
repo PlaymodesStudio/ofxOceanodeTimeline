@@ -44,6 +44,14 @@ void timelineTransport::setup() {
             timeline->playTimeline(selectedRef);
         }
     }));
+    // A Trigger Input router fires in the track's engine as it arrives,
+    // from whichever node it comes.
+    routers.onTriggerInput = [this, manager](const std::string& id) {
+        auto* timeline = manager();
+        if(timeline == nullptr) return;
+        if(const auto* sequence = timeline->findTimeline(selectedRef))
+            if(auto* engine = timeline->morphEngine(*sequence)) engine->triggerInput(id);
+    };
 }
 
 void timelineTransport::refreshTimelineList() {
@@ -82,14 +90,88 @@ void timelineTransport::refreshTimelineList() {
     }
 }
 
+void timelineTransport::updateRouters() {
+    if(hostContainer == nullptr) return;
+    auto& manager = hostContainer->getTimelineManager();
+    const auto* sequence = selectedRef.timeline.empty() ? nullptr : manager.findTimeline(selectedRef);
+    // A saved timeline that is not there (yet: the timeline loads after node
+    // presets) keeps the ports restored with the node, and their cables.
+    if(sequence == nullptr && !selectedRef.timeline.empty()) return;
+    // Another timeline, none, or one without a Macro Morphing Track: no routers.
+    auto* engine = sequence != nullptr ? manager.morphEngine(*sequence) : nullptr;
+    if(engine == nullptr) {
+        routers.clear();
+        routersEngine = nullptr;
+        return;
+    }
+    manager.noteMorphPublisher(*sequence);
+    // The ports match the track's routers: reinstalled when they were
+    // edited, and when the engine is another one (the timeline has loaded,
+    // an undo restored it, another timeline was selected).
+    const auto& contract = engine->contract().routers;
+    const auto& ports = routers.ports();
+    bool same = routersEngine == engine && ports.size() == contract.size();
+    for(size_t i = 0; same && i < ports.size(); ++i)
+        same = ports[i].id == contract[i].id && ports[i].name == contract[i].name &&
+               ports[i].type == contract[i].type && ports[i].direction == contract[i].direction;
+    if(!same) {
+        routers.install(*engine);
+        // An input nothing is connected to shows the engine's value (the one
+        // saved with the track), instead of writing its own over it.
+        const auto& inputs = engine->inputs();
+        for(const auto& port : routers.ports()) {
+            if(port.direction != "Input" || port.type == MacroMixerMixing::triggerType) continue;
+            const auto value = inputs.find(port.id);
+            auto* parameter = routers.parameter(port.id);
+            if(value == inputs.end() || parameter == nullptr || parameter->hasInConnection()) continue;
+            // (Borrowed and registered values only arrive through a cable.)
+            if(std::holds_alternative<ofTexture*>(value->second) ||
+               std::holds_alternative<MacroMixerMixing::Object>(value->second)) continue;
+            MacroMixerMixing::writePort(port.type, *parameter, value->second);
+        }
+        routersEngine = engine;
+    }
+    // Only what changed on this node's ports is written: with several nodes
+    // on one timeline, the last change of any of them wins.
+    routers.syncInputs(*engine, true);
+    // The engine updates here, with the inputs just written (once per
+    // frame: the first Timeline node of the timeline to update).
+    manager.updateMorphEngine(*sequence);
+    // The engine is read once per frame by the timeline; every node
+    // publishes that reading (a Trigger reaches them all).
+    if(const auto* outputs = manager.morphOutputs(*sequence)) routers.publish(*outputs);
+}
+
 void timelineTransport::update(ofEventArgs &a) {
     refreshTimelineList();
+    updateRouters();
+}
+
+void timelineTransport::draw(ofEventArgs &a) {
+    // The track's sources draw with the patch (their textures are rendered
+    // here), once per frame whichever node asks first; then the outputs again.
+    if(hostContainer == nullptr || selectedRef.timeline.empty() || routersEngine == nullptr) return;
+    auto& manager = hostContainer->getTimelineManager();
+    const auto* sequence = manager.findTimeline(selectedRef);
+    if(sequence == nullptr) return;
+    manager.drawMorphEngine(*sequence);
+    if(const auto* outputs = manager.morphOutputs(*sequence)) routers.publish(*outputs);
 }
 
 void timelineTransport::presetSave(ofJson &json) {
     json["timelineCanvas"] = selectedRef.canvas;
     json["timelineId"] = selectedRef.timeline;
     json["timelineFormat"] = 15; // an empty id means none (before 15: the canvas's default timeline)
+    // The router ports as they are, so their cables find them on load.
+    if(!routers.ports().empty()) json["morphRouters"] = routers.savePorts();
+}
+
+void timelineTransport::loadBeforeConnections(ofJson &json) {
+    // Node presets and cables load before the timeline: the saved router
+    // ports are installed here, for the cables, and matched against the
+    // track's routers once the timeline has loaded (updateRouters).
+    if(!json.contains("morphRouters") || !routers.restorePorts(json["morphRouters"])) routers.clear();
+    routersEngine = nullptr;
 }
 
 void timelineTransport::presetRecallAfterSettingParameters(ofJson &json) {

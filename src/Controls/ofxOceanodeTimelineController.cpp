@@ -2976,8 +2976,8 @@ void ofxOceanodeTimelineController::draw() {
             // Its waveform, where this placement plays it.
             drawWaveform(innerClip, map, originX, x1, x2, contentTop, y2, IM_COL32(color.r, color.g, color.b, chrome ? 230 : 200),
                          innerFirst, innerLast);
-        } else if(innerTrack.isMacroTrack() || innerClip.muted) {
-            // A macro inside: a bar (its own content is a click away).
+        } else if(innerTrack.isMacroTrack() || innerTrack.isMorphTrack || innerClip.muted) {
+            // A macro inside, or a morphing source: a bar (its own content is a click away).
             dl->AddRectFilled(ImVec2(x1, contentTop), ImVec2(x2, y2),
                 IM_COL32(color.r, color.g, color.b, innerClip.muted ? 50 : 160));
         } else {
@@ -3100,7 +3100,16 @@ void ofxOceanodeTimelineController::draw() {
         // then (a macro placed as a whole) the timelines of that macro its
         // clips carry: the rows of each, under the track.
         if(level > 16) return;
-        const auto carried = timeline.carriedTimelines(outer, macroTrack);
+        // (A Macro Morphing Track: the timelines of its sources that are live
+        // now, each under its source's name, placed by that source's clips.)
+        std::vector<ofxOceanodeTimelineSequence*> carried;
+        std::vector<std::string> carriedSources;
+        if(macroTrack.isMorphTrack) {
+            for(const auto& live : timeline.morphLiveTimelines(outer, macroTrack)) {
+                carried.push_back(live.first);
+                carriedSources.push_back(live.second);
+            }
+        } else carried = timeline.carriedTimelines(outer, macroTrack);
         const float macroBlockTop = ImGui::GetCursorScreenPos().y;   // just under the macro track's own row
         for(size_t carriedIndex = 0; carriedIndex < carried.size(); ++carriedIndex) {
             auto* inner = carried[carriedIndex];
@@ -3108,9 +3117,13 @@ void ofxOceanodeTimelineController::draw() {
             auto* macroContainer = timeline.refOf(*inner, innerRef) ? timeline.canvasContainer(innerRef.canvas) : nullptr;
             if(macroContainer == nullptr) continue;
             // A carried timeline's rows are keyed by it too (track ids repeat between timelines).
-            const std::string group = carriedIndex == 0 ? outerGroup : outerGroup + "/" + innerRef.timeline;
+            // (A source's by its id: its canvas is another one each time it loads.)
+            const std::string morphSource = macroTrack.isMorphTrack ? carriedSources[carriedIndex] : std::string();
+            const std::string group = macroTrack.isMorphTrack ? outerGroup + "/" + morphSource + ":" + innerRef.timeline
+                                    : carriedIndex == 0 ? outerGroup : outerGroup + "/" + innerRef.timeline;
             unfoldedSequencesDrawn.push_back(inner);
-            const std::string macroLabel = timeline.timelineName(innerRef);
+            const std::string macroLabel = !macroTrack.isMorphTrack ? timeline.timelineName(innerRef)
+                : timeline.morphSourceName(outer, morphSource) + (timeline.morphSourceDirty(outer, morphSource) ? " *" : "");
             const double visibleFrom = beatAtOffset(zoneLeft - unfoldedOriginX);
             const double visibleTo = beatAtOffset(windowRight - unfoldedOriginX);
             // Reversed clips show the mirrored timeline (one per clip, kept for this call).
@@ -3124,6 +3137,7 @@ void ofxOceanodeTimelineController::draw() {
                     if(outerPlacement.reversed) continue; // what plays inside a mirror is not unfolded
                     const auto& outerMap = outerPlacement.at.map;
                     for(const auto& clip : macroTrack.clips) {
+                        if(macroTrack.isMorphTrack && clip.morphSource != morphSource) continue;   // another source's clip
                         ofxOceanodeTimelineSequence* shown = inner;
                         double mirrorShift = 0.0;
                         if(clip.reversed) {
@@ -3423,6 +3437,7 @@ void ofxOceanodeTimelineController::draw() {
                 // with lanes, a + for another lane in that clip (or a new clip
                 // on the track). Here they sit before M and S.
                 const bool addLaneButton = !innerTrack.isWaveTrack && !innerTrack.isGlobalTrack && !innerTrack.isMacroTrack() &&
+                    !innerTrack.isMorphTrack &&   // (its clips have no lanes)
                     padClip != nullptr && !padClip->lanes.empty() && (editorOnRow || forwardPlacement != nullptr);
                 // The row's arrow: a macro track unfolds its timelines; any
                 // other track with lanes opens and closes its clip editor (its
@@ -3514,7 +3529,13 @@ void ofxOceanodeTimelineController::draw() {
                     for(int line = -1; line <= 1; ++line)
                         dl->AddLine(ImVec2(settingsCenter.x - 4.0f, settingsCenter.y + line * 3.0f),
                                     ImVec2(settingsCenter.x + 4.0f, settingsCenter.y + line * 3.0f), labelTextColor);
-                    if(settingsClicked) {
+                    if(settingsClicked && innerTrack.isMorphTrack) {
+                        // A morphing clip's settings are its source's.
+                        anyClipInteractionClaimedThisFrame = true;
+                        const RowScope here{inner, macroContainer, {}, group};
+                        const RowScopeGuard at(*this, &here);
+                        openMorphSource(timeline, padClip != nullptr ? padClip->id : innerTrack.clips.front().id);
+                    } else if(settingsClicked) {
                         anyClipInteractionClaimedThisFrame = true;
                         clipSettingsOpen = true;
                         clipSettingsFocus = true;
@@ -3630,6 +3651,16 @@ void ofxOceanodeTimelineController::draw() {
                                                          left, right, rowMin.y + 3.0f, rowMax.y - 3.0f, true, highlighted);
                         if(span.second > span.first) hits.push_back({p, innerClip.id, span.first, span.second});
                     }
+                    // A Macro Morphing Track's transitions, over the clips they
+                    // join, where a macro clip plays the timeline forward.
+                    if(shownTrack->isMorphTrack && !placement.reversed) {
+                        const RowScopeGuard at(*this, &placement.at);
+                        const auto& map = placement.at.map;
+                        dl->PushClipRect(ImVec2(left, rowMin.y), ImVec2(right, rowMax.y), true);
+                        drawMorphOverlaps(timeline, *shownTrack, dl, ImVec2(unfoldedOriginX, rowMin.y), rowMax,
+                                          [&](double beat) { return beatOffset(map.toTimeline(beat)); });
+                        dl->PopClipRect();
+                    }
                 }
                 const float playheadX = unfoldedOriginX + beatOffset(transportState.beatPosition);
                 if(playheadX >= zoneLeft && playheadX <= rowMax.x) dl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2);
@@ -3714,7 +3745,15 @@ void ofxOceanodeTimelineController::draw() {
                             selectedClips.clear();
                             selectedTracks.clear();
                             if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                                if(innerTrack.isMacroTrack()) {
+                                if(innerTrack.isMorphTrack) {
+                                    // Over an overlap: the transition into its later
+                                    // clip; elsewhere, this clip's source.
+                                    const RowScopeGuard at(*this, &placement.at);
+                                    const double clickedBeat = placement.at.map.toSequence(beatAtOffset(mouse.x - unfoldedOriginX));
+                                    ofxOceanodeTimelineMorphOverlap overlap;
+                                    if(morphOverlapAt(innerTrack, clickedBeat, overlap)) openMorphTransition(timeline, overlap.laterClipId);
+                                    else openMorphSource(timeline, clip->id);
+                                } else if(innerTrack.isMacroTrack()) {
                                     if(auto* editTrack = timeline.getTrack(*inner, innerTrack.id)) editTrack->macroUnfolded = true;
                                 } else if(rowOpen) {
                                     // Any clip on this open track folds its lanes again.
@@ -3755,7 +3794,8 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 // Empty space where a macro clip plays the timeline forward:
                 // a new clip there, in the timeline's own beats.
-                const bool canCreateClips = !innerTrack.isMacroTrack() && !innerTrack.isWaveTrack && !innerTrack.isGlobalTrack;
+                const bool canCreateClips = !innerTrack.isMacroTrack() && !innerTrack.isWaveTrack && !innerTrack.isGlobalTrack &&
+                                            !innerTrack.isMorphTrack;   // (its clips come with their sources)
                 // Notes the forward placement under the mouse for a row's menu
                 // (false: outside the macro clips, or in a mirrored one).
                 auto menuPlacementAtMouse = [&]() {
@@ -3877,6 +3917,20 @@ void ofxOceanodeTimelineController::draw() {
                         requestRename();
                         ImGui::CloseCurrentPopup();
                     }
+                    if(innerTrack.isMorphTrack) {
+                        contextMenuSection("Macro morphing");
+                        const RowScope here{inner, macroContainer, {}, group};
+                        const RowScopeGuard at(*this, &here);
+                        if(ImGui::MenuItem("Macro Morphing Routers")) {
+                            openMorphRouters(timeline);
+                            ImGui::CloseCurrentPopup();
+                        }
+                        if(ImGui::MenuItem("Add Morphing Source")) {
+                            morphFolderRequest = true;   // the folder dialog, after the track loop
+                            morphFolderRef = morphRefHere(timeline);
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
                     contextMenuSection("Arrange");
                     if(ImGui::MenuItem("Duplicate track")) {
                         innerTrackRequests.push_back({InnerTrackRequest::Kind::Duplicate, inner, innerTrack.id, std::string()});
@@ -3940,7 +3994,15 @@ void ofxOceanodeTimelineController::draw() {
                                 ImGui::SetTooltip("Right-click a keyframe to delete it.");
                             contextMenuSection("Clip");
                         }
-                        if(!innerTrack.isWaveTrack && !innerTrack.isMacroTrack() && !innerTrack.isGlobalTrack && ImGui::MenuItem("Edit content")) {
+                        if(innerTrack.isMorphTrack) {
+                            const RowScopeGuard at(*this, &innerMenuAt);
+                            if(ImGui::MenuItem("Source...")) openMorphSource(timeline, clip->id);
+                            ofxOceanodeTimelineMorphOverlap into;
+                            if(morphOverlapInto(innerTrack, clip->id, into) && ImGui::MenuItem("Transition..."))
+                                openMorphTransition(timeline, clip->id);
+                        }
+                        if(!innerTrack.isWaveTrack && !innerTrack.isMacroTrack() && !innerTrack.isGlobalTrack && !innerTrack.isMorphTrack &&
+                           ImGui::MenuItem("Edit content")) {
                             openInnerClipEditor(innerMenuAt, innerMenuTrackId, innerMenuClipId,
                                                 clip->lanes.empty() ? std::string() : clip->lanes.front().id);
                             editorRowGroup = innerMenuGroup;
@@ -4209,7 +4271,9 @@ void ofxOceanodeTimelineController::draw() {
         // ofxOceanodeTimelineTrack::isWaveTrack) -- it always renders as the
         // same single always-visible clip row a collapsed track would use,
         // regardless of its own collapsed flag.
-        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack();
+        // (A Macro Morphing Track neither: it has no bindings.)
+        const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack() ||
+                                    track.isMorphTrack;
         // The height the tracks of the Clips view share.
         const float sharedTrackHeight = ofClamp(timeline.getViewState().trackHeight, kMinTrackHeight, kMaxTrackHeight);
         // A macro track's pad has one row only (what it plays shows under it,
@@ -4249,7 +4313,9 @@ void ofxOceanodeTimelineController::draw() {
         // In the Clips view a track's arrow opens and closes its clip editor,
         // as double-clicking a clip does, and + adds a lane to the clip the
         // editor shows (opening it first when it is closed).
-        const bool editorArrow = !targetsView && !track.isMacroTrack() && !track.isGlobalTrack && !track.clips.empty();
+        // (A Macro Morphing Track's clips have no lanes to edit: no arrow.)
+        const bool editorArrow = !targetsView && !track.isMacroTrack() && !track.isGlobalTrack && !track.isMorphTrack &&
+                                 !track.clips.empty();
         const bool editorOpenHere = scopeEditorOnTrack(track.id);
         // The clip the editor shows, or would open on: the selected clip of
         // this track, else the one it last edited, else its first.
@@ -4329,8 +4395,8 @@ void ofxOceanodeTimelineController::draw() {
         // Targets view an arrow folds a track's rows. A Wave Track there has
         // nothing to fold, so it gets no arrow.
         const ImVec2 arrowAt(pad.arrowX, pad.y);
-        if(track.isMacroTrack()) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
-        else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
+        if(track.isMacroTrack() || track.isMorphTrack) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
+        else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
         else if(editorArrow) drawFoldArrow(dl, arrowAt, editorOpenHere, editorArrowHovered ? IM_COL32(255, 255, 255, 255) : labelTextColor);
         if(editorArrowHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip(editorOpenHere ? "Close the clip editor" : "Open the clip editor");
@@ -4380,6 +4446,19 @@ void ofxOceanodeTimelineController::draw() {
         }
         if(trackPadHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip("Select track. Shift or Cmd/Ctrl-click to toggle multiple tracks.\nDouble-click to rename. Right-click for track actions.");
+        if(track.isMorphTrack) {
+            // A Macro Morphing Track whose engine has something to say (a
+            // source that does not load, a backend not ready): a mark where
+            // [missing target] goes, the reason in its tooltip.
+            const std::string morphStatus = timeline.morphEngineStatus(scope(timeline));
+            if(!morphStatus.empty()) {
+                const ImVec2 markAt(pad.hasSecondRow ? pad.nameX : leftGroupRight + padSpacing, specificY);
+                const ImVec2 markSize = ImGui::CalcTextSize("[!]");
+                dl->AddText(markAt, IM_COL32(255, 165, 60, 255), "[!]");
+                if(hoverRect(markAt, ImVec2(markAt.x + markSize.x, markAt.y + markSize.y)) && !ImGui::IsAnyItemActive())
+                    ImGui::SetTooltip("%s", morphStatus.c_str());
+            }
+        }
         if(selectedTracks.count(track.id)) {
             dl->AddRectFilled(headerMin, padMax, IM_COL32(120, 170, 255, 35));
             dl->AddRect(ImVec2(headerMin.x + 1, headerMin.y + 1),
@@ -4396,9 +4475,10 @@ void ofxOceanodeTimelineController::draw() {
                 std::strncpy(pendingTrackName, track.name.c_str(), sizeof(pendingTrackName) - 1);
                 pendingTrackName[sizeof(pendingTrackName) - 1] = '\0';
                 requestRenamePopup = true;
-            } else if(track.isMacroTrack() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
+            } else if((track.isMacroTrack() || track.isMorphTrack) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
-            } else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
+            } else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack &&
+                      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
             } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 pendingTrackId = track.id;
@@ -4418,7 +4498,11 @@ void ofxOceanodeTimelineController::draw() {
         for(int line = -1; line <= 1; ++line)
             dl->AddLine(ImVec2(settingsCenter.x - 4.0f, settingsCenter.y + line * 3.0f),
                         ImVec2(settingsCenter.x + 4.0f, settingsCenter.y + line * 3.0f), labelTextColor);
-        if(settingsClicked) {
+        if(settingsClicked && track.isMorphTrack) {
+            // A morphing clip's settings are its source's.
+            anyClipInteractionClaimedThisFrame = true;
+            if(!track.clips.empty()) openMorphSource(timeline, editorClip != nullptr ? editorClip->id : track.clips.front().id);
+        } else if(settingsClicked) {
             anyClipInteractionClaimedThisFrame = true;
             clipSettingsOpen = true;
             clipSettingsFocus = true;
@@ -4429,7 +4513,8 @@ void ofxOceanodeTimelineController::draw() {
                 : track.clips.empty() ? std::string() : track.clips.front().id;
             clipSettingsAnchor = ImVec2(settingsMax.x + 12.0f, settingsMin.y);
         }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Clip settings shared by all lanes");
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip(track.isMorphTrack ? "The source its clip plays" : "Clip settings shared by all lanes");
         if(addLaneButton) {
             ImGui::SetCursorScreenPos(ImVec2(addLaneX, pad.y));
             ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
@@ -4519,7 +4604,7 @@ void ofxOceanodeTimelineController::draw() {
                     static_cast<unsigned char>(ofClamp(menuColor[2] * 255.0f, 0.0f, 255.0f)),
                     static_cast<unsigned char>(ofClamp(menuColor[3] * 255.0f, 0.0f, 255.0f)));
             }
-            if(!track.isWaveTrack) {
+            if(!track.isWaveTrack && !track.isMorphTrack) {
                 // The toolbar has no view selector: this is the way into the
                 // target rows, and back to the clips.
                 const bool rowsShown = targetsView && !trackCollapsed;
@@ -4577,8 +4662,35 @@ void ofxOceanodeTimelineController::draw() {
                         }
                 }
             }
+            if(track.isMorphTrack) {
+                contextMenuSection("Macro morphing");
+                if(ImGui::MenuItem("Macro Morphing Routers")) {
+                    openMorphRouters(timeline);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The routers every source of this track is read through:\n"
+                                      "the ports of a Timeline node that points at this timeline.");
+                if(ImGui::MenuItem("Unfold its sources here", nullptr, track.macroUnfolded))
+                    if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Show, under this track, the tracks of the sources playing at the playhead\n"
+                                      "(one, or the two of a transition), and edit them in place.\n"
+                                      "Edits stay in the project until Save Source writes them to the source's folder.");
+            }
             contextMenuSection("Create");
-            if(ImGui::MenuItem(track.isWaveTrack ? "Add new wave clip" : "New clip")) {
+            if(track.isMorphTrack) {
+                // Its clips play sources: a new one comes with its source,
+                // after the last clip and overlapping it.
+                if(ImGui::MenuItem("Add Morphing Source")) {
+                    morphFolderRequest = true;   // the folder dialog, after the track loop
+                    morphFolderRef = morphRefHere(timeline);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Choose a macro folder: it is added to this track's sources and gets a clip\n"
+                                      "after the last one, overlapping it (the overlap is the transition).");
+            } else if(ImGui::MenuItem(track.isWaveTrack ? "Add new wave clip" : "New clip")) {
                 if(track.isMacroTrack()) {
                     // A macro clip: one pass of the macro's timeline.
                     const auto clipId = timeline.createMacroClip(scope(timeline), track.id, snapBeat(std::max(0.0, pendingWaveClipBeat)));
@@ -4601,12 +4713,12 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 ImGui::CloseCurrentPopup();
             }
-            if(ImGui::MenuItem("Load clip from disk...")) {
+            if(!track.isMorphTrack && ImGui::MenuItem("Load clip from disk...")) {
                 clipFileRequest = ClipFileRequest::Load;
                 clipFileTrackId = track.id;
                 clipImportBeat = snapBeat(pendingWaveClipBeat);
             }
-            if(!track.isWaveTrack) {
+            if(!track.isWaveTrack && !track.isMorphTrack) {
                 const bool canCaptureState = std::any_of(track.bindings.begin(), track.bindings.end(), [](const auto& binding) {
                     return binding.valueType == typeid(float).name() ||
                            binding.valueType == typeid(int).name() ||
@@ -4884,8 +4996,17 @@ void ofxOceanodeTimelineController::draw() {
                 if(labelRight - labelLeft > 39) {
                     std::string label = clip.name + (clip.muted ? " [Muted]" : "");
                     if(clip.chance < 1.0f) label += " " + ofToString(static_cast<int>(std::round(clip.chance * 100.0f))) + "%";
-                    label += track.isMacroTrack() ? std::string(clip.reversed ? " [timeline, reversed]" : " [timeline]")
-                                                  : " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
+                    if(track.isMorphTrack) {
+                        // The source it plays, when the clip is not named after it.
+                        const std::string source = timeline.morphSourceName(scope(timeline), clip.morphSource);
+                        if(source.empty()) label += " [source missing]";
+                        else if(source != clip.name) label += " [" + source + "]";
+                        // Its source's timelines were edited here and not saved to its folder.
+                        if(timeline.morphSourceDirty(scope(timeline), clip.morphSource)) label += " *";
+                    } else {
+                        label += track.isMacroTrack() ? std::string(clip.reversed ? " [timeline, reversed]" : " [timeline]")
+                                                      : " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
+                    }
                     dl->PushClipRect(ImVec2(left + 4.0f, min.y + 3.0f), ImVec2(labelRight, max.y - 3.0f), true);
                     // Dark on a light band (a selected clip of a vivid track), light on a dark one.
                     dl->AddText(ImVec2(labelLeft, min.y + 6),
@@ -4894,6 +5015,18 @@ void ofxOceanodeTimelineController::draw() {
                 }
             }
             if(!drawContent) return;
+            if(track.isMorphTrack) {
+                // No lanes: what it plays is its source, named under the title
+                // band (the overlaps are drawn over the clips, after them).
+                const float top = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
+                if(max.y - 3.0f - top < ImGui::GetTextLineHeight()) return;
+                const std::string source = timeline.morphSourceName(scope(timeline), clip.morphSource);
+                dl->PushClipRect(ImVec2(left + 4.0f, top), ImVec2(right - 2.0f, max.y - 3.0f), true);
+                if(source.empty()) dl->AddText(ImVec2(left + 6.0f, top + 2.0f), IM_COL32(255, 165, 60, 255), "[source missing]");
+                else dl->AddText(ImVec2(left + 6.0f, top + 2.0f), clipInk(clip, clip.muted ? 110 : 235), source.c_str());
+                dl->PopClipRect();
+                return;
+            }
             // Repeats that are off screen are not drawn (a short repeating
             // source on a long clip can have thousands of them).
             int firstVisibleCycle = 0;
@@ -5268,7 +5401,15 @@ void ofxOceanodeTimelineController::draw() {
                     editorState.lastClipForTrack[track.id] = clip.id;
                     expandClipLanes(track, clip.id);
                 };
-                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
+                ofxOceanodeTimelineMorphOverlap morphOverlap;
+                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMorphTrack) {
+                    // An overlap is over the two clips it joins: there, the
+                    // transition into the later one (whichever of the two
+                    // took the click); elsewhere, this clip's source.
+                    if(morphOverlapAt(track, clickedBeat, morphOverlap)) openMorphTransition(timeline, morphOverlap.laterClipId);
+                    else openMorphSource(timeline, clip.id);
+                    selectedClips = {memberKey};
+                } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && track.isMacroTrack()) {
                     // Into the macro's own timeline (next frame: never mid-iteration).
                     requestPlacedScope(timeline, track);
                 } else if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && scopeEditorOnTrack(track.id)) {
@@ -5421,9 +5562,32 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("Which of the macro's snapshots this clip recalls when it starts\n(-1: none). Each clip can start a different scene.");
             }
+            if(track.isMorphTrack) {
+                if(ImGui::MenuItem("Source...")) {
+                    openMorphSource(timeline, clip.id);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The source this clip plays: its folder, problems, checks and kept-out nodes.\n(Also: double-click the clip.)");
+                if(ImGui::MenuItem("Save Source", nullptr, false, timeline.morphSourceDirty(scope(timeline), clip.morphSource))) {
+                    std::string saveError;
+                    if(!timeline.saveMorphSource(scope(timeline), clip.morphSource, saveError)) reportMorphError(saveError);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Write this source's timelines, as edited here, into its folder.\n"
+                                      "Until then the edits are kept with this session only.");
+                // Where it overlaps the clip before it: how the two are joined.
+                ofxOceanodeTimelineMorphOverlap into;
+                if(morphOverlapInto(track, clip.id, into) && ImGui::MenuItem("Transition...")) {
+                    openMorphTransition(timeline, clip.id);
+                    ImGui::CloseCurrentPopup();
+                }
+            }
             if(ImGui::MenuItem("Mute clip", nullptr, clip.muted))
                 timeline.setClipMuted(scope(timeline), track.id, clip.id, !clip.muted);
-            if(!track.isWaveTrack) { // Wave clips have their own Reverse
+            // (Nor a Macro Morphing Track's: a source's graph only runs forwards.)
+            if(!track.isWaveTrack && !track.isMorphTrack) { // Wave clips have their own Reverse
                 if(ImGui::MenuItem("Reverse", nullptr, track.isMacroTrack() && clip.reversed))
                     timeline.reverseClip(scope(timeline), track.id, clip.id);
                 if(ImGui::IsItemHovered())
@@ -5440,7 +5604,8 @@ void ofxOceanodeTimelineController::draw() {
                 clipFileTrackId = track.id;
                 clipFileClipId = clip.id;
             }
-            if(ImGui::BeginMenu("Clips at this position")) {
+            // (Not on a Macro Morphing Track: it opens the clip editor.)
+            if(!track.isMorphTrack && ImGui::BeginMenu("Clips at this position")) {
                 for(const auto& candidate : track.clips) {
                     if(clipMenuHitBeat < candidate.startBeat ||
                        clipMenuHitBeat >= candidate.startBeat + candidate.durationBeats) continue;
@@ -5463,17 +5628,20 @@ void ofxOceanodeTimelineController::draw() {
                 ofxOceanodeTimelinePresentation::drawClipTiming(timeline, scope(timeline), track, *editClip,
                     editorView(timeline, transportState.bpm, endBeat),
                     static_cast<ofxOceanodeTimelineEndEdit>(endEditTool), false);
-                contextMenuSection("Content");
-                if(!track.isWaveTrack) {
+                // (A Macro Morphing Track's clip has no content of its own.)
+                if(!track.isMorphTrack) contextMenuSection("Content");
+                if(!track.isWaveTrack && !track.isMorphTrack) {
                     if(ImGui::MenuItem("Break lanes into tracks", nullptr, false, clip.lanes.size() > 1))
                         breakClipLanesRequest = {track.id, clip.id};
                     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                         ImGui::SetTooltip("Replace this clip with one new track per lane, preserving timing, content and targets.");
                 }
-                if(ImGui::MenuItem("Consolidate content"))
-                    timeline.consolidateClipContent(scope(timeline), track.id, clip.id);
-                if(ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Permanently remove source data hidden beyond the clip's right edge");
+                if(!track.isMorphTrack) {
+                    if(ImGui::MenuItem("Consolidate content"))
+                        timeline.consolidateClipContent(scope(timeline), track.id, clip.id);
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Permanently remove source data hidden beyond the clip's right edge");
+                }
             }
             auto* selectedLane = timeline.getLane(scope(timeline), track.id, clip.id, pendingLaneId);
             if(clip.isStateCapture && clip.lanes.size() > 1) {
@@ -5573,7 +5741,7 @@ void ofxOceanodeTimelineController::draw() {
                     editorRowScope = {};
                     editorState.clipEditorOpen = true;
                 }
-            } else {
+            } else if(!track.isMorphTrack) {
                 contextMenuSection("Lane");
                 const auto selectedType = selectedLane == nullptr ? ofxOceanodeTimelineLaneType::Step : selectedLane->type;
                 if(ImGui::BeginMenu("Lane type", selectedLane != nullptr)) {
@@ -5646,7 +5814,7 @@ void ofxOceanodeTimelineController::draw() {
             if(mergeCandidates.size() >= 2 &&
                std::all_of(mergeCandidates.begin(), mergeCandidates.end(), [&](const auto& key) { return key.first == track.id; })) {
                 contextMenuSection("Merge");
-                const bool mergeable = !track.isWaveTrack && !track.isMacroTrack() &&
+                const bool mergeable = !track.isWaveTrack && !track.isMacroTrack() && !track.isMorphTrack &&
                     std::all_of(mergeCandidates.begin(), mergeCandidates.end(), [&](const auto& key) {
                         const auto* selected = timeline.getClip(scope(timeline), track.id, key.second);
                         return selected != nullptr && !ofxOceanodeTimelineClipHasLfoLane(*selected) && !selected->isStateCapture;
@@ -5661,7 +5829,7 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", mergeable
                         ? "One clip spanning them all. Lanes on the same parameters with the same kind of lane become one lane; others stay separate."
-                        : "Wave, state-capture and macro clips, and clips with an LFO lane, cannot be merged.");
+                        : "Wave, state-capture, macro and morphing clips, and clips with an LFO lane, cannot be merged.");
             }
             contextMenuSection("Remove");
             if(ImGui::MenuItem("Delete clip")) {
@@ -5697,6 +5865,8 @@ void ofxOceanodeTimelineController::draw() {
                     }
                 }
             }
+            // A Macro Morphing Track's transitions, over the clips they join.
+            if(track.isMorphTrack) drawMorphOverlaps(timeline, track, dl, laneMin, max, beatOffset);
             // The bottom edge resizes the track, before any clip under it
             // (not from a pad button reaching into it, on a short track).
             // With its clip editor docked under it, the line between them (in
@@ -6455,7 +6625,7 @@ void ofxOceanodeTimelineController::draw() {
                 editorScreenSpans.emplace_back(editorScreenTop, editorScreenBottom);
             }
         }
-        if(track.isMacroTrack() && track.macroUnfolded) {
+        if((track.isMacroTrack() || track.isMorphTrack) && track.macroUnfolded) {
             // The timeline shown places the macro track's own clips as they are.
             RowPlacement shownTimeline;
             shownTimeline.at = {&scope(timeline), inMacroScope() ? scopes.back().container : nullptr, {}, std::string()};
@@ -6874,6 +7044,8 @@ void ofxOceanodeTimelineController::draw() {
         }
         keyboardClipDeletionRequests.clear();
     }
+
+    serviceMorphRequests(timeline);
 
     if(waveFileRequest != WaveFileRequest::None) {
         const auto request = waveFileRequest;
@@ -7475,6 +7647,7 @@ void ofxOceanodeTimelineController::draw() {
     drawClipRenamePopup(timeline);
     drawClipImportPopup(timeline);
     drawClipSettingsWindow(timeline, endBeat);
+    drawMorphWindows(timeline);
     finishHistoryGesture(timeline);
 }
 
@@ -8555,7 +8728,7 @@ void ofxOceanodeTimelineController::drawClipLaneEditor(ofxOceanodeTimelineManage
     // A Multi Curve shown as lanes gets room for each of them.
     const bool stackedCurves = lane->type == ofxOceanodeTimelineLaneType::MultiCurve && lane->multiCurveStacked;
     const float defaultEditorHeight = stackedCurves
-        ? std::max(laneEditors.defaultHeight(lane->type), 96.0f * static_cast<float>(lane->multiCurves.size()))
+        ? std::max(laneEditors.defaultHeight(lane->type), 48.0f * static_cast<float>(lane->multiCurves.size()))
         : chordLane
         ? std::max(laneEditors.defaultHeight(lane->type), 16.0f + std::max(lane->multiRowCount, chordBank.voices) * (ImGui::GetTextLineHeight() + 7.0f))
         : laneEditors.defaultHeight(lane->type);

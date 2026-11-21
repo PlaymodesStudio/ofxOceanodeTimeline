@@ -707,6 +707,47 @@ private:
     // (sequence null: a clip of the timeline shown).
     RowScope clipSettingsScope;
     ImVec2 clipSettingsAnchor;
+    // ---- Macro Morphing Track (ofxOceanodeTimelineControllerMorph.cpp) ----
+    // The windows of the shown timeline's Macro Morphing Track: the routers
+    // of its engine, one source (a clip's) and one transition (into a clip,
+    // from the clip it overlaps). Their panels are the MacroMixer node's
+    // (MacroMixerGui): they queue their edits, which are applied to the
+    // track's engine once a frame, after the windows.
+    struct MorphPanels;
+    // (shared_ptr: the type is complete in that file only.)
+    std::shared_ptr<MorphPanels> morphPanels;
+    MorphPanels& morphPanelState();
+    ofxOceanodeTimelineManager::TimelineRef morphWindowRef;
+    bool morphRoutersOpen = false, morphRoutersFocus = false;
+    bool morphSourceOpen = false, morphSourceFocus = false;
+    bool morphTransitionOpen = false, morphTransitionFocus = false;
+    std::string morphSourceClipId;       // the clip whose source the source window shows
+    std::string morphTransitionClipId;   // the later clip of the overlap the transition window edits
+    // The timeline a morph gesture is on: the shown one, or the one of the
+    // unfolded row being drawn or acted on.
+    ofxOceanodeTimelineManager::TimelineRef morphRefHere(const ofxOceanodeTimelineManager& timeline) const;
+    void showMorphWindowsHere(const ofxOceanodeTimelineManager& timeline);
+    void openMorphRouters(const ofxOceanodeTimelineManager& timeline);
+    void openMorphSource(const ofxOceanodeTimelineManager& timeline, const std::string& clipId);
+    void openMorphTransition(const ofxOceanodeTimelineManager& timeline, const std::string& clipId);
+    void drawMorphWindows(ofxOceanodeTimelineManager& timeline);
+    // "Add Morphing Source" opens a folder dialog: asked for in the track
+    // menu, served after the track loop (see waveFileRequest below).
+    bool morphFolderRequest = false;
+    ofxOceanodeTimelineManager::TimelineRef morphFolderRef;   // the timeline whose track asked
+    void serviceMorphRequests(ofxOceanodeTimelineManager& timeline);
+    std::string morphErrorMessage;
+    bool requestMorphErrorPopup = false;
+    void reportMorphError(const std::string& message);
+    // The overlaps of a Macro Morphing Track's clips, drawn over them: laneMin
+    // is where beat 0 of the row is, max the row's bottom right.
+    void drawMorphOverlaps(const ofxOceanodeTimelineManager& timeline, const ofxOceanodeTimelineTrack& track,
+                           ImDrawList* dl, const ImVec2& laneMin, const ImVec2& max,
+                           const std::function<float(double)>& beatOffset);
+    // The overlap of the track at a beat, or the one into a clip (false: none).
+    static bool morphOverlapAt(const ofxOceanodeTimelineTrack& track, double beat, ofxOceanodeTimelineMorphOverlap& found);
+    static bool morphOverlapInto(const ofxOceanodeTimelineTrack& track, const std::string& clipId,
+                                 ofxOceanodeTimelineMorphOverlap& found);
     bool followPlayhead = false;       // scroll to keep the playhead in view while playing
     float zoomAnchorViewportX = 0.0f;
     double zoomAnchorUntil = 0.0;
