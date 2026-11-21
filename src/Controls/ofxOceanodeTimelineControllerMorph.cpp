@@ -366,19 +366,39 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
                         panels.state.actions.push_back({MacroMixerGui::ActionKind::Refresh, revision->source()});
                     if(ImGui::IsItemHovered())
                         ImGui::SetTooltip("Read the source folder again.\nEdits to its timelines not saved with Save Source are lost.");
-                    // Its timelines as edited here (the track unfolded), against its folder's.
-                    const bool dirty = timeline.morphSourceDirty(sequence, clip->morphSource);
+                    // Its patch, in a canvas tab: only while it plays alone.
+                    const bool inTransition = engine->transitioning();
+                    const bool alone = timeline.morphSourceAlone(sequence, clip->morphSource);
                     ImGui::SameLine();
-                    ImGui::BeginDisabled(!dirty);
+                    ImGui::BeginDisabled(!alone);
+                    if(ImGui::SmallButton("Open Source")) timeline.openMorphSourceCanvas(sequence, clip->morphSource);
+                    ImGui::EndDisabled();
+                    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip(alone ? "Open this source's patch in a canvas tab.\n"
+                                                  "Changes made there last while the source plays, unless Save Source writes them.\n"
+                                                  "The tab closes when a crossfade starts or the source stops playing."
+                                        : inTransition ? "Not during a crossfade: two sources are playing."
+                                                       : "This source is not playing: move the playhead onto one of its clips.");
+                    // Its timelines as edited here (the track unfolded), against its folder's.
+                    // Its patch too, once opened on the graph playing now and changed there.
+                    const bool patch = timeline.morphSourcePatchDirty(sequence, clip->morphSource);
+                    const bool dirty = timeline.morphSourceDirty(sequence, clip->morphSource) || patch;
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(!dirty || inTransition);
                     if(ImGui::SmallButton("Save Source")) {
                         std::string saveError;
                         if(!timeline.saveMorphSource(sequence, clip->morphSource, saveError)) reportMorphError(saveError);
                     }
                     ImGui::EndDisabled();
                     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                        ImGui::SetTooltip(dirty ? "Write this source's timelines, as edited here, into its folder."
-                                                : "This source's timelines are as its folder holds them.");
-                    if(dirty) { ImGui::SameLine(); ImGui::TextColored(kMorphWarning, "unsaved timeline edits"); }
+                        ImGui::SetTooltip(inTransition ? "Not during a crossfade: two sources are playing."
+                                          : patch ? "Write this source's patch and timelines into its folder: its nodes as they are\n"
+                                                    "right now (values included) and their cables. The nodes kept out of the graph\n"
+                                                    "are written back as the folder had them."
+                                          : dirty ? "Write this source's timelines, as edited here, into its folder."
+                                                  : "This source's timelines are as its folder holds them.\n"
+                                                    "Open Source first to save changes to its patch.");
+                    if(dirty) { ImGui::SameLine(); ImGui::TextColored(kMorphWarning, patch ? "unsaved patch changes" : "unsaved timeline edits"); }
                     ImGui::Separator();
                     MacroMixerGui::SourceContext context;
                     context.color = ofFloatColor(track->color);

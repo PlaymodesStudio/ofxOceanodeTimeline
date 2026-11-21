@@ -5033,8 +5033,9 @@ void ofxOceanodeTimelineController::draw() {
                         label = (named ? clip.name : source) + (clip.muted ? " [Muted]" : "");
                         if(source.empty()) label += named ? " [source missing]" : "[source missing]";
                         else if(named) label += " [" + source + "]";
-                        // Its source's timelines were edited here and not saved to its folder.
-                        if(timeline.morphSourceDirty(scope(timeline), clip.morphSource)) label += " *";
+                        // Its source's timelines, or its patch, were changed here and not saved to its folder.
+                        if(timeline.morphSourceDirty(scope(timeline), clip.morphSource) ||
+                           timeline.morphSourcePatchDirty(scope(timeline), clip.morphSource)) label += " *";
                     } else {
                         label += track.isMacroTrack() ? std::string(clip.reversed ? " [timeline, reversed]" : " [timeline]")
                                                       : " [" + ofxOceanodeTimelinePresentation::clipSummary(clip, track.isWaveTrack) + "]";
@@ -5615,14 +5616,25 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("The source this clip plays: its folder, problems, checks and kept-out nodes.\n(Also: double-click the clip.)");
-                if(ImGui::MenuItem("Save Source", nullptr, false, timeline.morphSourceDirty(scope(timeline), clip.morphSource))) {
+                // (Not during a crossfade, as in the source's window.)
+                const bool morphTransition = timeline.morphInTransition(scope(timeline));
+                if(ImGui::MenuItem("Open Source", nullptr, false, timeline.morphSourceAlone(scope(timeline), clip.morphSource))) {
+                    timeline.openMorphSourceCanvas(scope(timeline), clip.morphSource);
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("This source's patch in a canvas tab, while it plays alone.\n"
+                                      "Save Source then writes the patch too.");
+                if(ImGui::MenuItem("Save Source", nullptr, false,
+                                   !morphTransition && (timeline.morphSourceDirty(scope(timeline), clip.morphSource) ||
+                                                        timeline.morphSourcePatchDirty(scope(timeline), clip.morphSource)))) {
                     std::string saveError;
                     if(!timeline.saveMorphSource(scope(timeline), clip.morphSource, saveError)) reportMorphError(saveError);
                     ImGui::CloseCurrentPopup();
                 }
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Write this source's timelines, as edited here, into its folder.\n"
-                                      "Until then the edits are kept with this session only.");
+                    ImGui::SetTooltip("Write this source's timelines, as edited here, into its folder;\n"
+                                      "its patch too, once Open Source has opened it.");
                 // Where it overlaps the clip before it: how the two are joined.
                 ofxOceanodeTimelineMorphOverlap into;
                 if(morphOverlapInto(track, clip.id, into) && ImGui::MenuItem("Transition...")) {

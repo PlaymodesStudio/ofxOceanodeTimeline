@@ -526,10 +526,6 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     // saved with those macros).
     if(const auto outside = outsideTargetsJson(std::string(), rootTimelines); !outside.empty())
         json["outsideTargets"] = outside;
-    // The timelines of Macro Morphing Track sources edited here and not
-    // saved to their folders yet: kept with the project until they are.
-    if(!isEngine())
-        if(const auto edits = morphSourceEditsJson(); !edits.empty()) json["morphSourceEdits"] = edits;
     // A host's windows (a MacroMixer's) are its own, opened again by it.
     if(std::any_of(timelineWindows.begin(), timelineWindows.end(), [](const auto& window) { return window.hostLabel.empty(); })) {
         json["windows"] = ofJson::array();
@@ -553,7 +549,7 @@ ofJson ofxOceanodeTimelineManager::presetEditState() const {
         auto owner = entry.container.lock();
         if(!owner || !entry.timelines || entry.timelines->timelines.empty()) continue;
         // (A Macro Morphing Track's source lives on a canvas made anew each
-        // time it plays: its edits are counted by folder, in morphSourceEdits.)
+        // time it plays, and its timelines are its folder's, not the project's.)
         if(isMorphDocument(entry.timelines.get())) continue;
         auto data = canvasToJson(*entry.timelines);
         data.erase("nextTimelineNumber");
@@ -960,9 +956,10 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
 
     // The root canvas's timelines.
     canvasFromJson(rootTimelines, json);
-    // Source timelines of Macro Morphing Tracks that were edited and not
-    // saved to their folders: back as they were (none: the folders').
-    if(!isEngine()) restoreMorphSourceEdits(json.contains("morphSourceEdits") ? json["morphSourceEdits"] : ofJson());
+    // Macro Morphing Track sources are read from their folders again: the
+    // project holds no copy of their timelines (a "morphSourceEdits" entry
+    // left by an earlier version is ignored, and gone at the next save).
+    if(!isEngine()) clearMorphDocuments();
     // Before version 16 the loop at the top level was the global
     // transport's, shared by every timeline linked to it: now each
     // timeline's own. The root canvas's timelines linked to the global

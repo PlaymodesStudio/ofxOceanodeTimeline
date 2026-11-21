@@ -100,42 +100,24 @@ ofxOceanodeTimelineManager::MorphDocument* ofxOceanodeTimelineManager::ensureMor
     return &document;
 }
 
-ofJson ofxOceanodeTimelineManager::morphSourceEditsJson() const {
-    ofJson edits = ofJson::array();
-    for(const auto& entry : morphDocuments) {
-        const auto& document = entry.second;
-        if(!document.timelines || morphDocumentSignature(document) == document.savedSignature) continue;
-        ofJson item = canvasToJson(*document.timelines);
-        // The folder as its engine names it (relative to the data folder, as
-        // the track's state does), so the project reads the same on another
-        // machine; the path it was loaded from only when no engine has it.
-        std::string folder = document.folder;
-        for(const auto& spelled : morphSourceFolders())
-            if(libraryKey(spelled) == entry.first) { folder = spelled; break; }
-        item["folder"] = folder;
-        item["macroFile"] = document.macroFile;
-        edits.push_back(std::move(item));
+std::vector<ofxOceanodeTimelineManager::MorphDocument*> ofxOceanodeTimelineManager::dirtyMorphDocuments() {
+    std::vector<MorphDocument*> dirty;
+    const float now = ofGetElapsedTimef();
+    for(auto& entry : morphDocuments) {
+        auto& document = entry.second;
+        if(!document.timelines) continue;
+        if(document.seenAt < 0.0f || now - document.seenAt > 0.25f || now < document.seenAt) {
+            document.seenSignature = morphDocumentSignature(document);
+            document.seenAt = now;
+        }
+        if(document.seenSignature != document.savedSignature) dirty.push_back(&document);
     }
-    return edits;
+    return dirty;
 }
 
-void ofxOceanodeTimelineManager::restoreMorphSourceEdits(const ofJson& json) {
+void ofxOceanodeTimelineManager::clearMorphDocuments() {
     morphDocuments.clear();
     morphDocumentKeys.clear();
-    if(!json.is_array()) return;
-    for(const auto& item : json) {
-        if(!item.is_object() || !item.contains("timelines")) continue;
-        const std::string folder = item.value("folder", std::string());
-        if(folder.empty()) continue;
-        auto& document = morphDocuments[libraryKey(folder)];
-        document.timelines = std::make_shared<ofxOceanodeTimelineCanvas>();
-        canvasFromJson(*document.timelines, item);
-        for(auto& timeline : document.timelines->timelines) timeline->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp();
-        document.folder = folder;
-        document.macroFile = item.value("macroFile", false);
-        document.savedSignature = 0;   // not the folder's: still to be saved there
-        document.seenAt = -1.0f;
-    }
 }
 
 bool ofxOceanodeTimelineManager::isMorphDocument(const ofxOceanodeTimelineCanvas* timelines) const {
@@ -171,29 +153,22 @@ bool ofxOceanodeTimelineManager::morphSourceDirty(const ofxOceanodeTimelineSeque
     return document->seenSignature != document->savedSignature;
 }
 
-bool ofxOceanodeTimelineManager::saveMorphSource(const ofxOceanodeTimelineSequence& host, const std::string& sourceId,
-                                                 std::string& error) {
-    error.clear();
-    const std::string folder = morphSourceFolder(host, sourceId);
-    auto* document = morphDocumentOf(folder);
-    if(document == nullptr) {
-        error = "This source's timelines are not loaded: it is read when one of its clips first plays.";
+bool ofxOceanodeTimelineManager::writeMorphDocument(MorphDocument& document, std::string& error) const {
+    if(!document.timelines) { error = "This source's timelines are not loaded."; return false; }
+    if(!ofDirectory::doesDirectoryExist(document.folder)) {
+        error = "The source's folder is gone: " + document.folder;
         return false;
     }
-    if(!ofDirectory::doesDirectoryExist(document->folder)) {
-        error = "The source's folder is gone: " + document->folder;
-        return false;
-    }
-    const std::string file = ofFilePath::join(document->folder, document->macroFile ? kSequenceFile : "timeline.json");
+    const std::string file = ofFilePath::join(document.folder, document.macroFile ? kSequenceFile : "timeline.json");
     // The file as it is, in today's format: only its timelines are replaced
     // (a preset's timeline.json keeps its view, tempo and the rest).
     ofJson json = ofJson::object();
     if(ofFile::doesFileExist(file)) {
-        json = upgradeTimelineDocument(ofLoadJson(file), document->macroFile);
+        json = upgradeTimelineDocument(ofLoadJson(file), document.macroFile);
         if(!json.is_object()) json = ofJson::object();
     }
     json["timelines"] = ofJson::array();
-    for(const auto& timeline : document->timelines->timelines) {
+    for(const auto& timeline : document.timelines->timelines) {
         // As a macro saves its own: without what they drive outside the source.
         const bool reachesOut = std::any_of(timeline->tracks.begin(), timeline->tracks.end(), [](const auto& track) {
             return std::any_of(track.bindings.begin(), track.bindings.end(), [](const auto& binding) {
@@ -205,15 +180,29 @@ bool ofxOceanodeTimelineManager::saveMorphSource(const ofxOceanodeTimelineSequen
         stripOutsideTargets(inside);
         json["timelines"].push_back(sequenceToJson(inside));
     }
-    json["nextTimelineNumber"] = document->timelines->nextTimelineNumber;
+    json["nextTimelineNumber"] = document.timelines->nextTimelineNumber;
     json["version"] = kPresetVersion;
     if(!ofSavePrettyJson(file, json)) {
         error = "Could not write " + file;
         return false;
     }
-    document->savedSignature = document->seenSignature = morphDocumentSignature(*document);
-    document->seenAt = ofGetElapsedTimef();
+    document.savedSignature = document.seenSignature = morphDocumentSignature(document);
+    document.seenAt = ofGetElapsedTimef();
     return true;
+}
+
+bool ofxOceanodeTimelineManager::saveMorphSource(const ofxOceanodeTimelineSequence& host, const std::string& sourceId,
+                                                 std::string& error) {
+    error.clear();
+    // Its patch too, when it was opened on the graph playing it alone and
+    // changed there (its timelines are written with it: see saveMacroSequence).
+    if(morphSourcePatchDirty(host, sourceId, true)) return saveMorphSourcePatch(host, sourceId, error);
+    auto* document = morphDocumentOf(morphSourceFolder(host, sourceId));
+    if(document == nullptr) {
+        error = "This source's timelines are not loaded: it is read when one of its clips first plays.";
+        return false;
+    }
+    return writeMorphDocument(*document, error);
 }
 
 ofxOceanodeTimelineCanvas* ofxOceanodeTimelineManager::getMacroTimelines(ofxOceanodeContainer& macroContainer) {
@@ -434,6 +423,17 @@ bool ofxOceanodeTimelineManager::saveMacroSequence(const ofxOceanodeContainer& m
     pruneMacroSequences();
     const auto found = std::find_if(macroSequences.begin(), macroSequences.end(),
         [&](const auto& entry) { return entry.address == &macroContainer; });
+    // A Macro Morphing Track's source saved from its graph: its timelines go
+    // where they were read from (a preset's timeline.json, which the preset
+    // opened on its own reads), not into a sequence.json beside it.
+    if(found != macroSequences.end())
+        for(auto& document : morphDocuments)
+            if(document.second.timelines == found->timelines) {
+                std::string error;
+                if(writeMorphDocument(document.second, error)) return true;
+                ofLogError("ofxOceanodeTimeline") << "Saving a source's timelines: " << error;
+                return false;
+            }
     const std::string file = ofFilePath::join(folder, kSequenceFile);
     // What the macros inside this one drive on its canvas is saved here.
     const ofJson outside = found == macroSequences.end() ? ofJson::array()

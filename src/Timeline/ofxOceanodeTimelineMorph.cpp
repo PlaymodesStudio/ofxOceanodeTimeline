@@ -9,6 +9,7 @@
 
 #include "Managers/ofxOceanodeContainer.h"
 #include "Nodes/MacroMixerRuntime.h"
+#include "Nodes/ofxOceanodeNodeMacro.h"
 #include "Nodes/MacroMixerGui.h"
 #include "Nodes/MacroMixerPorts.h"
 
@@ -42,6 +43,20 @@ void readTransition(const ofxOceanodeTimelineMorphTransition& transition, MacroM
             router.id = item.key();
             if(readPolicy(item.value(), router.policy, router.options)) overrides[item.key()] = std::move(router);
         }
+}
+
+// What the user changed by hand in a canvas and the Macros inside it, as a
+// number that moves with every such change: values edited on a node's
+// controls (each container counts its own) and canvas gestures (nodes,
+// cables, positions: one history for the whole graph).
+uint64_t patchEditCount(ofxOceanodeContainer& canvas, int depth = 0) {
+    uint64_t count = canvas.getUserEditSerial();
+    if(depth == 0) count += canvas.getCanvasHistoryRevision();
+    if(depth < 32)
+        for(auto* node : canvas.getAllModules())
+            if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&node->getNodeModel()))
+                if(auto inner = macro->getContainer()) count += patchEditCount(*inner, depth + 1);
+    return count;
 }
 
 // An engine's state without the values of its Input routers: those follow
@@ -119,6 +134,24 @@ struct ofxOceanodeTimelineManager::MorphEngine {
     std::vector<std::pair<const MacroMixerRuntime::Graph*, std::string>> graphs;
     uint64_t drawnFrame = 0;
     uint64_t updatedFrame = 0;
+    // The graph whose patch was opened in a canvas tab (compared, never dereferenced).
+    const MacroMixerRuntime::Graph* patchGraph = nullptr;
+    // Its count of hand edits (patchEditCount) when it was opened or last saved.
+    uint64_t patchRevision = 0;
+    // (The count walks the graph's nodes: looked at a few times a second.)
+    mutable uint64_t patchSeen = 0;
+    mutable float patchSeenAt = -1.0f;
+    // The patch opened on the graph playing alone now, and changed since.
+    bool patchDirty(bool exact = false) const {
+        if(runtime == nullptr || patchGraph == nullptr || runtime->transitioning() || runtime->origin() != patchGraph) return false;
+        if(patchGraph->container == nullptr) return false;
+        const float now = ofGetElapsedTimef();
+        if(exact || patchSeenAt < 0.0f || now - patchSeenAt > 0.25f || now < patchSeenAt) {
+            patchSeen = patchEditCount(*patchGraph->container);
+            patchSeenAt = now;
+        }
+        return patchSeen != patchRevision;
+    }
     // How far through its overlap the scene last told was (0 outside one).
     float progress = 0.0f;
     // Source folders whose import waits on the blocked-node dialog: each
@@ -345,6 +378,129 @@ std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> ofxOceanodeTim
             }
         }
     return live;
+}
+
+bool ofxOceanodeTimelineManager::morphSourceAlone(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const {
+    const auto* engine = findMorphEngine(host);
+    if(engine == nullptr || engine->runtime == nullptr || sourceId.empty()) return false;
+    const auto& runtime = *engine->runtime;
+    return runtime.origin() != nullptr && !runtime.transitioning() && runtime.currentID() == sourceId;
+}
+
+bool ofxOceanodeTimelineManager::morphInTransition(const ofxOceanodeTimelineSequence& host) const {
+    const auto* engine = findMorphEngine(host);
+    return engine != nullptr && engine->runtime != nullptr && engine->runtime->transitioning();
+}
+
+bool ofxOceanodeTimelineManager::morphSourceCanvasOpen(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const {
+    if(!morphSourceAlone(host, sourceId)) return false;
+    const auto* graph = findMorphEngine(host)->runtime->origin();
+    return graph->macro != nullptr && graph->macro->isWindowVisible();
+}
+
+bool ofxOceanodeTimelineManager::openMorphSourceCanvas(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) {
+    if(!morphSourceAlone(host, sourceId)) return false;
+    const auto* graph = findMorphEngine(host)->runtime->origin();
+    if(graph->macro == nullptr) return false;
+    // The Macro's own tab: docked with the other canvases, and focused.
+    graph->macro->setWindowVisible(true);
+    auto* engine = findMorphEngine(host);
+    if(engine->patchGraph != graph) {
+        engine->patchGraph = graph;
+        engine->patchRevision = graph->container != nullptr ? patchEditCount(*graph->container) : 0;
+        engine->patchSeenAt = -1.0f;
+    }
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::morphSourcePatchDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId,
+                                                       bool exact) const {
+    if(!morphSourceAlone(host, sourceId)) return false;
+    return findMorphEngine(host)->patchDirty(exact);
+}
+
+std::vector<std::string> ofxOceanodeTimelineManager::morphUnsavedSources() {
+    std::vector<std::string> unsaved;
+    if(isEngine()) return unsaved;
+    for(const auto* document : dirtyMorphDocuments())
+        unsaved.push_back(ofFilePath::getFileName(ofFilePath::removeTrailingSlash(document->folder)) + " (timeline)");
+    for(const auto& entry : morphEngines)
+        if(entry.second != nullptr && entry.second->patchDirty() && entry.second->patchGraph->revision != nullptr)
+            unsaved.push_back(entry.second->patchGraph->revision->name() + " (patch)");
+    return unsaved;
+}
+
+bool ofxOceanodeTimelineManager::saveMorphUnsavedSources(std::string& error) {
+    error.clear();
+    if(isEngine()) return true;
+    bool saved = true;
+    auto fail = [&](const std::string& reason) {
+        saved = false;
+        if(!reason.empty()) error += (error.empty() ? "" : "\n") + reason;
+    };
+    // Patches first: a patch is written with its timelines.
+    std::vector<std::pair<TimelineRef, std::string>> patches;
+    for(const auto& entry : morphEngines)
+        if(entry.second != nullptr && entry.second->patchDirty() && entry.second->patchGraph->revision != nullptr)
+            patches.push_back({entry.first, entry.second->patchGraph->revision->id()});
+    for(const auto& patch : patches) {
+        const auto* host = findTimeline(patch.first);
+        std::string reason;
+        if(host == nullptr || !saveMorphSourcePatch(*host, patch.second, reason)) fail(reason);
+    }
+    for(auto* document : dirtyMorphDocuments()) {
+        std::string reason;
+        if(!writeMorphDocument(*document, reason)) fail(reason);
+    }
+    return saved;
+}
+
+bool ofxOceanodeTimelineManager::morphSourcePatchOpened(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const {
+    if(!morphSourceAlone(host, sourceId)) return false;
+    const auto* engine = findMorphEngine(host);
+    return engine->patchGraph != nullptr && engine->patchGraph == engine->runtime->origin();
+}
+
+bool ofxOceanodeTimelineManager::saveMorphSourcePatch(const ofxOceanodeTimelineSequence& host, const std::string& sourceId,
+                                                     std::string& error) {
+    error.clear();
+    if(!morphSourcePatchOpened(host, sourceId)) {
+        error = "The source's patch can be saved while it plays alone, after opening it.";
+        return false;
+    }
+    const auto* graph = findMorphEngine(host)->runtime->origin();
+    const std::string folder = graph->source;
+    if(graph->container == nullptr || folder.empty() || !ofFile::doesFileExist(ofFilePath::join(folder, "modules.json"))) {
+        error = "The source's folder is not a preset any more: " + folder;
+        return false;
+    }
+    // What a preset keeps for the project it is opened as, which this graph
+    // (a Macro in another project) does not hold: left exactly as it is.
+    const std::vector<std::string> projectFiles{"scope_config.json", "midi.json", "transport.json", "transportSync.json", "layout.json"};
+    std::map<std::string, std::string> kept;
+    for(const auto& name : projectFiles) {
+        const auto path = ofFilePath::join(folder, name);
+        if(ofFile::doesFileExist(path)) kept[name] = ofBufferFromFile(path).getText();
+    }
+    // The preset as its container saves itself: its nodes as they are now and
+    // their cables; the nodes kept out of the graph as the folder had them
+    // (the container kept them aside when it loaded); its timelines through
+    // saveMacroSequence, into the file they were read from.
+    const bool saved = graph->container->savePreset(folder);
+    for(const auto& name : projectFiles) {
+        const auto path = ofFilePath::join(folder, name);
+        const auto original = kept.find(name);
+        if(original != kept.end()) ofBufferToFile(path, ofBuffer(original->second.data(), original->second.size()));
+        else if(ofFile::doesFileExist(path)) ofFile::removeFile(path);
+    }
+    if(!saved) {
+        error = "The source's patch could not be saved to " + folder;
+        return false;
+    }
+    auto* engine = findMorphEngine(host);
+    engine->patchRevision = patchEditCount(*graph->container);
+    engine->patchSeenAt = -1.0f;
+    return true;
 }
 
 std::vector<ofxOceanodeTimelineMorphIdleSource> ofxOceanodeTimelineManager::morphIdleSources(
@@ -709,6 +865,13 @@ void ofxOceanodeTimelineManager::presentMorphScene(const TimelineRef& ref, const
     const auto transport = transportFor(ref);
     engine.idle = scene.origin.empty() && (transport == nullptr || !transport->getState().isPlaying);
     engine.runtime->present(scene);
+    // Two sources live (a transition, or one loaded ahead): no source's patch
+    // stays open. In place the one graph is neither source's; on two graphs
+    // the origin's goes when the transition ends.
+    if(engine.runtime->transitioning())
+        for(const MacroMixerRuntime::Graph* graph : {engine.runtime->origin(), engine.runtime->destination()})
+            if(graph != nullptr && graph->macro != nullptr && graph->macro->isWindowVisible())
+                graph->macro->setWindowVisible(false, false);
     noteMorphGraphs(engine);
 }
 
@@ -812,6 +975,18 @@ void ofxOceanodeTimelineManager::updateMorphEngine(const ofxOceanodeTimelineSequ
     // (Held: a graph's update may reach back into the list.)
     const auto engine = found->second;
     updateMorphEngineNow(*engine);
+}
+
+void ofxOceanodeTimelineManager::forEachMorphGraph(const std::function<void(ofxOceanodeContainer&)>& visit) {
+    if(isEngine() || !visit) return;
+    for(const auto& entry : morphEngines) {
+        if(entry.second == nullptr || entry.second->runtime == nullptr) continue;
+        const auto* origin = entry.second->runtime->origin();
+        const auto* destination = entry.second->runtime->destination();
+        if(origin != nullptr && origin->container != nullptr) visit(*origin->container);
+        // (In place, the one graph is both.)
+        if(destination != nullptr && destination != origin && destination->container != nullptr) visit(*destination->container);
+    }
 }
 
 void ofxOceanodeTimelineManager::drawMorphEngines() {

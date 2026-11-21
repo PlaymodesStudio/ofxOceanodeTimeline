@@ -623,8 +623,7 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'std::string ofxOceanodeTimelineManager::takeMorphError() { return std::string(); }\n'
             'std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> ofxOceanodeTimelineManager::morphLiveTimelines('
             'const ofxOceanodeTimelineSequence&, const ofxOceanodeTimelineTrack&) { return {}; }\n'
-            'ofJson ofxOceanodeTimelineManager::morphSourceEditsJson() const { return ofJson::array(); }\n'
-            'void ofxOceanodeTimelineManager::restoreMorphSourceEdits(const ofJson&) {}\n'
+            'void ofxOceanodeTimelineManager::clearMorphDocuments() {}\n'
             'bool ofxOceanodeTimelineManager::isMorphDocument(const ofxOceanodeTimelineCanvas*) const { return false; }\n')
         cpp = folder / "regression.cpp"
         cpp.write_text(inject_fixture(cases) + "\n" + parameter_source[destructor_start:destructor_end])

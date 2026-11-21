@@ -639,7 +639,12 @@ the track's defaults. They are stored on the later clip.
 
 **Source window.** Double-click a clip outside an overlap (or **Source...**
 in the clip's menu): the source's folder, problems, checks, kept-out nodes,
-**Refresh** and **Save Source**. The button on the track's pad opens the
+**Refresh**, **Open Source** and **Save Source**. **Open Source** shows the
+source's patch in a canvas tab while the source plays alone; the tab closes
+when a crossfade starts or the source stops playing. Once the patch has been
+opened, **Save Source** writes it too: the nodes as they are at that moment
+(values included) and their cables, with the nodes kept out of the graph
+written back as the folder had them. Both are disabled during a crossfade. The button on the track's pad opens the
 track's menu, the same one a right-click on its header opens.
 
 **Pre-loading.** A source loads when the playhead reaches its clip, which can
@@ -658,10 +663,14 @@ only while it plays, which is why only those rows are editable.
 **Source timelines.** A source's timelines never play on their own: they
 follow the clip playing the source, and so do the timelines of the macros
 inside it, at any depth. Edits to them are kept by source folder: they survive
-the source's graph being rebuilt, are saved with the project, and reach the
+the source's graph being rebuilt, last for the session, and reach the
 source's folder only with **Save Source**. A `*` on a clip or on a source's
-header marks edits not saved to the folder. **Refresh** reads the folder again
-and drops them.
+header marks changes (to its timelines, or to its patch once opened) not saved
+to the folder. **Refresh** reads the folder again and drops them. Before the
+project is closed or replaced, the "Save changes?" dialog lists the sources
+with unsaved changes and offers **Save sources**, which writes them to their
+folders; saving the project itself never does. A changed patch can only be
+written while its source plays alone, so save it before the next crossfade.
 
 **Editing while two sources play.** Routers, sources and policies cannot
 change while two sources play: one of them (the one further along) stays

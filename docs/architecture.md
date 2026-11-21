@@ -690,7 +690,9 @@ keeps each source's timeline list by folder. `loadMacroSequence` gives every
 graph built from that folder the same list instead of reading the folder
 again, so edits outlive the graph. `morphSourceDirty` compares signatures,
 `saveMorphSource` writes the folder's `sequence.json` or `timeline.json`, and
-`toJson` / `fromJson` carry the dirty ones as `morphSourceEdits`. A document
+The project holds no copy of them: `fromJson` clears the documents, so a
+source is always read from its folder and edits not written with Save Source
+last for the session only. A document
 no graph plays has a null `base`; `morphIdleSources` hands those to the editor
 to draw read-only.
 

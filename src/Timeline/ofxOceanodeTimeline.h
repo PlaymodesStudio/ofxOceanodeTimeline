@@ -1783,6 +1783,10 @@ public:
     // node's inputs hold reaches the sources in the same frame. A timeline
     // no node points at is updated by the frame pass instead.
     void updateMorphEngine(const ofxOceanodeTimelineSequence& sequence);
+    // The canvases of every engine's live graphs (one, or the two of a
+    // transition), for the host's time system: their phasors and time
+    // generators run with the patch's.
+    void forEachMorphGraph(const std::function<void(ofxOceanodeContainer&)>& visit);
     // Called on the host's draw, before the nodes': every engine not drawn
     // yet this frame draws (a timeline no Timeline node points at too).
     void drawMorphEngines();
@@ -1799,6 +1803,28 @@ public:
     // clips place), each with its source's id: the rows the track unfolds.
     std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> morphLiveTimelines(
         const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track);
+    // A source's patch, in a canvas tab of its own (the tab of the Macro its
+    // graph runs in). Only while the source plays alone: a transition closes
+    // it, and it goes with the graph when the source stops playing. What is
+    // changed there lasts while the source plays; it is not saved.
+    bool morphSourceAlone(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const;
+    // Two sources are live on the track (a crossfade, or one loaded ahead).
+    bool morphInTransition(const ofxOceanodeTimelineSequence& host) const;
+    bool morphSourceCanvasOpen(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const;
+    bool openMorphSourceCanvas(const ofxOceanodeTimelineSequence& host, const std::string& sourceId);
+    // The source's patch was opened on the graph playing now, so it may have
+    // been changed: saveMorphSource then writes the patch too.
+    bool morphSourcePatchOpened(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const;
+    // ...and was changed there by hand since it was opened or last saved: a
+    // value on a node's controls, or a canvas gesture (nodes, cables), the
+    // Macros inside it included.
+    // (Looked at a few times a second; exact: now.)
+    bool morphSourcePatchDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, bool exact = false) const;
+    // Every source with changes not written to its folder, by name (its
+    // timelines, its patch), for the host's "Save changes?" dialog; and
+    // writing them all. A patch can only be written while its source plays alone.
+    std::vector<std::string> morphUnsavedSources();
+    bool saveMorphUnsavedSources(std::string& error);
     // The track's sources that have clips and are not live now, in the order
     // of their first clips: shown under the live ones, read-only.
     std::vector<ofxOceanodeTimelineMorphIdleSource> morphIdleSources(const ofxOceanodeTimelineSequence& host,
@@ -1807,7 +1833,10 @@ public:
     // (looked at a few times a second; exact: now).
     bool morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, bool exact = false);
     // Writes a source's timelines into its folder (the file they were read
-    // from). False, with the reason: nothing was written.
+    // from). When its patch was opened on the graph playing now and it plays
+    // alone, the patch is written as well, as the preset it is: its nodes as
+    // they are now, their cables, and the nodes kept out of the graph as the
+    // folder had them. False, with the reason.
     bool saveMorphSource(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, std::string& error);
 
     // ---- Macro tracks: clips that play a macro canvas's timeline ----
@@ -3658,18 +3687,23 @@ private:
         uint64_t seenSignature = 0;      // as last looked at (seenAt)
         float seenAt = -1.0f;
     };
-    std::map<std::string, MorphDocument> morphDocuments;
+    mutable std::map<std::string, MorphDocument> morphDocuments;
+    // Writes a document's timelines into its folder's own file.
+    bool writeMorphDocument(MorphDocument& document, std::string& error) const;
+    // The source's patch, saved from the graph playing it alone (Morph.cpp).
+    bool saveMorphSourcePatch(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, std::string& error);
     std::map<std::string, std::string> morphDocumentKeys;   // a folder as spelled -> its key
     MorphDocument* morphDocumentOf(const std::string& folder);
     // The same, read from the folder when no graph of the source has loaded yet.
     MorphDocument* ensureMorphDocument(const std::string& folder);
     uint64_t morphDocumentSignature(const MorphDocument& document) const;
     void dropMorphDocument(const std::string& folder);
-    // The sources' timelines that differ from their folders, to save with
-    // the project (so those edits are not lost with the session) and to put
-    // back when it loads: still unsaved to their folders then.
-    ofJson morphSourceEditsJson() const;
-    void restoreMorphSourceEdits(const ofJson& json);
+    // The documents that differ from their folders (looked at a few times a second).
+    std::vector<MorphDocument*> dirtyMorphDocuments();
+    // A project load starts from the folders again: a source has one
+    // version, its folder's. Edits not written there with Save Source are
+    // kept for the session only, never in the project.
+    void clearMorphDocuments();
     bool isMorphDocument(const ofxOceanodeTimelineCanvas* timelines) const;
     // The folders of every engine's sources, as the engines spell them.
     std::vector<std::string> morphSourceFolders() const;

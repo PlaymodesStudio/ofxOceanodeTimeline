@@ -145,6 +145,29 @@ int main(int argc, char** argv) {
         assert(c.savePreset(nested));
     }
 
+    // ---- Nodes a registry filter keeps out of a load survive a save ----
+    // (What saving a source's patch from its graph relies on: the graph has
+    // no kept-out node, and the folder must keep them.)
+    {
+        auto filtered = std::make_shared<ofxOceanodeNodeRegistry>(*registry);
+        filtered->setNodeLoadFilter([](const std::string&, const std::string& node) { return node == "Probe_1"; });
+        ofxOceanodeContainer partial(filtered, types, transport); partial.setCanvasID("Partial");
+        check(partial.loadPreset(b), "A preset loads with one node kept out");
+        check(partial.getDynamicNodes().count("Probe") == 0 || partial.getDynamicNodes().at("Probe").empty(), "...which is not created");
+        check(partial.getDynamicNodes().count("Router f") == 1, "...while the others are");
+        const auto resaved = scratch + "/resaved";
+        check(partial.savePreset(resaved), "The loaded container is saved to a folder");
+        const auto modules = ofLoadJson(resaved + "/modules.json");
+        check(modules.contains("Probe") && modules["Probe"].contains("01") && modules.contains("Router f"),
+              "The node kept out is still in the saved node list: " + modules.dump());
+        check(fs::exists(resaved + "/Probe_1.json") &&
+              ofBufferFromFile(resaved + "/Probe_1.json").getText() == ofBufferFromFile(b + "/Probe_1.json").getText(),
+              "...with its own file, as it was");
+        const auto cables = ofLoadJson(resaved + "/connections.json");
+        check(cables.contains("Probe_1") && cables["Probe_1"].contains("Output") && cables["Probe_1"]["Output"].contains("Router_f_1"),
+              "...and its cable: " + cables.dump());
+    }
+
     auto frame = [&](double seconds = 0.05) {
         transport->advanceFrameStep(seconds); transport->latchFrameState();
         model.update(); model.applyAutomation(); // players, the morph engines, evaluation, apply
@@ -213,6 +236,14 @@ int main(int argc, char** argv) {
     check(outputs != nullptr && outputs->count("value") == 1 && near(std::get<float>(outputs->at("value")), 0.25f),
           "The routers are read once per frame for the Timeline nodes");
     check(model.morphEngineStatus(sequence).empty(), "Nothing to report: " + model.morphEngineStatus(sequence));
+    // The host's time system advances the phasors and time generators of the
+    // live graphs: it is handed their canvases (no node of the patch reaches them).
+    auto clocked = [&]() {
+        std::vector<ofxOceanodeContainer*> canvases;
+        model.forEachMorphGraph([&](ofxOceanodeContainer& canvas) { canvases.push_back(&canvas); });
+        return canvases;
+    };
+    check(clocked().size() == 1 && clocked()[0] == graphA->container.get(), "The live source's canvas is handed to the time system");
 
     // Inside the overlap (4..8): both sources, progress the position in it.
     seek(5.0);
@@ -221,6 +252,8 @@ int main(int argc, char** argv) {
     const auto* graphB = engine->destination();
     if(graphB == nullptr) return 1;
     check(near(engine->progress(), 0.25f), "Progress is the playhead's position in the overlap: " + ofToString(engine->progress()));
+    check(clocked().size() == 2 && clocked()[0] == graphA->container.get() && clocked()[1] == graphB->container.get(),
+          "In a transition both sources' canvases are clocked");
     check(near(probeOf(graphA).level.get(), 0.625f), "a's timeline still follows its clip (beat 5 of it)");
     check(near(probeOf(graphB).level.get(), 0.75f), "b's timeline follows its own clip at the same time");
     check(near(engine->value(), 0.625f * 0.75f + 0.75f * 0.25f), "The router mixes the two: " + ofToString(engine->value()));
@@ -253,6 +286,7 @@ int main(int argc, char** argv) {
     // A gap: nothing plays.
     seek(20.0);
     check(engine->origin() == nullptr && engine->destination() == nullptr, "In a gap nothing plays");
+    check(clocked().empty(), "...and no canvas is clocked");
     for(const auto& listed : model.allCanvases()) check(listed.rfind("MacroMixer/", 0) != 0, "No source canvas is left: " + listed);
 
     // ---- Playing ----
@@ -330,6 +364,27 @@ int main(int argc, char** argv) {
         const auto written = ofLoadJson(a + "/timeline.json");
         check(written.dump().find("Edited here") != std::string::npos && written.value("version", 0) > 0 &&
               written.contains("timelines") && written["timelines"].size() == 1, "The folder's timeline.json holds the edit");
+        // Its patch, once opened on the graph playing it, is saved with it.
+        check(!model.morphSourcePatchOpened(sequence, aID), "The patch was not opened");
+        check(model.openMorphSourceCanvas(sequence, aID) && model.morphSourcePatchOpened(sequence, aID), "Open Source, while a plays alone");
+        // (A value changed on a node's control makes it dirty: the node's GUI
+        // records that, and this fixture has no GUI to do it.)
+        check(!model.morphSourcePatchDirty(sequence, aID, true), "Opened, nothing in it was changed yet");
+        const auto timelineBefore = ofLoadJson(a + "/timeline.json");
+        check(model.saveMorphSource(sequence, aID, saveError), "Save Source with the patch open: " + saveError);
+        check(!model.morphSourcePatchDirty(sequence, aID, true) && model.morphUnsavedSources().empty(),
+              "Saved, the patch is clean and nothing is left to warn about");
+        check(fs::exists(a + "/modules.json") && ofLoadJson(a + "/modules.json").contains("Probe") &&
+              ofLoadJson(a + "/connections.json").contains("Probe_1"), "The folder is still the preset: its nodes and cables");
+        check(!fs::exists(a + "/sequence.json"), "Its timelines did not go to a sequence.json beside the preset's file");
+        check(ofLoadJson(a + "/timeline.json").dump().find("Edited here") != std::string::npos &&
+              ofLoadJson(a + "/timeline.json").value("version", 0) == timelineBefore.value("version", -1),
+              "...but stayed in its timeline.json");
+        seek(5.0);
+        check(engine->transitioning() && !model.morphSourcePatchOpened(sequence, aID) && !model.morphSourceAlone(sequence, aID),
+              "In a crossfade no source is alone: nothing to open or save as a patch");
+        seek(2.0);
+        check(model.morphSourceAlone(sequence, aID), "(a alone again)");
         // Refresh reads the folder again: unsaved edits go, saved ones stay.
         const auto unsaved = model.createTrack(*kept, "Unsaved");
         check(!unsaved.empty() && model.morphSourceDirty(sequence, aID, true), "Another edit, not saved");
@@ -380,6 +435,7 @@ int main(int argc, char** argv) {
         check(engine->transitioning() && engine->morphingInPlace(), "Entered from a, the morph runs in place: " + engine->sceneInPlaceNote());
         check(engine->origin() == only && engine->destination() == only && engine->currentID() == aID && engine->destinationID() == bID,
               "...on a's graph, towards b");
+        check(clocked().size() == 1 && clocked()[0] == only->container.get(), "...clocked once: one graph plays both");
         check(near(engine->progress(), 0.25f), "...its progress the position in the overlap: " + ofToString(engine->progress()));
         seek(4.5);
         check(engine->morphingInPlace() && engine->origin() == only && near(engine->progress(), 0.125f), "Scrubbing back keeps the morph in place");
@@ -496,7 +552,7 @@ int main(int argc, char** argv) {
     check(model.morphEngine(sequence) == nullptr, "Its engine went with it");
     for(const auto& listed : model.allCanvases()) check(listed.rfind("MacroMixer/", 0) != 0, "...and its sources: " + listed);
 
-    // ---- Unsaved source edits travel with the project ----
+    // ---- A source has one version: its folder's. The project keeps no copy ----
     {
         const auto again = model.createMorphTrack(sequence, "Morph again");
         MacroMixerGui::Action contract{MacroMixerGui::ActionKind::Routers};
@@ -510,11 +566,17 @@ int main(int argc, char** argv) {
         const auto id = playing->importedMacro(a)->id();
         auto* live = model.timelineFor(TimelineRef{playing->origin()->container->getCanvasID(), "tl_1"});
         if(live == nullptr) return 1;
-        check(!model.createTrack(*live, "Kept with the project").empty() && model.morphSourceDirty(sequence, id, true), "An unsaved edit to a's timeline");
+        check(!model.createTrack(*live, "Not saved to the folder").empty() && model.morphSourceDirty(sequence, id, true),
+              "An edit to a's timeline, not saved to its folder");
         const auto project = model.toJson();
-        check(project.contains("morphSourceEdits") && project["morphSourceEdits"].size() == 1 &&
-              project["morphSourceEdits"].dump().find("Kept with the project") != std::string::npos, "The project holds the unsaved edit");
-        model.fromJson(project);
+        check(!project.contains("morphSourceEdits") && project.dump().find("Not saved to the folder") == std::string::npos,
+              "The project does not hold the source's timeline");
+        // A project written by an earlier version, with a copy of a source's
+        // timeline in it: the copy is ignored, the folder is what plays.
+        auto older = project;
+        older["morphSourceEdits"] = ofJson::array({{{"folder", a}, {"macroFile", false}, {"nextTimelineNumber", 2},
+            {"timelines", ofJson::array({{{"id", "tl_1"}, {"tracks", ofJson::array()}}})}}});
+        model.fromJson(older);
         auto* reloaded = model.timelineFor(main);
         check(reloaded != nullptr, "The project loads again");
         if(reloaded == nullptr) return 1;
@@ -524,20 +586,20 @@ int main(int argc, char** argv) {
         check(after != nullptr && after->origin() != nullptr, "a plays after the reload: " + model.morphEngineStatus(*reloaded));
         if(after == nullptr || after->origin() == nullptr) return 1;
         const auto* restored = model.timelineFor(TimelineRef{after->origin()->container->getCanvasID(), "tl_1"});
-        bool kept = false;
-        if(restored != nullptr) for(const auto& listed : restored->tracks) kept = kept || listed.name == "Kept with the project";
-        check(kept, "...with the edit, from the project");
-        check(model.morphSourceDirty(*reloaded, after->importedMacro(a)->id(), true), "...still unsaved to its folder");
-        check(ofLoadJson(a + "/timeline.json").dump().find("Kept with the project") == std::string::npos, "The folder was not touched");
-        std::string saveError;
-        check(model.saveMorphSource(*reloaded, after->importedMacro(a)->id(), saveError) &&
-              !model.toJson().contains("morphSourceEdits"), "Saved to its folder, the project no longer carries it: " + saveError);
+        bool unsaved = false, fromFolder = false;
+        if(restored != nullptr) for(const auto& listed : restored->tracks) {
+            unsaved = unsaved || listed.name == "Not saved to the folder";
+            fromFolder = fromFolder || listed.name == "Edited here";
+        }
+        check(restored != nullptr && fromFolder && !unsaved, "Its timeline is the folder's: the unsaved edit and the stored copy are gone");
+        check(!model.morphSourceDirty(*reloaded, after->importedMacro(a)->id(), true), "...and nothing is pending for it");
+        check(!model.toJson().contains("morphSourceEdits"), "Saved again, the project drops the old entry");
     }
 
     if(failures > 0) return 1;
     std::cout << "Macro morphing playback passed: engine per timeline, routers and sources stored in the track, scene at the playhead "
                  "(alone, transition, gap), source timelines placed by their clips (both in an overlap), playing, muted clip and track, "
-                 "publishers, source timelines kept across graphs and saved on demand, source loaded ahead, morph in place, nested macro timelines, undo of a source removal, removed source, state restored behind the engine, engine gone with its track, unsaved source edits kept with the project.\n";
+                 "publishers, source timelines kept across graphs and saved on demand, source loaded ahead, morph in place, nested macro timelines, undo of a source removal, removed source, state restored behind the engine, engine gone with its track, no copy of a source kept in the project.\n";
     return 0;
 }
 '''

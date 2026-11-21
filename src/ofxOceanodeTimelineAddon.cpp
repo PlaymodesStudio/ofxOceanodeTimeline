@@ -27,6 +27,9 @@ public:
     void applyAutomation() override { manager.applyAutomation(); }
     void endParameterCache() override { manager.endParameterCache(); }
     void draw() override { manager.drawMorphEngines(); }
+    void forEachClockedGuest(const std::function<void(ofxOceanodeContainer&)>& visit) override { manager.forEachMorphGraph(visit); }
+    std::vector<std::string> unsavedExternalWork() override { return manager.morphUnsavedSources(); }
+    bool saveExternalWork(std::string& error) override { return manager.saveMorphUnsavedSources(error); }
     bool loadPreset(const std::string& path) override { return manager.loadPreset(path); }
     bool savePreset(const std::string& path) const override { return manager.savePreset(path); }
     bool getPlayOnPresetLoad() const override { return manager.getPlayOnPresetLoad(); }
