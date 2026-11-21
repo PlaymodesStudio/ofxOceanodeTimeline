@@ -5048,15 +5048,29 @@ void ofxOceanodeTimelineController::draw() {
             }
             if(!drawContent) return;
             if(track.isMorphTrack) {
-                // No lanes: what it plays is its source, named under the title
-                // band (the overlaps are drawn over the clips, after them).
-                const float top = std::min(max.y - 3.0f, min.y + 9.0f + ImGui::GetTextLineHeight());
-                if(max.y - 3.0f - top < ImGui::GetTextLineHeight()) return;
-                const std::string source = timeline.morphSourceName(scope(timeline), clip.morphSource);
+                // No lanes (its source is named in the title band). Under it:
+                // what its source or the last transition into it has to say,
+                // as the MacroMixer's Details do, red or orange; nothing when
+                // all is well. (The overlaps are drawn over the clips, after them.)
+                const float lineHeight = ImGui::GetTextLineHeight();
+                const float top = std::min(max.y - 3.0f, min.y + 9.0f + lineHeight);
+                if(max.y - 3.0f - top < lineHeight) return;
+                const auto warnings = timeline.morphClipWarnings(scope(timeline), clip);
+                if(warnings.empty()) return;
+                const ImU32 red = IM_COL32(255, 97, 82, clip.muted ? 130 : 255), orange = IM_COL32(255, 158, 56, clip.muted ? 130 : 255);
                 dl->PushClipRect(ImVec2(textLeft + 4.0f, top), ImVec2(right - 2.0f, max.y - 3.0f), true);
-                if(source.empty()) dl->AddText(ImVec2(textLeft + 6.0f, top + 2.0f), IM_COL32(255, 165, 60, 255), "[source missing]");
-                else dl->AddText(ImVec2(textLeft + 6.0f, top + 2.0f), clipInk(clip, clip.muted ? 110 : 235), source.c_str());
+                float y = top + 2.0f;
+                size_t shown = 0;
+                for(; shown < warnings.size() && y + lineHeight <= max.y - 3.0f; ++shown, y += lineHeight)
+                    dl->AddText(ImVec2(textLeft + 6.0f, y), warnings[shown].severe ? red : orange, warnings[shown].text.c_str());
                 dl->PopClipRect();
+                // All of them, whole, under the mouse.
+                if(clipDragMode == ClipDragMode::None && !ImGui::IsAnyItemActive() &&
+                   hoverRect(ImVec2(textLeft, top), ImVec2(right, max.y - 3.0f))) {
+                    std::string all;
+                    for(const auto& warning : warnings) all += (all.empty() ? "" : "\n") + warning.text;
+                    ImGui::SetTooltip("%s", all.c_str());
+                }
                 return;
             }
             // Repeats that are off screen are not drawn (a short repeating

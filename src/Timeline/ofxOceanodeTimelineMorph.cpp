@@ -564,6 +564,38 @@ std::string ofxOceanodeTimelineManager::morphEngineStatus(const ofxOceanodeTimel
     return MacroMixerGui::failureText(runtime);
 }
 
+std::vector<ofxOceanodeTimelineMorphWarning> ofxOceanodeTimelineManager::morphClipWarnings(
+        const ofxOceanodeTimelineSequence& sequence, const ofxOceanodeTimelineClip& clip) const {
+    std::vector<ofxOceanodeTimelineMorphWarning> warnings;
+    const auto* engine = findMorphEngine(sequence);
+    if(engine == nullptr || engine->runtime == nullptr) return warnings;
+    if(!engine->problem.empty()) { warnings.push_back({true, engine->problem}); return warnings; }
+    const auto& runtime = *engine->runtime;
+    const auto source = runtime.macro(clip.morphSource);
+    if(source == nullptr) { warnings.push_back({true, "The track's engine does not have this clip's source"}); return warnings; }
+    // The source itself: it could not be read, or failed when the scene asked for it.
+    if(const auto problem = runtime.sourceProblem(clip.morphSource); !problem.empty()) warnings.push_back({false, problem});
+    if(runtime.sceneDriven() && !runtime.sceneReady()) {
+        const auto status = runtime.sceneStatus();
+        const std::string mine = source->name() + ": ";
+        if(status.compare(0, mine.size(), mine) == 0) warnings.push_back({true, status.substr(mine.size())});
+    }
+    // The last transition into it, as its Details recorded it (never a
+    // preview: that would read the source again). Red: the graph fell back;
+    // orange: a node was replaced.
+    if(runtime.hasTransitionDetails(clip.morphSource))
+        for(const auto& detail : runtime.sourceDetails(clip.morphSource)) {
+            const bool severe = detail.kind == "fallback" || detail.kind == "skipped";
+            if(!severe && detail.kind != "replaced") continue;
+            const char* kind = detail.kind == "fallback" ? "Graph fallback" : detail.kind == "skipped" ? "Skipped connection mix" : "Replaced node";
+            std::string text = kind;
+            if(!detail.location.empty() && detail.location != "Graph") text += " (" + detail.location + ")";
+            if(!detail.message.empty()) text += ": " + detail.message;
+            warnings.push_back({severe, std::move(text)});
+        }
+    return warnings;
+}
+
 bool ofxOceanodeTimelineManager::morphHasPublisher(const ofxOceanodeTimelineSequence& sequence) const {
     TimelineRef ref;
     if(isEngine() || !refOf(sequence, ref)) return false;

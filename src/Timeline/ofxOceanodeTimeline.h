@@ -1287,6 +1287,13 @@ struct ofxOceanodeTimelineMorphIdleSource {
     std::string id, name;
     std::vector<const ofxOceanodeTimelineSequence*> timelines;
 };
+// Something a Macro Morphing Track's clip has to say about its source or
+// the transition into it, as the MacroMixer's Details do: severe (red: the
+// source fails, or the whole graph falls back) or not (orange).
+struct ofxOceanodeTimelineMorphWarning {
+    bool severe = false;
+    std::string text;
+};
 // What a Macro Morphing Track holds at a beat: no clip (a gap: both ids
 // empty), one clip (the origin alone), or two in transition, with how far
 // through their overlap the beat is (0 at its start, towards 1 at its end:
@@ -1756,6 +1763,10 @@ public:
     std::string morphSourceName(const ofxOceanodeTimelineSequence& sequence, const std::string& sourceId) const;
     std::string morphEngineStatus(const ofxOceanodeTimelineSequence& sequence) const;
     bool morphHasPublisher(const ofxOceanodeTimelineSequence& sequence) const;
+    // What a clip of the track shows under its name: its source's problems
+    // and the issues of the last transition into it (none: all is well).
+    std::vector<ofxOceanodeTimelineMorphWarning> morphClipWarnings(const ofxOceanodeTimelineSequence& sequence,
+                                                                   const ofxOceanodeTimelineClip& clip) const;
     // For the Timeline nodes pointing at the timeline. The engine's Output
     // routers by router id, read once per frame (a Trigger is consumed by
     // the read), for every node to publish; null without an engine.
