@@ -1,7 +1,16 @@
 # Macro Morphing Track (MMT): architecture check and implementation plan
 
-Status: plan, no code changed. Written 2026-11-21 against ofxOceanodeTimeline
-`main` (`4f16794`) and core `megabranch26_A` (`37fe574e`).
+Status: implemented (all four waves). What was built is described in
+`timeline.md` ("Macro Morphing Track") and `architecture.md` ("Macro Morphing
+Track"); this file is kept as the record of the decisions. Differences from
+the plan: routers are published by the Timeline node; a timeline holds one
+track; only the sources playing at the playhead unfold as editable rows (the
+others are read-only); unsaved source edits are saved with the project;
+in-place Morph is a per-transition option, tried only when the target is not
+already live; pre-loading is a per-track option, off by default.
+
+Written 2026-11-21 as a plan, against ofxOceanodeTimeline `main` (`4f16794`)
+and core `megabranch26_A` (`37fe574e`).
 
 Note: `../ofxOceanode/docs/macro-mixer-timeline-study.md` is out of date.
 Mixer graphs already play their sources' timelines (as timeline guests with

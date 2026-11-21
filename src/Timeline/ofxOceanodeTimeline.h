@@ -787,6 +787,9 @@ struct ofxOceanodeTimelineMorphTransition {
     bool morph = false;      // Morph; off: Mix
     float biPow = 0.0f;      // the shape of the progress, -1..1 (the node's Bi Pow; 0: linear)
     float logBlend = 1.0f;   // the amount of log blending of a morph, 0..1 (the node's Log Blend)
+    // A Morph on the outgoing source's own graph when the two sources allow
+    // it (one graph instead of two); on two graphs otherwise.
+    bool inPlace = false;
     // The morph policies of this transition and the mix policy of each
     // router it overrides, as the track's engine reads them (null: the
     // track's defaults). JSON, so the model needs no mixer header.
@@ -800,7 +803,7 @@ struct ofxOceanodeTimelineMorphTransition {
         return ++counter;
     }
     bool isDefault() const {
-        return !morph && biPow == 0.0f && logBlend == 1.0f && morphPolicies.is_null() && routerOverrides.is_null();
+        return !morph && !inPlace && biPow == 0.0f && logBlend == 1.0f && morphPolicies.is_null() && routerOverrides.is_null();
     }
 };
 
@@ -1263,6 +1266,10 @@ struct ofxOceanodeTimelineTrack {
     // Changes whenever morphState does, so a signature hashes the stamp
     // instead of the state (see setMorphState). Not saved.
     uint64_t morphStateStamp = 0;
+    // How long before a clip starts its source is loaded (0: when the
+    // playhead reaches it, which can stall that frame). Loaded ahead, the
+    // source runs silent until its clip starts.
+    float morphPreloadSeconds = 0.0f;
 };
 // Two neighbouring clips of a Macro Morphing Track that overlap: the
 // transition from the earlier one into the later one, over these beats.
@@ -3647,6 +3654,12 @@ private:
     MorphDocument* ensureMorphDocument(const std::string& folder);
     uint64_t morphDocumentSignature(const MorphDocument& document) const;
     void dropMorphDocument(const std::string& folder);
+    // The sources' timelines that differ from their folders, to save with
+    // the project (so those edits are not lost with the session) and to put
+    // back when it loads: still unsaved to their folders then.
+    ofJson morphSourceEditsJson() const;
+    void restoreMorphSourceEdits(const ofJson& json);
+    bool isMorphDocument(const ofxOceanodeTimelineCanvas* timelines) const;
     // The folders of every engine's sources, as the engines spell them.
     std::vector<std::string> morphSourceFolders() const;
     std::string morphSourceFolder(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) const;

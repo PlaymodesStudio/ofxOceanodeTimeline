@@ -589,6 +589,83 @@ The unfolded state is saved with the track. Structural work (new tracks,
 targets, note groups) still happens in the macro's timeline itself, opened by
 **Edit macro timeline** (or a double-click on the macro clip).
 
+## Macro Morphing Track
+
+A Macro Morphing Track plays macro sources as clips on one lane and, where two
+clips overlap, mixes or morphs one source into the next over the overlap. It
+is the MacroMixer node laid out in time: the same engine, routers, sources and
+policies, driven by the playhead in either direction. A timeline holds one at
+most.
+
+**Creating it.** The timeline's actions menu has **Add Macro Morphing Track**.
+The track starts empty.
+
+**Routers.** **Macro Morphing Routers** in the track's menu opens the routers
+window (the MacroMixer inspector's Routers and default policies). The routers
+are published as ports on every **Timeline** node that points at this
+timeline, after a `ROUTERS` separator: inputs are written into the sources,
+outputs carry the mix. Several Timeline nodes may point at one timeline; each
+publishes the outputs, and the last input to change wins. Without such a node
+the track still plays and draws, and its outputs go nowhere.
+
+**Sources and clips.** **Add Morphing Source** in the track's menu asks for a
+macro folder; a macro's header menu has **Add to Timeline Macro Morphing
+Track**, which adds the macro as it was last saved (a local macro at any
+depth, once its preset is saved). Either adds the source to the track's engine
+and a clip after the last one, overlapping it by 4 seconds (never more than
+half of the shorter clip). A clip lasts one pass of the source's first
+timeline and repeats when it is made longer.
+
+**Overlaps.** Clips obey the track's overlap rules: at most two play at any
+beat, and no clip lies inside another. Moving or resizing a clip is held to
+the nearest valid timing; a move takes a clip past a neighbour when it fits
+beyond it at its length and that is nearer to where it was dragged. An overlap
+is drawn as a box labelled **Mix** or **Morph**.
+
+**Transition settings.** Double-click an overlap (or **Transition...** in the
+later clip's menu): Mix or Morph, Bi Pow (the shape of the progress), Log
+Blend, and this transition's own morph policies and router mix policies over
+the track's defaults. They are stored on the later clip.
+
+- **Mix:** both sources run; router outputs are mixed by each router's policy.
+- **Morph:** the incoming source also starts from the outgoing source's
+  control values and glides to its own.
+- **Morph, In place:** the outgoing source's graph morphs into the incoming
+  one, when the two sources have matching nodes: one graph runs instead of
+  two and nothing loads at the overlap. The outgoing source's own automation
+  stops when the overlap starts. When the sources do not allow it, or the
+  overlap is entered from the incoming source (scrubbing backwards), the morph
+  runs on two graphs; the window says which is running and why.
+
+**Source window.** Double-click a clip outside an overlap (or **Source...**,
+or the settings button on the track's pad): the source's folder, problems,
+checks, kept-out nodes, **Refresh** and **Save Source**.
+
+**Pre-loading.** A source loads when the playhead reaches its clip, which can
+stall that frame. **Pre-load next source (s)** in the track's menu loads the
+next clip's source that long before the clip starts. Loaded ahead, the source
+runs silent: its portals publish, it takes GPU memory and its synths may
+start. It is off by default, and is not used for a Morph set to run in place.
+
+**Unfolding.** The track's arrow (or **Unfold its sources here**) shows the
+sources under the track. The sources playing at the playhead (one, or the two
+of a transition) show their tracks as a macro track does: editable in place.
+The other sources show dimmed, read-only rows with their clips as bars; a
+double-click moves the playhead onto that source. A source's parameters exist
+only while it plays, which is why only those rows are editable.
+
+**Source timelines.** A source's timelines never play on their own: they
+follow the clip playing the source, and so do the timelines of the macros
+inside it, at any depth. Edits to them are kept by source folder: they survive
+the source's graph being rebuilt, are saved with the project, and reach the
+source's folder only with **Save Source**. A `*` on a clip or on a source's
+header marks edits not saved to the folder. **Refresh** reads the folder again
+and drops them.
+
+**Editing while two sources play.** Routers, sources and policies cannot
+change while two sources play: one of them (the one further along) stays
+live, the other loads again on the next frame.
+
 ## Several timelines, each with its clock source
 
 There is no main timeline, and no fixed Timeline window: every timeline

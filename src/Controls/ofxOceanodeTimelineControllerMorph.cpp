@@ -357,6 +357,21 @@ void ofxOceanodeTimelineController::drawMorphWindows(ofxOceanodeTimelineManager&
                 }
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("The shape of the progress through the overlap (0: linear).");
                 if(transition.morph) {
+                    if(ImGui::Checkbox("In place", &transition.inPlace)) changed = true;
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Morph the outgoing source's own graph into the incoming one, when the two sources\n"
+                                          "have matching nodes: one graph runs instead of two, and nothing loads at the overlap.\n"
+                                          "The outgoing source's own automation stops when the overlap starts.\n"
+                                          "When the sources do not allow it, or the overlap is entered from the incoming\n"
+                                          "source, the morph runs on two graphs.");
+                    // What is running now, when this is the transition at the playhead.
+                    if(engine != nullptr && engine->transitioning() && engine->destinationID() == clip->morphSource) {
+                        if(engine->morphingInPlace()) ImGui::TextDisabled("Now: morphing in place, on one graph.");
+                        else if(transition.inPlace && engine->morphing()) {
+                            const std::string why = engine->sceneInPlaceNote();
+                            wrapped(&kMorphWarning, "Now: on two graphs" + (why.empty() ? std::string(".") : ": " + why + "."));
+                        } else if(engine->morphing()) ImGui::TextDisabled("Now: morphing on two graphs.");
+                    }
                     ImGui::SetNextItemWidth(180.0f);
                     if(ImGui::SliderFloat("Log Blend", &transition.logBlend, 0.0f, 1.0f, "%.2f")) {
                         transition.logBlend = ofClamp(transition.logBlend, 0.0f, 1.0f);

@@ -94,10 +94,10 @@ struct ofxOceanodeTimelineManager::MorphEngine {
     // again with the next frame's scene.
     void holdOne() {
         if(runtime == nullptr || !runtime->transitioning()) return;
+        // (A morph in place ends on that side: committed, or rolled back.)
         MacroMixerScene scene;
-        const MacroMixerRuntime::Graph* keep = progress >= 0.5f ? runtime->destination() : runtime->origin();
-        if(keep == nullptr) keep = runtime->origin();
-        if(keep != nullptr && keep->revision != nullptr) scene.origin = keep->revision->id();
+        scene.origin = progress >= 0.5f ? runtime->destinationID() : runtime->currentID();
+        if(scene.origin.empty()) scene.origin = runtime->currentID();
         runtime->present(scene);
     }
 
@@ -237,7 +237,11 @@ void ofxOceanodeTimelineManager::noteMorphGraphs(MorphEngine& engine) {
         for(const MacroMixerRuntime::Graph* graph : {engine.runtime->origin(), engine.runtime->destination()}) {
             if(graph == nullptr || graph->container == nullptr) continue;
             if(!now.empty() && now.back().first == graph) continue;
-            now.push_back({graph, graph->container->getCanvasID()});
+            // (With the source whose timelines it holds: a morph in place
+            // puts the destination's on the origin's canvas.)
+            const std::string source = engine.runtime->morphingInPlace() ? engine.runtime->destinationID()
+                                     : graph->revision != nullptr ? graph->revision->id() : std::string();
+            now.push_back({graph, graph->container->getCanvasID() + "#" + source});
         }
     if(now == engine.graphs) return;
     engine.graphs = std::move(now);
@@ -262,7 +266,10 @@ std::vector<ofxOceanodeTimelineManager::MorphGraph> ofxOceanodeTimelineManager::
     for(const MacroMixerRuntime::Graph* graph : {runtime.origin(), runtime.destination()}) {
         if(graph == nullptr || graph->container == nullptr || graph->revision == nullptr) continue;
         if(!graphs.empty() && graphs.back().canvas == graph->container.get()) continue;
-        graphs.push_back({graph->revision->id(), graph->container.get(), graph->container->getCanvasID()});
+        // A morph in place: one graph, holding the destination's timelines
+        // from the start of the morph (the destination's clips place them).
+        graphs.push_back({runtime.morphingInPlace() ? runtime.destinationID() : graph->revision->id(),
+                          graph->container.get(), graph->container->getCanvasID()});
     }
     return graphs;
 }
@@ -636,6 +643,7 @@ void ofxOceanodeTimelineManager::presentMorphScene(const TimelineRef& ref, const
                 scene.progress = MacroMixerRuntime::shape(at.position, transition.biPow);
                 engine.progress = scene.progress;
                 scene.morph = transition.morph;
+                scene.inPlace = transition.morph && transition.inPlace;
                 scene.logBlend = transition.logBlend;
                 if(!engine.transitionKnown || engine.transitionClip != target->id || engine.transitionStamp != transition.stamp) {
                     readTransition(transition, engine.transitionPolicies, engine.transitionOverrides);
@@ -645,6 +653,25 @@ void ofxOceanodeTimelineManager::presentMorphScene(const TimelineRef& ref, const
                 }
                 scene.morphPolicies = engine.transitionPolicies;
                 scene.routerOverrides = engine.transitionOverrides;
+            } else if(track.morphPreloadSeconds > 0.0f) {
+                // Alone, and another source's clip starts soon: that source
+                // loads now, silent (the target of a Mix held at 0), so the
+                // frame its clip starts on does not wait for it. Not for a
+                // Morph in place, which needs the target not to be loaded.
+                const auto clock = transportFor(ref);
+                const double bpm = clock != nullptr ? std::max(1.0, static_cast<double>(clock->getState().bpm)) : 120.0;
+                const double lead = track.morphPreloadSeconds * bpm / 60.0;
+                const ofxOceanodeTimelineClip* upcoming = nullptr;
+                for(const auto& clip : track.clips) {
+                    if(clip.startBeat <= beat || clip.startBeat - beat > lead || silent(&clip) ||
+                       clip.morphSource == origin->morphSource) continue;
+                    if(upcoming == nullptr || clip.startBeat < upcoming->startBeat) upcoming = &clip;
+                }
+                if(upcoming != nullptr && !(upcoming->morphIn.morph && upcoming->morphIn.inPlace)) {
+                    scene.target = upcoming->morphSource;
+                    scene.progress = 0.0f;
+                    scene.morph = false;
+                }
             }
         }
     }
@@ -670,8 +697,6 @@ void ofxOceanodeTimelineManager::presentMorphScenes() {
         }
         for(const auto& ref : gone) releaseMorphEngine(ref);
     }
-    // (No engine: no source, and none of their documents.)
-    if(morphEngines.empty() && !morphDocuments.empty()) { morphDocuments.clear(); morphDocumentKeys.clear(); }
     // The timelines with a Macro Morphing Track.
     std::vector<TimelineRef> hosts;
     for(const auto& listed : allTimelines()) {
@@ -679,6 +704,8 @@ void ofxOceanodeTimelineManager::presentMorphScenes() {
         const auto* sequence = findTimeline(ref);
         if(sequence != nullptr && morphTrackOf(*sequence) != nullptr) hosts.push_back(ref);
     }
+    // (No Macro Morphing Track anywhere: no source, and none of their documents.)
+    if(hosts.empty() && !morphDocuments.empty()) { morphDocuments.clear(); morphDocumentKeys.clear(); }
     // No track, or no timeline, any more.
     {
         std::vector<TimelineRef> gone;

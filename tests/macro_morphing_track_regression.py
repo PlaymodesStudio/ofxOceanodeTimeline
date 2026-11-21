@@ -200,7 +200,9 @@ int main() {
     {
         const auto& morphJson = saved["tracks"][0];
         const auto& plainJson = saved["tracks"][1];
-        check(morphJson.value("isMorphTrack", false) && morphJson["morphState"] == state && morphJson.value("macroUnfolded", false), "The track's fields are written");
+        check(morphJson.value("isMorphTrack", false) && morphJson["morphState"].is_string() &&
+              ofJson::parse(morphJson["morphState"].get<std::string>()) == state && morphJson.value("macroUnfolded", false),
+              "The track's fields are written (the engine's state as text: its null values survive loading)");
         check(!plainJson.contains("isMorphTrack") && !plainJson.contains("morphState") && !plainJson["clips"][0].contains("morphSource") &&
               !plainJson["clips"][0].contains("morphIn"), "...and left out of an ordinary track");
         bool defaultOmitted = false, written = false;

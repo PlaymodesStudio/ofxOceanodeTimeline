@@ -4671,6 +4671,19 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("The routers every source of this track is read through:\n"
                                       "the ports of a Timeline node that points at this timeline.");
+                {
+                    float preload = track.morphPreloadSeconds;
+                    ImGui::SetNextItemWidth(150.0f);
+                    if(ImGui::DragFloat("Pre-load next source (s)##morphPreload", &preload, 0.05f, 0.0f, 30.0f, preload > 0.0f ? "%.2f s" : "off"))
+                        if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) {
+                            editTrack->morphPreloadSeconds = ofClamp(preload, 0.0f, 30.0f);
+                        }
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Load the next clip's source this long before the clip starts, so the frame it starts on\n"
+                                          "does not stall. Loaded ahead, the source runs silent: its portals publish, it takes\n"
+                                          "GPU memory and its synths may start. Off: it loads when the playhead reaches it.\n"
+                                          "Not used for a Morph set to run in place.");
+                }
                 if(ImGui::MenuItem("Unfold its sources here", nullptr, track.macroUnfolded))
                     if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
                 if(ImGui::IsItemHovered())

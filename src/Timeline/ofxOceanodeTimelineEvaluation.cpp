@@ -2488,7 +2488,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         hash.add(track.isFolder); hash.add(track.parentId);
         hash.add(track.macroGate); hash.add(track.macroPreRollMs); hash.add(track.macroTailMs);
         // (The stamp changes whenever the engine state does.)
-        hash.add(track.isMorphTrack); hash.add(track.morphStateStamp);
+        hash.add(track.isMorphTrack); hash.add(track.morphStateStamp); hash.add(track.morphPreloadSeconds);
         hash.add(track.waveVolume); hash.add(track.waveVolumeAutomationEnabled); hash.add(track.waveVolumeInterpolation);
         hash.add(track.waveVolumePoints.size());
         for(const auto& point : track.waveVolumePoints) { hash.add(point.beat); hash.add(point.value); }
@@ -2513,7 +2513,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.contentDurationBeats); hash.add(clip.contentStretch); hash.add(clip.repeatContent); hash.add(clip.contentOffsetBeats);
             hash.add(clip.reversed); hash.add(clip.macroSnapshot);
             hash.add(clip.morphSource); hash.add(clip.morphIn.morph); hash.add(clip.morphIn.biPow);
-            hash.add(clip.morphIn.logBlend); hash.add(clip.morphIn.stamp);
+            hash.add(clip.morphIn.logBlend); hash.add(clip.morphIn.inPlace); hash.add(clip.morphIn.stamp);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
             hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);

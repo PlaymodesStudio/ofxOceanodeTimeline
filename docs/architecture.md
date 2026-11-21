@@ -640,6 +640,66 @@ holds it, `removeBinding` takes it off the track.
 `refreshTimelineFlag(sequence, path)` then clears the parameter's timelined
 flag by the path the sequence keeps (a macro's is not a path from the root).
 
+## Macro Morphing Track
+
+The model is in `ofxOceanodeTimeline.{h,cpp}`: a track with `isMorphTrack`,
+clips with `morphSource` (a source id of the track's engine) and `morphIn`
+(the transition into the clip, `ofxOceanodeTimelineMorphTransition`), the
+engine's state as an opaque JSON blob in `morphState`, and
+`morphPreloadSeconds`. `fitMorphTiming` holds every clip timing to the overlap
+rules; `morphOverlaps` and `morphSceneAt` read the transitions and what is
+held at a beat. The model includes no mixer header.
+
+The engine is in `ofxOceanodeTimelineMorph.cpp`. The primary manager keeps one
+`MacroMixerRuntime` (core) per timeline that has the track, in `morphEngines`,
+restored from and stored into `morphState` (`ensureMorphEngine`,
+`storeMorphState`). A track state replaced behind the engine (undo, redo, a
+load) is noticed by its stamp and the engine is restored from it.
+
+Frame order, inside the host's `evaluateAutomation`:
+
+1. `presentMorphScenes()` tells each engine its scene (`MacroMixerScene`):
+   nothing, one source, or two with the overlap position as progress, the
+   later clip's transition saying how. A source within the pre-load lead is
+   presented as the target of a Mix held at 0.
+2. `updatePlayers()` runs the timelines, the sources' included.
+3. `updateMorphEngines()` updates the engines no Timeline node publishes, then
+   clears the parameter cache: the sources' nodes updated in there and may
+   have made or deleted nodes.
+
+An engine a Timeline node publishes is updated by that node instead, on its
+own update, right after it wrote its inputs (`updateMorphEngine`), so inputs
+reach the sources in the same frame. Drawing is `drawMorphEngines()`, called
+from the core's automation extension draw hook before the nodes draw.
+
+The Timeline node (`Nodes/timelineTransport`) shows the routers through the
+core's `MacroMixerPorts`, saves its port list with the node and restores it in
+`loadBeforeConnections`, because node presets and cables load before the
+timeline does.
+
+Source timelines. Each live graph is a canvas of its own (`MacroMixer/<n> /
+...`, made anew by every build). `morphPlacedTimelines()` places the timelines
+of that canvas, and of the macro canvases nested under it, with the timeline
+holding the track, so they are Dependent and the track's clips of that source
+place them (`PlayedMacro::morphSource`, `morphHost`). During a morph in place
+the one graph holds the destination's timelines, so `morphGraphsOf` reports
+the destination as its source.
+
+Source documents (`ofxOceanodeTimelineMacroSequences.cpp`). `morphDocuments`
+keeps each source's timeline list by folder. `loadMacroSequence` gives every
+graph built from that folder the same list instead of reading the folder
+again, so edits outlive the graph. `morphSourceDirty` compares signatures,
+`saveMorphSource` writes the folder's `sequence.json` or `timeline.json`, and
+`toJson` / `fromJson` carry the dirty ones as `morphSourceEdits`. A document
+no graph plays has a null `base`; `morphIdleSources` hands those to the editor
+to draw read-only.
+
+The editor's side is `ofxOceanodeTimelineControllerMorph.cpp` (windows,
+overlap boxes, folder dialog) plus the morph branches in the track loop and in
+the unfolded rows of `ofxOceanodeTimelineController.cpp`. The windows belong
+to the timeline they were opened on (`morphWindowRef`), which may be an
+unfolded row's.
+
 ## Coordinates
 
 `EditorView` is constructed for the current draw call. Pixel offsets are

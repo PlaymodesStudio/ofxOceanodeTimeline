@@ -100,6 +100,44 @@ ofxOceanodeTimelineManager::MorphDocument* ofxOceanodeTimelineManager::ensureMor
     return &document;
 }
 
+ofJson ofxOceanodeTimelineManager::morphSourceEditsJson() const {
+    ofJson edits = ofJson::array();
+    for(const auto& entry : morphDocuments) {
+        const auto& document = entry.second;
+        if(!document.timelines || morphDocumentSignature(document) == document.savedSignature) continue;
+        ofJson item = canvasToJson(*document.timelines);
+        item["folder"] = document.folder;
+        item["macroFile"] = document.macroFile;
+        edits.push_back(std::move(item));
+    }
+    return edits;
+}
+
+void ofxOceanodeTimelineManager::restoreMorphSourceEdits(const ofJson& json) {
+    morphDocuments.clear();
+    morphDocumentKeys.clear();
+    if(!json.is_array()) return;
+    for(const auto& item : json) {
+        if(!item.is_object() || !item.contains("timelines")) continue;
+        const std::string folder = item.value("folder", std::string());
+        if(folder.empty()) continue;
+        auto& document = morphDocuments[libraryKey(folder)];
+        document.timelines = std::make_shared<ofxOceanodeTimelineCanvas>();
+        canvasFromJson(*document.timelines, item);
+        for(auto& timeline : document.timelines->timelines) timeline->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp();
+        document.folder = folder;
+        document.macroFile = item.value("macroFile", false);
+        document.savedSignature = 0;   // not the folder's: still to be saved there
+        document.seenAt = -1.0f;
+    }
+}
+
+bool ofxOceanodeTimelineManager::isMorphDocument(const ofxOceanodeTimelineCanvas* timelines) const {
+    if(timelines == nullptr) return false;
+    for(const auto& entry : morphDocuments) if(entry.second.timelines.get() == timelines) return true;
+    return false;
+}
+
 void ofxOceanodeTimelineManager::dropMorphDocument(const std::string& folder) {
     if(folder.empty()) return;
     morphDocuments.erase(libraryKey(folder));

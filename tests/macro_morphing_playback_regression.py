@@ -99,6 +99,51 @@ int main(int argc, char** argv) {
     const auto a = scratch + "/a", b = scratch + "/b";
     save(a, -1);      // the ramp
     save(b, 0.75f);   // holds 0.75
+    // A source with a Macro inside: the preset's own timeline holds Level at
+    // 0.5, and the Macro's own timeline ramps its inner Probe 0 -> 1 over 8
+    // beats. Both saved free and set to play on load.
+    const auto nested = scratch + "/nested";
+    {
+        ofxOceanodeContainer c(registry, types, transport); c.setCanvasID("Canvas");
+        auto& timeline = ofxOceanodeTimeline::attach(c);
+        timeline.setEditTarget(timeline.addTimeline("", "Timeline 1"));
+        auto& out = c.createNode(std::make_unique<router<float>>("f", 0.f, -100.f, 100.f), 1).getNodeModel();
+        out.getParameter<std::string>("Name") = "Value";
+        auto& node = c.createNode(std::make_unique<Probe>(), 1);
+        assert(c.createConnectionFromInfo("Probe_1", "Output", "Router_f_1", "Value"));
+        auto& level = static_cast<ofxOceanodeAbstractParameter&>(node.getParameters().get("Level"));
+        const auto track = timeline.createTrack("Level");
+        const auto binding = timeline.addBinding(track, level);
+        const auto clip = timeline.createClip(track, "Clip", 0, 8);
+        const auto lane = timeline.createLane(track, clip, "Level", ofxOceanodeTimelineLaneType::Number);
+        timeline.addBindingToLane(track, clip, lane, binding);
+        timeline.setClipNumber(track, clip, lane, 0, 0.5f);
+        auto& macroNode = c.createNode(std::make_unique<ofxOceanodeNodeMacro>(), 1);
+        auto inside = static_cast<ofxOceanodeNodeMacro&>(macroNode.getNodeModel()).getContainer();
+        auto& innerNode = inside->createNode(std::make_unique<Probe>(), 1);
+        auto& innerLevel = static_cast<ofxOceanodeAbstractParameter&>(innerNode.getParameters().get("Level"));
+        auto* list = timeline.getMacroTimelines(*inside);
+        assert(list != nullptr);
+        if(list->timelines.empty()) timeline.createTimeline(inside->getCanvasID(), "Inner");
+        assert(!list->timelines.empty());
+        auto& inner = *list->timelines.front();
+        const auto it = timeline.createTrack(inner, "Ramp");
+        const auto ib = timeline.addBinding(inner, it, innerLevel);
+        const auto ic = timeline.createClip(inner, it, "Phrase", 0, 8);
+        const auto il = timeline.createLane(inner, it, ic, "Level", ofxOceanodeTimelineLaneType::Curve);
+        timeline.addBindingToLane(inner, it, ic, il, ib);
+        auto* ramp = timeline.getLane(inner, it, ic, il);
+        ramp->curveInterpolation = "Linear";
+        ramp->curvePoints = {{0, 0.0f}, {8, 1.0f}};
+        ramp->curveTensions = {{}};
+        for(const TimelineRef ref : {timeline.getEditTarget(), TimelineRef{inside->getCanvasID(), inner.timelineId}}) {
+            auto settings = *timeline.playSettings(ref);
+            settings.playOnLoad = true; settings.quantize = 0; settings.loopEnabled = false;
+            timeline.setPlaySettings(ref, settings);
+            timeline.setFree(ref, true);
+        }
+        assert(c.savePreset(nested));
+    }
 
     auto frame = [&](double seconds = 0.05) {
         transport->advanceFrameStep(seconds); transport->latchFrameState();
@@ -306,6 +351,130 @@ int main(int argc, char** argv) {
         check(engine->importedMacro(a)->id() == aID, "(the source keeps its id)");
     }
 
+    // ---- The next source loaded ahead of its clip ----
+    {
+        model.getTrack(sequence, trackId)->morphPreloadSeconds = 1.0f; // 2 beats at 120 BPM; clip b starts at beat 4
+        seek(1.0);
+        check(engine->currentID() == aID && !engine->transitioning(), "Three beats before b's clip, a plays alone");
+        seek(3.0);
+        check(engine->currentID() == aID && engine->destinationID() == bID && engine->transitioning(), "Within the lead, b is loaded ahead");
+        check(near(engine->progress(), 0.0f) && near(engine->value(), 0.375f), "...silent: the router is a's alone: " + ofToString(engine->value()));
+        const auto* ahead = engine->destination();
+        seek(5.0);
+        check(engine->destination() == ahead && near(engine->progress(), 0.25f), "The overlap starts on the graph loaded ahead");
+        model.getTrack(sequence, trackId)->morphPreloadSeconds = 0.0f;
+        seek(3.0);
+        check(engine->currentID() == aID && !engine->transitioning(), "Off again, nothing is loaded ahead");
+    }
+
+    // ---- Morph in place: one graph for both sources ----
+    {
+        auto transition = model.getClip(sequence, trackId, clipB)->morphIn;
+        transition.morph = true;
+        transition.inPlace = true;
+        check(model.setMorphTransition(sequence, trackId, clipB, transition), "The transition into b morphs in place");
+        seek(2.0);
+        const auto* only = engine->origin();
+        check(only != nullptr && !engine->transitioning(), "a plays alone before the overlap");
+        seek(5.0);
+        check(engine->transitioning() && engine->morphingInPlace(), "Entered from a, the morph runs in place: " + engine->sceneInPlaceNote());
+        check(engine->origin() == only && engine->destination() == only && engine->currentID() == aID && engine->destinationID() == bID,
+              "...on a's graph, towards b");
+        check(near(engine->progress(), 0.25f), "...its progress the position in the overlap: " + ofToString(engine->progress()));
+        seek(4.5);
+        check(engine->morphingInPlace() && engine->origin() == only && near(engine->progress(), 0.125f), "Scrubbing back keeps the morph in place");
+        seek(10.0);
+        check(!engine->transitioning() && engine->currentID() == bID && engine->origin() == only, "Past the overlap, the same graph is b");
+        check(near(engine->value(), 0.75f), "...playing b's value: " + ofToString(engine->value()));
+        seek(5.0);
+        check(engine->transitioning() && engine->morphing() && !engine->morphingInPlace() && !engine->sceneInPlaceNote().empty(),
+              "Entered from b, the morph runs on two graphs: " + engine->sceneInPlaceNote());
+        seek(2.0);
+        check(engine->currentID() == aID && !engine->transitioning(), "a alone again");
+        seek(5.0);
+        check(engine->morphingInPlace(), "In place again from a");
+        seek(2.0);
+        check(engine->currentID() == aID && !engine->transitioning() && engine->origin() != nullptr, "Left on the left, the graph is a again");
+        if(engine->origin() != nullptr)
+            check(near(probeOf(engine->origin()).level.get(), 0.25f), "...driven by a's timeline: " + ofToString(probeOf(engine->origin()).level.get()));
+        transition.morph = false;
+        transition.inPlace = false;
+        model.setMorphTransition(sequence, trackId, clipB, transition);
+        seek(5.0);
+        check(engine->transitioning() && !engine->morphing(), "Back to Mix");
+    }
+
+    // ---- The timelines of a Macro inside a source follow the clip too ----
+    {
+        const auto clipN = model.addMorphSource(sequence, nested, error);
+        check(!clipN.empty(), "The source with a Macro inside is added: " + error);
+        if(clipN.empty()) return 1;
+        const auto nID = engine->importedMacro(nested)->id();
+        const auto* placed = model.getClip(sequence, trackId, clipN);
+        const double start = placed->startBeat, end = placed->startBeat + placed->durationBeats;
+        // (Where it plays alone: after b's clip.)
+        const double alone = std::max(start, 12.0) + 1.0;
+        check(alone < end, "The nested source's clip outlasts b's");
+        seek(alone);
+        check(engine->currentID() == nID && !engine->transitioning() && engine->origin() != nullptr, "The nested source plays alone");
+        if(engine->origin() == nullptr) return 1;
+        auto& hostedMacro = static_cast<ofxOceanodeNodeMacro&>(
+            engine->origin()->container->getDynamicNodes().at("Macro").at(1)->getNodeModel());
+        auto innerCanvas = hostedMacro.getContainer();
+        auto& innerProbe = static_cast<Probe&>(innerCanvas->getDynamicNodes().at("Probe").at(1)->getNodeModel());
+        const auto* innerList = model.getMacroTimelines(*innerCanvas);
+        check(innerList != nullptr && innerList->timelines.size() == 1, "The Macro inside brought its own timeline");
+        if(innerList == nullptr || innerList->timelines.empty()) return 1;
+        const TimelineRef innerRef{innerCanvas->getCanvasID(), innerList->timelines.front()->timelineId};
+        check(model.clockSourceOf(innerRef) == ClockSource::Dependent, "...placed by the clip, whatever it saved (free, play on load)");
+        const float expected = static_cast<float>((alone - start) / 8.0);
+        check(near(innerProbe.level.get(), expected), "...at the clip's own beat: " + ofToString(innerProbe.level.get()) + " for " + ofToString(expected));
+        for(int i = 0; i < 10; ++i) frame(0.1);
+        check(near(innerProbe.level.get(), expected), "Stopped, it does not run by itself");
+        check(near(probeOf(engine->origin()).level.get(), 0.5f), "...next to the source's own timeline");
+        MacroMixerGui::Action gone{MacroMixerGui::ActionKind::RemoveMacro};
+        gone.text = nID;
+        check(model.applyMorphAction(sequence, gone, panel, error) && model.getClip(sequence, trackId, clipN) == nullptr,
+              "(the nested source is removed again): " + error);
+        seek(5.0);
+    }
+
+    // ---- Undo and redo of a source removal: the engine follows the track ----
+    {
+        // (A router cannot be added while a source that lacks it is imported:
+        // the engine refuses that edit, and nothing is recorded.)
+        MacroMixerGui::Action more{MacroMixerGui::ActionKind::Routers};
+        more.contract = engine->contract();
+        auto second = more.contract.routers.front();
+        second.id = "second";
+        second.name = "Second";
+        more.contract.routers.push_back(second);
+        check(!model.applyMorphAction(sequence, more, panel, error) && engine->contract().routers.size() == 1 && !error.empty(),
+              "A router the sources do not have is refused, with the reason");
+        model.beginTimelineEdit(sequence);
+        MacroMixerGui::Action drop{MacroMixerGui::ActionKind::RemoveMacro};
+        drop.text = bID;
+        check(model.applyMorphAction(sequence, drop, panel, error) && engine->macros().size() == 1 &&
+              model.getClip(sequence, trackId, clipB) == nullptr, "Source b is removed, with its clip: " + error);
+        check(model.endTimelineEdit(sequence), "...as one undo step");
+        check(model.undoTimelineEdit(sequence), "Undo");
+        frame();
+        engine = model.morphEngine(sequence);
+        check(engine != nullptr && engine->macros().size() == 2 && engine->macro(bID) != nullptr &&
+              model.getClip(sequence, trackId, clipB) != nullptr, "The engine has b again, and its clip is back");
+        check(model.redoTimelineEdit(sequence), "Redo");
+        frame();
+        engine = model.morphEngine(sequence);
+        check(engine != nullptr && engine->macros().size() == 1 && model.getClip(sequence, trackId, clipB) == nullptr, "...removed again");
+        check(model.undoTimelineEdit(sequence), "Undo again");
+        frame();
+        engine = model.morphEngine(sequence);
+        check(engine != nullptr && engine->macros().size() == 2 && engine->contract().routers.size() == 1, "Both sources, one router");
+        if(engine == nullptr) return 1;
+        seek(5.0);
+        check(engine->currentID() == aID && engine->destinationID() == bID, "...and it plays as before");
+    }
+
     // ---- The track's state and the engine follow each other ----
     // Removing a source removes its clips.
     const auto withBoth = model.getTrack(sequence, trackId)->morphState;
@@ -327,10 +496,48 @@ int main(int argc, char** argv) {
     check(model.morphEngine(sequence) == nullptr, "Its engine went with it");
     for(const auto& listed : model.allCanvases()) check(listed.rfind("MacroMixer/", 0) != 0, "...and its sources: " + listed);
 
+    // ---- Unsaved source edits travel with the project ----
+    {
+        const auto again = model.createMorphTrack(sequence, "Morph again");
+        MacroMixerGui::Action contract{MacroMixerGui::ActionKind::Routers};
+        contract.contract = MacroMixerContract{};
+        check(!again.empty() && model.applyMorphAction(sequence, contract, panel, error), "A new morph track: " + error);
+        check(!model.addMorphSource(sequence, a, error).empty(), "...with source a: " + error);
+        seek(2.0);
+        auto* playing = model.morphEngine(sequence);
+        check(playing != nullptr && playing->origin() != nullptr, "a plays on it");
+        if(playing == nullptr || playing->origin() == nullptr) return 1;
+        const auto id = playing->importedMacro(a)->id();
+        auto* live = model.timelineFor(TimelineRef{playing->origin()->container->getCanvasID(), "tl_1"});
+        if(live == nullptr) return 1;
+        check(!model.createTrack(*live, "Kept with the project").empty() && model.morphSourceDirty(sequence, id, true), "An unsaved edit to a's timeline");
+        const auto project = model.toJson();
+        check(project.contains("morphSourceEdits") && project["morphSourceEdits"].size() == 1 &&
+              project["morphSourceEdits"].dump().find("Kept with the project") != std::string::npos, "The project holds the unsaved edit");
+        model.fromJson(project);
+        auto* reloaded = model.timelineFor(main);
+        check(reloaded != nullptr, "The project loads again");
+        if(reloaded == nullptr) return 1;
+        frame();
+        seek(2.0);
+        auto* after = model.morphEngine(*reloaded);
+        check(after != nullptr && after->origin() != nullptr, "a plays after the reload: " + model.morphEngineStatus(*reloaded));
+        if(after == nullptr || after->origin() == nullptr) return 1;
+        const auto* restored = model.timelineFor(TimelineRef{after->origin()->container->getCanvasID(), "tl_1"});
+        bool kept = false;
+        if(restored != nullptr) for(const auto& listed : restored->tracks) kept = kept || listed.name == "Kept with the project";
+        check(kept, "...with the edit, from the project");
+        check(model.morphSourceDirty(*reloaded, after->importedMacro(a)->id(), true), "...still unsaved to its folder");
+        check(ofLoadJson(a + "/timeline.json").dump().find("Kept with the project") == std::string::npos, "The folder was not touched");
+        std::string saveError;
+        check(model.saveMorphSource(*reloaded, after->importedMacro(a)->id(), saveError) &&
+              !model.toJson().contains("morphSourceEdits"), "Saved to its folder, the project no longer carries it: " + saveError);
+    }
+
     if(failures > 0) return 1;
     std::cout << "Macro morphing playback passed: engine per timeline, routers and sources stored in the track, scene at the playhead "
                  "(alone, transition, gap), source timelines placed by their clips (both in an overlap), playing, muted clip and track, "
-                 "publishers, source timelines kept across graphs and saved on demand, removed source, state restored behind the engine, engine gone with its track.\n";
+                 "publishers, source timelines kept across graphs and saved on demand, source loaded ahead, morph in place, nested macro timelines, undo of a source removal, removed source, state restored behind the engine, engine gone with its track, unsaved source edits kept with the project.\n";
     return 0;
 }
 '''

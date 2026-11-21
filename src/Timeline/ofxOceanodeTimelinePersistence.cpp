@@ -526,6 +526,10 @@ ofJson ofxOceanodeTimelineManager::toJson() const {
     // saved with those macros).
     if(const auto outside = outsideTargetsJson(std::string(), rootTimelines); !outside.empty())
         json["outsideTargets"] = outside;
+    // The timelines of Macro Morphing Track sources edited here and not
+    // saved to their folders yet: kept with the project until they are.
+    if(!isEngine())
+        if(const auto edits = morphSourceEditsJson(); !edits.empty()) json["morphSourceEdits"] = edits;
     // A host's windows (a MacroMixer's) are its own, opened again by it.
     if(std::any_of(timelineWindows.begin(), timelineWindows.end(), [](const auto& window) { return window.hostLabel.empty(); })) {
         json["windows"] = ofJson::array();
@@ -548,6 +552,9 @@ ofJson ofxOceanodeTimelineManager::presetEditState() const {
     for(const auto& entry : sequenceEntries()) {
         auto owner = entry.container.lock();
         if(!owner || !entry.timelines || entry.timelines->timelines.empty()) continue;
+        // (A Macro Morphing Track's source lives on a canvas made anew each
+        // time it plays: its edits are counted by folder, in morphSourceEdits.)
+        if(isMorphDocument(entry.timelines.get())) continue;
         auto data = canvasToJson(*entry.timelines);
         data.erase("nextTimelineNumber");
         state["macros"][owner->getCanvasID()] = std::move(data);
@@ -612,7 +619,10 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
     if(track.isMorphTrack) {
         trackJson["isMorphTrack"] = true;
         // (Its engine's state, as the engine wrote it.)
-        if(!track.morphState.is_null()) trackJson["morphState"] = track.morphState;
+        // As text: loading drops null values from a file's JSON (withoutNulls),
+        // and the engine's state has keys that are null.
+        if(!track.morphState.is_null()) trackJson["morphState"] = track.morphState.dump();
+        if(track.morphPreloadSeconds > 0.0f) trackJson["morphPreloadSeconds"] = track.morphPreloadSeconds;
         if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
         if(!track.macroFoldedTimelines.empty()) trackJson["macroFoldedTimelines"] = track.macroFoldedTimelines;
     }
@@ -667,6 +677,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
             if(!clip.morphIn.isDefault()) {
                 ofJson transition = ofJson::object();
                 if(clip.morphIn.morph) transition["morph"] = true;
+                if(clip.morphIn.inPlace) transition["inPlace"] = true;
                 if(clip.morphIn.biPow != 0.0f) transition["biPow"] = clip.morphIn.biPow;
                 if(clip.morphIn.logBlend != 1.0f) transition["logBlend"] = clip.morphIn.logBlend;
                 if(!clip.morphIn.morphPolicies.is_null()) transition["morphPolicies"] = clip.morphIn.morphPolicies;
@@ -949,6 +960,9 @@ void ofxOceanodeTimelineManager::fromJson(const ofJson& input) {
 
     // The root canvas's timelines.
     canvasFromJson(rootTimelines, json);
+    // Source timelines of Macro Morphing Tracks that were edited and not
+    // saved to their folders: back as they were (none: the folders').
+    if(!isEngine()) restoreMorphSourceEdits(json.contains("morphSourceEdits") ? json["morphSourceEdits"] : ofJson());
     // Before version 16 the loop at the top level was the global
     // transport's, shared by every timeline linked to it: now each
     // timeline's own. The root canvas's timelines linked to the global
@@ -1088,8 +1102,14 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 << "A timeline has one Macro Morphing Track: \"" << track.name << "\" was loaded as an ordinary track.";
         }
         if(track.isMorphTrack && trackJson.contains("morphState")) {
-            track.morphState = trackJson["morphState"];
+            // (Text; an object in the first files written with the track.)
+            const auto& stored = trackJson["morphState"];
+            track.morphState = stored.is_string() ? ofJson::parse(stored.get<std::string>(), nullptr, false) : stored;
+            if(track.morphState.is_discarded()) track.morphState = ofJson();
             track.morphStateStamp = ofxOceanodeTimelineMorphTransition::nextStamp();
+        }
+        if(track.isMorphTrack && trackJson.contains("morphPreloadSeconds") && trackJson["morphPreloadSeconds"].is_number()) {
+            track.morphPreloadSeconds = ofClamp(trackJson["morphPreloadSeconds"].get<float>(), 0.0f, 30.0f);
         }
         const bool unfolds = !track.macroCanvas.empty() || track.isMorphTrack;
         track.macroUnfolded = unfolds && trackJson.value("macroUnfolded", false);
@@ -1186,6 +1206,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                     if(clipJson.contains("morphIn") && clipJson["morphIn"].is_object()) {
                         const auto& transition = clipJson["morphIn"];
                         clip.morphIn.morph = transition.value("morph", false);
+                        clip.morphIn.inPlace = transition.value("inPlace", false);
                         clip.morphIn.biPow = ofClamp(transition.value("biPow", 0.0f), -1.0f, 1.0f);
                         clip.morphIn.logBlend = transition.contains("logBlend") && transition["logBlend"].is_number()
                             ? ofClamp(transition["logBlend"].get<float>(), 0.0f, 1.0f) : 1.0f;
