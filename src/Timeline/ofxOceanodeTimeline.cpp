@@ -3110,6 +3110,9 @@ float fittedPowerSteepness(Shape&& shape) {
 // The mirror of a Log / Exp segment, 1 - (1 - x)^s, is not a power curve:
 // it is laid out as kPieces segments, each a fitted power curve.
 constexpr int kMirroredPowerPieces = 4;
+// How long a Global Track channel whose parameter was not found waits before
+// looking it up again (about half a second).
+constexpr uint64_t kGlobalMissingRetryFrames = 30;
 
 void mirrorCurve(ofxOceanodeTimelineLane& lane, double length) {
     if(lane.curvePoints.empty()) return;
@@ -6176,8 +6179,11 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
             // Explicit automation wins, on this timeline or an outer one.
             if(bindingsByPathCache.count(channel.path) > 0) continue;
             if(pathDrivenElsewhere && pathDrivenElsewhere(channel.path)) continue;
+            const uint64_t frameNumber = static_cast<uint64_t>(ofGetFrameNum());
+            if(frameNumber < channel.retryFrame) continue;
             auto* parameter = findParameterCached(channel.path);
-            if(parameter == nullptr || parameter->hasInConnection()) continue;
+            if(parameter == nullptr) { channel.retryFrame = frameNumber + kGlobalMissingRetryFrames; continue; }
+            if(parameter->hasInConnection()) continue;
             const std::string type = parameter->valueType();
             if(channel.kind == 0) {
                 // Only controls are written: a keyframe made before the

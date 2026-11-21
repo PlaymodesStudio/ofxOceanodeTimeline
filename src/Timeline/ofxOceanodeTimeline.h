@@ -3486,6 +3486,10 @@ private:
         bool logarithmic = false;                // interpolated: geometric glide
         std::vector<std::vector<float>> numbers; // per keyframe (interpolated; empty where absent)
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
+        // A path not found (its node left out of a Macro Morphing source, or
+        // deleted) is looked up again from this frame on, not on every pass:
+        // a miss scans its whole canvas.
+        uint64_t retryFrame = 0;
     };
     struct GlobalClipChannels {
         // The played timeline's copy, or the copy of a timeline its clips
