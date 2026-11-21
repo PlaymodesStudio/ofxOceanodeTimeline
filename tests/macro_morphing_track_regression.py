@@ -120,6 +120,17 @@ int main() {
     check(model.setClipTiming(mt, c, 20, 32) && nearly(clip(c)->startBeat, 32) && valid(track()), "A clip never reaches the clip two before it");
     check(scene(33).originClipId == b && scene(33).targetClipId == c, "...so two clips play there, not three");
     check(model.setClipTiming(mt, c, 52, 32) && nearly(clip(c)->startBeat, 52), "(back)");
+    // Reordering: a move goes past a neighbour when it fits beyond it at its
+    // length and that is nearer to where it was asked to go.
+    check(model.setClipTiming(mt, c, 100, 32) && nearly(clip(c)->startBeat, 100) && nearly(clip(c)->durationBeats, 32) && valid(track()),
+          "Dragged past the last clip into free space, a clip lands where asked");
+    check(ofxOceanodeTimelineManager::morphOverlaps(track()).size() == 1 && scene(101).originClipId == c && scene(92).originClipId == g,
+          "...now after it: only a and b still overlap");
+    check(model.setClipTiming(mt, c, 52, 32) && nearly(clip(c)->startBeat, 52) && valid(track()) &&
+          ofxOceanodeTimelineManager::morphOverlaps(track()).size() == 2, "...and dragged back past it, to where it was");
+    check(model.setClipTiming(mt, g, 40, 4) && nearly(clip(g)->startBeat, 80 + offset) && nearly(clip(g)->durationBeats, 4) && valid(track()),
+          "A clip is not taken between two clips that overlap each other: it stops on its side");
+    check(model.setClipTiming(mt, g, 90, 4) && nearly(clip(g)->startBeat, 90), "(back)");
     check(model.setClipTiming(mt, a, 40, 32) && clip(a)->startBeat < clip(b)->startBeat && valid(track()), "The first clip stays first");
     check(model.setClipTiming(mt, a, 0, 32) && nearly(clip(a)->startBeat, 0), "(back)");
     check(model.setClipTiming(mt, g, 60, 4) && clip(g)->startBeat > clip(c)->startBeat && endOf(g) > endOf(c) && valid(track()),

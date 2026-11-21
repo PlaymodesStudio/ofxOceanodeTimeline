@@ -954,20 +954,25 @@ std::vector<ofxOceanodeTimelineManager::MacroSource> ofxOceanodeTimelineManager:
                 const std::string hostKey = parent < 0 ? rootKey : keys[static_cast<size_t>(parent)];
                 if(!owner->placedTimelinesValid) owner->refreshPlacedTimelines();
                 for(const auto& graph : owner->morphGraphsOf(hostRef)) {
-                    const ofxOceanodeTimelineCanvas* list = nullptr;
-                    for(const auto& entry : entries) if(entry.address == graph.canvas) list = entry.timelines.get();
-                    if(list == nullptr) continue; // a source without timelines
-                    for(const auto& timeline : list->timelines) {
-                        if(sources.size() >= kMaximumSources) break;
-                        const auto placer = owner->placedTimelines.find(TimelineRef{graph.canvasId, timeline->timelineId});
-                        if(placer == owner->placedTimelines.end() || placer->second != hostRef) continue;
-                        const std::string key = keyOf(graph.canvasId, timeline->timelineId);
-                        if(std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
-                        MacroSource source{graph.canvas, graph.canvasId, timeline->timelineId, timeline.get(), parent, trackIndex};
-                        source.morphSource = graph.source;
-                        source.morphHost = hostKey;
-                        sources.push_back(source);
-                        keys.push_back(key);
+                    // The source's own timelines and those of the macros
+                    // inside it (at any depth): the clips place them all.
+                    const std::string inside = graph.canvasId + " / ";
+                    for(const auto& entry : entries) {
+                        if(entry.address == nullptr || entry.container.expired()) continue;
+                        const std::string canvas = entry.address == graph.canvas ? graph.canvasId : entry.address->getCanvasID();
+                        if(entry.address != graph.canvas && canvas.compare(0, inside.size(), inside) != 0) continue;
+                        for(const auto& timeline : entry.timelines->timelines) {
+                            if(sources.size() >= kMaximumSources) break;
+                            const auto placer = owner->placedTimelines.find(TimelineRef{canvas, timeline->timelineId});
+                            if(placer == owner->placedTimelines.end() || placer->second != hostRef) continue;
+                            const std::string key = keyOf(canvas, timeline->timelineId);
+                            if(std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
+                            MacroSource source{entry.address, canvas, timeline->timelineId, timeline.get(), parent, trackIndex};
+                            source.morphSource = graph.source;
+                            source.morphHost = hostKey;
+                            sources.push_back(source);
+                            keys.push_back(key);
+                        }
                     }
                 }
                 continue;

@@ -1272,6 +1272,14 @@ struct ofxOceanodeTimelineMorphOverlap {
     double fromBeat = 0.0;  // the later clip's start
     double toBeat = 0.0;    // the earlier clip's end
 };
+// A source of a Macro Morphing Track that is not playing at the playhead:
+// its timelines as they are kept (read from its folder, with the edits made
+// since), to show, not to edit: they belong to no canvas until it plays.
+class ofxOceanodeTimelineSequence;
+struct ofxOceanodeTimelineMorphIdleSource {
+    std::string id, name;
+    std::vector<const ofxOceanodeTimelineSequence*> timelines;
+};
 // What a Macro Morphing Track holds at a beat: no clip (a gap: both ids
 // empty), one clip (the origin alone), or two in transition, with how far
 // through their overlap the beat is (0 at its start, towards 1 at its end:
@@ -1773,8 +1781,13 @@ public:
     // clips place), each with its source's id: the rows the track unfolds.
     std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> morphLiveTimelines(
         const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track);
-    // Whether a source's timelines differ from what its folder holds.
-    bool morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId);
+    // The track's sources that have clips and are not live now, in the order
+    // of their first clips: shown under the live ones, read-only.
+    std::vector<ofxOceanodeTimelineMorphIdleSource> morphIdleSources(const ofxOceanodeTimelineSequence& host,
+                                                                     const ofxOceanodeTimelineTrack& track);
+    // Whether a source's timelines differ from what its folder holds
+    // (looked at a few times a second; exact: now).
+    bool morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, bool exact = false);
     // Writes a source's timelines into its folder (the file they were read
     // from). False, with the reason: nothing was written.
     bool saveMorphSource(const ofxOceanodeTimelineSequence& host, const std::string& sourceId, std::string& error);
@@ -3630,6 +3643,8 @@ private:
     std::map<std::string, MorphDocument> morphDocuments;
     std::map<std::string, std::string> morphDocumentKeys;   // a folder as spelled -> its key
     MorphDocument* morphDocumentOf(const std::string& folder);
+    // The same, read from the folder when no graph of the source has loaded yet.
+    MorphDocument* ensureMorphDocument(const std::string& folder);
     uint64_t morphDocumentSignature(const MorphDocument& document) const;
     void dropMorphDocument(const std::string& folder);
     // The folders of every engine's sources, as the engines spell them.

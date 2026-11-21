@@ -248,6 +248,64 @@ int main(int argc, char** argv) {
     frame(); frame();
     check(!model.morphHasPublisher(sequence), "...and no longer once it stopped updating");
 
+    // ---- A source's own timelines: kept across its graphs, saved on demand ----
+    {
+        seek(2.0);
+        check(engine->currentID() == aID && engine->origin() != nullptr, "a plays alone at beat 2");
+        if(engine->origin() == nullptr) return 1;
+        const TimelineRef liveRef{engine->origin()->container->getCanvasID(), "tl_1"};
+        auto* kept = model.timelineFor(liveRef);
+        check(kept != nullptr, "a's timeline is there while it plays");
+        if(kept == nullptr) return 1;
+        const auto live = model.morphLiveTimelines(sequence, *model.getTrack(sequence, trackId));
+        check(live.size() == 1 && live[0].first == kept && live[0].second == aID, "The track unfolds the timeline of the source playing");
+        const auto idle = model.morphIdleSources(sequence, *model.getTrack(sequence, trackId));
+        check(idle.size() == 1 && idle[0].id == bID && idle[0].timelines.size() == 1 && idle[0].timelines[0]->tracks.size() == 1,
+              "...and shows the other source's, read from its folder, without loading it");
+        check(engine->origin() != nullptr && engine->destination() == nullptr, "(no graph was made for it)");
+        check(!model.morphSourceDirty(sequence, aID, true), "As read from its folder, a source is not dirty");
+        const auto edited = model.createTrack(*kept, "Edited here");
+        check(!edited.empty() && model.morphSourceDirty(sequence, aID, true), "An edit to its timeline makes it dirty");
+        check(!model.morphSourceDirty(sequence, bID, true), "...and only it");
+        // Its graph goes (a gap) and comes back: the same timelines, with the edit.
+        seek(20.0);
+        check(engine->origin() == nullptr && !model.timelineExists(liveRef), "In a gap a's graph and canvas are gone");
+        check(model.morphSourceDirty(sequence, aID, true), "The edit is kept while the source does not play");
+        seek(2.0);
+        if(engine->origin() == nullptr) return 1;
+        const TimelineRef againRef{engine->origin()->container->getCanvasID(), "tl_1"};
+        check(!(againRef == liveRef), "a plays again, on a new graph");
+        check(model.timelineFor(againRef) == kept && model.getTrack(*kept, edited) != nullptr, "...which plays the kept timelines, with the edit");
+        check(near(probeOf(engine->origin()).level.get(), 0.25f), "...and they still drive it");
+        // Save Source writes them to the folder.
+        check(ofLoadJson(a + "/timeline.json").dump().find("Edited here") == std::string::npos, "The folder does not have the edit yet");
+        std::string saveError;
+        check(model.saveMorphSource(sequence, aID, saveError), "Save Source: " + saveError);
+        check(!model.morphSourceDirty(sequence, aID, true), "Saved, it is not dirty");
+        const auto written = ofLoadJson(a + "/timeline.json");
+        check(written.dump().find("Edited here") != std::string::npos && written.value("version", 0) > 0 &&
+              written.contains("timelines") && written["timelines"].size() == 1, "The folder's timeline.json holds the edit");
+        // Refresh reads the folder again: unsaved edits go, saved ones stay.
+        const auto unsaved = model.createTrack(*kept, "Unsaved");
+        check(!unsaved.empty() && model.morphSourceDirty(sequence, aID, true), "Another edit, not saved");
+        MacroMixerGui::Action refresh{MacroMixerGui::ActionKind::Refresh};
+        refresh.text = engine->macro(aID)->source();
+        check(model.applyMorphAction(sequence, refresh, panel, error), "The source is refreshed: " + error);
+        seek(2.0);
+        check(engine->origin() != nullptr && engine->importedMacro(a) != nullptr, "a plays again after the refresh");
+        if(engine->origin() == nullptr || engine->importedMacro(a) == nullptr) return 1;
+        const auto* reread = model.timelineFor(TimelineRef{engine->origin()->container->getCanvasID(), "tl_1"});
+        bool hasSaved = false, hasUnsaved = false;
+        if(reread != nullptr)
+            for(const auto& listed : reread->tracks) {
+                hasSaved = hasSaved || listed.name == "Edited here";
+                hasUnsaved = hasUnsaved || listed.name == "Unsaved";
+            }
+        check(reread != nullptr && hasSaved && !hasUnsaved, "Refreshed, its timelines are the folder's: the saved edit, not the unsaved one");
+        check(!model.morphSourceDirty(sequence, engine->importedMacro(a)->id(), true), "...and it is not dirty");
+        check(engine->importedMacro(a)->id() == aID, "(the source keeps its id)");
+    }
+
     // ---- The track's state and the engine follow each other ----
     // Removing a source removes its clips.
     const auto withBoth = model.getTrack(sequence, trackId)->morphState;
@@ -272,7 +330,7 @@ int main(int argc, char** argv) {
     if(failures > 0) return 1;
     std::cout << "Macro morphing playback passed: engine per timeline, routers and sources stored in the track, scene at the playhead "
                  "(alone, transition, gap), source timelines placed by their clips (both in an overlap), playing, muted clip and track, "
-                 "publishers, removed source, state restored behind the engine, engine gone with its track.\n";
+                 "publishers, source timelines kept across graphs and saved on demand, removed source, state restored behind the engine, engine gone with its track.\n";
     return 0;
 }
 '''

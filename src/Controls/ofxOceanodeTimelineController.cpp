@@ -6633,6 +6633,109 @@ void ofxOceanodeTimelineController::draw() {
             shownTimeline.to = std::numeric_limits<double>::infinity();
             shownTimeline.shown = &scope(timeline);
             drawUnfoldedRows(track, scope(timeline), {shownTimeline}, &shownTimeline, 0, folderIndent + kUnfoldedIndent, track.id, insideLevels);
+            // A Macro Morphing Track's sources that are not playing at the
+            // playhead: their tracks as they are kept, read-only (their
+            // parameters exist only while the source plays). A double-click
+            // takes the playhead to the source, where its rows are editable.
+            if(track.isMorphTrack) {
+                const float idleOriginX = zoneLeft - timelineScrollX;
+                const float idleRight = ImGui::GetWindowPos().x + ImGui::GetWindowWidth();
+                const float tab = folderIndent + kUnfoldedIndent;
+                const float indent = std::min(kLabelWidth - 140.0f, tab);
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                for(const auto& idle : timeline.morphIdleSources(scope(timeline), track)) {
+                    // Where its clips are, and the one nearest to the playhead.
+                    std::vector<const ofxOceanodeTimelineClip*> sourceClips;
+                    for(const auto& clip : track.clips) if(clip.morphSource == idle.id) sourceClips.push_back(&clip);
+                    if(sourceClips.empty()) continue;
+                    const ofxOceanodeTimelineClip* nearest = sourceClips.front();
+                    for(const auto* clip : sourceClips)
+                        if(std::abs(clip->startBeat - transportState.beatPosition) < std::abs(nearest->startBeat - transportState.beatPosition))
+                            nearest = clip;
+                    auto goToSource = [&]() {
+                        anyClipInteractionClaimedThisFrame = true;
+                        // (Just inside the clip, past a transition into it when there is one.)
+                        ofxOceanodeTimelineMorphOverlap into;
+                        const double from = morphOverlapInto(track, nearest->id, into) ? into.toBeat : nearest->startBeat;
+                        seekShownTimeline(timeline, std::min(from + 1e-3, nearest->startBeat + nearest->durationBeats - 1e-3));
+                    };
+                    // ---- The source's own row ----
+                    size_t trackCount = 0;
+                    for(const auto* inner : idle.timelines)
+                        for(const auto& counted : inner->tracks) if(!counted.isFolder) ++trackCount;
+                    ImGui::SetCursorPos(ImVec2(0, ImGui::GetCursorPosY()));
+                    ImGui::Dummy(ImVec2(contentWidth, kRowHeight));
+                    {
+                        const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
+                        ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
+                        const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
+                        dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.07f));
+                        drawGutter(dl, rowMin, rowMax.y, indent, insideLevels);
+                        dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), padMax, mutedTrackColor(track.color, 0.22f, 0.5f));
+                        const PadRow pad = padRow(rowMin, rowMax, indent);
+                        const std::string label = idle.name + (timeline.morphSourceDirty(scope(timeline), idle.id) ? " *" : "") +
+                                                  "  (" + ofToString(trackCount) + ", not playing here)";
+                        dl->PushClipRect(ImVec2(pad.swatchX, rowMin.y), ImVec2(pad.right, rowMax.y), true);
+                        dl->AddText(ImVec2(pad.swatchX, pad.y), IM_COL32(170, 170, 170, 255), label.c_str());
+                        dl->PopClipRect();
+                        // Where its clips are on the track.
+                        dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), ImVec2(idleRight, rowMax.y), true);
+                        for(const auto* clip : sourceClips) {
+                            const float x1 = idleOriginX + beatOffset(clip->startBeat);
+                            const float x2 = idleOriginX + beatOffset(clip->startBeat + clip->durationBeats);
+                            dl->AddRectFilled(ImVec2(x1, rowMin.y + 3.0f), ImVec2(x2, rowMax.y - 3.0f),
+                                              IM_COL32(track.color.r, track.color.g, track.color.b, 40));
+                        }
+                        dl->PopClipRect();
+                        if(hoverRect(rowMin, rowMax) && clipDragMode == ClipDragMode::None) {
+                            if(!ImGui::IsAnyItemActive())
+                                ImGui::SetTooltip("%s\nThis source is not playing at the playhead: its tracks are shown as they are kept.\n"
+                                                  "Double-click to move the playhead onto it and edit them.", idle.name.c_str());
+                            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !anyClipInteractionClaimedThisFrame) goToSource();
+                        }
+                    }
+                    // ---- Its tracks: their clips where the source's clips play them ----
+                    const float rowIndent = std::min(kLabelWidth - 140.0f, tab + kUnfoldedIndent);
+                    const double visibleFrom = beatAtOffset(zoneLeft - idleOriginX), visibleTo = beatAtOffset(idleRight - idleOriginX);
+                    for(const auto* inner : idle.timelines) {
+                        for(const auto& innerTrack : inner->tracks) {
+                            if(innerTrack.isFolder) continue;
+                            ImGui::SetCursorPos(ImVec2(0, ImGui::GetCursorPosY()));
+                            ImGui::Dummy(ImVec2(contentWidth, kRowHeight));
+                            const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
+                            ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
+                            const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
+                            dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(innerTrack.color, 0.06f));
+                            drawGutter(dl, rowMin, rowMax.y, rowIndent, insideLevels);
+                            dl->AddRectFilled(ImVec2(rowMin.x + rowIndent, rowMin.y), padMax, mutedTrackColor(innerTrack.color, 0.18f, 0.5f));
+                            const PadRow pad = padRow(rowMin, rowMax, rowIndent);
+                            dl->PushClipRect(ImVec2(pad.swatchX, rowMin.y), ImVec2(pad.right, rowMax.y), true);
+                            dl->AddText(ImVec2(pad.swatchX, pad.y), IM_COL32(150, 150, 150, 255), innerTrack.name.c_str());
+                            dl->PopClipRect();
+                            dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), ImVec2(idleRight, rowMax.y), true);
+                            for(const auto* clip : sourceClips)
+                                for(const auto& placement : macroClipPlacements(*clip, 0.0, visibleFrom, visibleTo))
+                                    for(const auto& innerClip : innerTrack.clips) {
+                                        const double from = std::max(placement.from, placement.map.toTimeline(innerClip.startBeat));
+                                        const double to = std::min(placement.to, placement.map.toTimeline(innerClip.startBeat + innerClip.durationBeats));
+                                        if(to <= from) continue;
+                                        const float x1 = idleOriginX + beatOffset(from), x2 = idleOriginX + beatOffset(to);
+                                        dl->AddRectFilled(ImVec2(x1 + 1.0f, rowMin.y + 4.0f), ImVec2(x2 - 1.0f, rowMax.y - 4.0f),
+                                                          IM_COL32(innerTrack.color.r, innerTrack.color.g, innerTrack.color.b,
+                                                                   innerClip.muted ? 35 : 95));
+                                    }
+                            dl->PopClipRect();
+                            if(hoverRect(rowMin, rowMax) && clipDragMode == ClipDragMode::None) {
+                                if(!ImGui::IsAnyItemActive())
+                                    ImGui::SetTooltip("%s, of %s\nNot playing at the playhead: shown, not editable.\n"
+                                                      "Double-click to move the playhead onto this source and edit it.",
+                                                      innerTrack.name.c_str(), idle.name.c_str());
+                                if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !anyClipInteractionClaimedThisFrame) goToSource();
+                            }
+                        }
+                    }
+                }
+            }
             // Dropping a dragged header on its rows drops it on the macro track.
             for(auto& row : trackHeaderRows)
                 if(row.trackId == track.id) row.maxY = ImGui::GetCursorScreenPos().y;

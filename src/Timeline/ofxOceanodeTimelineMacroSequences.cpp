@@ -81,6 +81,25 @@ ofxOceanodeTimelineManager::MorphDocument* ofxOceanodeTimelineManager::morphDocu
     return found == morphDocuments.end() || !found->second.timelines ? nullptr : &found->second;
 }
 
+ofxOceanodeTimelineManager::MorphDocument* ofxOceanodeTimelineManager::ensureMorphDocument(const std::string& folder) {
+    if(auto* document = morphDocumentOf(folder)) return document;
+    if(folder.empty()) return nullptr;
+    // As loadMacroSequence reads a source: a macro's own timelines
+    // (sequence.json), else a preset's (timeline.json); none: an empty list.
+    auto& document = morphDocuments[morphDocumentKeys.at(folder)];
+    document.timelines = std::make_shared<ofxOceanodeTimelineCanvas>();
+    std::string file = ofFilePath::join(folder, kSequenceFile);
+    const bool macroFile = ofFile::doesFileExist(file);
+    if(!macroFile) file = ofFilePath::join(folder, "timeline.json");
+    if(ofFile::doesFileExist(file)) canvasFromJson(*document.timelines, upgradeTimelineDocument(ofLoadJson(file), macroFile));
+    for(auto& timeline : document.timelines->timelines) timeline->loadStamp = ofxOceanodeTimelineSequence::nextLoadStamp();
+    document.folder = folder;
+    document.macroFile = macroFile;
+    document.savedSignature = morphDocumentSignature(document);
+    document.seenAt = -1.0f;
+    return &document;
+}
+
 void ofxOceanodeTimelineManager::dropMorphDocument(const std::string& folder) {
     if(folder.empty()) return;
     morphDocuments.erase(libraryKey(folder));
@@ -95,12 +114,13 @@ uint64_t ofxOceanodeTimelineManager::morphDocumentSignature(const MorphDocument&
     return hash;
 }
 
-bool ofxOceanodeTimelineManager::morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId) {
+bool ofxOceanodeTimelineManager::morphSourceDirty(const ofxOceanodeTimelineSequence& host, const std::string& sourceId,
+                                                  bool exact) {
     auto* document = morphDocumentOf(morphSourceFolder(host, sourceId));
     if(document == nullptr) return false;
     // (Asked every frame by the editor: looked at a few times a second.)
     const float now = ofGetElapsedTimef();
-    if(document->seenAt < 0.0f || now - document->seenAt > 0.25f || now < document->seenAt) {
+    if(exact || document->seenAt < 0.0f || now - document->seenAt > 0.25f || now < document->seenAt) {
         document->seenSignature = morphDocumentSignature(*document);
         document->seenAt = now;
     }

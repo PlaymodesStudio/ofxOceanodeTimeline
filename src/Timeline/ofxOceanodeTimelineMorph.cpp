@@ -271,12 +271,19 @@ std::vector<std::pair<ofxOceanodeTimelineManager::TimelineRef, ofxOceanodeTimeli
 ofxOceanodeTimelineManager::morphPlacedTimelines() const {
     std::vector<std::pair<TimelineRef, TimelineRef>> placed;
     for(const auto& engine : morphEngines)
-        for(const auto& graph : morphGraphsOf(engine.first))
+        for(const auto& graph : morphGraphsOf(engine.first)) {
+            // The source's own timelines, then those of the macros inside it,
+            // at any depth: the whole source follows the clip playing it.
+            // (One a timeline track places stays that track's: see refreshPlacedTimelines.)
+            const std::string inside = graph.canvasId + " / ";
             for(const auto& entry : macroSequences) {
-                if(entry.address != graph.canvas) continue;
+                if(entry.address == nullptr || entry.container.expired()) continue;
+                const std::string canvas = entry.address == graph.canvas ? graph.canvasId : entry.address->getCanvasID();
+                if(entry.address != graph.canvas && canvas.compare(0, inside.size(), inside) != 0) continue;
                 for(const auto& timeline : entry.timelines->timelines)
-                    placed.push_back({TimelineRef{graph.canvasId, timeline->timelineId}, engine.first});
+                    placed.push_back({TimelineRef{canvas, timeline->timelineId}, engine.first});
             }
+        }
     return placed;
 }
 
@@ -331,6 +338,32 @@ std::vector<std::pair<ofxOceanodeTimelineSequence*, std::string>> ofxOceanodeTim
             }
         }
     return live;
+}
+
+std::vector<ofxOceanodeTimelineMorphIdleSource> ofxOceanodeTimelineManager::morphIdleSources(
+        const ofxOceanodeTimelineSequence& host, const ofxOceanodeTimelineTrack& track) {
+    std::vector<ofxOceanodeTimelineMorphIdleSource> idle;
+    TimelineRef hostRef;
+    const auto* engine = findMorphEngine(host);
+    if(isEngine() || !track.isMorphTrack || engine == nullptr || engine->runtime == nullptr || !refOf(host, hostRef)) return idle;
+    std::set<std::string> seen;
+    for(const auto& graph : morphGraphsOf(normalizedRef(hostRef))) seen.insert(graph.source);   // live: unfolded as rows
+    // In the order of their first clips.
+    std::vector<const ofxOceanodeTimelineClip*> clips;
+    for(const auto& clip : track.clips) clips.push_back(&clip);
+    std::stable_sort(clips.begin(), clips.end(), [](const auto* a, const auto* b) { return a->startBeat < b->startBeat; });
+    for(const auto* clip : clips) {
+        if(clip->morphSource.empty() || !seen.insert(clip->morphSource).second) continue;
+        const auto source = engine->runtime->macro(clip->morphSource);
+        if(source == nullptr) continue;
+        ofxOceanodeTimelineMorphIdleSource entry;
+        entry.id = clip->morphSource;
+        entry.name = source->name();
+        if(const auto* document = ensureMorphDocument(source->source()))
+            for(const auto& timeline : document->timelines->timelines) entry.timelines.push_back(timeline.get());
+        idle.push_back(std::move(entry));
+    }
+    return idle;
 }
 
 // ---- The panels' edits ----
