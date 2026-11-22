@@ -5980,6 +5980,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         const float automatedBpm = evaluateBpm(transport.beatPosition, transport.bpm);
         if(std::abs(automatedBpm - transport.bpm) > 0.001f) {
             if(isEngine()) engineTransport->setBpm(automatedBpm);
+    // Playback starting, a seek, a loop wrap: curves not under the playhead
+    // take the value the timeline implies there (once; manual control of the
+    // gap resumes after), instead of keeping whatever the parameter had.
+    const bool chaseCurveGaps = transport.isPlaying &&
+        (!playingAtLastEvaluation || std::isnan(previousCurveBeat));
+    playingAtLastEvaluation = transport.isPlaying;
             else container->setBpm(automatedBpm);
             transport.bpm = automatedBpm;
         }
@@ -6005,7 +6011,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Drifted notes start again from the written ones on the next play.
     if(!transport.isPlaying && !playback.pianoDrift.empty()) playback.clearRolls();
     collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues,
-                        nullptr, nullptr, previousCurveBeat);
+                        nullptr, nullptr, previousCurveBeat, chaseCurveGaps);
     ++activeValuesRevision;
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);

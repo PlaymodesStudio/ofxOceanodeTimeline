@@ -1055,6 +1055,26 @@ bool ofxOceanodeTimelineLaneChanceSilenced(const ofxOceanodeTimelineLane& lane,
 // anything above runs from kDbFloor dB to the level of valueMax (its top).
 namespace ofxOceanodeTimelineScale {
     constexpr float kDbFloor = -60.0f;
+// A Curve lane's normalized value where its clip starts (atEnd false) or
+// ends (its last value, before a repeat wraps): what playback chases into
+// the gaps around the clip (see collectActiveValues). False for other lanes
+// and for a curve without points.
+bool ofxOceanodeTimelineCurveEdgeValue(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane,
+                                       bool atEnd, float& value);
+// Where no clip plays one of a track's targets, the normalized value playback
+// chases there (see collectActiveValues), as the editors draw it: before the
+// first clip its first value, after a clip (the one ending latest) its last,
+// up to the next clip or, after the last, forever (toBeat infinite). From
+// audible Curve lanes of unmuted clips only; none for a bypassed target or a
+// piano gate's (it rests at 0). Track audibility is the caller's to check.
+struct ofxOceanodeTimelineCurveChaseSegment {
+    double fromBeat = 0.0, toBeat = 0.0;
+    const ofxOceanodeTimelineClip* clip = nullptr; // whose value it holds
+    const ofxOceanodeTimelineLane* lane = nullptr;
+    float value = 0.0f;
+};
+std::vector<ofxOceanodeTimelineCurveChaseSegment> ofxOceanodeTimelineCurveChaseSegments(
+    const ofxOceanodeTimelineTrack& track, const std::string& bindingId);
     bool isDecibels(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineParameterBinding* binding);
     float topDb(const ofxOceanodeTimelineLane& lane);
     float normalizedToDb(const ofxOceanodeTimelineLane& lane, float normalized);   // -inf at 0
@@ -3277,9 +3297,13 @@ private:
                              ActiveValueMap& activeValues,
                              ofxOceanodeTimelineTargetInspection* inspection = nullptr,
                              const std::set<std::string>* onlyPaths = nullptr,
-                             double previousBeat = std::numeric_limits<double>::quiet_NaN()) const;
+                             double previousBeat = std::numeric_limits<double>::quiet_NaN(),
+                             bool chaseGaps = false) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
+    // chaseGaps (playback starting, a seek, a loop wrap): a curve binding no
+    // clip covers at `beat` takes the value its timeline implies there -- the
+    // last value of its previous clip, or else the first of its next one.
                                ofxOceanodeAbstractParameter* parameter,
                                std::string& outValue) const;
     // computeParameterValue's blend of activeAutomationValues per path, kept
@@ -3722,6 +3746,9 @@ private:
     double retriggerGapBeats = 1.0 / 48.0;
     // The gap of lanes whose targets are all scheduled (a few milliseconds).
     double scheduledRetriggerGapBeats = 1.0 / 160.0;
+    // Whether the last evaluated frame was playing: the first playing frame
+    // after it chases curve values into the gaps between clips.
+    bool playingAtLastEvaluation = false;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     bool schedulingEnabled = true;

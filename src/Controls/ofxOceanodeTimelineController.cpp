@@ -40,6 +40,18 @@
 namespace {
 using namespace ofxOceanodeTimelineLaneEditorUi;
 
+// A curve chase segment (ofxOceanodeTimelineCurveChaseSegments) as a dashed
+// line between top and bottom, at the height the clip previews draw values.
+template<typename BeatOffset>
+void drawCurveChaseSegment(ImDrawList* dl, const ofxOceanodeTimelineCurveChaseSegment& segment, float originX,
+                           float top, float bottom, float clipLeft, float clipRight, ImU32 ink, const BeatOffset& beatOffset) {
+    const float fromX = std::max(clipLeft, originX + beatOffset(segment.fromBeat));
+    const float toX = std::isfinite(segment.toBeat) ? std::min(clipRight, originX + beatOffset(segment.toBeat)) : clipRight;
+    if(toX <= fromX || bottom - top < 10.0f) return;
+    const float y = bottom - 5.0f - ofClamp(segment.value, 0.0f, 1.0f) * (bottom - top - 10.0f);
+    for(float x = fromX; x < toX; x += 8.0f) dl->AddLine(ImVec2(x, y), ImVec2(std::min(x + 4.0f, toX), y), ink, 1.0f);
+}
+
 // Lane editors write the open clip in place. Compare what it plays before and
 // after they draw, so events already queued ahead of the playhead are
 // corrected instead of playing the old content.
@@ -6052,6 +6064,23 @@ void ofxOceanodeTimelineController::draw() {
             // The bottom edge resizes the track, before any clip under it
             // (not from a pad button reaching into it, on a short track).
             // With its clip editor docked under it, the line between them (in
+            // Each target's chased values in the gaps (as in the targets
+            // view), in the band where the clip holding the value draws it.
+            if(!track.isWaveTrack && !track.isMacroTrack() && !track.isMorphTrack && !track.isGlobalTrack &&
+               timeline.isTrackAudible(track)) {
+                const ImU32 chaseInk = IM_COL32(track.color.r, track.color.g, track.color.b, 170);
+                for(const auto& binding : track.bindings)
+                    for(const auto& segment : ofxOceanodeTimelineCurveChaseSegments(track, binding.id)) {
+                        const auto& lanes = segment.clip->lanes;
+                        const size_t bands = std::min<size_t>(3, lanes.size());
+                        const size_t laneIndex = static_cast<size_t>(segment.lane - lanes.data());
+                        if(laneIndex >= bands) continue;
+                        const float top = min.y + 22.0f;
+                        const float bandHeight = (max.y - top) / bands;
+                        drawCurveChaseSegment(dl, segment, laneMin.x, top + laneIndex * bandHeight, top + (laneIndex + 1) * bandHeight,
+                                              zoneLeft, max.x, chaseInk, beatOffset);
+                    }
+            }
             // the track's colour) is the handle: the strip is centred on it.
             const bool editorDocksBelow = scopeEditorOnTrack(track.id) && (track.isWaveTrack || !expandTrackForEditor);
             const ImVec2 resizeMin(headerMin.x, headerMax.y - (editorDocksBelow ? kTrackResizeHandleHeight * 0.5f : kTrackResizeHandleHeight));
@@ -6669,6 +6698,12 @@ void ofxOceanodeTimelineController::draw() {
                 for(auto clipIt = track.clips.rbegin(); clipIt != track.clips.rend(); ++clipIt) {
                     const auto* lane = rowLane(*clipIt);
                     if(lane != nullptr) handleClip(*clipIt, lane, laneMin, max);
+                // Where no clip plays this target, a dashed line at the value
+                // playback chases there (ofxOceanodeTimelineCurveChaseSegments).
+                if(timeline.isTrackAudible(track))
+                    for(const auto& segment : ofxOceanodeTimelineCurveChaseSegments(track, binding.id))
+                        drawCurveChaseSegment(dl, segment, laneMin.x, min.y, max.y, zoneLeft, max.x,
+                                              IM_COL32(track.color.r, track.color.g, track.color.b, 170), beatOffset);
                 }
                 currentRowBindingId.clear();
                 if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&

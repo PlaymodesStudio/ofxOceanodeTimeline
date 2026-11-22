@@ -77,16 +77,18 @@ int main() {
         owner.transport->seekToBeat(mode == 7 ? 0 : 4.99);
         owner.transport->play(); model.update();
         const float before = output.get();
-        if(mode == 6) owner.transport->seekToBeat(5.1); // a seek leaves manual hold alone
+        // A seek past the clip chases its last value into the gap.
+        if(mode == 6) { model.getLane(t, c, l)->curvePoints = {{0, 0}, {4, 0.6f}}; owner.transport->seekToBeat(5.1); }
         else owner.transport->advanceFrameStep(mode == 7 ? 2.6 : 0.02);
         model.update();
-        if(mode < 4 || mode == 6) assert(output.get() == before);
+        if(mode < 4) assert(output.get() == before);
+        else if(mode == 6) near(output.get(), 0.6f);
         else if(mode == 4 || mode == 5) near(output.get(), 0.2f);
         else if(mode == 7) assert(output.get() == 1.0f); // a frame skipped the entire clip
         else assert(output.get() == 0.0f); // a shared gate still releases
     }
     std::cout << "Curve endpoints passed: exact/overshot ends, repeats, stretch, trims, offsets, "
-                 "manual holds, seeks, skipped clips, active-clip priority and gate release.\n";
+                 "manual holds, seeks chasing the end, skipped clips, active-clip priority and gate release.\n";
 }
 '''
 

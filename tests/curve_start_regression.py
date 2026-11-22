@@ -23,6 +23,13 @@ int main() {
         TestTimeline model(&owner);
         const auto t = model.createTrack("Level"), b = model.addBinding(t, target), g = model.addBinding(t, gateTarget);
         // A fade-in from 0 at beat 4, and a step gate on at its first beat.
+        // A clip ending at 1 before it: what playback starting at 3.9 chases.
+        const auto h = model.createClip(t, "Hold", 0, 2);
+        model.getClip(t, h)->repeatContent = false;
+        const auto hl = model.createLane(t, h, "Curve", ofxOceanodeTimelineLaneType::Curve);
+        model.addBindingToLane(t, h, hl, b);
+        model.getLane(t, h, hl)->curvePoints = {{0, 1}, {2, 1}};
+        model.getLane(t, h, hl)->curveTensions.resize(1);
         const auto c = model.createClip(t, "Fade", 4, 4);
         model.getClip(t, c)->repeatContent = false;
         const auto l = model.createLane(t, c, "Curve", ofxOceanodeTimelineLaneType::Curve);
@@ -39,7 +46,7 @@ int main() {
         owner.transport->seekToBeat(3.9);
         if(mode != 1) owner.transport->play();
         model.update(); model.applyAutomation();
-        assert(output.get() == 1.0f); // nothing ahead yet
+        assert(output.get() == 1.0f); // nothing ahead yet (Hold's end chased)
         if(mode == 1) owner.transport->seekToBeat(3.98);
         else owner.transport->advanceFrameStep(0.04); // 0.08 beats at 120 BPM
         model.update(); model.applyAutomation();
