@@ -1185,6 +1185,13 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                         }
                     continue;
                 }
+                if(lane.type == ofxOceanodeTimelineLaneType::MultiGate && chordLaneInstrument(track, lane)) {
+                    // A Chords lane plays notes, like a piano gate: outside its
+                    // clips and while stopped its chords are released.
+                    for(const auto& bindingId : lane.bindingIds)
+                        if(const auto* binding = bindingFor(bindingId)) zeroWhenInactiveBindingsCache.emplace(binding);
+                    continue;
+                }
                 if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) {
                     // Pitch is prepared ahead of Gate, both scheduled together;
                     // outside its clips the gate is off and the pitch holds.
@@ -1897,6 +1904,12 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                     }
                     // Stopped piano rolls leave pitch, gate and velocity to live input.
                     if(!isPlaying && ofxOceanodeTimelineLaneUsesNoteRoles(sourceLane.type)) continue;
+                    // So do stopped Chords lanes (their gates: see rebuildEvaluationIndexes).
+                    if(!isPlaying && sourceLane.type == ofxOceanodeTimelineLaneType::MultiGate &&
+                       std::any_of(sourceLane.bindingIds.begin(), sourceLane.bindingIds.end(), [&](const auto& id) {
+                           const auto* binding = bindingFor(track, id);
+                           return binding != nullptr && zeroWhenInactiveBindingsCache.count(binding) > 0;
+                       })) continue;
                     const SharedPianoPlayback* shared = nullptr;
                     if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                         const auto it = trackIt->second.sharedPiano.find(&sourceLane);

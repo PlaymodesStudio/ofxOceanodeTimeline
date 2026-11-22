@@ -3724,6 +3724,10 @@ private:
     std::unordered_set<std::string> playingPianoGatePaths;
     // Gates closed by the last updatePianoGateOwnership().
     std::vector<std::string> releasedPianoGatePaths;
+    // Gates closed once since playback stopped (or the engine was made or
+    // reloaded): a gate a preset left open is shut while stopped, so the first
+    // note on play is a fresh rising edge. Live input owns them afterwards.
+    std::unordered_set<std::string> restedGatePaths;
     // Rest values of the gate-type lanes heard last frame, by parameter path.
     std::unordered_map<std::string, std::string> soundingRestPaths;
     ActiveValueMap activeAutomationValues;

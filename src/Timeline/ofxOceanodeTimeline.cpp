@@ -5670,6 +5670,18 @@ void ofxOceanodeTimelineManager::updatePianoGateOwnership(bool isPlaying) {
             ++activeValuesRevision;
         }
     }
+    if(isPlaying) restedGatePaths.clear();
+    else for(const auto* binding : zeroWhenInactiveBindingsCache) {
+        if(binding->bypass || !restedGatePaths.insert(binding->parameterPath).second) continue;
+        const auto& path = binding->parameterPath;
+        if(next.count(path) > 0 ||
+           std::find(releasedPianoGatePaths.begin(), releasedPianoGatePaths.end(), path) != releasedPianoGatePaths.end()) continue;
+        releasedPianoGatePaths.push_back(path);
+        if(activeAutomationValues.count(path) == 0) {
+            activeAutomationValues[path].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, "0");
+            ++activeValuesRevision;
+        }
+    }
     playingPianoGatePaths = std::move(next);
 }
 namespace {
