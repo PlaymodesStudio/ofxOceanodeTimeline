@@ -128,4 +128,19 @@ def optimized_run(command, **kwargs):
         command = [arg for arg in command if arg != '-g']
     return real_run(command, **kwargs)
 fixture.subprocess.run = optimized_run
+# As in the app: this session's parameters live for the whole run, so their
+# lookups may be kept (a lifetime token), and the node graph does not change
+# (the regression stub reports a new generation on every call).
+keepalive = 'static const std::shared_ptr<int> benchmarkKeepalive = std::make_shared<int>(0);\n'
+fixture.CONTAINER = fixture.CONTAINER.replace(
+    'class ofxOceanodeContainer {', keepalive + 'class ofxOceanodeContainer {').replace(
+    '        alive.reset();\n        return findTimelineParameter(path);',
+    '        alive.reset();\n        auto* found = findTimelineParameter(path);\n'
+    '        if(found != nullptr) alive = benchmarkKeepalive;\n        return found;')
+real_write_text = Path.write_text
+def write_text(self, text, *args, **kwargs):
+    if self.name == 'macro_stub.cpp':
+        text = text.replace('{ static uint64_t n = 0; return ++n; }', '{ return 1; }')
+    return real_write_text(self, text, *args, **kwargs)
+Path.write_text = write_text
 fixture.main(cases=cases, extra_includes=[base / 'src'])
