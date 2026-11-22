@@ -2736,6 +2736,10 @@ public:
     const ofxOceanodeTimelineMarker* getMarker(const std::string& markerId) const;
 
     void setLoopEnabled(bool enabled);
+    // An offline render (Render Audio...) plays every timeline straight
+    // through: loops are ignored while this is on, their settings kept.
+    static void setLoopsSuspended(bool suspended) { loopsSuspendedFlag() = suspended; }
+    static bool loopsSuspended() { return loopsSuspendedFlag(); }
     // Play on preset load: when a preset with this on finishes loading, the
     // transport starts from the beginning (saved per preset, off by default)
     bool getPlayOnPresetLoad() const { return playOnPresetLoad; }
@@ -3632,6 +3636,7 @@ private:
     // timeline linked to it loops on its own while it runs on. Identity
     // while the loop is off or the position is before it.
     ofxOceanodeTransportState loopedState(ofxOceanodeTransportState state) const;
+    static bool& loopsSuspendedFlag() { static bool flag = false; return flag; }
     // Points every piano-roll lane that uses any of affectedBindingIds at the group's roles.
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,
                             const std::vector<std::string>& affectedBindingIds);

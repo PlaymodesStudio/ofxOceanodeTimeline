@@ -80,6 +80,12 @@ void ofxOceanodeTimelineManager::preserveLoopPlayhead() {
 }
 
 ofxOceanodeTransportState ofxOceanodeTimelineManager::loopedState(ofxOceanodeTransportState state) const {
+    // Rendering: straight through, the global transport's own position.
+    if(loopsSuspended()) {
+        state.loopEnabled = false;
+        state.loopCount = 0;
+        return state;
+    }
     if(loopPositionAnchor.valid && state.generation != loopPositionAnchor.generation) {
         // Play/pause can change generation without seeking. Keep the mapping
         // through those toggles; an explicit seek/stop restores the clock position.

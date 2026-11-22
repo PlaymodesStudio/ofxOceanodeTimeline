@@ -5609,7 +5609,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // itself (playState), so each such timeline loops on its own, under an
     // external clock too. The meter is the root's default timeline's to set.
     if(auto ownerTransport = playTransport()) {
-        if(ownerTransport->isDerived()) ownerTransport->setLoop(loopEnabled, loopStartBeat, loopEndBeat);
+        if(ownerTransport->isDerived()) ownerTransport->setLoop(loopEnabled && !loopsSuspended(), loopStartBeat, loopEndBeat);
         if(!engineSharesRoot) ownerTransport->setBeatsPerBar(getBeatsPerBar());
         transport = playState();
     }

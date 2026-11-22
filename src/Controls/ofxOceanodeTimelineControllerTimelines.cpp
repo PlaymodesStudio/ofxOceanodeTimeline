@@ -12,6 +12,7 @@
 #endif
 #include "ofxOceanodeMenu.h"
 #include "ofxOceanodeColors.h"
+#include "ofxOceanodeTimelineRender.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -558,7 +559,7 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
             dl->AddLine(ImVec2(left, y), ImVec2(left + lineWidth, y), ink, 1.0f);
         }
     }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, playback settings, timebase, sync, delete, place, load a clip, open in a window");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("New, duplicate, rename, color, playback settings, timebase, sync, delete, place, load a clip, open in a window, render audio");
     if(ImGui::BeginPopup("##timelineActionsMenu")) {
         const std::string canvas = rootCanvas(shown.canvas) ? std::string() : shown.canvas;
         // Both through the New Timeline dialog (name, colour, owner), shown in this window.
@@ -759,6 +760,29 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Recall a saved clip with all its lanes and choose new parameter targets.");
         if(ImGui::MenuItem("Open in a new window", nullptr, false, timeline.timelineExists(shown))) timeline.openTimelineWindow(shown);
+        // Render Audio... (an audio addon's, when one is there)
+        if(ofxOceanodeTimelineRender::menuProvider() && timeline.timelineExists(shown)) {
+            auto& host = ofxOceanodeTimelineRender::host();
+            std::weak_ptr<ofxOceanodeContainer> root = container;
+            host.globalBeat = [root]() {
+                auto locked = root.lock();
+                return locked != nullptr ? locked->getTransportState().beatPosition : 0.0;
+            };
+            host.suspendLoops = [](bool suspended) { ofxOceanodeTimelineManager::setLoopsSuspended(suspended); };
+            ofxOceanodeTimelineRenderRange range;
+            range.timelineName = timeline.timelineName(shown);
+            if(const auto* play = timeline.playSettings(shown)) {
+                range.hasRange = play->loopEndBeat > play->loopStartBeat + 1e-6;
+                range.inBeat = play->loopStartBeat;
+                range.outBeat = play->loopEndBeat;
+                range.beatsPerBar = play->timeSignatureNumerator * (4.0 / std::max(1, play->timeSignatureDenominator));
+            }
+            range.bpm = container->getTransportState().bpm;
+            const auto shownTransport = timeline.transportFor(shown);
+            range.onGlobalClock = shownTransport == nullptr || !shownTransport->isDerived();
+            ImGui::Separator();
+            ofxOceanodeTimelineRender::menuProvider()(range);
+        }
         ImGui::EndPopup();
     }
 }
