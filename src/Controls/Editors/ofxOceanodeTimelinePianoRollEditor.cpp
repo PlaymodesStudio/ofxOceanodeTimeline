@@ -821,15 +821,20 @@ void ofxOceanodeTimelinePianoRollEditor::drawCanvas(ofxOceanodeTimelineLaneEdito
     // While the Mutate tab shows a group, its notes light up (others dim).
     const bool groupFocus = mutationEditLaneId == lane->id && mutationTabFrame >= ImGui::GetFrameCount() - 1;
     dl->PushClipRect(ImVec2(left, rollTop), ImVec2(right, stripsBottom), true);
+    // Notes wholly outside the (window-intersected) clip draw nothing: skip them.
+    const float drawnLeft = dl->GetClipRectMin().x, drawnRight = dl->GetClipRectMax().x;
     for(int cycle = firstCycle; cycle <= lastCycle; ++cycle) {
         for(size_t noteIndex = 0; noteIndex < lane->pianoNotes.size(); ++noteIndex) {
             const auto& note = lane->pianoNotes[noteIndex];
+            const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
+            const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
+            // Handles sit at x1 + 3 (radius 3.5, 3 px lines): a few px of reach.
+            const float reach = 3.0f + 6.0f * geometryScale;
+            if(std::max({x1, x2, x1 + reach}) + 2.0f < drawnLeft || std::min({x1, x2, x1 + 3.0f - reach}) - 2.0f > drawnRight) continue;
             // Notes outside the shown keys are not drawn, but their VEL / PROB /
             // MUT handles always are.
             const int soundingPitch = sounding(note.pitch);
             const bool shown = soundingPitch >= lowPitch && soundingPitch <= highPitch;
-            const float x1 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat, cycle));
-            const float x2 = timelineMin.x + beatOffset(sourceToTimelineBeat(*clip, note.startBeat + note.durationBeats, cycle));
             const float y2 = rollBottom - (soundingPitch - lowPitch) * pitchHeight;
             const float y1 = y2 - pitchHeight + noteInset;
             const bool selected = isFocused && pianoSelectedNoteIndices.count(static_cast<int>(noteIndex)) > 0;
@@ -1476,10 +1481,12 @@ void ofxOceanodeTimelinePianoRollEditor::drawPreview(const ofxOceanodeTimelineCl
 
     const int cycles = clip.repeatContent ? static_cast<int>(std::ceil(clip.durationBeats / cycleDuration(clip))) : 1;
     dl->PushClipRect(ImVec2(left + 1.0f, min.y + 3.0f), ImVec2(right - 1.0f, max.y - 3.0f), true);
+    const float drawnLeft = dl->GetClipRectMin().x, drawnRight = dl->GetClipRectMax().x;
     for(int cycle = firstVisibleCycle; cycle < cycles && cycle <= lastVisibleCycle; ++cycle) {
         for(const auto& note : lane->pianoNotes) {
             const float nx1 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat, cycle));
             const float nx2 = min.x + beatOffset(sourceToTimelineBeat(clip, note.startBeat + note.durationBeats, cycle));
+            if(std::max(nx1, nx2) + 2.0f < drawnLeft || std::min(nx1, nx2) - 2.0f > drawnRight) continue;   // fully clipped
             const float ny = max.y - 5.0f - (note.pitch % 12) / 12.0f * (max.y - min.y - 10.0f);
             dl->AddRectFilled(ImVec2(nx1, ny - 3.0f), ImVec2(nx2, ny + 2.0f), previewInk(preview, 180), 1.0f);
         }
