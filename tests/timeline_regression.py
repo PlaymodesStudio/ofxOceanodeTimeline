@@ -44,12 +44,6 @@ public:
         auto it = targets.find(path);
         return it == targets.end() ? nullptr : it->second;
     }
-    // Tests own their parameters and edit `targets` freely: no lifetime to
-    // report, so a lookup is only kept for the pass that made it.
-    ofxOceanodeAbstractParameter* findTimelineParameter(const std::string& path, std::weak_ptr<void>& alive) const {
-        alive.reset();
-        return findTimelineParameter(path);
-    }
 };
 '''
 

@@ -27,7 +27,6 @@ def production():
     for signature in ('std::string ofxOceanodeContainer::getTimelineParameterPath(',
                       'std::string ofxOceanodeContainer::getTimelineParameterPath(ofxOceanodeAbstractParameter& parameter,\n',
                       'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findTimelineParameter(',
-                      'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findTimelineParameter(const std::string& parameterPath,\n',
                       'ofxOceanodeAbstractParameter* ofxOceanodeContainer::findParameter('):
         result += block(source, signature) + '\n'
     for signature in ('ofxOceanodeContainer::ParsedParameterPath ofxOceanodeContainer::parseParameterPath(',

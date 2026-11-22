@@ -680,7 +680,7 @@ void ofxOceanodeTimelineManager::syncPlayer(Player& player) {
     // schedule stays: an edit through the setters invalidates it on the
     // engine too (invalidateSchedule), and the scheduler repairs a direct
     // change to the content as it always did.
-    const uint64_t signature = sourceSequenceSignature(*sequence);
+    const uint64_t signature = sequenceSignature(*sequence);
     engine.waveAudioProvider = waveAudioProvider; // Wave tracks play on it too, keyed apart
     if(player.sourceSequence != sequence || player.sourceSignature != signature) {
         engine.releaseWaveClips(engine.playedSequence, sequence);
@@ -809,9 +809,6 @@ void ofxOceanodeTimelineManager::updatePlayers() {
     lastDriverForPath.clear();
     for(auto* player : running) {
         auto& engine = *player->engine;
-        // Its pass starts here: the copy hashed now is the one it evaluates
-        // (an edit of it in between invalidates its indexes).
-        engine.beginParameterCache();
         engine.ensureEvaluationIndexes();
         for(const auto& entry : engine.bindingsByPathCache) lastDriverForPath[entry.first] = &engine;
     }
@@ -821,6 +818,7 @@ void ofxOceanodeTimelineManager::updatePlayers() {
             const auto found = lastDriverForPath.find(path);
             return found != lastDriverForPath.end() && found->second != &engine;
         };
+        engine.beginParameterCache();
         engine.evaluateAutomation();
         engine.applyAutomation();
         engine.endParameterCache();

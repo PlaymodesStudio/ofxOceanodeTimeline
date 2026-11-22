@@ -199,9 +199,9 @@ std::vector<std::string> ofxOceanodeTimelineManager::selectSchedulablePaths() co
     // frame path. (A role whose consumer cannot schedule at all is untimed
     // either way and holds nothing back.) Lanes can share a role path, so
     // repeat until no group is split.
-    std::unordered_set<std::string> scheduledSet;
-    if(!pianoRoleGroupsCache.empty()) scheduledSet.insert(schedulablePaths.begin(), schedulablePaths.end());
-    const auto scheduled = [&](const std::string& path) { return scheduledSet.count(path) > 0; };
+    const auto scheduled = [&](const std::string& path) {
+        return std::find(schedulablePaths.begin(), schedulablePaths.end(), path) != schedulablePaths.end();
+    };
     const auto heldBack = [&](const std::string& path) {
         if(scheduled(path)) return false;
         auto* parameter = findParameterCached(path);
@@ -216,7 +216,6 @@ std::vector<std::string> ofxOceanodeTimelineManager::selectSchedulablePaths() co
                 [&](const std::string& path) {
                     return std::find(group.begin(), group.end(), path) != group.end();
                 }), schedulablePaths.end());
-            for(const auto& path : group) scheduledSet.erase(path);
             split = true;
         }
     }
@@ -286,11 +285,10 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         const std::vector<ofxOceanodeTimelineParameterBinding*>* bindings = nullptr;
     };
     const std::vector<std::string>& schedulablePaths = schedulablePathsThisFrame;
-    // (In schedulablePaths' order: targets[i] is schedulablePaths[i]'s.)
-    std::vector<PathTarget> targets;
+    std::unordered_map<std::string, PathTarget> targets;
     targets.reserve(schedulablePaths.size());
     for(const auto& path : schedulablePaths)
-        targets.push_back({findParameterCached(path), &bindingsByPathCache.at(path)});
+        targets[path] = {findParameterCached(path), &bindingsByPathCache.at(path)};
     if(schedulablePaths.empty()) {
         // Same rule as every other invalidation path: events already handed
         // to a backend cannot be recalled, so correct them before forgetting
@@ -312,12 +310,8 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
     // frame). A difference that small is timing, not content to repair.
     const uint64_t toleranceUs = static_cast<uint64_t>(1000000.0 *
         std::max(0.020, 2.0 * std::min(0.25, static_cast<double>(ofGetLastFrameTime()))));
-    for(size_t pathIndex = 0; pathIndex < schedulablePaths.size(); ++pathIndex) {
-        const auto& path = schedulablePaths[pathIndex];
-        auto& target = targets[pathIndex];
-        // A node deleted since the paths were selected (a listener in this
-        // same evaluation) leaves no parameter to schedule for.
-        if(target.parameter == nullptr) continue;
+    for(const auto& path : schedulablePaths) {
+        auto& target = targets[path];
         std::string frameValue;
         if(!computeParameterValue(*target.bindings, activeAutomationValues, target.parameter, frameValue))
             frameValue = parameterValueForAutomation(*target.parameter); // between clips: the held value
@@ -382,7 +376,7 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
             if(activePaths.count(entry.first) == 0) dropped.insert(entry.first);
         if(!dropped.empty()) sendScheduleCorrections(transport, nowUs, &dropped);
     }
-    scheduledBackendPaths = std::move(suppressedPaths);
+    scheduledBackendPaths = suppressedPaths;
     if(activePaths.empty()) return;
 
     // ---- track latency correction ----------------------------------------
@@ -488,10 +482,9 @@ void ofxOceanodeTimelineManager::runScheduler(const ofxOceanodeTransportState& t
         // "start <= beat < end", so the probe must land inside the new
         // step/note/region, not exactly on its edge.
         collectActiveValues(context, beat + 1e-7, true, false, futureValues, nullptr, &activePaths);
-        for(size_t pathIndex = 0; pathIndex < schedulablePaths.size(); ++pathIndex) {
-            const auto& path = schedulablePaths[pathIndex];
+        for(const auto& path : schedulablePaths) {
             if(activePaths.count(path) == 0) continue;
-            auto& target = targets[pathIndex];
+            auto& target = targets[path];
             std::string value;
             if(!computeParameterValue(*target.bindings, futureValues, target.parameter, value)) continue;
             auto& state = scheduledPaths[path];

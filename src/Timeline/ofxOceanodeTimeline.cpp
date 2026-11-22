@@ -4844,7 +4844,6 @@ void ofxOceanodeTimelineManager::refreshPlaybackEnablement() {
     if(container != nullptr) {
         const auto transport = playState();
         collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, false, activeAutomationValues);
-        ++activeValuesRevision;
         updatePianoGateOwnership(transport.isPlaying);
     }
     // Correct queued events against the updated playback state.
@@ -5363,11 +5362,10 @@ void ofxOceanodeTimelineManager::update() {
     // host applies them again (applyAutomation) once the nodes ran.
     if(isEngine()) applyAutomation();
     endParameterCache();
-    closeSourceSignatures();
 }
 
 void ofxOceanodeTimelineManager::beginParameterCache() {
-    ++parameterCachePass;
+    parameterCache.clear();
     parameterCacheActive = true;
     evaluationHashedThisPass = false;
     anySoloCache.clear();
@@ -5376,6 +5374,7 @@ void ofxOceanodeTimelineManager::beginParameterCache() {
 
 void ofxOceanodeTimelineManager::endParameterCache() {
     parameterCacheActive = false;
+    parameterCache.clear();
     evaluationHashedThisPass = false;
     anySoloCacheActive = false;
     anySoloCache.clear();
@@ -5401,53 +5400,15 @@ ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findAutomatedTarget(co
     return parameter;
 }
 
-bool ofxOceanodeTimelineManager::stillInGroup(const CachedParameter& cached) {
-    // Alive (the caller checked): its name can be read. A renamed parameter
-    // (MixerPro track names, macro pins) is looked up again under the path.
-    if(cached.parameter->getName() != cached.name) return false;
-    if(cached.model == nullptr) return true; // (only its lifetime is known)
-    auto& group = cached.model->getParameterGroup();
-    return cached.index < group.size() && &group.get(cached.index) == static_cast<ofAbstractParameter*>(cached.parameter);
-}
-
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findParameterCached(const std::string& path) const {
     if(container == nullptr) return nullptr;
     // An engine's paths are absolute, like its primary's: share its cache.
-    if(primary != nullptr) return primary->findParameterCached(path);
-    const uint64_t generation = nodeGraphGeneration();
-    if(generation != parameterCacheGeneration) {
-        parameterCache.clear();
-        parameterCacheGeneration = generation;
-    }
-    const uint64_t frame = static_cast<uint64_t>(ofGetFrameNum());
+    if(primary != nullptr && primary->parameterCacheActive) return primary->findParameterCached(path);
+    if(!parameterCacheActive) return container->findTimelineParameter(path);
     const auto it = parameterCache.find(path);
-    if(it != parameterCache.end()) {
-        const auto& cached = it->second;
-        if(cached.parameter == nullptr) {
-            // A miss holds for the pass only, as before: the apply path has
-            // its own 30-frame retry (findAutomatedTarget), and the scheduler
-            // and GUI must find a parameter a node just added to itself.
-            if(parameterCacheActive && cached.pass == parameterCachePass) return nullptr;
-        } else if(cached.tracked ? !cached.alive.expired() && stillInGroup(cached)
-                                 : parameterCacheActive && cached.pass == parameterCachePass) {
-            return cached.parameter;
-        }
-    }
-    CachedParameter entry;
-    entry.parameter = container->findTimelineParameter(path, entry.alive);
-    entry.tracked = !entry.alive.expired();
-    if(entry.parameter != nullptr) entry.name = entry.parameter->getName();
-    if(entry.tracked && (entry.model = entry.parameter->getNodeModel()) != nullptr) {
-        auto& group = entry.model->getParameterGroup();
-        entry.index = group.size();
-        for(size_t i = 0; i < group.size(); ++i)
-            if(&group.get(i) == static_cast<ofAbstractParameter*>(entry.parameter)) { entry.index = i; break; }
-    }
-    entry.pass = parameterCachePass;
-    entry.retryFrame = frame + kMissingTargetRetryFrames;
-    auto* parameter = entry.parameter;
-    // Outside a pass only what can be kept is kept, as before.
-    if(parameter == nullptr || entry.tracked || parameterCacheActive) parameterCache[path] = std::move(entry);
+    if(it != parameterCache.end()) return it->second;
+    auto* parameter = container->findTimelineParameter(path);
+    parameterCache.emplace(path, parameter);
     return parameter;
 }
 
@@ -5466,10 +5427,8 @@ void ofxOceanodeTimelineManager::updatePianoGateOwnership(bool isPlaying) {
     for(const auto& path : playingPianoGatePaths) {
         if(next.count(path) > 0) continue;
         releasedPianoGatePaths.push_back(path);
-        if(activeAutomationValues.count(path) == 0) {
+        if(activeAutomationValues.count(path) == 0)
             activeAutomationValues[path].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, "0");
-            ++activeValuesRevision;
-        }
     }
     playingPianoGatePaths = std::move(next);
 }
@@ -5520,7 +5479,7 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
     uint64_t signature = evaluationIndexesSignature;
     if(!isEngine()) {
         ChangeHash hash;
-        for(const auto& timeline : rootTimelines.timelines) hash.word(sourceSequenceSignature(*timeline));
+        for(const auto& timeline : rootTimelines.timelines) hash.word(sequenceSignature(*timeline));
         signature = hash.result();
     }
     if(adoptedInstrumentsSignature == signature && frame >= adoptedInstrumentsFrame &&
@@ -5606,8 +5565,6 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     // Timelines playing on their own first: the main timeline then applies
     // over them on any path both drive.
     if(!isEngine()) {
-        sourceSignatures.clear();
-        sourceSignaturesOpen = true;
         // Each Macro Morphing Track's engine is told its scene first (a
         // source that is not live loads here), so the timelines of its
         // sources play in this pass; it updates once they have written.
@@ -5817,7 +5774,6 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(!transport.isPlaying && !playback.pianoDrift.empty()) playback.clearRolls();
     collectActiveValues(playContext, transport.beatPosition, transport.isPlaying, true, activeAutomationValues,
                         nullptr, nullptr, previousCurveBeat);
-    ++activeValuesRevision;
     updatePianoGateOwnership(transport.isPlaying);
     releaseSilencedRests(transport);
     updateMacroGating(transport);
@@ -5838,8 +5794,6 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
             const double beat = placement.map.toSequence(transport.beatPosition);
             for(const auto& track : placement.sequence->tracks) {
                 if(!track.isWaveTrack) continue;
-                const std::string waveKey = waveKeyPrefix + track.id;
-                const bool trackAudible = isTrackAudible(track);
                 for(const auto& clip : track.clips) {
                     // Wave clips always map their complete source linearly over
                     // the visible clip, independent of repeatContent and of the
@@ -5852,7 +5806,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                     // Read faster where the sequence plays faster (its map's ratio).
                     const double sourcePerTimelineBeat = sourcePerBeat / placement.map.ratio;
                     const double localBeat = beat - clip.startBeat;
-                    const bool active = trackAudible && !clip.muted && !isClipChanceSilenced(clip) && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
+                    const bool active = isTrackAudible(track) && !clip.muted && !isClipChanceSilenced(clip) && localBeat >= -kEpsilon && localBeat < visibleDuration - kEpsilon;
                     const double waveSourceBeat = active
                         ? ofClamp(localBeat * sourcePerBeat, 0.0, sourceDuration) : 0.0;
                     const float volume = ofClamp(evaluateWaveClipVolume(track, clip, beat), 0.0f, 4.0f);
@@ -5861,8 +5815,8 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                     const float clipPlaybackRate = ofClamp(
                         static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
                         0.01f, 16.0f);
-                    waveAudioProvider->setWaveClipTimestretch(waveKey, clip.id, clip.waveTimestretch);
-                    waveAudioProvider->updateWaveClip(waveKey, clip.id, clip.waveFilePath, clip.waveGain,
+                    waveAudioProvider->setWaveClipTimestretch(waveKeyPrefix + track.id, clip.id, clip.waveTimestretch);
+                    waveAudioProvider->updateWaveClip(waveKeyPrefix + track.id, clip.id, clip.waveFilePath, clip.waveGain,
                                                       volume, clip.waveNumChannels, waveSourceBeat,
                                                       clip.contentDurationBeats,
                                                       clip.waveSourceStartBeat,
@@ -5952,8 +5906,6 @@ void ofxOceanodeTimelineManager::applyAutomation() {
         const std::string type = parameter->valueType();
         applyAutomationValue(*parameter, broadcastScalarNumericVectorValue(*parameter, "0", type), type);
     }
-    // The host's pass after the nodes ran ends the update (see sourceSequenceSignature).
-    if(!isEngine() && !parameterCacheActive) closeSourceSignatures();
 }
 
 // ---- Global Track ---------------------------------------------------------
@@ -6642,8 +6594,6 @@ void ofxOceanodeTimelineManager::clear() {
     pendingNoteGroupSetupParameter = nullptr;
     pendingNoteGroupSetupRef = {};
     activeAutomationValues.clear();
-    ++activeValuesRevision;
-    combinedValues.clear();
     // playingPianoGatePaths survives: a gate held open by the content being
     // replaced (an undo, a preset load) is released on the next update.
     stateCaptureLastAppliedValues.clear();

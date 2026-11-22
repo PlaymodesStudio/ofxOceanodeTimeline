@@ -534,7 +534,7 @@ inline bool lfoControlAudible(const ofxOceanodeTimelineLane& lfoLane, const ofxO
 // Cycles of an LFO lane from source beat 0 to sourceBeat.
 inline double lfoCycles(const ofxOceanodeTimelineLane& lfoLane, double sourceBeat,
                         const ofxOceanodeTimelinePlayContext* context = nullptr) {
-    static const auto* const definition = lfoParameterDefinition("frequency"); // (a constant table)
+    const auto* definition = lfoParameterDefinition("frequency");
     const ofxOceanodeTimelineLane* frequencyLane = nullptr;
     for(const auto& lane : lfoLane.lfoControls) {
         if(lfoControlAudible(lfoLane, lane) && lane.lfoParameter == "frequency" &&
@@ -557,11 +557,10 @@ inline double lfoCycles(const ofxOceanodeTimelineLane& lfoLane, double sourceBea
     const auto& points = frequencyLane->curvePoints;
     if(points.size() == 1) return sourceBeat / curve.pointPeriod(0);
 
-    // Running totals per point, cached per LFO lane (rebuilt only when the
-    // curve changes). By the lane itself: copies of a timeline share ids.
-    static thread_local std::unordered_map<const ofxOceanodeTimelineLane*, LfoCyclesCache> caches;
+    // Running totals per point, cached per LFO lane (rebuilt only when the curve changes).
+    static thread_local std::map<std::string, LfoCyclesCache> caches;
     if(caches.size() > 256) caches.clear();
-    LfoCyclesCache& cache = caches[&lfoLane];
+    LfoCyclesCache& cache = caches[lfoLane.id];
     const uint64_t signature = lfoCurveSignature(*frequencyLane, *definition);
     if(cache.signature != signature || cache.atPoint.size() != points.size()) {
         cache.signature = signature;
