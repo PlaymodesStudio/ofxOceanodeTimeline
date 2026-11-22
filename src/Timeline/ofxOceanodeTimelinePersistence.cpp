@@ -686,6 +686,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         clipJson["isStateCapture"] = clip.isStateCapture;
         clipJson["waveFilePath"] = clip.waveFilePath;
         clipJson["waveGain"] = clip.waveGain;
+        if(clip.waveNormalizeGain != 1.0f) clipJson["waveNormalizeGain"] = clip.waveNormalizeGain;
         clipJson["wavePlaybackRate"] = clip.wavePlaybackRate;
         clipJson["waveSourceStartBeat"] = clip.waveSourceStartBeat;
         clipJson["waveFileDurationBeats"] = clip.waveFileDurationBeats;
@@ -1216,6 +1217,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
                 clip.isStateCapture = clipJson.value("isStateCapture", false);
                 clip.waveFilePath = clipJson.value("waveFilePath", std::string());
                 clip.waveGain = ofClamp(clipJson.value("waveGain", 1.0f), 0.0f, 4.0f);
+                clip.waveNormalizeGain = ofClamp(clipJson.value("waveNormalizeGain", 1.0f), 0.0f, kWaveNormalizeGainMax);
                 clip.wavePlaybackRate = ofClamp(clipJson.value("wavePlaybackRate", 1.0f), 0.1f, 4.0f);
                 clip.waveSourceStartBeat = std::max(0.0, clipJson.value("waveSourceStartBeat", 0.0));
                 clip.waveFileDurationBeats = std::max(0.0, clipJson.value("waveFileDurationBeats", 0.0));

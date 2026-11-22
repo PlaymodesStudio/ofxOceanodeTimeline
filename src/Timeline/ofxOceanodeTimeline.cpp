@@ -1684,8 +1684,18 @@ bool ofxOceanodeTimelineManager::normalizeWaveClip(ofxOceanodeTimelineSequence& 
     const float bpm = container != nullptr ? container->getTransportState().bpm : 120.0f;
     const float loudest = ofxOceanodeTimelineWaveform::peak(*clip, bpm);
     if(loudest <= 1e-6f) return false;
+    // Its own gain, so the clip gain stays as set and still goes on top.
     // Rounded down, so the peak lands on full scale or just under it.
-    clip->waveGain = ofClamp(std::floor(1000.0f / loudest) / 1000.0f, 0.0f, 4.0f);
+    clip->waveNormalizeGain = ofClamp(std::floor(1000.0f / loudest) / 1000.0f, 0.0f, kWaveNormalizeGainMax);
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::clearWaveClipNormalization(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                            const std::string& clipId) {
+    const auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || clip == nullptr || !track->isWaveTrack || clip->waveNormalizeGain == 1.0f) return false;
+    clip->waveNormalizeGain = 1.0f;
     return true;
 }
 
@@ -5970,6 +5980,12 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         playContext.generation == transport.generation && !loopWrappedThisFrame &&
         transport.beatPosition >= lastEvaluatedTransportBeat
         ? lastEvaluatedTransportBeat : std::numeric_limits<double>::quiet_NaN();
+    // Playback starting, a seek, a loop wrap: curves not under the playhead
+    // take the value the timeline implies there (once; manual control of the
+    // gap resumes after), instead of keeping whatever the parameter had.
+    const bool chaseCurveGaps = transport.isPlaying &&
+        (!playingAtLastEvaluation || std::isnan(previousCurveBeat));
+    playingAtLastEvaluation = transport.isPlaying;
     lastEvaluatedTransportBeat = transport.beatPosition;
     hasEvaluatedTransportBeat = true;
 
@@ -5980,12 +5996,6 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         const float automatedBpm = evaluateBpm(transport.beatPosition, transport.bpm);
         if(std::abs(automatedBpm - transport.bpm) > 0.001f) {
             if(isEngine()) engineTransport->setBpm(automatedBpm);
-    // Playback starting, a seek, a loop wrap: curves not under the playhead
-    // take the value the timeline implies there (once; manual control of the
-    // gap resumes after), instead of keeping whatever the parameter had.
-    const bool chaseCurveGaps = transport.isPlaying &&
-        (!playingAtLastEvaluation || std::isnan(previousCurveBeat));
-    playingAtLastEvaluation = transport.isPlaying;
             else container->setBpm(automatedBpm);
             transport.bpm = automatedBpm;
         }
@@ -6057,7 +6067,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
                         static_cast<float>(clip.wavePlaybackRate * sourcePerTimelineBeat),
                         0.01f, 16.0f);
                     waveAudioProvider->setWaveClipTimestretch(waveKey, clip.id, clip.waveTimestretch);
-                    waveAudioProvider->updateWaveClip(waveKey, clip.id, clip.waveFilePath, clip.waveGain,
+                    waveAudioProvider->updateWaveClip(waveKey, clip.id, clip.waveFilePath, clip.waveGain * clip.waveNormalizeGain,
                                                       volume, clip.waveNumChannels, waveSourceBeat,
                                                       clip.contentDurationBeats,
                                                       clip.waveSourceStartBeat,

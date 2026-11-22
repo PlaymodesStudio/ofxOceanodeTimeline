@@ -2615,7 +2615,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.morphSource); hash.add(clip.morphIn.morph); hash.add(clip.morphIn.biPow);
             hash.add(clip.morphIn.logBlend); hash.add(clip.morphIn.inPlace); hash.add(clip.morphIn.stamp);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
-            hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
+            hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.waveNormalizeGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
             hash.add(clip.waveFadeInBeats); hash.add(clip.waveFadeOutBeats); hash.add(clip.waveCrossfadeCurve); hash.add(clip.waveTimestretch);
             hash.add(clip.waveFadeInTension.inflection); hash.add(clip.waveFadeInTension.steepness);

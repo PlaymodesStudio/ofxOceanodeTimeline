@@ -91,6 +91,8 @@ enum class ofxOceanodeTimelineLaneType {
 };
 
 constexpr int kOfxOceanodeTimelineMaxMultiCurves = 16;
+// The most normalizeWaveClip boosts a quiet clip: x1000 (+60 dB).
+constexpr float kWaveNormalizeGainMax = 1000.0f;
 // The id a Multi Curve lane's curve is known by (the editor's selection).
 inline std::string ofxOceanodeTimelineMultiCurveKey(const std::string& laneId, int index) {
     return laneId + "#curve" + std::to_string(index);
@@ -856,6 +858,10 @@ struct ofxOceanodeTimelineClip {
     // what evaluateWaveClipVolume resolves.
     std::string waveFilePath;
     float waveGain = 1.0f;
+    // Set by normalizeWaveClip, apart from waveGain and on top of it: what
+    // brings the file's loudest peak to full scale, however quiet it is (up
+    // to kWaveNormalizeGainMax). 1 means not normalized.
+    float waveNormalizeGain = 1.0f;
     // Base playback multiplier for this audio clip. Stretching the clip
     // changes the effective rate sent to the audio provider, while this
     // value remains the user-facing clip property.
@@ -1049,12 +1055,6 @@ bool ofxOceanodeTimelineClipChanceSilenced(const ofxOceanodeTimelineClip& clip,
                                            const ofxOceanodeTimelinePlayContext& context);
 bool ofxOceanodeTimelineLaneChanceSilenced(const ofxOceanodeTimelineLane& lane,
                                            const ofxOceanodeTimelinePlayContext& context);
-
-// Curve lanes in decibels (a gain parameter): shared by the evaluator and the
-// editor so the curve always draws what it applies. Normalized 0 is silence,
-// anything above runs from kDbFloor dB to the level of valueMax (its top).
-namespace ofxOceanodeTimelineScale {
-    constexpr float kDbFloor = -60.0f;
 // A Curve lane's normalized value where its clip starts (atEnd false) or
 // ends (its last value, before a repeat wraps): what playback chases into
 // the gaps around the clip (see collectActiveValues). False for other lanes
@@ -1075,6 +1075,12 @@ struct ofxOceanodeTimelineCurveChaseSegment {
 };
 std::vector<ofxOceanodeTimelineCurveChaseSegment> ofxOceanodeTimelineCurveChaseSegments(
     const ofxOceanodeTimelineTrack& track, const std::string& bindingId);
+
+// Curve lanes in decibels (a gain parameter): shared by the evaluator and the
+// editor so the curve always draws what it applies. Normalized 0 is silence,
+// anything above runs from kDbFloor dB to the level of valueMax (its top).
+namespace ofxOceanodeTimelineScale {
+    constexpr float kDbFloor = -60.0f;
     bool isDecibels(const ofxOceanodeTimelineLane& lane, const ofxOceanodeTimelineParameterBinding* binding);
     float topDb(const ofxOceanodeTimelineLane& lane);
     float normalizedToDb(const ofxOceanodeTimelineLane& lane, float normalized);   // -inf at 0
@@ -2661,6 +2667,8 @@ public:
     // going over full scale (at most the gain's range, x4). False when the
     // clip is silent or has no waveform.
     bool normalizeWaveClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
+    // Undoes normalizeWaveClip; the clip gain is untouched.
+    bool clearWaveClipNormalization(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     // Sets a wave clip's fade lengths (timeline beats), kept inside the clip
     // and off each other: the one being changed stops at the other.
     bool setWaveClipFades(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
@@ -3292,6 +3300,9 @@ private:
     // second implementation of the lane semantics. Curves whose end beat the
     // playhead rests on, or crossed since a finite previousBeat, contribute
     // one terminal sample (their exact end value).
+    // chaseGaps (playback starting, a seek, a loop wrap): a curve binding no
+    // clip covers at `beat` takes the value its timeline implies there -- the
+    // last value of its previous clip, or else the first of its next one.
     void collectActiveValues(const ofxOceanodeTimelinePlayContext& context,
                              double beat, bool isPlaying, bool applyPianoRanges,
                              ActiveValueMap& activeValues,
@@ -3301,9 +3312,6 @@ private:
                              bool chaseGaps = false) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
-    // chaseGaps (playback starting, a seek, a loop wrap): a curve binding no
-    // clip covers at `beat` takes the value its timeline implies there -- the
-    // last value of its previous clip, or else the first of its next one.
                                ofxOceanodeAbstractParameter* parameter,
                                std::string& outValue) const;
     // computeParameterValue's blend of activeAutomationValues per path, kept
@@ -3738,6 +3746,9 @@ private:
     // while the audio provider is being resynchronised.
     bool hasEvaluatedTransportBeat = false;
     double lastEvaluatedTransportBeat = 0.0;
+    // Whether the last evaluated frame was playing: the first playing frame
+    // after it chases curve values into the gaps between clips.
+    bool playingAtLastEvaluation = false;
     // Back-to-back repeated notes/steps/gate blocks (one ends exactly where
     // the next, equal one starts) get a short gate-off at the join so they
     // retrigger instead of merging into one long gate (overlapping ones do
@@ -3746,9 +3757,6 @@ private:
     double retriggerGapBeats = 1.0 / 48.0;
     // The gap of lanes whose targets are all scheduled (a few milliseconds).
     double scheduledRetriggerGapBeats = 1.0 / 160.0;
-    // Whether the last evaluated frame was playing: the first playing frame
-    // after it chases curve values into the gaps between clips.
-    bool playingAtLastEvaluation = false;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
     bool schedulingEnabled = true;
