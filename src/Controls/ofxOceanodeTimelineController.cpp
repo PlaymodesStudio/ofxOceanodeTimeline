@@ -4152,61 +4152,19 @@ void ofxOceanodeTimelineController::draw() {
     // Shared-height tracks drawn so far: resizing all of them from one edge
     // moves that edge by this many times the height change.
     int sharedHeightTracks = 0;
-    // The arrangement's parentOf / depthOf / isWithin each scan the track
-    // list by id: the same lookups through a per-frame index (the loop below
-    // never adds, removes or refiles tracks; collapsed and colour are read live).
-    std::unordered_map<std::string, const ofxOceanodeTimelineTrack*> trackById;
-    trackById.reserve(arrangement.tracks.size());
-    for(const auto& each : arrangement.tracks) trackById.emplace(each.id, &each);
-    auto parentOfTrack = [&](const ofxOceanodeTimelineTrack& child) -> const ofxOceanodeTimelineTrack* {
-        if(child.parentId.empty()) return nullptr;
-        const auto found = trackById.find(child.parentId);
-        return found != trackById.end() && found->second->isFolder ? found->second : nullptr;
-    };
-    auto depthOfTrack = [&](const ofxOceanodeTimelineTrack& child) {
-        int depth = 0;
-        for(const auto* parent = parentOfTrack(child); parent != nullptr && depth <= static_cast<int>(arrangement.tracks.size());
-            parent = parentOfTrack(*parent))
-            ++depth;
-        return depth;
-    };
-    // What each folder holds (tracks, not folders, at any depth), in track
-    // order: built at the first folder row instead of once per folder row.
-    std::unordered_map<std::string, std::vector<const ofxOceanodeTimelineTrack*>> folderContents;
-    bool folderContentsBuilt = false;
-    auto contentsOfFolder = [&](const ofxOceanodeTimelineTrack& folder) -> const std::vector<const ofxOceanodeTimelineTrack*>& {
-        if(!folderContentsBuilt) {
-            folderContentsBuilt = true;
-            for(const auto& other : scope(timeline).tracks) {
-                if(other.isFolder) continue;
-                const auto start = trackById.find(other.id);
-                const auto* at = start == trackById.end() ? nullptr : start->second;
-                for(size_t steps = 0; at != nullptr && steps <= arrangement.tracks.size(); ++steps) {
-                    at = parentOfTrack(*at);
-                    if(at != nullptr && at->id != other.id) {
-                        auto& held = folderContents[at->id];
-                        if(held.empty() || held.back() != &other) held.push_back(&other);
-                    }
-                }
-            }
-        }
-        static const std::vector<const ofxOceanodeTimelineTrack*> nothing;
-        const auto found = folderContents.find(folder.id);
-        return found == folderContents.end() ? nothing : found->second;
-    };
     for(const auto& track : scope(timeline).tracks) {
         // Whatever is inside a collapsed folder is not drawn.
         bool insideCollapsed = false;
-        for(const auto* parent = parentOfTrack(track); parent != nullptr && !insideCollapsed;
-            parent = parentOfTrack(*parent))
+        for(const auto* parent = arrangement.parentOf(track); parent != nullptr && !insideCollapsed;
+            parent = arrangement.parentOf(*parent))
             insideCollapsed = parent->collapsed;
         if(insideCollapsed) continue;
-        const int folderDepth = depthOfTrack(track);
+        const int folderDepth = arrangement.depthOf(track);
         const float folderIndent = folderDepth * kFolderIndent;
         // The header colours of the folders it is inside, outermost first:
         // the strips of its indentation (see drawGutter).
         std::vector<ImU32> folderLevels;
-        for(const auto* parent = parentOfTrack(track); parent != nullptr; parent = parentOfTrack(*parent))
+        for(const auto* parent = arrangement.parentOf(track); parent != nullptr; parent = arrangement.parentOf(*parent))
             folderLevels.insert(folderLevels.begin(), mutedTrackColor(parent->color, 0.34f, 0.5f));
         if(track.isFolder) {
             // ---- Folder row: header pad, then a summary of what is inside ----
@@ -4217,27 +4175,25 @@ void ofxOceanodeTimelineController::draw() {
             const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
             trackHeaderRows.push_back({track.id, true, folderDepth, rowMin.y, rowMax.y});
             const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
-            // Scrolled out of the window: its drawing is skipped (all clipped);
-            // its widgets, hover checks and menu below still run as usual.
-            const bool rowShown = rowMax.y + 2.0f >= dl->GetClipRectMin().y && rowMin.y - 2.0f <= dl->GetClipRectMax().y;
+            dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.10f));
+            dl->AddRectFilled(rowMin, padMax, mutedTrackColor(track.color, 0.34f, 0.5f));
+            drawGutter(dl, rowMin, rowMax.y, folderIndent, folderLevels);
+            dl->AddRectFilled(ImVec2(rowMin.x + folderIndent, rowMin.y), ImVec2(rowMin.x + folderIndent + 3.0f, rowMax.y),
+                              IM_COL32(track.color.r, track.color.g, track.color.b, 255));
+            // The pad's first row: fold arrow, colour and name; M and S at its right.
             const PadRow pad = padRow(rowMin, rowMax, folderIndent);
+            drawFoldArrow(dl, ImVec2(pad.arrowX, pad.y), !track.collapsed);
+            size_t inside = 0;
+            for(const auto& other : scope(timeline).tracks)
+                if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) ++inside;
+            const std::string label = track.name + "  (" + ofToString(inside) + ")";
             const ImVec2 folderPadMax(std::max(pad.nameX, pad.muteX - ImGui::GetStyle().ItemSpacing.x), rowMax.y);
-            if(rowShown) {
-                dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.10f));
-                dl->AddRectFilled(rowMin, padMax, mutedTrackColor(track.color, 0.34f, 0.5f));
-                drawGutter(dl, rowMin, rowMax.y, folderIndent, folderLevels);
-                dl->AddRectFilled(ImVec2(rowMin.x + folderIndent, rowMin.y), ImVec2(rowMin.x + folderIndent + 3.0f, rowMax.y),
-                                  IM_COL32(track.color.r, track.color.g, track.color.b, 255));
-                // The pad's first row: fold arrow, colour and name; M and S at its right.
-                drawFoldArrow(dl, ImVec2(pad.arrowX, pad.y), !track.collapsed);
-                const std::string label = track.name + "  (" + ofToString(contentsOfFolder(track).size()) + ")";
-                dl->PushClipRect(ImVec2(pad.nameX, rowMin.y), folderPadMax, true);
-                dl->AddText(ImVec2(pad.nameX, pad.y), IM_COL32(235, 235, 235, 255), label.c_str());
-                dl->PopClipRect();
-                if(selectedTracks.count(track.id)) {
-                    dl->AddRectFilled(rowMin, padMax, IM_COL32(120, 170, 255, 35));
-                    dl->AddRect(ImVec2(rowMin.x + 1, rowMin.y + 1), ImVec2(rowMax.x - 1, rowMax.y - 1), IM_COL32(150, 190, 255, 255), 0.0f, 0, 2.0f);
-                }
+            dl->PushClipRect(ImVec2(pad.nameX, rowMin.y), folderPadMax, true);
+            dl->AddText(ImVec2(pad.nameX, pad.y), IM_COL32(235, 235, 235, 255), label.c_str());
+            dl->PopClipRect();
+            if(selectedTracks.count(track.id)) {
+                dl->AddRectFilled(rowMin, padMax, IM_COL32(120, 170, 255, 35));
+                dl->AddRect(ImVec2(rowMin.x + 1, rowMin.y + 1), ImVec2(rowMax.x - 1, rowMax.y - 1), IM_COL32(150, 190, 255, 255), 0.0f, 0, 2.0f);
             }
             if(hoverRect(rowMin, folderPadMax) && !overPadSwatch(pad)) {
                 if(!ImGui::IsAnyItemActive())
@@ -4279,28 +4235,28 @@ void ofxOceanodeTimelineController::draw() {
             // The next row starts under this one, wherever its buttons are.
             ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
             // What is inside, one thin row per track, in each track's color.
+            std::vector<const ofxOceanodeTimelineTrack*> contents;
+            for(const auto& other : scope(timeline).tracks)
+                if(!other.isFolder && other.id != track.id && arrangement.isWithin(other.id, track.id)) contents.push_back(&other);
             const ImVec2 laneMin(rowMin.x + kLabelWidth - timelineScrollX, rowMin.y);
-            if(rowShown) {
-                const auto& contents = contentsOfFolder(track);
-                dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), rowMax, true);
-                const float stripTop = rowMin.y + 4.0f, stripHeight = rowHeight - 8.0f;
-                const float barHeight = contents.empty() ? 0.0f : std::max(1.0f, stripHeight / contents.size());
-                for(size_t i = 0; i < contents.size(); ++i) {
-                    const auto& inner = *contents[i];
-                    const float y1 = stripTop + i * barHeight, y2 = y1 + std::max(1.0f, barHeight - 1.0f);
-                    const bool heard = inMacroScope() || timeline.isTrackAudible(inner);
-                    for(const auto& clip : inner.clips) {
-                        const float x1 = laneMin.x + beatOffset(clip.startBeat);
-                        const float x2 = laneMin.x + beatOffset(clip.startBeat + clip.durationBeats);
-                        dl->AddRectFilled(ImVec2(x1, y1), ImVec2(std::max(x1 + 1.0f, x2 - 1.0f), y2),
-                                          IM_COL32(inner.color.r, inner.color.g, inner.color.b, clip.muted || !heard ? 60 : 200));
-                    }
+            dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), rowMax, true);
+            const float stripTop = rowMin.y + 4.0f, stripHeight = rowHeight - 8.0f;
+            const float barHeight = contents.empty() ? 0.0f : std::max(1.0f, stripHeight / contents.size());
+            for(size_t i = 0; i < contents.size(); ++i) {
+                const auto& inner = *contents[i];
+                const float y1 = stripTop + i * barHeight, y2 = y1 + std::max(1.0f, barHeight - 1.0f);
+                const bool heard = inMacroScope() || timeline.isTrackAudible(inner);
+                for(const auto& clip : inner.clips) {
+                    const float x1 = laneMin.x + beatOffset(clip.startBeat);
+                    const float x2 = laneMin.x + beatOffset(clip.startBeat + clip.durationBeats);
+                    dl->AddRectFilled(ImVec2(x1, y1), ImVec2(std::max(x1 + 1.0f, x2 - 1.0f), y2),
+                                      IM_COL32(inner.color.r, inner.color.g, inner.color.b, clip.muted || !heard ? 60 : 200));
                 }
-                const float playheadX = laneMin.x + beatOffset(transportState.beatPosition);
-                if(playheadX >= zoneLeft && playheadX <= rowMax.x)
-                    dl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2);
-                dl->PopClipRect();
             }
+            const float playheadX = laneMin.x + beatOffset(transportState.beatPosition);
+            if(playheadX >= zoneLeft && playheadX <= rowMax.x)
+                dl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2);
+            dl->PopClipRect();
             // A click on a folded folder's summary unfolds it.
             if(track.collapsed && hoverRect(ImVec2(zoneLeft, rowMin.y), rowMax) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 if(auto* editFolder = timeline.getTrack(scope(timeline), track.id)) editFolder->collapsed = false;
@@ -4943,10 +4899,6 @@ void ofxOceanodeTimelineController::draw() {
         }
 
         auto drawGrid = [&](const ImVec2& min, const ImVec2& max) {
-            // A row out of the window draws nothing (its clip rect is empty or elsewhere).
-            const ImVec2 gridClipMin = dl->GetClipRectMin(), gridClipMax = dl->GetClipRectMax();
-            if(gridClipMax.x <= gridClipMin.x || gridClipMax.y <= gridClipMin.y ||
-               max.y + 2.0f < gridClipMin.y || min.y - 2.0f > gridClipMax.y) return;
             double loopStartBeat = 0.0, loopEndBeat = 0.0;
             if(shownLoop(timeline, loopStartBeat, loopEndBeat)) {
                 const float loopX1 = min.x + beatOffset(loopStartBeat);
@@ -5069,17 +5021,6 @@ void ofxOceanodeTimelineController::draw() {
                 if(morphOverlapInto(track, clip.id, into)) textLeft = std::max(left, min.x + beatOffset(into.toBeat));
             }
             if(right <= left) return;
-            // Scrolled out of the lanes' clip rect (past their left, or its row
-            // out of the window): all it draws is clipped (the group outline
-            // reaches 3 px out). Its hit rect is still kept; a morph clip's
-            // warning tooltip still runs.
-            const ImVec2 clipMin = dl->GetClipRectMin(), clipMax = dl->GetClipRectMax();
-            const bool clippedAway = clipMax.x <= clipMin.x || clipMax.y <= clipMin.y ||
-                right + 4.0f < clipMin.x || left - 4.0f > clipMax.x || max.y + 4.0f < clipMin.y || min.y - 4.0f > clipMax.y;
-            if(clippedAway && !track.isMorphTrack) {
-                if(drawChrome) clipScreenRects.push_back({track.id, clip.id, left + 1.0f, min.y + 3.0f, right - 1.0f, max.y - 3.0f});
-                return;
-            }
             if(drawChrome) {
                 clipScreenRects.push_back({track.id, clip.id, left + 1.0f, min.y + 3.0f, right - 1.0f, max.y - 3.0f});
                 // Square, no outline; a selected clip is shown by a brighter fill.
@@ -5119,8 +5060,7 @@ void ofxOceanodeTimelineController::draw() {
                 const bool gainKnob = track.isWaveTrack && waveGainKnob(left, right, min.y, max.y, gainCenter, gainRadius);
                 const float chromeLeft = gainKnob ? gainCenter.x - gainRadius - 3.0f
                     : knob ? knobCenter.x - knobRadius - 3.0f : right - 3.0f;
-                const auto* clipGroup = timeline.getGroupForClip(scope(timeline), track.id, clip.id);
-                if(const auto* group = clipGroup) {
+                if(const auto* group = timeline.getGroupForClip(scope(timeline), track.id, clip.id)) {
                     // Colour by a hash of the group id so every member of
                     // the same group reads as one thing across every track
                     // it touches, while a second group visible at the same
@@ -5134,7 +5074,7 @@ void ofxOceanodeTimelineController::draw() {
                 // A wave clip's knob goes on top of its waveform, drawn with the content.
                 if(knob && !track.isWaveTrack) drawClipChanceKnob(clip, knobCenter, knobRadius);
                 const float labelLeft = textLeft + 6.0f;
-                const float labelRight = chromeLeft - (clipGroup ? 14.0f : 0.0f);
+                const float labelRight = chromeLeft - (timeline.getGroupForClip(scope(timeline), track.id, clip.id) ? 14.0f : 0.0f);
                 if(labelRight - labelLeft > 39) {
                     std::string label = clip.name + (clip.muted ? " [Muted]" : "");
                     if(clip.chance < 1.0f && !track.isMorphTrack)
@@ -6104,9 +6044,7 @@ void ofxOceanodeTimelineController::draw() {
             const float px = laneMin.x + beatOffset(transportState.beatPosition);
             if(px >= zoneLeft && px <= max.x) dl->AddLine(ImVec2(px, min.y), ImVec2(px, max.y), kPlayhead, 2);
             dl->PopClipRect();
-            // BeginPopup can only succeed with a popup open at this level: skip the per-clip id strings otherwise.
-            if(ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
-                for(const auto& clip : track.clips) drawClipMenu(clip);
+            for(const auto& clip : track.clips) drawClipMenu(clip);
             if(trackResizeId == track.id) {
                 if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                     // Every shared-height track above grows too, so divide
@@ -6683,10 +6621,8 @@ void ofxOceanodeTimelineController::draw() {
                 ++index;
                 if(noteGroup == nullptr || lastGroupMember) dockEditorHere();
             }
-            // Clip context menus (opened from any row's clip), once per track
-            // (only with a popup open at this level, as above).
-            if(ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
-                for(const auto& clip : track.clips) drawClipMenu(clip);
+            // Clip context menus (opened from any row's clip), once per track.
+            for(const auto& clip : track.clips) drawClipMenu(clip);
             if(!multiLaneClipRowSpans.empty()) {
                 const float contentOriginX = zoneLeft - timelineScrollX;
                 const float rowRight = ImGui::GetWindowPos().x + contentWidth;
