@@ -5039,9 +5039,12 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
 
     if(croppedRepeat || std::abs(clip->contentDurationBeats - contentEnd) > kEpsilon) {
         clip->contentDurationBeats = contentEnd;
-        if(croppedRepeat) clip->repeatContent = false;
-        clip->contentStretch = std::max(1.0 / 1024.0,
-            clip->durationBeats / clip->contentDurationBeats);
+        // A repeating clip stays repeating: its cycle becomes the part it
+        // showed, at the same stretch, so it plays the same and extending it
+        // later repeats the consolidated content.
+        if(!clip->repeatContent)
+            clip->contentStretch = std::max(1.0 / 1024.0,
+                clip->durationBeats / clip->contentDurationBeats);
         changed = true;
     }
     return changed;
