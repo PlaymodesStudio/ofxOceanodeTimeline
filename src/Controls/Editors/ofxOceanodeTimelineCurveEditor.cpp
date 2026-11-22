@@ -120,6 +120,8 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     };
     // The editor's grid: the theme's OC_CurveEditorLines (a bar's line is thicker).
     const ImU32 editorLines = ImGui::ColorConvertFloat4ToU32(OceanodeColors::CurveEditorLines);
+    // Drawn over the clip only: past its end there is no curve to edit.
+    dl->PushClipRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y), true);
     if(curveSnapLevels(*lane) >= 2) {
         const int levels = curveSnapLevels(*lane);
         for(int row = 0; row <= levels; ++row) {
@@ -167,6 +169,23 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         const bool bar = std::fmod(beat, timeline.getBeatsPerBar()) < 0.001;
         if(bar || beatOffset(beat + curveGrid) - beatOffset(beat) >= 4.0f)
             dl->AddLine(ImVec2(x, curveTop), ImVec2(x, curveBottom), editorLines, bar ? 1.5f : 1.0f);
+    }
+    dl->PopClipRect();
+    // Past the clip, a dashed line at what playback chases into the gaps
+    // around it (ofxOceanodeTimelineCurveChaseSegments), so the value
+    // before and after the clip is visible though no point sets it there.
+    if(timeline.isTrackAudible(track)) {
+        const ImU32 chaseInk = IM_COL32(track.color.r, track.color.g, track.color.b, 170);
+        dl->PushClipRect(editorMin, editorMax, true);
+        for(const auto& bindingId : lane->bindingIds)
+            for(const auto& segment : ofxOceanodeTimelineCurveChaseSegments(track, bindingId)) {
+                const float fromX = timelineMin.x + beatOffset(segment.fromBeat);
+                const float toX = std::isfinite(segment.toBeat) ? timelineMin.x + beatOffset(segment.toBeat) : editorMax.x;
+                const float y = curveValueToY(segment.value);
+                for(float x = std::max(fromX, editorMin.x); x < std::min(toX, editorMax.x); x += 8.0f)
+                    dl->AddLine(ImVec2(x, y), ImVec2(std::min({x + 4.0f, toX, editorMax.x}), y), chaseInk, 1.5f);
+            }
+        dl->PopClipRect();
     }
     // Points stay in beat order; an edit that moves one past a neighbour is
     // reordered here. Stable, so two points on one beat (a vertical step)

@@ -609,6 +609,58 @@ bool ofxOceanodeTimelineLaneChanceSilenced(const ofxOceanodeTimelineLane& lane,
     return chanceSilenced(lane.chance, lane.id, context);
 }
 
+bool ofxOceanodeTimelineCurveEdgeValue(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane,
+                                       bool atEnd, float& value) {
+    if(lane.type != ofxOceanodeTimelineLaneType::Curve) return false;
+    const double endBeat = clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
+    const double sourceBeat = atEnd ? curveEndSourceBeat(clip, endBeat)
+                                    : ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, clip.startBeat);
+    std::string text;
+    if(!evaluateCurve(lane, sourceBeat, text)) return false;
+    value = static_cast<float>(automationText::parse(text));
+    return true;
+}
+
+std::vector<ofxOceanodeTimelineCurveChaseSegment> ofxOceanodeTimelineCurveChaseSegments(
+        const ofxOceanodeTimelineTrack& track, const std::string& bindingId) {
+    std::vector<ofxOceanodeTimelineCurveChaseSegment> segments;
+    const auto binding = std::find_if(track.bindings.begin(), track.bindings.end(),
+                                      [&](const auto& candidate) { return candidate.id == bindingId; });
+    if(binding == track.bindings.end() || binding->bypass) return segments;
+    std::vector<std::pair<const ofxOceanodeTimelineClip*, const ofxOceanodeTimelineLane*>> clips;
+    for(const auto& clip : track.clips) {
+        for(const auto& lane : clip.lanes)
+            if(lane.pianoGateBindingId == bindingId) return {};
+        if(clip.muted) continue;
+        for(const auto& lane : clip.lanes)
+            if(lane.type == ofxOceanodeTimelineLaneType::Curve && laneAudible(clip, lane) &&
+               std::find(lane.bindingIds.begin(), lane.bindingIds.end(), bindingId) != lane.bindingIds.end()) {
+                clips.emplace_back(&clip, &lane);
+                break;
+            }
+    }
+    std::stable_sort(clips.begin(), clips.end(),
+                     [](const auto& a, const auto& b) { return a.first->startBeat < b.first->startBeat; });
+    auto clipEnd = [](const ofxOceanodeTimelineClip& clip) {
+        return clip.startBeat + std::max(1.0 / 24.0, clip.durationBeats);
+    };
+    float value = 0.0f;
+    if(!clips.empty() && clips.front().first->startBeat > kEpsilon &&
+       ofxOceanodeTimelineCurveEdgeValue(*clips.front().first, *clips.front().second, false, value))
+        segments.push_back({0.0, clips.front().first->startBeat, clips.front().first, clips.front().second, value});
+    // The clip ending latest so far holds the gap after it.
+    size_t latest = 0;
+    double latestEnd = -std::numeric_limits<double>::infinity();
+    for(size_t i = 0; i < clips.size(); ++i) {
+        if(clipEnd(*clips[i].first) >= latestEnd) { latest = i; latestEnd = clipEnd(*clips[i].first); }
+        const double gapTo = i + 1 < clips.size() ? clips[i + 1].first->startBeat : std::numeric_limits<double>::infinity();
+        if(gapTo <= latestEnd + kEpsilon) continue;
+        if(ofxOceanodeTimelineCurveEdgeValue(*clips[latest].first, *clips[latest].second, true, value))
+            segments.push_back({latestEnd, gapTo, clips[latest].first, clips[latest].second, value});
+    }
+    return segments;
+}
+
 ofxOceanodeTimelinePlayContext ofxOceanodeTimelineManager::playContextFor(
         const ofxOceanodeTransportState& transport, uint64_t passOffset) const {
     ofxOceanodeTimelinePlayContext context;
@@ -1133,6 +1185,13 @@ void ofxOceanodeTimelineManager::rebuildEvaluationIndexes() {
                         }
                     continue;
                 }
+                if(lane.type == ofxOceanodeTimelineLaneType::MultiGate && chordLaneInstrument(track, lane)) {
+                    // A Chords lane plays notes, like a piano gate: outside its
+                    // clips and while stopped its chords are released.
+                    for(const auto& bindingId : lane.bindingIds)
+                        if(const auto* binding = bindingFor(bindingId)) zeroWhenInactiveBindingsCache.emplace(binding);
+                    continue;
+                }
                 if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) {
                     // Pitch is prepared ahead of Gate, both scheduled together;
                     // outside its clips the gate is off and the pitch holds.
@@ -1599,7 +1658,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                                      ActiveValueMap& activeValues,
                                                      ofxOceanodeTimelineTargetInspection* inspection,
                                                      const std::set<std::string>* onlyPaths,
-                                                     double previousBeat) const {
+                                                     double previousBeat, bool chaseGaps) const {
     if(container == nullptr) return;
     if(!evaluationIndexesValid)
         const_cast<ofxOceanodeTimelineManager*>(this)->rebuildEvaluationIndexes();
@@ -1786,9 +1845,36 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 const bool endingCurve = (crossedEnd || restingOnEnd) &&
                     endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon &&
                     !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
-                if(endingCurve) {
+                // A clip starting within the next two frames: its curves'
+                // first values are written now, as a vertical step that close
+                // is (stepAhead). Values are written once a frame while notes
+                // are scheduled to their exact beat, so without this a note
+                // on the clip's first beat would play with the value before it
+                // (a level curve starting at 0 heard at the previous level).
+                const bool startingCurve = !endingCurve && sequenceAhead > 0.0 &&
+                    clip.startBeat > beat + kEpsilon && clip.startBeat <= beat + sequenceAhead + kEpsilon &&
+                    placement.map.toTimeline(clip.startBeat) < placement.windowTo - kEpsilon &&
+                    !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
+                // Chasing (see collectActiveValues' declaration): every clip
+                // the playhead is not in offers its curves' value toward it --
+                // its last value if it ended before, its first if it starts
+                // after. They rank below any clip covering the beat, the
+                // latest ending first, then the nearest starting.
+                const bool chaseable = chaseGaps && isPlaying && !endingCurve && !startingCurve &&
+                    !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext) && !clipCoversBeat(clip, beat);
+                const bool chaseEnd = chaseable && endBeat <= beat + kEpsilon &&
+                    endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon;
+                const double startTimelineBeat = placement.map.toTimeline(clip.startBeat);
+                const bool chaseStart = chaseable && !chaseEnd && clip.startBeat > beat + kEpsilon &&
+                    startTimelineBeat < placement.windowTo - kEpsilon;
+                if(endingCurve || chaseEnd) {
                     sourceBeat = curveEndSourceBeat(clip, endBeat);
                     endingCurveClips[&clip] = endTimelineBeat;
+                } else if(chaseStart) {
+                    sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, clip.startBeat);
+                    endingCurveClips[&clip] = -1e12 - startTimelineBeat;
+                } else if(startingCurve) {
+                    sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, clip.startBeat);
                 } else if(beatPosition >= placement.windowTo - kEpsilon || !clipSourceBeat(clip, copyContext, beat, sourceBeat)) {
                     // A clip its chance roll left out plays as an empty pass: the
                     // lanes that rest at 0 between their events (gates, toggles,
@@ -1803,7 +1889,8 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 }
                 for(const auto& sourceLane : clip.lanes) {
                     if(!laneAudible(clip, sourceLane)) continue;
-                    if(endingCurve && sourceLane.type != ofxOceanodeTimelineLaneType::Curve &&
+                    const bool curvesOnly = endingCurve || startingCurve || chaseEnd || chaseStart;
+                    if(curvesOnly && sourceLane.type != ofxOceanodeTimelineLaneType::Curve &&
                        sourceLane.type != ofxOceanodeTimelineLaneType::MultiCurve) continue;
                     if(onlyPaths != nullptr) {
                         bool wanted = false;
@@ -1817,6 +1904,12 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                     }
                     // Stopped piano rolls leave pitch, gate and velocity to live input.
                     if(!isPlaying && ofxOceanodeTimelineLaneUsesNoteRoles(sourceLane.type)) continue;
+                    // So do stopped Chords lanes (their gates: see rebuildEvaluationIndexes).
+                    if(!isPlaying && sourceLane.type == ofxOceanodeTimelineLaneType::MultiGate &&
+                       std::any_of(sourceLane.bindingIds.begin(), sourceLane.bindingIds.end(), [&](const auto& id) {
+                           const auto* binding = bindingFor(track, id);
+                           return binding != nullptr && zeroWhenInactiveBindingsCache.count(binding) > 0;
+                       })) continue;
                     const SharedPianoPlayback* shared = nullptr;
                     if(const auto trackIt = trackEvaluationIndexes.find(&track); trackIt != trackEvaluationIndexes.end()) {
                         const auto it = trackIt->second.sharedPiano.find(&sourceLane);
@@ -1892,8 +1985,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 // shared parameter's combined value at all.
                                 if(binding->bypass) continue;
                                 // A gate sharing this binding must still release
-                                // to its rest, rather than hold the curve endpoint.
-                                if(endingCurve && (zeroWhenInactiveBindingsCache.count(binding) > 0 ||
+                                // to its rest, rather than hold the curve endpoint
+                                // (or take the next clip's first value early).
+                                if(curvesOnly && (zeroWhenInactiveBindingsCache.count(binding) > 0 ||
                                                   restWhenInactiveCache.count(binding) > 0)) continue;
                                 contribute(binding, ofxOceanodeTimelineIsHeldValueLane(lane.type)
                                         ? (binding->valueType == typeid(int).name() ||
@@ -2534,7 +2628,7 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
             hash.add(clip.morphSource); hash.add(clip.morphIn.morph); hash.add(clip.morphIn.biPow);
             hash.add(clip.morphIn.logBlend); hash.add(clip.morphIn.inPlace); hash.add(clip.morphIn.stamp);
             hash.add(clip.muted); hash.add(clip.chance); hash.add(clip.isStateCapture);
-            hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
+            hash.add(clip.waveFilePath); hash.add(clip.waveGain); hash.add(clip.waveNormalizeGain); hash.add(clip.wavePlaybackRate); hash.add(clip.waveSourceStartBeat);
             hash.add(clip.waveFileDurationBeats); hash.add(clip.waveReverse);
             hash.add(clip.waveFadeInBeats); hash.add(clip.waveFadeOutBeats); hash.add(clip.waveCrossfadeCurve); hash.add(clip.waveTimestretch);
             hash.add(clip.waveFadeInTension.inflection); hash.add(clip.waveFadeInTension.steepness);

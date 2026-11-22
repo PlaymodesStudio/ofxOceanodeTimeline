@@ -40,6 +40,18 @@
 namespace {
 using namespace ofxOceanodeTimelineLaneEditorUi;
 
+// A curve chase segment (ofxOceanodeTimelineCurveChaseSegments) as a dashed
+// line between top and bottom, at the height the clip previews draw values.
+template<typename BeatOffset>
+void drawCurveChaseSegment(ImDrawList* dl, const ofxOceanodeTimelineCurveChaseSegment& segment, float originX,
+                           float top, float bottom, float clipLeft, float clipRight, ImU32 ink, const BeatOffset& beatOffset) {
+    const float fromX = std::max(clipLeft, originX + beatOffset(segment.fromBeat));
+    const float toX = std::isfinite(segment.toBeat) ? std::min(clipRight, originX + beatOffset(segment.toBeat)) : clipRight;
+    if(toX <= fromX || bottom - top < 10.0f) return;
+    const float y = bottom - 5.0f - ofClamp(segment.value, 0.0f, 1.0f) * (bottom - top - 10.0f);
+    for(float x = fromX; x < toX; x += 8.0f) dl->AddLine(ImVec2(x, y), ImVec2(std::min(x + 4.0f, toX), y), ink, 1.0f);
+}
+
 // Lane editors write the open clip in place. Compare what it plays before and
 // after they draw, so events already queued ahead of the playhead are
 // corrected instead of playing the old content.
@@ -332,7 +344,7 @@ void drawWaveClipWaveform(ImDrawList* dl, const ofxOceanodeTimelineClip& clip, f
             ofxOceanodeTimelineWaveform::range(clip.waveformPeaks, channels, ch,
                 start + (clip.waveReverse ? 1.0 - n1 : n0) * span,
                 start + (clip.waveReverse ? 1.0 - n0 : n1) * span, low, high);
-            const float gain = clip.waveGain * (level != nullptr ? (*level)((n0 + n1) * 0.5) : 1.0f);
+            const float gain = clip.waveGain * clip.waveNormalizeGain * (level != nullptr ? (*level)((n0 + n1) * 0.5) : 1.0f);
             low *= gain;
             high *= gain;
             float y1 = mid - ofClamp(high, -1.0f, 1.0f) * half;
@@ -843,6 +855,7 @@ bool ofxOceanodeTimelineController::replaceWaveClipFromFile(ofxOceanodeTimelineM
     const double visibleDuration = std::max(1.0 / kPPQ, clip->durationBeats);
     clip->waveFilePath = filePath;
     clip->waveGain = std::max(0.0f, clip->waveGain);
+    clip->waveNormalizeGain = 1.0f;  // measured on the old file
     if(!timeline.reloadWaveform(scope(timeline), trackId, clipId)) return false;
 
     const double bpm = container != nullptr
@@ -968,6 +981,7 @@ bool ofxOceanodeTimelineController::splitWaveClipAtPlayhead(ofxOceanodeTimelineM
     if(rightClip == nullptr) return false;
     rightClip->waveFilePath = original.waveFilePath;
     rightClip->waveGain = original.waveGain;
+    rightClip->waveNormalizeGain = original.waveNormalizeGain;
     rightClip->wavePlaybackRate = original.wavePlaybackRate;
     // For forward playback the right slice begins after the cut. For reverse
     // playback the timeline starts at the high end of the source range, so
@@ -5882,14 +5896,17 @@ void ofxOceanodeTimelineController::draw() {
                     ImGui::SetTooltip("Stretching the clip changes its speed. Off: like tape, the pitch follows.\nOn: stretched in time (granular), the pitch stays.");
                 // As loud as it goes without clipping: the gain knob follows.
                 const float menuPeak = ofxOceanodeTimelineWaveform::peak(clip, transportState.bpm);
-                if(ImGui::MenuItem("Normalize sound", nullptr, false, menuPeak > 1e-6f))
+                if(ImGui::MenuItem("Normalize sound", nullptr, clip.waveNormalizeGain != 1.0f, menuPeak > 1e-6f))
                     timeline.normalizeWaveClip(scope(timeline), track.id, clip.id);
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                     if(menuPeak > 1e-6f)
-                        ImGui::SetTooltip("Sets the clip gain so its loudest peak reaches full scale: %s%s",
-                                          waveGainText(std::min(4.0f, 1.0f / menuPeak)).c_str(), 1.0f / menuPeak > 4.0f ? " (the most the gain goes)" : "");
+                        ImGui::SetTooltip("Brings the loudest peak to full scale with its own gain, apart from the clip gain\n(which still applies on top): %s%s",
+                                          waveGainText(std::min(kWaveNormalizeGainMax, 1.0f / menuPeak)).c_str(),
+                                          1.0f / menuPeak > kWaveNormalizeGainMax ? " (the most it goes)" : "");
                     else ImGui::SetTooltip("This clip has no sound to measure");
                 }
+                if(ImGui::MenuItem("Remove normalization", nullptr, false, clip.waveNormalizeGain != 1.0f))
+                    timeline.clearWaveClipNormalization(scope(timeline), track.id, clip.id);
                 // Where it overlaps a neighbour the two crossfade: the curve
                 // of the crossfade nearest the click (kept by the clip coming in).
                 const auto menuFades = ofxOceanodeTimelineWaveform::resolveFades(track, clip);
@@ -6046,6 +6063,23 @@ void ofxOceanodeTimelineController::draw() {
                         drawClip(clip, &clip.lanes[laneIndex], previewMin, previewMax, false, true);
                     }
                 }
+            }
+            // Each target's chased values in the gaps (as in the targets
+            // view), in the band where the clip holding the value draws it.
+            if(!track.isWaveTrack && !track.isMacroTrack() && !track.isMorphTrack && !track.isGlobalTrack &&
+               timeline.isTrackAudible(track)) {
+                const ImU32 chaseInk = IM_COL32(track.color.r, track.color.g, track.color.b, 170);
+                for(const auto& binding : track.bindings)
+                    for(const auto& segment : ofxOceanodeTimelineCurveChaseSegments(track, binding.id)) {
+                        const auto& lanes = segment.clip->lanes;
+                        const size_t bands = std::min<size_t>(3, lanes.size());
+                        const size_t laneIndex = static_cast<size_t>(segment.lane - lanes.data());
+                        if(laneIndex >= bands) continue;
+                        const float top = min.y + 22.0f;
+                        const float bandHeight = (max.y - top) / bands;
+                        drawCurveChaseSegment(dl, segment, laneMin.x, top + laneIndex * bandHeight, top + (laneIndex + 1) * bandHeight,
+                                              zoneLeft, max.x, chaseInk, beatOffset);
+                    }
             }
             // A Macro Morphing Track's transitions, over the clips they join.
             if(track.isMorphTrack) drawMorphOverlaps(timeline, track, dl, laneMin, max, beatOffset);
@@ -6664,6 +6698,12 @@ void ofxOceanodeTimelineController::draw() {
                     }
                     if(clip.lanes.size() > 1) multiLaneClipRowSpans[clip.id].push_back({min.y, max.y});
                 }
+                // Where no clip plays this target, a dashed line at the value
+                // playback chases there (ofxOceanodeTimelineCurveChaseSegments).
+                if(timeline.isTrackAudible(track))
+                    for(const auto& segment : ofxOceanodeTimelineCurveChaseSegments(track, binding.id))
+                        drawCurveChaseSegment(dl, segment, laneMin.x, min.y, max.y, zoneLeft, max.x,
+                                              IM_COL32(track.color.r, track.color.g, track.color.b, 170), beatOffset);
                 clipDropRows.push_back({track.id, binding.id, min.y, max.y});
                 currentRowBindingId = binding.id;
                 for(auto clipIt = track.clips.rbegin(); clipIt != track.clips.rend(); ++clipIt) {
@@ -8707,6 +8747,11 @@ void ofxOceanodeTimelineController::drawWaveClipProperties(ofxOceanodeTimelineMa
     ImGui::TextUnformatted("Clip gain");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::DragFloat("##waveGain", &clip.waveGain, 0.01f, 0.0f, 4.0f, "%.2f");
+    if(clip.waveNormalizeGain != 1.0f) {
+        ImGui::Text("Normalized: %s", waveGainText(clip.waveNormalizeGain).c_str());
+        ImGui::SameLine();
+        if(ImGui::SmallButton("Remove##waveNormalize")) clip.waveNormalizeGain = 1.0f;
+    }
     // Fades, also dragged by the handles in the clip's top corners.
     float fadeIn = static_cast<float>(clip.waveFadeInBeats), fadeOut = static_cast<float>(clip.waveFadeOutBeats);
     const float fadeMax = static_cast<float>(clip.durationBeats);

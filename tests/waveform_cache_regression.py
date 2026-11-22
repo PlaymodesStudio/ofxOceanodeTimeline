@@ -57,9 +57,12 @@ int main() {
         // Normalize: the gain that takes the loudest peak to full scale, never over it.
         assert(std::abs(Wave::peak(clip, 120.0f) - 30000.0f / 32768.0f) < 0.002f);
         assert(timeline.normalizeWaveClip(timeline.editSequence(), track, clipId));
-        const float normalized = timeline.getClip(track, clipId)->waveGain;
+        const float normalized = timeline.getClip(track, clipId)->waveNormalizeGain;
         assert(normalized > 1.085f && normalized * Wave::peak(clip, 120.0f) <= 1.0f && normalized * Wave::peak(clip, 120.0f) > 0.998f);
-        timeline.getClip(track, clipId)->waveGain = 1.0f;
+        // Apart from the clip gain, which it leaves alone.
+        assert(timeline.getClip(track, clipId)->waveGain == 1.0f);
+        assert(timeline.clearWaveClipNormalization(timeline.editSequence(), track, clipId) && timeline.getClip(track, clipId)->waveNormalizeGain == 1.0f);
+        assert(!timeline.clearWaveClipNormalization(timeline.editSequence(), track, clipId));
         float low = 0, high = 0;
         assert(Wave::range(clip.waveformPeaks, 1, 0, 0.25, 0.30, low, high));
         assert(low < -0.9f && high > 0.9f && std::abs(low + high) < 0.02f);
@@ -238,10 +241,19 @@ int main() {
         writeWav(folder / "silent.wav", 1, std::vector<int16_t>(4800, 0));
         load("silent.wav");
         timeline.getClip(track, clipId)->waveGain = 0.7f;
-        assert(!timeline.normalizeWaveClip(timeline.editSequence(), track, clipId) && timeline.getClip(track, clipId)->waveGain == 0.7f);
+        assert(!timeline.normalizeWaveClip(timeline.editSequence(), track, clipId) && timeline.getClip(track, clipId)->waveNormalizeGain == 1.0f);
         writeWav(folder / "quiet.wav", 1, std::vector<int16_t>(4800, 328));
         load("quiet.wav");
-        assert(timeline.normalizeWaveClip(timeline.editSequence(), track, clipId) && timeline.getClip(track, clipId)->waveGain == 4.0f);
+        timeline.getClip(track, clipId)->waveGain = 0.7f;
+        // Beyond the clip gain's x4: the whole way to full scale, the clip gain kept.
+        assert(timeline.normalizeWaveClip(timeline.editSequence(), track, clipId));
+        const float quietGain = timeline.getClip(track, clipId)->waveNormalizeGain;
+        assert(quietGain > 99.0f && quietGain * 328.0f / 32768.0f <= 1.0f && timeline.getClip(track, clipId)->waveGain == 0.7f);
+        // Saved and loaded.
+        const auto saved = timeline.toJson();
+        timeline.getClip(track, clipId)->waveNormalizeGain = 1.0f;
+        timeline.fromJson(saved);
+        assert(timeline.getTrack(track)->clips[0].waveNormalizeGain == quietGain);
     }
 
     // Caches of any other shape are not read.

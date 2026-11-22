@@ -681,6 +681,8 @@ void ofxOceanodeTimelineManager::syncPlayer(Player& player) {
     auto* sequence = timelineFor(player.ref);
     if(sequence == nullptr || player.engine == nullptr || container == nullptr) return;
     auto& engine = *player.engine;
+    // A preset was loaded: its gates may have come back open.
+    if(player.awaitingSync) engine.restedGatePaths.clear();
     player.awaitingSync = false;
     // The copy follows its source: rebuilt when its content changed. Its
     // schedule stays: an edit through the setters invalidates it on the

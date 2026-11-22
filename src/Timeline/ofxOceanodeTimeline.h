@@ -91,6 +91,8 @@ enum class ofxOceanodeTimelineLaneType {
 };
 
 constexpr int kOfxOceanodeTimelineMaxMultiCurves = 16;
+// The most normalizeWaveClip boosts a quiet clip: x1000 (+60 dB).
+constexpr float kWaveNormalizeGainMax = 1000.0f;
 // The id a Multi Curve lane's curve is known by (the editor's selection).
 inline std::string ofxOceanodeTimelineMultiCurveKey(const std::string& laneId, int index) {
     return laneId + "#curve" + std::to_string(index);
@@ -856,6 +858,10 @@ struct ofxOceanodeTimelineClip {
     // what evaluateWaveClipVolume resolves.
     std::string waveFilePath;
     float waveGain = 1.0f;
+    // Set by normalizeWaveClip, apart from waveGain and on top of it: what
+    // brings the file's loudest peak to full scale, however quiet it is (up
+    // to kWaveNormalizeGainMax). 1 means not normalized.
+    float waveNormalizeGain = 1.0f;
     // Base playback multiplier for this audio clip. Stretching the clip
     // changes the effective rate sent to the audio provider, while this
     // value remains the user-facing clip property.
@@ -1049,6 +1055,26 @@ bool ofxOceanodeTimelineClipChanceSilenced(const ofxOceanodeTimelineClip& clip,
                                            const ofxOceanodeTimelinePlayContext& context);
 bool ofxOceanodeTimelineLaneChanceSilenced(const ofxOceanodeTimelineLane& lane,
                                            const ofxOceanodeTimelinePlayContext& context);
+// A Curve lane's normalized value where its clip starts (atEnd false) or
+// ends (its last value, before a repeat wraps): what playback chases into
+// the gaps around the clip (see collectActiveValues). False for other lanes
+// and for a curve without points.
+bool ofxOceanodeTimelineCurveEdgeValue(const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineLane& lane,
+                                       bool atEnd, float& value);
+// Where no clip plays one of a track's targets, the normalized value playback
+// chases there (see collectActiveValues), as the editors draw it: before the
+// first clip its first value, after a clip (the one ending latest) its last,
+// up to the next clip or, after the last, forever (toBeat infinite). From
+// audible Curve lanes of unmuted clips only; none for a bypassed target or a
+// piano gate's (it rests at 0). Track audibility is the caller's to check.
+struct ofxOceanodeTimelineCurveChaseSegment {
+    double fromBeat = 0.0, toBeat = 0.0;
+    const ofxOceanodeTimelineClip* clip = nullptr; // whose value it holds
+    const ofxOceanodeTimelineLane* lane = nullptr;
+    float value = 0.0f;
+};
+std::vector<ofxOceanodeTimelineCurveChaseSegment> ofxOceanodeTimelineCurveChaseSegments(
+    const ofxOceanodeTimelineTrack& track, const std::string& bindingId);
 
 // Curve lanes in decibels (a gain parameter): shared by the evaluator and the
 // editor so the curve always draws what it applies. Normalized 0 is silence,
@@ -2641,6 +2667,8 @@ public:
     // going over full scale (at most the gain's range, x4). False when the
     // clip is silent or has no waveform.
     bool normalizeWaveClip(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
+    // Undoes normalizeWaveClip; the clip gain is untouched.
+    bool clearWaveClipNormalization(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId);
     // Sets a wave clip's fade lengths (timeline beats), kept inside the clip
     // and off each other: the one being changed stops at the other.
     bool setWaveClipFades(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
@@ -3272,12 +3300,16 @@ private:
     // second implementation of the lane semantics. Curves whose end beat the
     // playhead rests on, or crossed since a finite previousBeat, contribute
     // one terminal sample (their exact end value).
+    // chaseGaps (playback starting, a seek, a loop wrap): a curve binding no
+    // clip covers at `beat` takes the value its timeline implies there -- the
+    // last value of its previous clip, or else the first of its next one.
     void collectActiveValues(const ofxOceanodeTimelinePlayContext& context,
                              double beat, bool isPlaying, bool applyPianoRanges,
                              ActiveValueMap& activeValues,
                              ofxOceanodeTimelineTargetInspection* inspection = nullptr,
                              const std::set<std::string>* onlyPaths = nullptr,
-                             double previousBeat = std::numeric_limits<double>::quiet_NaN()) const;
+                             double previousBeat = std::numeric_limits<double>::quiet_NaN(),
+                             bool chaseGaps = false) const;
     bool computeParameterValue(const std::vector<ofxOceanodeTimelineParameterBinding*>& bindings,
                                const ActiveValueMap& activeValues,
                                ofxOceanodeAbstractParameter* parameter,
@@ -3692,6 +3724,10 @@ private:
     std::unordered_set<std::string> playingPianoGatePaths;
     // Gates closed by the last updatePianoGateOwnership().
     std::vector<std::string> releasedPianoGatePaths;
+    // Gates closed once since playback stopped (or the engine was made or
+    // reloaded): a gate a preset left open is shut while stopped, so the first
+    // note on play is a fresh rising edge. Live input owns them afterwards.
+    std::unordered_set<std::string> restedGatePaths;
     // Rest values of the gate-type lanes heard last frame, by parameter path.
     std::unordered_map<std::string, std::string> soundingRestPaths;
     ActiveValueMap activeAutomationValues;
@@ -3714,6 +3750,9 @@ private:
     // while the audio provider is being resynchronised.
     bool hasEvaluatedTransportBeat = false;
     double lastEvaluatedTransportBeat = 0.0;
+    // Whether the last evaluated frame was playing: the first playing frame
+    // after it chases curve values into the gaps between clips.
+    bool playingAtLastEvaluation = false;
     // Back-to-back repeated notes/steps/gate blocks (one ends exactly where
     // the next, equal one starts) get a short gate-off at the join so they
     // retrigger instead of merging into one long gate (overlapping ones do
