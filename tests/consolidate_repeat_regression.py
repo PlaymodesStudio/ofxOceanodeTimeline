@@ -109,6 +109,36 @@ int main() {
     model.consolidateClipContent(t, l);
     near(ofxOceanodeTimelineClipTime::effectiveStretch(*model.getClip(t, l)), 2);
 
+    // A one-shot clip whose pattern lanes loop inside it (a 4-cell slider and
+    // a 2-beat step pattern over 10 beats): each becomes one pattern as long
+    // as the content.
+    const auto g = model.createClip(t, "G", 100, 10);
+    model.getClip(t, g)->repeatContent = false;
+    const auto gSlider = model.createLane(t, g, "Slider", ofxOceanodeTimelineLaneType::MultiSlider);
+    const auto gSteps = model.createLane(t, g, "Steps", ofxOceanodeTimelineLaneType::Step);
+    {
+        auto* slider = model.getLane(t, g, gSlider);
+        slider->beatsPerStep = 1; slider->stepCount = 4; slider->multiSliderValues = {1, 2, 3, 4};
+        auto* steps = model.getLane(t, g, gSteps);
+        steps->beatsPerStep = 1; steps->stepCount = 2;
+        model.setClipStep(t, g, gSteps, 0, "1", 0.5);
+    }
+    assert(model.consolidateClipContent(t, g));
+    near(model.getClip(t, g)->contentDurationBeats, 10);
+    {
+        const auto* slider = model.getLane(t, g, gSlider);
+        assert(slider->stepCount == 10);
+        const std::vector<float> expected = {1, 2, 3, 4, 1, 2, 3, 4, 1, 2};
+        assert(slider->multiSliderValues == expected);
+        const auto* steps = model.getLane(t, g, gSteps);
+        assert(steps->stepCount == 10 && steps->step.steps.size() == 5);
+        for(size_t i = 0; i < 5; ++i) near(steps->step.steps[i].startBeat, 2.0 * i);
+    }
+    // Each pass is its own now; consolidating again changes nothing.
+    model.getLane(t, g, gSlider)->multiSliderValues[5] = 9;
+    assert(model.getLane(t, g, gSlider)->multiSliderValues[1] == 2);
+    assert(!model.consolidateClipContent(t, g));
+
     // A repeating clip showing less than one pass: its visible part.
     const auto b = model.createClip(t, "B", 20, 4);
     model.createLane(t, b, "Curve", ofxOceanodeTimelineLaneType::Curve);

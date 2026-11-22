@@ -5088,6 +5088,34 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
         }
     }
 
+    // A pattern lane (Step, Multi Slider, Drum Grid) shorter than its content
+    // loops through it: its passes become one pattern as long as the content,
+    // each editable apart. (A Drum Grid row cannot be longer than
+    // kMaxLength: such a lane keeps looping.)
+    if(!clip->repeatContent && !track->isWaveTrack && !track->isMacroTrack() && !track->isMorphTrack) {
+        ClipLayout layout;
+        layout.content = layout.length = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+        auto loops = [&](const ofxOceanodeTimelineLane& lane) {
+            const double cell = std::max(1.0 / 24.0, lane.beatsPerStep);
+            if(lane.type == ofxOceanodeTimelineLaneType::Step || lane.type == ofxOceanodeTimelineLaneType::MultiSlider)
+                return std::max(1, lane.stepCount) * cell < layout.content - kEpsilon;
+            if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid)
+                return std::any_of(lane.drumRows.begin(), lane.drumRows.end(), [&](const auto& row) {
+                    return std::max(ofxOceanodeTimelineDrumGrid::kMinLength, row.length) < layout.content - kEpsilon;
+                });
+            return false;
+        };
+        for(auto& lane : clip->lanes) {
+            if(!loops(lane)) continue;
+            bool refused = false;
+            auto unrolled = layOutClipLane(lane, layout, layout.content, refused);
+            if(refused) continue;
+            fillUncoveredSliderCells(unrolled);
+            lane = std::move(unrolled);
+            changed = true;
+        }
+    }
+
     const double oldSourceDuration = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     const bool croppedRepeat = clip->repeatContent &&
         clip->durationBeats < ofxOceanodeTimelineClipTime::cycleDuration(*clip) - kEpsilon;
