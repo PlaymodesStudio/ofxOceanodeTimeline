@@ -3106,6 +3106,14 @@ private:
     static std::string absolutePathIn(const std::string& canvas, const std::string& path);
     // Content signature of one sequence (what a rebuild of its copy follows).
     uint64_t sequenceSignature(const ofxOceanodeTimelineSequence& sequence) const;
+    // The same, hashed once per update on the primary: from its evaluation
+    // until its last applyAutomation (the nodes' updates in between, an LFO
+    // Track's sync, reuse it). Any other time, or on an edit through the
+    // setters (invalidateEvaluationIndexes), it is hashed again.
+    uint64_t sourceSequenceSignature(const ofxOceanodeTimelineSequence& sequence) const;
+    mutable std::unordered_map<const ofxOceanodeTimelineSequence*, uint64_t> sourceSignatures;
+    bool sourceSignaturesOpen = false;
+    void closeSourceSignatures() { sourceSignaturesOpen = false; sourceSignatures.clear(); }
     // Engine state: the manager owning its sequences, and its transport.
     ofxOceanodeTimelineManager* primary = nullptr;
     std::shared_ptr<ofxOceanodeTransport> engineTransport;
@@ -3274,6 +3282,13 @@ private:
                                const ActiveValueMap& activeValues,
                                ofxOceanodeAbstractParameter* parameter,
                                std::string& outValue) const;
+    // computeParameterValue's blend of activeAutomationValues per path, kept
+    // until that map changes (activeValuesRevision): the scheduler and both
+    // applyAutomation passes of a frame blend each path once. The broadcast
+    // and clamp after it read the parameter, and still run every time.
+    struct CombinedValue { uint64_t revision = 0; std::string valueType, value; };
+    mutable std::unordered_map<std::string, CombinedValue> combinedValues;
+    uint64_t activeValuesRevision = 1;
     // Rebuilt once before each automation evaluation and reused by the
     // frame pass, the scheduler and the post-node re-apply. Keeping these
     // indexes here avoids repeatedly grouping the same bindings and doing
@@ -3388,10 +3403,29 @@ private:
     ofxOceanodeAbstractParameter* findAutomatedTarget(const std::string& path);
     struct MissingTarget { uint64_t retryFrame = 0, generation = 0; };
     // Moves whenever a node is made or deleted anywhere (the core's
-    // ofxOceanodeNode::graphGeneration): a target missing before may be there now.
+    // ofxOceanodeNode::graphGeneration), or a canvas id changes: a target
+    // missing before may be there now, one found may be gone.
     static uint64_t nodeGraphGeneration();
     std::unordered_map<std::string, MissingTarget> missingTargets;
-    mutable std::unordered_map<std::string, ofxOceanodeAbstractParameter*> parameterCache;
+    // Kept across passes (an engine uses its primary's): an entry holds while
+    // the node graph's generation stays and its parameter lives (alive); one
+    // whose lifetime cannot be told (untracked) only for the pass that found
+    // it. A miss is looked up again after a while, or once the graph moves.
+    // A tracked entry also holds where it sat in its node's group: one taken
+    // out (and kept alive by the node) or moved is looked up again.
+    struct CachedParameter {
+        ofxOceanodeAbstractParameter* parameter = nullptr;
+        std::weak_ptr<void> alive;
+        ofxOceanodeNodeModel* model = nullptr; // alive while the generation holds
+        size_t index = 0;
+        std::string name;   // a rename in place keeps identity and index: the path no longer names it
+        bool tracked = false;
+        uint64_t pass = 0, retryFrame = 0;
+    };
+    static bool stillInGroup(const CachedParameter& cached);
+    mutable std::unordered_map<std::string, CachedParameter> parameterCache;
+    mutable uint64_t parameterCacheGeneration = 0;
+    uint64_t parameterCachePass = 0;
     bool parameterCacheActive = false;
     std::unordered_map<std::string, std::vector<ofxOceanodeTimelineParameterBinding*>> bindingsByPathCache;
     std::unordered_map<std::string, ofxOceanodeTimelineTrack*> trackByIdCache;

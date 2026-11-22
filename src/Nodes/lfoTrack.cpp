@@ -81,15 +81,27 @@ void lfoTrack::refreshTimelineList() {
 
 void lfoTrack::refreshTrackList() {
     if(hostContainer == nullptr) return;
+    const auto* sequence = hostContainer->getTimelineManager().findTimeline(selectedRef);
+    // Compared in place first: the lists are rebuilt only when a track changed.
+    bool same = !trackIds.empty() && trackIds[0].empty() && !trackNames.empty() && trackNames[0] == "None" &&
+                trackIds.size() == trackNames.size();
+    size_t listed = 1;
+    if(same && sequence != nullptr)
+        for(const auto &track : sequence->tracks) {
+            if(track.isWaveTrack) continue;
+            if(listed >= trackIds.size() || trackIds[listed] != track.id || trackNames[listed] != track.name) { same = false; break; }
+            ++listed;
+        }
+    same = same && listed == trackIds.size();
     std::vector<std::string> ids = {""};
     std::vector<std::string> names = {"None"};
-    if(const auto* sequence = hostContainer->getTimelineManager().findTimeline(selectedRef))
+    if(!same && sequence != nullptr)
         for(const auto &track : sequence->tracks) {
             if(track.isWaveTrack) continue;
             ids.push_back(track.id);
             names.push_back(track.name);
         }
-    if(ids != trackIds || names != trackNames) {
+    if(!same) {
         trackIds = ids;
         trackNames = names;
         updatingSelector = true;
