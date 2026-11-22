@@ -120,6 +120,8 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
     };
     // The editor's grid: the theme's OC_CurveEditorLines (a bar's line is thicker).
     const ImU32 editorLines = ImGui::ColorConvertFloat4ToU32(OceanodeColors::CurveEditorLines);
+    // Drawn over the clip only: past its end there is no curve to edit.
+    dl->PushClipRect(ImVec2(left, editorMin.y), ImVec2(right, editorMax.y), true);
     if(curveSnapLevels(*lane) >= 2) {
         const int levels = curveSnapLevels(*lane);
         for(int row = 0; row <= levels; ++row) {
@@ -168,6 +170,7 @@ void ofxOceanodeTimelineCurveEditor::drawCanvas(ofxOceanodeTimelineLaneEditorCon
         if(bar || beatOffset(beat + curveGrid) - beatOffset(beat) >= 4.0f)
             dl->AddLine(ImVec2(x, curveTop), ImVec2(x, curveBottom), editorLines, bar ? 1.5f : 1.0f);
     }
+    dl->PopClipRect();
     // Points stay in beat order; an edit that moves one past a neighbour is
     // reordered here. Stable, so two points on one beat (a vertical step)
     // never swap -- an unstable sort could reorder them every frame.

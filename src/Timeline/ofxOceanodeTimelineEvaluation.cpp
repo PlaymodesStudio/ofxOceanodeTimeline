@@ -1786,9 +1786,21 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 const bool endingCurve = (crossedEnd || restingOnEnd) &&
                     endBeat > clip.startBeat + kEpsilon && endTimelineBeat > placement.windowFrom + kEpsilon &&
                     !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
+                // A clip starting within the next two frames: its curves'
+                // first values are written now, as a vertical step that close
+                // is (stepAhead). Values are written once a frame while notes
+                // are scheduled to their exact beat, so without this a note
+                // on the clip's first beat would play with the value before it
+                // (a level curve starting at 0 heard at the previous level).
+                const bool startingCurve = !endingCurve && sequenceAhead > 0.0 &&
+                    clip.startBeat > beat + kEpsilon && clip.startBeat <= beat + sequenceAhead + kEpsilon &&
+                    placement.map.toTimeline(clip.startBeat) < placement.windowTo - kEpsilon &&
+                    !clip.muted && !ofxOceanodeTimelineClipChanceSilenced(clip, copyContext);
                 if(endingCurve) {
                     sourceBeat = curveEndSourceBeat(clip, endBeat);
                     endingCurveClips[&clip] = endTimelineBeat;
+                } else if(startingCurve) {
+                    sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(clip, clip.startBeat);
                 } else if(beatPosition >= placement.windowTo - kEpsilon || !clipSourceBeat(clip, copyContext, beat, sourceBeat)) {
                     // A clip its chance roll left out plays as an empty pass: the
                     // lanes that rest at 0 between their events (gates, toggles,
@@ -1803,7 +1815,7 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                 }
                 for(const auto& sourceLane : clip.lanes) {
                     if(!laneAudible(clip, sourceLane)) continue;
-                    if(endingCurve && sourceLane.type != ofxOceanodeTimelineLaneType::Curve &&
+                    if((endingCurve || startingCurve) && sourceLane.type != ofxOceanodeTimelineLaneType::Curve &&
                        sourceLane.type != ofxOceanodeTimelineLaneType::MultiCurve) continue;
                     if(onlyPaths != nullptr) {
                         bool wanted = false;
@@ -1892,8 +1904,9 @@ void ofxOceanodeTimelineManager::collectActiveValues(const ofxOceanodeTimelinePl
                                 // shared parameter's combined value at all.
                                 if(binding->bypass) continue;
                                 // A gate sharing this binding must still release
-                                // to its rest, rather than hold the curve endpoint.
-                                if(endingCurve && (zeroWhenInactiveBindingsCache.count(binding) > 0 ||
+                                // to its rest, rather than hold the curve endpoint
+                                // (or take the next clip's first value early).
+                                if((endingCurve || startingCurve) && (zeroWhenInactiveBindingsCache.count(binding) > 0 ||
                                                   restWhenInactiveCache.count(binding) > 0)) continue;
                                 contribute(binding, ofxOceanodeTimelineIsHeldValueLane(lane.type)
                                         ? (binding->valueType == typeid(int).name() ||
