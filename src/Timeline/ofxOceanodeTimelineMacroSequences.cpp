@@ -46,7 +46,8 @@ std::string libraryKey(const std::string& folder) {
 } // namespace
 
 uint64_t ofxOceanodeTimelineManager::nodeGraphGeneration() {
-    return ofxOceanodeNode::graphGeneration();
+    // (Plus canvas id changes: a path naming a renamed canvas resolves elsewhere.)
+    return ofxOceanodeNode::graphGeneration() + ofxOceanodeContainer::canvasIdGeneration();
 }
 
 void ofxOceanodeTimelineManager::pruneMacroSequences() const {

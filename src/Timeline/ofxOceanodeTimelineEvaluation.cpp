@@ -1015,6 +1015,14 @@ void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     evaluationIndexesValid = false;
     // (Bindings may have changed: what was missing is looked up again.)
     missingTargets.clear();
+    sourceSignatures.clear();
+    combinedValues.clear();
+    {
+        auto& cache = primary != nullptr ? primary->parameterCache : parameterCache;
+        for(auto it = cache.begin(); it != cache.end();) {
+            if(it->second.parameter == nullptr) it = cache.erase(it); else ++it;
+        }
+    }
     placedTimelinesValid = false;
     bindingsByPathCache.clear();
     trackByIdCache.clear();
@@ -2286,7 +2294,16 @@ bool ofxOceanodeTimelineManager::computeParameterValue(
     // Outside every clip the parameter holds its last value: nothing is
     // written, so it can also be changed by hand between clips.
     if(valuesIt == activeValues.end()) return false;
-    std::string value = combineAutomationValues(valuesIt->second, defaultBinding->valueType);
+    std::string value;
+    if(&activeValues == &activeAutomationValues) {
+        auto& combined = combinedValues[valuesIt->first];
+        if(combined.revision != activeValuesRevision || combined.valueType != defaultBinding->valueType) {
+            combined.value = combineAutomationValues(valuesIt->second, defaultBinding->valueType);
+            combined.valueType = defaultBinding->valueType;
+            combined.revision = activeValuesRevision;
+        }
+        value = combined.value;
+    } else value = combineAutomationValues(valuesIt->second, defaultBinding->valueType);
     value = broadcastScalarNumericVectorValue(*parameter, value, defaultBinding->valueType);
     if(defaultBinding->clampToParameterRange)
         value = clampValueToParameterRange(*parameter, value, defaultBinding->valueType);
@@ -2540,6 +2557,15 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         }
     }
     return hash.result();
+}
+
+uint64_t ofxOceanodeTimelineManager::sourceSequenceSignature(const ofxOceanodeTimelineSequence& sequence) const {
+    if(!sourceSignaturesOpen) return sequenceSignature(sequence);
+    const auto found = sourceSignatures.find(&sequence);
+    if(found != sourceSignatures.end()) return found->second;
+    const uint64_t signature = sequenceSignature(sequence);
+    sourceSignatures.emplace(&sequence, signature);
+    return signature;
 }
 
 void ofxOceanodeTimelineManager::ensureEvaluationIndexes() {
@@ -2820,7 +2846,8 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
                                           lane.type == ofxOceanodeTimelineLaneType::MultiValue;
                     if(!multiRow && lane.type != ofxOceanodeTimelineLaneType::Step) continue;
                     const bool heard = audible && !clip.muted && laneAudible(clip, lane);
-                    const std::string rest = multiRow
+                    // (Only a heard lane's rest is written.)
+                    const std::string rest = !heard ? std::string() : multiRow
                         ? joinAutomationValues(std::vector<std::string>(static_cast<size_t>(std::max(1, lane.multiRowCount)), "0"))
                         : "0";
                     for(const auto& bindingId : lane.bindingIds) {
@@ -2836,8 +2863,10 @@ void ofxOceanodeTimelineManager::releaseSilencedRests(const ofxOceanodeTransport
     // Heard last frame, silenced now and written by nothing else: rest once.
     for(const auto& entry : soundingRestPaths) {
         if(sounding.count(entry.first) > 0 || silenced.count(entry.first) == 0) continue;
-        if(activeAutomationValues.count(entry.first) == 0)
+        if(activeAutomationValues.count(entry.first) == 0) {
             activeAutomationValues[entry.first].emplace_back(ofxOceanodeTimelineAutomationMode::Replace, entry.second);
+            ++activeValuesRevision;
+        }
     }
     soundingRestPaths = std::move(sounding);
 }
