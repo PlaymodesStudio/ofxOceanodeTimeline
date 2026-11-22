@@ -510,6 +510,10 @@ int main() {
         {
             assert(ui.editorState.editorLaneId!=piano);
             auto click=[&](ImVec2 at){ frame(1250,at,false); frame(1250,at,true); frame(1250,at,false); for(int i=0;i<25;++i) frame(); };
+            // The clicks below are placed for a piano roll 480 high (a lane opens
+            // lower than that): give it that height for this check only.
+            ui.editorState.laneEditorHeights[piano]=480.0f;
+            for(int i=0;i<3;++i) frame();
             const int low=model.getLane(t,c,piano)->pianoLowPitch, high=model.getLane(t,c,piano)->pianoHighPitch;
             // "+" is the first control down the keys' scrollbar column, beside the lane's panel.
             ImGuiWindow* pianoPanel=nullptr;
@@ -531,6 +535,8 @@ int main() {
             assert(lane->pianoLowPitch < zoomedLow);
             assert(ui.editorState.editorLaneId!=piano);
             lane->pianoLowPitch=low; lane->pianoHighPitch=high;
+            ui.editorState.laneEditorHeights.erase(piano);
+            for(int i=0;i<3;++i) frame();
         }
         model.getLane(t,c,piano)->pianoNotes[1].mutation=0.0f; model.getLane(t,c,piano)->mutation.scaleMask=0xFFF; model.getLane(t,c,piano)->mutation.pitchDirection=0;
     }
@@ -1128,8 +1134,15 @@ int main() {
     io.AddMouseButtonEvent(1,false);frame(1250,pad,false);frame();
     assert(!ImGui::GetCurrentContext()->OpenPopupStack.empty());
     auto* trackMenu=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;assert(trackMenu);
-    const ImVec2 duplicatePoint(trackMenu->Pos.x+50,trackMenu->Pos.y+trackMenu->Size.y-
-        ImGui::GetStyle().WindowPadding.y-ImGui::GetTextLineHeight()*0.5f-ImGui::GetTextLineHeightWithSpacing());
+    // "Duplicate track", wherever the menu has it (other entries follow it):
+    // found by hovering up from the bottom.
+    const ImGuiID duplicateId=trackMenu->GetID("Duplicate track");
+    ImVec2 duplicatePoint(-1,-1);
+    for(float y=trackMenu->Pos.y+trackMenu->Size.y-4.0f;y>trackMenu->Pos.y && duplicatePoint.x<0;y-=4.0f) {
+        frame(1250,ImVec2(trackMenu->Pos.x+50,y),false);
+        if(ImGui::GetCurrentContext()->HoveredId==duplicateId) duplicatePoint=ImVec2(trackMenu->Pos.x+50,y);
+    }
+    assert(duplicatePoint.x>=0);
     frame(1250,duplicatePoint,false);frame(1250,duplicatePoint,true);frame(1250,duplicatePoint,false);
     assert(model.editSequence().tracks.size()==trackBefore.size()+1 && ui.selectedTracks.size()==1);
     const auto duplicatedTrack=*ui.selectedTracks.begin();assert(duplicatedTrack!=t);
