@@ -45,6 +45,10 @@ std::string libraryKey(const std::string& folder) {
 }
 } // namespace
 
+uint64_t ofxOceanodeTimelineManager::nodeGraphGeneration() {
+    return ofxOceanodeNode::graphGeneration();
+}
+
 void ofxOceanodeTimelineManager::pruneMacroSequences() const {
     macroSequences.erase(std::remove_if(macroSequences.begin(), macroSequences.end(),
         [](const auto& entry) { return entry.container.expired(); }), macroSequences.end());

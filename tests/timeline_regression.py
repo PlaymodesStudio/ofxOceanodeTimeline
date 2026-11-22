@@ -567,6 +567,9 @@ def main(*, cases=CASES, extra_sources=(), extra_includes=()):
             'const ofxOceanodeContainer&, const std::string&) const { return nullptr; }\n'
             # Canvases: only the root exists here, and no macro has timelines.
             'void ofxOceanodeTimelineManager::pruneMacroSequences() const {}\n'
+            # No real nodes here: as if they changed on every lookup, so a
+            # missing target is looked up every time, as before the wait.
+            'uint64_t ofxOceanodeTimelineManager::nodeGraphGeneration() { static uint64_t n = 0; return ++n; }\n'
             # A Global Track keyframe walks real nodes: nothing to capture here.
             'void ofxOceanodeTimelineManager::captureGlobalValues(ofxOceanodeContainer&, '
             'const std::unordered_set<ofxOceanodeAbstractParameter*>&, std::map<std::string, std::string>&) const {}\n'

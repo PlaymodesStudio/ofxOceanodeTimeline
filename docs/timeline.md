@@ -1039,6 +1039,24 @@ changing the evaluation path.
 - **Scheduler:** it only looks for change beats in clips and lanes that drive a
   scheduled path.
 - **Piano held notes:** the held-note lookup binary-searches each voice slot.
+- **Missing targets:** a binding or Global Track parameter that is not found
+  (its node deleted, or kept out of a Macro Morphing source) costs a scan of
+  its whole canvas. It is looked up again after 30 frames, or at once when a
+  node is made or deleted anywhere (`ofxOceanodeNode::graphGeneration`). A
+  parameter added to an existing node is picked up within the 30 frames.
+- **Global Track repeats:** the host applies automation up to three times a
+  frame (before the nodes, after the morph engines, after the nodes). A Global
+  Track writes a value only when it differs from what it last wrote, so a
+  repeat with the same inputs writes nothing and is skipped. The inputs: the
+  evaluation, the playhead, the node graph, the automation filters
+  (`ofxOceanodeAbstractParameter::automationFilterGeneration`), the channels
+  and preset loads. Repeats still run while a channel has an automation filter
+  (a morph blending it in).
+- **Macro Morphing Track:** the Timeline node publishes the routers on update
+  and only the Texture routers on draw, so what is connected to them runs once
+  a frame. The parameter lookup cache is dropped after the engines update
+  only when an engine updated inside that pass (none does when a Timeline
+  node points at the timeline).
 
 ## Piano scale overlay
 

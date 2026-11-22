@@ -3377,6 +3377,16 @@ private:
     mutable std::string failedLoadPath; // timeline.json that could not be read
     // Per-update cache of parameter lookups by path (see update()).
     ofxOceanodeAbstractParameter* findParameterCached(const std::string& path) const;
+    // The target of an automated path for applyAutomation. One not found is
+    // not looked up again for a while (a miss scans its whole canvas: a node
+    // left out of a Macro Morphing source, or deleted, would be searched for
+    // three times a frame), unless nodes are made or deleted meanwhile.
+    ofxOceanodeAbstractParameter* findAutomatedTarget(const std::string& path);
+    struct MissingTarget { uint64_t retryFrame = 0, generation = 0; };
+    // Moves whenever a node is made or deleted anywhere (the core's
+    // ofxOceanodeNode::graphGeneration): a target missing before may be there now.
+    static uint64_t nodeGraphGeneration();
+    std::unordered_map<std::string, MissingTarget> missingTargets;
     mutable std::unordered_map<std::string, ofxOceanodeAbstractParameter*> parameterCache;
     bool parameterCacheActive = false;
     std::unordered_map<std::string, std::vector<ofxOceanodeTimelineParameterBinding*>> bindingsByPathCache;
@@ -3487,9 +3497,14 @@ private:
         std::vector<std::vector<float>> numbers; // per keyframe (interpolated; empty where absent)
         std::vector<const std::string*> texts;   // per keyframe (into the keyframes' maps; null where absent)
         // A path not found (its node left out of a Macro Morphing source, or
-        // deleted) is looked up again from this frame on, not on every pass:
-        // a miss scans its whole canvas.
+        // deleted) is looked up again from this frame on, or as soon as the
+        // node graph changes from this generation (ofxOceanodeNode::
+        // graphGeneration), not on every pass: a miss scans its whole canvas.
         uint64_t retryFrame = 0;
+        uint64_t retryGeneration = 0;
+        // The parameter it last found (compared, never dereferenced): another
+        // one (its node made anew) is written even if the value has not moved.
+        const ofxOceanodeAbstractParameter* foundParameter = nullptr;
     };
     struct GlobalClipChannels {
         // The played timeline's copy, or the copy of a timeline its clips
@@ -3519,6 +3534,27 @@ private:
     struct GlobalApplied { std::vector<float> numbers; std::string text; bool blended = false; };
     std::unordered_map<std::string, GlobalApplied> globalLastApplied;
     uint64_t globalLoadCountSeen = 0;
+    // A Global Track writes a value only when it differs from what it last
+    // wrote, so a repeat of a pass (the host applies again after the morph
+    // engines and after the nodes ran) with the same inputs writes nothing:
+    // it is skipped. Its inputs: the evaluation it follows, the playhead, the
+    // node graph, the automation filters, the channels and the preset loads.
+    struct GlobalPassKey {
+        uint64_t evaluation = 0;
+        double beat = 0.0;
+        uint64_t nodes = 0, filters = 0, channels = 0, loads = 0;
+        bool operator==(const GlobalPassKey& other) const {
+            return evaluation == other.evaluation && beat == other.beat && nodes == other.nodes &&
+                   filters == other.filters && channels == other.channels && loads == other.loads;
+        }
+    };
+    GlobalPassKey globalPassKey;
+    bool globalPassDone = false;
+    // A channel reached in the last full pass had an automation filter (a
+    // morph blending it in): what it writes moves, so repeats run.
+    bool globalPassFiltered = false;
+    uint64_t evaluationCount = 0;     // goes up with every evaluateAutomation
+    uint64_t globalChannelsBuild = 0; // goes up with every rebuildGlobalChannels
     // The parameters a Global Track is moving right now (the playhead is
     // between two keyframes that differ for them), with their track's
     // colour: the node GUI marks them like a track's own parameters. Kept by
@@ -3707,7 +3743,8 @@ private:
     void presentMorphScenes();
     void updateMorphEngines();
     // One engine's update and outputs, once per frame.
-    void updateMorphEngineNow(MorphEngine& engine);
+    // (False: it had updated this frame already, or has no runtime.)
+    bool updateMorphEngineNow(MorphEngine& engine);
     // Releases the engines (rootOnly: those of the root canvas's timelines).
     void releaseMorphEngines(bool rootOnly);
     void releaseMorphEngine(const TimelineRef& ref);

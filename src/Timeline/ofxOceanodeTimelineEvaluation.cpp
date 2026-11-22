@@ -1013,6 +1013,8 @@ bool ofxOceanodeTimelineManager::isClipChanceSilenced(const ofxOceanodeTimelineC
 
 void ofxOceanodeTimelineManager::invalidateEvaluationIndexes() {
     evaluationIndexesValid = false;
+    // (Bindings may have changed: what was missing is looked up again.)
+    missingTargets.clear();
     placedTimelinesValid = false;
     bindingsByPathCache.clear();
     trackByIdCache.clear();

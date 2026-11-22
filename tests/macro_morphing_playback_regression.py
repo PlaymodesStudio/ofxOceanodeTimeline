@@ -531,6 +531,79 @@ int main(int argc, char** argv) {
         check(engine->currentID() == aID && engine->destinationID() == bID, "...and it plays as before");
     }
 
+    // ---- A target not found is looked up again as soon as nodes change ----
+    {
+        // (A parameter found one frame after its node is made again was found
+        // because a node was made: the wait for a missing target is 30 frames.)
+        auto probeAt = [&](int id) -> Probe* {
+            const auto& nodes = owner->getDynamicNodes();
+            const auto type = nodes.find("Probe");
+            if(type == nodes.end() || type->second.count(id) == 0) return nullptr;
+            return &static_cast<Probe&>(type->second.at(id)->getNodeModel());
+        };
+        auto& made = owner->createNode(std::make_unique<Probe>(), 9);
+        auto& level = static_cast<ofxOceanodeAbstractParameter&>(made.getParameters().get("Level"));
+        const auto bound = model.createTrack("Missing then back");
+        const auto binding = model.addBinding(bound, level);
+        const auto boundClip = model.createClip(bound, "Clip", 0, 8);
+        const auto lane = model.createLane(bound, boundClip, "Level", ofxOceanodeTimelineLaneType::Number);
+        model.addBindingToLane(bound, boundClip, lane, binding);
+        model.setClipNumber(bound, boundClip, lane, 0, 2.0f);
+        seek(2.0);
+        check(probeAt(9) != nullptr && near(probeAt(9)->level.get(), 2.0f), "A bound parameter takes its clip's value");
+        made.deleteSelf();
+        frame(); frame();
+        check(probeAt(9) == nullptr, "Its node is deleted: the target is missing");
+        owner->createNode(std::make_unique<Probe>(), 9);
+        frame();
+        check(probeAt(9) != nullptr && near(probeAt(9)->level.get(), 2.0f),
+              "Made again, it is found and written on the next frame: " + ofToString(probeAt(9) ? probeAt(9)->level.get() : -9.0f));
+        model.removeTrack(sequence, bound);
+        // The same for a Global Track's parameter, written again although its
+        // value has not moved since it went missing.
+        owner->createNode(std::make_unique<Probe>(), 8);
+        const auto globalId = model.createGlobalTrack(sequence);
+        const auto globalClip = model.getTrack(sequence, globalId)->clips.front().id;
+        auto keyframe = [](const char* value) {
+            return std::make_shared<const std::map<std::string, std::string>>(std::map<std::string, std::string>{{"Probe_8/Level", value}});
+        };
+        model.getClip(sequence, globalId, globalClip)->globalKeyframes = {{0, keyframe("1")}, {8, keyframe("3")}};
+        seek(4.0);
+        auto moved = [&]() { auto* p = probeAt(8); return p != nullptr && p->level.get() > 1.0f && p->level.get() < 3.0f; };
+        check(moved(), "A Global Track moves its parameter: " + ofToString(probeAt(8) ? probeAt(8)->level.get() : -9.0f));
+        {
+            // A repeat pass with the same inputs is skipped (it would write
+            // nothing); these change between passes, so the next pass runs.
+            auto levelOf8 = [&]() -> ofxOceanodeParameter<float>& {
+                return static_cast<ofxOceanodeAbstractParameter&>(
+                    owner->getDynamicNodes().at("Probe").at(8)->getParameters().get("Level")).cast<float>();
+            };
+            // A filter set between passes (a morph starting during the node updates).
+            levelOf8().setAutomationFilter([](const float&) { return 3.5f; });
+            model.applyAutomation();
+            check(near(probeAt(8)->level.get(), 3.5f),
+                  "A filter set between passes is written by the next one: " + ofToString(probeAt(8)->level.get()));
+            levelOf8().clearAutomationFilter();
+            model.applyAutomation();
+            check(moved(), "...and once dropped, the next pass lands back on the track's value: " + ofToString(probeAt(8)->level.get()));
+            // A node made anew between passes.
+            owner->getDynamicNodes().at("Probe").at(8)->deleteSelf();
+            owner->createNode(std::make_unique<Probe>(), 8);
+            model.applyAutomation();
+            check(moved(), "A node made anew between passes is written by the next one: " +
+                           ofToString(probeAt(8) ? probeAt(8)->level.get() : -9.0f));
+        }
+        owner->getDynamicNodes().at("Probe").at(8)->deleteSelf();
+        frame(); frame();
+        owner->createNode(std::make_unique<Probe>(), 8);
+        frame();
+        check(moved(), "Its node made again, the Global Track writes it on the next frame: " +
+                       ofToString(probeAt(8) ? probeAt(8)->level.get() : -9.0f));
+        model.removeTrack(sequence, globalId);
+        for(const int id : {8, 9}) if(probeAt(id) != nullptr) owner->getDynamicNodes().at("Probe").at(id)->deleteSelf();
+        frame();
+    }
+
     // ---- The track's state and the engine follow each other ----
     // Removing a source removes its clips.
     const auto withBoth = model.getTrack(sequence, trackId)->morphState;
@@ -599,7 +672,7 @@ int main(int argc, char** argv) {
     if(failures > 0) return 1;
     std::cout << "Macro morphing playback passed: engine per timeline, routers and sources stored in the track, scene at the playhead "
                  "(alone, transition, gap), source timelines placed by their clips (both in an overlap), playing, muted clip and track, "
-                 "publishers, source timelines kept across graphs and saved on demand, source loaded ahead, morph in place, nested macro timelines, undo of a source removal, removed source, state restored behind the engine, engine gone with its track, no copy of a source kept in the project.\n";
+                 "publishers, source timelines kept across graphs and saved on demand, source loaded ahead, morph in place, missing targets picked up when nodes change, repeat Global Track passes, nested macro timelines, undo of a source removal, removed source, state restored behind the engine, engine gone with its track, no copy of a source kept in the project.\n";
     return 0;
 }
 '''

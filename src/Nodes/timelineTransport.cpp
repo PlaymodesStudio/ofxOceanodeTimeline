@@ -149,13 +149,15 @@ void timelineTransport::update(ofEventArgs &a) {
 
 void timelineTransport::draw(ofEventArgs &a) {
     // The track's sources draw with the patch (their textures are rendered
-    // here), once per frame whichever node asks first; then the outputs again.
+    // here), once per frame whichever node asks first; then the textures go
+    // out. The other outputs went out on update: written again here, every
+    // node connected to them would run twice a frame.
     if(hostContainer == nullptr || selectedRef.timeline.empty() || routersEngine == nullptr) return;
     auto& manager = hostContainer->getTimelineManager();
     const auto* sequence = manager.findTimeline(selectedRef);
     if(sequence == nullptr) return;
     manager.drawMorphEngine(*sequence);
-    if(const auto* outputs = manager.morphOutputs(*sequence)) routers.publish(*outputs);
+    if(const auto* outputs = manager.morphOutputs(*sequence)) routers.publish(*outputs, true);
 }
 
 void timelineTransport::presetSave(ofJson &json) {

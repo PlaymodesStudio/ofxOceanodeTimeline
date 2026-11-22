@@ -3110,9 +3110,10 @@ float fittedPowerSteepness(Shape&& shape) {
 // The mirror of a Log / Exp segment, 1 - (1 - x)^s, is not a power curve:
 // it is laid out as kPieces segments, each a fitted power curve.
 constexpr int kMirroredPowerPieces = 4;
-// How long a Global Track channel whose parameter was not found waits before
-// looking it up again (about half a second).
-constexpr uint64_t kGlobalMissingRetryFrames = 30;
+// How long a Global Track channel or a binding whose parameter was not found
+// waits before looking it up again (about half a second), unless nodes are
+// made or deleted meanwhile (then at once): a miss scans its whole canvas.
+constexpr uint64_t kMissingTargetRetryFrames = 30;
 
 void mirrorCurve(ofxOceanodeTimelineLane& lane, double length) {
     if(lane.curvePoints.empty()) return;
@@ -5379,6 +5380,26 @@ void ofxOceanodeTimelineManager::endParameterCache() {
     anySoloCache.clear();
 }
 
+ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findAutomatedTarget(const std::string& path) {
+    // (A path that is found, the usual case, costs what findParameterCached does.)
+    if(!missingTargets.empty()) {
+        const auto missing = missingTargets.find(path);
+        if(missing != missingTargets.end()) {
+            const uint64_t frame = static_cast<uint64_t>(ofGetFrameNum());
+            const uint64_t generation = nodeGraphGeneration();
+            if(frame < missing->second.retryFrame && generation == missing->second.generation) return nullptr;
+            auto* parameter = findParameterCached(path);
+            if(parameter != nullptr) missingTargets.erase(missing);
+            else missing->second = {frame + kMissingTargetRetryFrames, generation};
+            return parameter;
+        }
+    }
+    auto* parameter = findParameterCached(path);
+    if(parameter == nullptr)
+        missingTargets[path] = {static_cast<uint64_t>(ofGetFrameNum()) + kMissingTargetRetryFrames, nodeGraphGeneration()};
+    return parameter;
+}
+
 ofxOceanodeAbstractParameter* ofxOceanodeTimelineManager::findParameterCached(const std::string& path) const {
     if(container == nullptr) return nullptr;
     // An engine's paths are absolute, like its primary's: share its cache.
@@ -5540,6 +5561,7 @@ void ofxOceanodeTimelineManager::adoptInstrumentDurations() {
 
 void ofxOceanodeTimelineManager::evaluateAutomation() {
     if(container == nullptr) return;
+    ++evaluationCount; // (a Global Track pass after this one is a new pass: applyGlobalTracks)
     // Timelines playing on their own first: the main timeline then applies
     // over them on any path both drive.
     if(!isEngine()) {
@@ -5817,7 +5839,8 @@ void ofxOceanodeTimelineManager::applyAutomation() {
     const auto& activeValues = activeAutomationValues;
     for(const auto& path : orderedAutomationPaths()) {
         auto& bindings = bindingsByPathCache.at(path);
-        auto* parameter = findParameterCached(path);
+        // (A path not found waits before it is looked up again: findAutomatedTarget.)
+        auto* parameter = findAutomatedTarget(path);
         ofxOceanodeTimelineParameterBinding* defaultBinding = nullptr;
         for(auto* binding : bindings) {
             binding->missingTarget = parameter == nullptr;
@@ -6044,6 +6067,7 @@ int ofxOceanodeTimelineManager::moveGlobalKeyframe(ofxOceanodeTimelineSequence& 
 void ofxOceanodeTimelineManager::rebuildGlobalChannels() {
     globalChannelsCache.clear();
     globalChannelsValid = true;
+    ++globalChannelsBuild;
     // The played timeline, then the copies of the timelines its clips place
     // (forward and mirrored), outer ones first as collectMacroSources finds
     // them: applyGlobalTracks gives a parameter to the first that moves it.
@@ -6110,6 +6134,18 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
     }
     if(globalChannelsCache.empty()) { globalPlacementSeen.clear(); return; }
     const double playheadBeat = playState().beatPosition;
+    // A repeat of the last pass with the same inputs writes nothing (each
+    // write is checked against what the track last wrote): skip it, unless a
+    // channel had an automation filter then (a morph blending it in, whose
+    // value moves on every pass). See GlobalPassKey.
+    {
+        const GlobalPassKey key{evaluationCount, playheadBeat, nodeGraphGeneration(),
+                                ofxOceanodeAbstractParameter::automationFilterGeneration(), globalChannelsBuild, loads};
+        if(globalPassDone && !globalPassFiltered && key == globalPassKey) return;
+        globalPassKey = key;
+        globalPassDone = true;
+        globalPassFiltered = false;
+    }
     // A placed timeline's Global Track plays where a clip places the
     // timeline, in the timeline's own beats (through the clip's repeats,
     // stretch, offset and reverse). One placement per timeline, the first
@@ -6137,6 +6173,8 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
     // timeline's and one of a timeline around it hold the same parameter,
     // the outer one has it (the cache has the outer ones first).
     std::unordered_set<std::string_view> moved;
+    const uint64_t frameNumber = static_cast<uint64_t>(ofGetFrameNum());
+    const uint64_t nodeGeneration = nodeGraphGeneration();
     static const std::string floatType = typeid(float).name(), intType = typeid(int).name();
     static const std::string floatVectorType = typeid(std::vector<float>).name(), intVectorType = typeid(std::vector<int>).name();
     for(auto& entry : globalChannelsCache) {
@@ -6179,10 +6217,25 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
             // Explicit automation wins, on this timeline or an outer one.
             if(bindingsByPathCache.count(channel.path) > 0) continue;
             if(pathDrivenElsewhere && pathDrivenElsewhere(channel.path)) continue;
-            const uint64_t frameNumber = static_cast<uint64_t>(ofGetFrameNum());
-            if(frameNumber < channel.retryFrame) continue;
+            // A parameter not found waits (see kMissingTargetRetryFrames); a
+            // node made or deleted since may be it, so that ends the wait.
+            if(frameNumber < channel.retryFrame && nodeGeneration == channel.retryGeneration) continue;
             auto* parameter = findParameterCached(channel.path);
-            if(parameter == nullptr) { channel.retryFrame = frameNumber + kGlobalMissingRetryFrames; continue; }
+            if(parameter == nullptr) {
+                channel.retryFrame = frameNumber + kMissingTargetRetryFrames;
+                channel.retryGeneration = nodeGeneration;
+                // What was written to it went with it: the parameter found
+                // again (its node made anew) is written even if the value
+                // has not moved since.
+                globalLastApplied.erase(channel.path);
+                continue;
+            }
+            if(parameter != channel.foundParameter) {
+                // Another parameter than last time (its node made anew): what
+                // was written went with the old one.
+                globalLastApplied.erase(channel.path);
+                channel.foundParameter = parameter;
+            }
             if(parameter->hasInConnection()) continue;
             const std::string type = parameter->valueType();
             if(channel.kind == 0) {
@@ -6277,6 +6330,7 @@ void ofxOceanodeTimelineManager::applyGlobalTracks() {
                 // while one is set, and once more after it is gone to land
                 // on its own value.
                 const bool blending = parameter->hasAutomationFilter();
+                if(blending) globalPassFiltered = true; // (repeats of this pass must run)
                 if(!blending && !last.blended && last.numbers == value) continue;
                 ofxOceanodeAbstractParameter::AutomationWriteScope writing(*parameter);
                 if(type == floatType) {

@@ -928,8 +928,8 @@ void ofxOceanodeTimelineManager::presentMorphScenes() {
     parameterCache.clear();
 }
 
-void ofxOceanodeTimelineManager::updateMorphEngineNow(MorphEngine& engine) {
-    if(engine.runtime == nullptr || engine.updatedFrame == morphFrame) return;
+bool ofxOceanodeTimelineManager::updateMorphEngineNow(MorphEngine& engine) {
+    if(engine.runtime == nullptr || engine.updatedFrame == morphFrame) return false;
     engine.updatedFrame = morphFrame;
     auto& runtime = *engine.runtime;
     // Where the MacroMixer node updates its own: the timelines of this
@@ -945,6 +945,7 @@ void ofxOceanodeTimelineManager::updateMorphEngineNow(MorphEngine& engine) {
         if(runtime.originsToCheck() == 0) engine.checksWanted = false;
         else runtime.checkNextOrigin();
     }
+    return true;
 }
 
 void ofxOceanodeTimelineManager::updateMorphEngines() {
@@ -958,13 +959,15 @@ void ofxOceanodeTimelineManager::updateMorphEngines() {
         if(publisher != morphPublishers.end() && morphFrame - publisher->second <= 1) continue;
         engines.push_back(entry.second);
     }
+    bool updated = false;
     for(const auto& engine : engines)
-        if(engine != nullptr) updateMorphEngineNow(*engine);
+        if(engine != nullptr && updateMorphEngineNow(*engine)) updated = true;
     // The sources' nodes updated in there, and may have made or deleted nodes
     // (a nested macro loading a preset as its timeline is scrubbed) without
     // any graph changing: no parameter looked up before is trusted by the
-    // applyAutomation that follows.
-    parameterCache.clear();
+    // applyAutomation that follows. (An engine a Timeline node publishes
+    // updates on that node's update, outside this pass: nothing to drop then.)
+    if(updated) parameterCache.clear();
 }
 
 void ofxOceanodeTimelineManager::updateMorphEngine(const ofxOceanodeTimelineSequence& sequence) {
