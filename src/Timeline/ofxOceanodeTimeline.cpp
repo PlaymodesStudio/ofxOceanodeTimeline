@@ -2913,6 +2913,93 @@ std::vector<Event> layOutEvents(const std::vector<Event>& events, const ClipLayo
     return out;
 }
 
+// A clip's lane laid out as the clip plays it over `layout` (see ClipLayout),
+// in a clip `total` beats long. Sets `refused` when a Drum Grid would have
+// to be longer than a pattern can be.
+ofxOceanodeTimelineLane layOutClipLane(const ofxOceanodeTimelineLane& source, const ClipLayout& layout,
+                                       double total, bool& refused) {
+    const bool isCurveLane = source.type == ofxOceanodeTimelineLaneType::Curve || ofxOceanodeTimelineIsHeldValueLane(source.type);
+    ofxOceanodeTimelineLane lane = source;
+    if(isCurveLane) {
+        if(!source.curvePoints.empty()) layOutCurve(source, layout, lane.curvePoints, lane.curveTensions);
+    } else if(source.type == ofxOceanodeTimelineLaneType::MultiCurve) {
+        for(size_t curve = 0; curve < source.multiCurves.size(); ++curve)
+            if(!source.multiCurves[curve].curvePoints.empty())
+                layOutCurve(source.multiCurves[curve], layout,
+                            lane.multiCurves[curve].curvePoints, lane.multiCurves[curve].curveTensions);
+    } else if(source.type == ofxOceanodeTimelineLaneType::PianoRoll) {
+        lane.pianoNotes = layOutEvents(source.pianoNotes, layout);
+    } else if(source.type == ofxOceanodeTimelineLaneType::MultiGate) {
+        for(size_t row = 0; row < source.multiGateRows.size(); ++row) lane.multiGateRows[row] = layOutEvents(source.multiGateRows[row], layout);
+    } else if(source.type == ofxOceanodeTimelineLaneType::MultiValue) {
+        for(size_t row = 0; row < source.multiValueRows.size(); ++row) lane.multiValueRows[row] = layOutEvents(source.multiValueRows[row], layout);
+    } else if(source.type == ofxOceanodeTimelineLaneType::Step) {
+        const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
+        const double period = std::max(cell, source.stepCount * cell);
+        lane.step.steps.clear();
+        for(const auto& step : source.step.steps) {
+            if(step.startBeat >= period - kEpsilon) continue;
+            layout.forEachOccurrence(period, step.startBeat, [&](double at, double limit) {
+                auto piece = step;
+                const double length = std::min(step.durationBeats > kEpsilon ? step.durationBeats : cell, limit - at);
+                piece.startBeat = layout.toMerged(at);
+                piece.durationBeats = length * layout.stretch;
+                lane.step.steps.push_back(piece);
+            });
+        }
+        lane.beatsPerStep = cell * layout.stretch;
+        lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
+        lane.step.sortSteps();
+    } else if(source.type == ofxOceanodeTimelineLaneType::MultiSlider) {
+        const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
+        const int count = std::max(1, source.stepCount);
+        lane.beatsPerStep = cell * layout.stretch;
+        lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
+        // Cells outside this clip's span are filled in after joining (NaN until then).
+        lane.multiSliderValues.assign(static_cast<size_t>(lane.stepCount), std::numeric_limits<float>::quiet_NaN());
+        for(int m = 0; m < lane.stepCount; ++m) {
+            const double local = (m + 0.5) * lane.beatsPerStep - layout.placeAt;
+            if(local < 0.0 || local >= layout.length) continue;
+            const double sourceBeat = positiveModulo(local / layout.stretch, layout.content);
+            const int index = std::min(count - 1, static_cast<int>(std::floor(positiveModulo(sourceBeat, cell * count) / cell)));
+            if(index < static_cast<int>(source.multiSliderValues.size())) lane.multiSliderValues[static_cast<size_t>(m)] = source.multiSliderValues[static_cast<size_t>(index)];
+        }
+    } else if(source.type == ofxOceanodeTimelineLaneType::DrumGrid) {
+        // Each row becomes one pattern as long as the merged clip.
+        if(total > ofxOceanodeTimelineDrumGrid::kMaxLength + kEpsilon) refused = true;
+        for(size_t r = 0; r < source.drumRows.size(); ++r) {
+            const auto& row = source.drumRows[r];
+            auto& placedRow = lane.drumRows[r];
+            placedRow.steps.clear();
+            placedRow.length = std::min(total, ofxOceanodeTimelineDrumGrid::kMaxLength);
+            const double period = ofClamp(row.length, ofxOceanodeTimelineDrumGrid::kMinLength, ofxOceanodeTimelineDrumGrid::kMaxLength);
+            for(const auto& step : row.steps) {
+                if(ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) continue;
+                layout.forEachOccurrence(period, step.beat, [&](double at, double) {
+                    auto piece = step;
+                    piece.beat = layout.toMerged(at);
+                    piece.length = step.length * layout.stretch;
+                    placedRow.steps.push_back(piece);
+                });
+            }
+            ofxOceanodeTimelineDrumGrid::normalizeRow(placedRow);
+        }
+        lane.drumSwingBeats = source.drumSwingBeats * layout.stretch;
+    }
+    return lane;
+}
+
+// Slider cells no laid-out clip covered (NaN) hold the nearest covered value.
+void fillUncoveredSliderCells(ofxOceanodeTimelineLane& lane) {
+    if(lane.type != ofxOceanodeTimelineLaneType::MultiSlider) return;
+    auto& values = lane.multiSliderValues;
+    float last = std::numeric_limits<float>::quiet_NaN();
+    for(auto& value : values) { if(std::isnan(value)) value = last; else last = value; }
+    float next = std::numeric_limits<float>::quiet_NaN();
+    for(auto it = values.rbegin(); it != values.rend(); ++it) { if(std::isnan(*it)) *it = next; else next = *it; }
+    for(auto& value : values) if(std::isnan(value)) value = 0.0f;
+}
+
 // Value of a placed curve at a merged beat (the points' own interpolation).
 float placedCurveValue(const ofxOceanodeTimelineLane& lane, const std::vector<ofxOceanodeTimelineCurvePoint>& points,
                        const std::vector<ofxOceanodeTimelineCurveTension>& tensions, double beat) {
@@ -3379,74 +3466,7 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
 
     bool refused = false;
     auto layOut = [&](const ofxOceanodeTimelineLane& source, const ClipLayout& layout) {
-        ofxOceanodeTimelineLane lane = source;
-        if(isCurve(source)) {
-            if(!source.curvePoints.empty()) layOutCurve(source, layout, lane.curvePoints, lane.curveTensions);
-        } else if(source.type == ofxOceanodeTimelineLaneType::MultiCurve) {
-            for(size_t curve = 0; curve < source.multiCurves.size(); ++curve)
-                if(!source.multiCurves[curve].curvePoints.empty())
-                    layOutCurve(source.multiCurves[curve], layout,
-                                lane.multiCurves[curve].curvePoints, lane.multiCurves[curve].curveTensions);
-        } else if(source.type == ofxOceanodeTimelineLaneType::PianoRoll) {
-            lane.pianoNotes = layOutEvents(source.pianoNotes, layout);
-        } else if(source.type == ofxOceanodeTimelineLaneType::MultiGate) {
-            for(size_t row = 0; row < source.multiGateRows.size(); ++row) lane.multiGateRows[row] = layOutEvents(source.multiGateRows[row], layout);
-        } else if(source.type == ofxOceanodeTimelineLaneType::MultiValue) {
-            for(size_t row = 0; row < source.multiValueRows.size(); ++row) lane.multiValueRows[row] = layOutEvents(source.multiValueRows[row], layout);
-        } else if(source.type == ofxOceanodeTimelineLaneType::Step) {
-            const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
-            const double period = std::max(cell, source.stepCount * cell);
-            lane.step.steps.clear();
-            for(const auto& step : source.step.steps) {
-                if(step.startBeat >= period - kEpsilon) continue;
-                layout.forEachOccurrence(period, step.startBeat, [&](double at, double limit) {
-                    auto piece = step;
-                    const double length = std::min(step.durationBeats > kEpsilon ? step.durationBeats : cell, limit - at);
-                    piece.startBeat = layout.toMerged(at);
-                    piece.durationBeats = length * layout.stretch;
-                    lane.step.steps.push_back(piece);
-                });
-            }
-            lane.beatsPerStep = cell * layout.stretch;
-            lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
-            lane.step.sortSteps();
-        } else if(source.type == ofxOceanodeTimelineLaneType::MultiSlider) {
-            const double cell = std::max(1.0 / 24.0, source.beatsPerStep);
-            const int count = std::max(1, source.stepCount);
-            lane.beatsPerStep = cell * layout.stretch;
-            lane.stepCount = std::max(1, static_cast<int>(std::ceil(total / lane.beatsPerStep - 1e-9)));
-            // Cells outside this clip's span are filled in after joining (NaN until then).
-            lane.multiSliderValues.assign(static_cast<size_t>(lane.stepCount), std::numeric_limits<float>::quiet_NaN());
-            for(int m = 0; m < lane.stepCount; ++m) {
-                const double local = (m + 0.5) * lane.beatsPerStep - layout.placeAt;
-                if(local < 0.0 || local >= layout.length) continue;
-                const double sourceBeat = positiveModulo(local / layout.stretch, layout.content);
-                const int index = std::min(count - 1, static_cast<int>(std::floor(positiveModulo(sourceBeat, cell * count) / cell)));
-                if(index < static_cast<int>(source.multiSliderValues.size())) lane.multiSliderValues[static_cast<size_t>(m)] = source.multiSliderValues[static_cast<size_t>(index)];
-            }
-        } else if(source.type == ofxOceanodeTimelineLaneType::DrumGrid) {
-            // Each row becomes one pattern as long as the merged clip.
-            if(total > ofxOceanodeTimelineDrumGrid::kMaxLength + kEpsilon) refused = true;
-            for(size_t r = 0; r < source.drumRows.size(); ++r) {
-                const auto& row = source.drumRows[r];
-                auto& placedRow = lane.drumRows[r];
-                placedRow.steps.clear();
-                placedRow.length = std::min(total, ofxOceanodeTimelineDrumGrid::kMaxLength);
-                const double period = ofClamp(row.length, ofxOceanodeTimelineDrumGrid::kMinLength, ofxOceanodeTimelineDrumGrid::kMaxLength);
-                for(const auto& step : row.steps) {
-                    if(ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) continue;
-                    layout.forEachOccurrence(period, step.beat, [&](double at, double) {
-                        auto piece = step;
-                        piece.beat = layout.toMerged(at);
-                        piece.length = step.length * layout.stretch;
-                        placedRow.steps.push_back(piece);
-                    });
-                }
-                ofxOceanodeTimelineDrumGrid::normalizeRow(placedRow);
-            }
-            lane.drumSwingBeats = source.drumSwingBeats * layout.stretch;
-        }
-        return lane;
+        return layOutClipLane(source, layout, total, refused);
     };
 
     // Joining the second clip's lane into the first's: the first gives way at `cut`.
@@ -3542,15 +3562,7 @@ std::string ofxOceanodeTimelineManager::mergeClips(ofxOceanodeTimelineSequence& 
     }
     if(refused) return std::string();
     // Slider cells no clip covers hold the nearest covered value.
-    for(auto& lane : merged.lanes) {
-        if(lane.type != ofxOceanodeTimelineLaneType::MultiSlider) continue;
-        auto& values = lane.multiSliderValues;
-        float last = std::numeric_limits<float>::quiet_NaN();
-        for(auto& value : values) { if(std::isnan(value)) value = last; else last = value; }
-        float next = std::numeric_limits<float>::quiet_NaN();
-        for(auto it = values.rbegin(); it != values.rend(); ++it) { if(std::isnan(*it)) *it = next; else next = *it; }
-        for(auto& value : values) if(std::isnan(value)) value = 0.0f;
-    }
+    for(auto& lane : merged.lanes) fillUncoveredSliderCells(lane);
 
     const std::string mergedId = a.id, removedId = b.id;
     *getClip(sequence, trackId, mergedId) = std::move(merged);
@@ -4248,17 +4260,45 @@ bool ofxOceanodeTimelineManager::addBindingToLane(ofxOceanodeTimelineSequence& s
     lane->hiddenBindingIds.erase(std::remove(lane->hiddenBindingIds.begin(), lane->hiddenBindingIds.end(), bindingId),
                                  lane->hiddenBindingIds.end());
     if(std::find(lane->bindingIds.begin(), lane->bindingIds.end(), bindingId) != lane->bindingIds.end()) return true;
-    // An LFO lane's first target sets its output range to the parameter's
-    // (an oscillator over 0..1 would barely move most parameters).
-    if(ofxOceanodeTimelineIsLfoLane(lane->type) && lane->bindingIds.empty()) {
+    // A value lane's first target sets its range to the parameter's (a curve
+    // or oscillator over 0..1 would barely move most parameters). Lanes that
+    // hold absolute values, notes, gates or audio have no range to set.
+    const bool rangedLane = lane->type != ofxOceanodeTimelineLaneType::PianoRoll &&
+                            lane->type != ofxOceanodeTimelineLaneType::DrumGrid &&
+                            lane->type != ofxOceanodeTimelineLaneType::MultiGate &&
+                            lane->type != ofxOceanodeTimelineLaneType::Wave &&
+                            !ofxOceanodeTimelineIsHeldValueLane(lane->type);
+    if(rangedLane && lane->bindingIds.empty()) {
         const auto* binding = getBinding(sequence, trackId, bindingId);
         if(auto* parameter = resolverFor(sequence).find(binding->parameterPath)) {
+            float minimum = lane->valueMin, maximum = lane->valueMax;
+            bool bounded = false;
             if(binding->valueType == typeid(float).name()) {
-                lane->valueMin = parameter->cast<float>().getParameter().getMin();
-                lane->valueMax = parameter->cast<float>().getParameter().getMax();
+                const auto& value = parameter->cast<float>().getParameter();
+                minimum = value.getMin(); maximum = value.getMax();
+                bounded = std::isfinite(minimum) && std::isfinite(maximum) &&
+                          minimum > std::numeric_limits<float>::lowest() * 0.5f &&
+                          maximum < std::numeric_limits<float>::max() * 0.5f;
             } else if(binding->valueType == typeid(int).name()) {
-                lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
-                lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
+                const auto& value = parameter->cast<int>().getParameter();
+                minimum = static_cast<float>(value.getMin()); maximum = static_cast<float>(value.getMax());
+                bounded = value.getMin() != std::numeric_limits<int>::lowest() &&
+                          value.getMax() != std::numeric_limits<int>::max();
+            } else if(binding->valueType == typeid(std::vector<float>).name()) {
+                // Over the vector's range (its first element's).
+                const auto& value = parameter->cast<std::vector<float>>().getParameter();
+                const auto minimums = value.getMin(), maximums = value.getMax();
+                if(!minimums.empty() && !maximums.empty()) {
+                    minimum = minimums.front(); maximum = maximums.front();
+                    bounded = std::isfinite(minimum) && std::isfinite(maximum) &&
+                              minimum > std::numeric_limits<float>::lowest() * 0.5f &&
+                              maximum < std::numeric_limits<float>::max() * 0.5f;
+                }
+            }
+            if(bounded && maximum > minimum) {
+                lane->valueMin = minimum;
+                lane->valueMax = maximum;
+                ofxOceanodeTimelineSyncMultiCurves(*lane);
             }
         }
     }
@@ -4852,6 +4892,76 @@ void ofxOceanodeTimelineManager::refreshPlaybackEnablement() {
     applyAutomation();
 }
 
+namespace {
+// Trim growing a clip's content: a step grid loops its own pattern through
+// its content, so the added time would play the pattern again. The grid
+// becomes one pattern as long as the new content: what played up to the old
+// end (its repeats unrolled) stays, the added time is empty.
+void extendGridLanesForTrim(ofxOceanodeTimelineClip& clip, double oldContent, double newContent) {
+    if(newContent <= oldContent + 1e-9) return;
+    for(auto& lane : clip.lanes) {
+        const double cell = std::max(1.0 / 24.0, lane.beatsPerStep);
+        if(lane.type == ofxOceanodeTimelineLaneType::Step) {
+            const double period = std::max(cell, lane.stepCount * cell);
+            if(period >= newContent - 1e-9) continue;
+            const int cells = std::max(1, static_cast<int>(std::ceil(newContent / cell - 1e-9)));
+            const double newPeriod = cells * cell;
+            std::vector<ofxOceanodeTimelineStep> steps;
+            for(double base = 0.0; base < oldContent - 1e-9; base += period)
+                for(const auto& step : lane.step.steps) {
+                    if(step.startBeat >= period - 1e-9) continue;
+                    const double start = base + std::max(0.0, step.startBeat);
+                    if(base > 0.0 && start >= oldContent - 1e-9) continue;
+                    auto piece = step;
+                    piece.startBeat = start;
+                    if(base > 0.0 && step.durationBeats > 1e-9)
+                        piece.durationBeats = std::min(step.durationBeats, oldContent - start);
+                    steps.push_back(piece);
+                }
+            // Hits hidden past the pattern stay hidden past the new one.
+            for(const auto& step : lane.step.steps)
+                if(step.startBeat >= newPeriod - 1e-9) steps.push_back(step);
+            lane.step.steps = std::move(steps);
+            lane.step.sortSteps();
+            lane.stepCount = cells;
+        } else if(lane.type == ofxOceanodeTimelineLaneType::MultiSlider) {
+            const int count = std::max(1, lane.stepCount);
+            if(count * cell >= newContent - 1e-9) continue;
+            const int cells = std::max(1, static_cast<int>(std::ceil(newContent / cell - 1e-9)));
+            const int played = std::max(count, static_cast<int>(std::ceil(oldContent / cell - 1e-9)));
+            std::vector<float> values(static_cast<size_t>(cells), 0.0f);
+            for(int i = 0; i < std::min(cells, played); ++i) {
+                const size_t index = static_cast<size_t>(i % count);
+                values[static_cast<size_t>(i)] = index < lane.multiSliderValues.size() ? lane.multiSliderValues[index] : 0.0f;
+            }
+            lane.multiSliderValues = std::move(values);
+            lane.stepCount = cells;
+        } else if(lane.type == ofxOceanodeTimelineLaneType::DrumGrid) {
+            const double length = std::min(newContent, ofxOceanodeTimelineDrumGrid::kMaxLength);
+            for(auto& row : lane.drumRows) {
+                const double period = std::max(ofxOceanodeTimelineDrumGrid::kMinLength, row.length);
+                if(period >= length - 1e-9) continue;
+                std::vector<ofxOceanodeTimelineDrumStep> steps;
+                for(double base = 0.0; base < oldContent - 1e-9; base += period)
+                    for(const auto& step : row.steps) {
+                        if(ofxOceanodeTimelineDrumGrid::stepHidden(row, step)) continue;
+                        const double at = base + step.beat;
+                        if(at >= length - 1e-9 || (base > 0.0 && at >= oldContent - 1e-9)) continue;
+                        auto copy = step;
+                        copy.beat = at;
+                        steps.push_back(copy);
+                    }
+                for(const auto& step : row.steps)
+                    if(step.beat >= length - 1e-9) steps.push_back(step);
+                row.steps = std::move(steps);
+                row.length = length;
+                ofxOceanodeTimelineDrumGrid::normalizeRow(row);
+            }
+        }
+    }
+}
+} // namespace
+
 bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, const std::string& clipId,
                                                double duration, ofxOceanodeTimelineEndEdit operation) {
     auto* clip = getClip(sequence, trackId, clipId);
@@ -4871,6 +4981,8 @@ bool ofxOceanodeTimelineManager::resizeClipEnd(ofxOceanodeTimelineSequence& sequ
         setClipContentDuration(sequence, trackId, clipId, source, true);
     } else if(operation == ofxOceanodeTimelineEndEdit::Trim) {
         setClipContentDuration(sequence, trackId, clipId, duration / ratio, false);
+        if(track != nullptr && !track->isMorphTrack)
+            extendGridLanesForTrim(*clip, source, ofxOceanodeTimelineClipTime::sourceDuration(*clip));
     } else {
         // Stretch scales the clip as it plays now (longer = slower), keeping
         // what it shows and its repeats; it never refits the whole source,
@@ -4926,8 +5038,55 @@ bool ofxOceanodeTimelineManager::setClipContentOffset(ofxOceanodeTimelineSequenc
 bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                                                         const std::string& clipId) {
     auto* clip = getClip(sequence, trackId, clipId);
-    if(clip == nullptr) return false;
+    const auto* track = getTrack(sequence, trackId);
+    if(clip == nullptr || track == nullptr) return false;
     bakeContentOffset(*clip);
+    bool changed = false;
+
+    // The content is laid out as the clip plays it: a repeating clip's
+    // repeats become content of their own, one pass after the other, so each
+    // can be edited apart, and a stretched clip's content is scaled to play
+    // at 1x. The clip then plays the same, one content beat per timeline beat.
+    // (A Macro clip's content is its timeline's, Wave clips stretch audio,
+    // and an LFO's speed lives in its frequency values: a clip with an LFO
+    // lane keeps its stretch.)
+    const double playedStretch = ofxOceanodeTimelineClipTime::effectiveStretch(*clip);
+    const bool bakeStretch = !ofxOceanodeTimelineClipHasLfoLane(*clip) && std::abs(playedStretch - 1.0) > 1e-9;
+    if((clip->repeatContent || bakeStretch) &&
+       !track->isWaveTrack && !track->isMacroTrack() && !track->isMorphTrack) {
+        ClipLayout layout;
+        layout.stretch = bakeStretch ? playedStretch : 1.0;
+        layout.length = clip->durationBeats / playedStretch * layout.stretch;
+        layout.content = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+        const double total = std::max(1.0 / 24.0, layout.length);
+        bool refused = false;
+        std::vector<ofxOceanodeTimelineLane> lanes;
+        lanes.reserve(clip->lanes.size());
+        for(const auto& lane : clip->lanes) {
+            lanes.push_back(layOutClipLane(lane, layout, total, refused));
+            fillUncoveredSliderCells(lanes.back());
+        }
+        // (A Drum Grid pattern cannot be that long: the clip stays as it is.)
+        if(!refused) {
+            clip->lanes = std::move(lanes);
+            if(!clip->globalKeyframes.empty()) {
+                std::vector<ofxOceanodeTimelineGlobalKeyframe> keyframes;
+                layout.forEachRepeat([&](double base, double to) {
+                    for(const auto& keyframe : clip->globalKeyframes) {
+                        if(keyframe.beat >= to - kEpsilon) continue;
+                        auto copy = keyframe;
+                        copy.beat = layout.toMerged(base + keyframe.beat);
+                        keyframes.push_back(copy);
+                    }
+                });
+                clip->globalKeyframes = std::move(keyframes);
+            }
+            clip->contentDurationBeats = total;
+            clip->repeatContent = false;
+            clip->contentStretch = std::max(1.0 / 1024.0, clip->durationBeats / total);
+            changed = true;
+        }
+    }
 
     const double oldSourceDuration = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
     const bool croppedRepeat = clip->repeatContent &&
@@ -4936,7 +5095,6 @@ bool ofxOceanodeTimelineManager::consolidateClipContent(ofxOceanodeTimelineSeque
         ? clip->durationBeats / ofxOceanodeTimelineClipTime::stretch(*clip)
         : oldSourceDuration;
     const double contentEnd = std::max(1.0 / 24.0, visibleSourceDuration);
-    bool changed = false;
 
     // Points past the new end go; the value the curve had there stays as its
     // last point.

@@ -68,8 +68,8 @@ int main(int, char**) {
     const auto ol = model.createLane(*pattern, ot, oc, "Other", ofxOceanodeTimelineLaneType::Number);
     model.addBindingToLane(*pattern, ot, oc, ol, ob);
     model.setClipNumber(*pattern, ot, oc, ol, 0, 2.0f);
-    // The curve's own range is 0..1 (the lane's, not the parameter's).
-    auto expectedLevel = [](double value) { return static_cast<float>(value); };
+    // The curve's first target sets its range: Level's -1..4.
+    auto expectedLevel = [](double value) { return static_cast<float>(-1.0 + value * 5.0); };
 
     // Main timeline: a macro clip at beat 8, two repeats of its 4 beats.
     const auto mt = model.createTimelineTrack(model.editSequence(), ofxOceanodeTimelineManager::TimelineRef{inside->getCanvasID(), pattern->timelineId});
@@ -196,9 +196,9 @@ int main(int, char**) {
     at(8.5);
     check(near(innerProbe.level.get(), -1.0f), "Inner macro silent before its clip in the outer timeline");
     at(10.0);
-    check(near(innerProbe.level.get(), 0.125f), "Inner ramp one outer beat into its clip, at half speed: an eighth");
+    check(near(innerProbe.level.get(), expectedLevel(0.125)), "Inner ramp one outer beat into its clip, at half speed: an eighth");
     at(14.0);
-    check(near(innerProbe.level.get(), 0.125f), "...and again in the outer clip's second repeat");
+    check(near(innerProbe.level.get(), expectedLevel(0.125)), "...and again in the outer clip's second repeat");
     innerProbe.level = -1.0f;
     at(11.5);
     check(near(innerProbe.level.get(), -1.0f), "Silent after its clip ends inside the outer repeat");

@@ -465,6 +465,9 @@ int main() {
     const auto lane = timeline.createLane(track, clip, "Pitch", ofxOceanodeTimelineLaneType::Step);
     assert(!binding.empty() && !clip.empty() && !lane.empty());
     assert(timeline.addBindingToLane(track, clip, lane, binding));
+    // The lane took Value's 0..127 range; these steps hold absolute values.
+    timeline.getLane(track, clip, lane)->valueMin = 0.0f;
+    timeline.getLane(track, clip, lane)->valueMax = 1.0f;
     assert(timeline.setClipStep(track, clip, lane, 0.0, "64", 1.0));
     assert(timeline.setClipStep(track, clip, lane, 1.0, "72", 1.0));
     owner.transport->seekToBeat(0.5); timeline.update(); near(value.get(), 64.0);
@@ -476,6 +479,8 @@ int main() {
     const auto addClip = timeline.createClip(addTrack, "Offset", 0.0, 2.0);
     const auto addLane = timeline.createLane(addTrack, addClip, "Offset", ofxOceanodeTimelineLaneType::Step);
     assert(timeline.addBindingToLane(addTrack, addClip, addLane, addBinding));
+    timeline.getLane(addTrack, addClip, addLane)->valueMin = 0.0f;
+    timeline.getLane(addTrack, addClip, addLane)->valueMax = 1.0f;
     assert(timeline.setClipStep(addTrack, addClip, addLane, 0.0, "2", 2.0));
     owner.transport->seekToBeat(0.5); timeline.update(); near(value.get(), 66.0);
     // The loop is the timeline's own: the global transport runs on past

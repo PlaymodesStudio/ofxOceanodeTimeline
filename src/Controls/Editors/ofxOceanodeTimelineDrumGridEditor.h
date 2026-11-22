@@ -49,9 +49,27 @@ private:
     void drawHitEditor(ofxOceanodeTimelineLane& lane, double grid, const RowSound& sound,
                        double secondsPerBeat, bool hasFilter, bool hasStutter);
     // The hit's fields (shared by both popups); false once the hit moved
-    // (the popup ends this frame).
+    // (the popup ends this frame). With variants, a Variant choice replaces
+    // the Pitch field (none at all with variantField false: the caller lists them).
     bool drawStepFields(ofxOceanodeTimelineDrumRow& row, double grid, const RowSound& sound,
-                        bool hasFilter, bool hasStutter);
+                        bool hasFilter, bool hasStutter, const std::vector<std::string>* variants = nullptr,
+                        bool variantField = true);
+    // Header button / Row tab: which variant new hits of a row get.
+    void drawVariantPicker(ofxOceanodeTimelineLane& lane);
+
+    // ---- variants (the instrument's rowVariants) ----
+    // A row's named sounds, read from the instrument each frame (index = row,
+    // for the lane drawCanvas is drawing); empty: none, Pitch is a transpose.
+    // Variant k plays at pitch offset k (60 + k).
+    const std::vector<std::string>* variantsOf(int rowIndex) const;
+    int variantCount(int rowIndex) const;
+    // The variant new hits of a row get (0 without variants): session state
+    // per lane and kit slot, not saved.
+    int currentVariant(const ofxOceanodeTimelineLane& lane, int rowIndex) const;
+    void setCurrentVariant(const ofxOceanodeTimelineLane& lane, int rowIndex, int variant);
+    std::vector<std::vector<std::string>> frameVariants;
+    std::vector<ofColor> frameRowColors;   // each row's colour, same frame
+    std::map<std::string, std::map<int, int>> currentVariants;
     void drawRowSettings(ofxOceanodeTimelineLane& lane, int rowIndex, double grid);
 
     char targetSearch[128] = {};
@@ -63,8 +81,9 @@ private:
     // hits to empty cells / remove hits along the stroke. Velocity / Move:
     // dragging the grabbed hit. Strip / StripFine: painting bars.
     // Length: dragging a row's end-of-cycle handle. Stretch: Cmd/Ctrl-dragging
-    // a waveform hit's end (its duration, as varispeed).
-    enum class Drag { None, Pending, Paint, Erase, Velocity, Move, Strip, StripFine, Length, Stretch };
+    // a waveform hit's end (its duration, as varispeed). Variant: Alt +
+    // vertical drag on a hit of a row with variants (steps through them).
+    enum class Drag { None, Pending, Paint, Erase, Velocity, Move, Strip, StripFine, Length, Stretch, Variant };
     Drag drag = Drag::None;
     std::string dragLaneId;
     int dragRow = -1;

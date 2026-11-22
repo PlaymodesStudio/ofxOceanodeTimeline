@@ -77,6 +77,8 @@ int main(int argc, char** argv) {
             timeline.addBindingToLane(track, clip, lane, binding);
             auto* ramp = timeline.getLane(track, clip, lane);
             ramp->curveInterpolation = "Linear";
+            // The ramp outputs 0..1 (a lane takes its first target's range, -1..4).
+            ramp->valueMin = 0; ramp->valueMax = 1;
             ramp->curvePoints = {{0, 0.0f}, {8, 1.0f}};
             ramp->curveTensions = {{}};
         } else {

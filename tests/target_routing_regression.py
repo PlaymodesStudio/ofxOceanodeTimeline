@@ -41,6 +41,17 @@ int main(){
     assert(model.bindClipTarget(t,lc,lfoLane,pd.getEscapedName(),Role::Lane));
     const auto* oscillator=model.getLane(t,lc,lfoLane);assert(oscillator->valueMin==-10&&oscillator->valueMax==10);
     assert(oscillator->bindingIds.size()==1 && model.getBinding(t,oscillator->bindingIds[0])->parameterPath==pd.getEscapedName());
+    // So does a Curve lane's (and a second target leaves the range alone).
+    const auto curveLane=model.createLane(t,lc,"Curve",ofxOceanodeTimelineLaneType::Curve);
+    assert(model.bindClipTarget(t,lc,curveLane,pd.getEscapedName(),Role::Lane));
+    assert(model.getLane(t,lc,curveLane)->valueMin==-10&&model.getLane(t,lc,curveLane)->valueMax==10);
+    assert(model.bindClipTarget(t,lc,curveLane,pa.getEscapedName(),Role::Lane));
+    assert(model.getLane(t,lc,curveLane)->valueMin==-10&&model.getLane(t,lc,curveLane)->valueMax==10);
+    // A Number lane holds absolute values: no range to set.
+    const auto numberLane=model.createLane(t,lc,"Number",ofxOceanodeTimelineLaneType::Number);
+    const float numberMin=model.getLane(t,lc,numberLane)->valueMin,numberMax=model.getLane(t,lc,numberLane)->valueMax;
+    assert(model.bindClipTarget(t,lc,numberLane,pd.getEscapedName(),Role::Lane));
+    assert(model.getLane(t,lc,numberLane)->valueMin==numberMin&&model.getLane(t,lc,numberLane)->valueMax==numberMax);
     // Its control sublanes are not lanes a target can be bound to.
     assert(!model.bindClipTarget(t,lc,ofxOceanodeTimelineLfoControlKey(lfoLane,"frequency"),pd.getEscapedName(),Role::Lane));
     assert(model.getLane(t,lc,ofxOceanodeTimelineLfoControlKey(lfoLane,"frequency"))->bindingIds.empty());

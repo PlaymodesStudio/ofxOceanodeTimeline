@@ -208,11 +208,12 @@ std::string lengthLabel(const Row& row, double grid) {
     return text;
 }
 
-Step newStep(const Row& row, double beat, double grid) {
+Step newStep(const Row& row, double beat, double grid, int pitch = 0) {
     Step step;
     step.beat = beat;
     step.length = grid;
     step.gate = row.gate;
+    step.pitch = pitch;
     return step;
 }
 
@@ -223,9 +224,9 @@ void clearVisible(Row& row) {
 }
 
 // Every hit on the grid's cells i * every (from 0), nothing else (hidden hits stay).
-void fillEvery(Row& row, double grid, int every) {
+void fillEvery(Row& row, double grid, int every, int pitch) {
     clearVisible(row);
-    for(double beat = 0.0; beat < row.length - 1e-9; beat += every * grid) DrumGrid::addStep(row, newStep(row, beat, grid));
+    for(double beat = 0.0; beat < row.length - 1e-9; beat += every * grid) DrumGrid::addStep(row, newStep(row, beat, grid, pitch));
 }
 
 // Moves every audible hit by `by` beats, wrapping inside the row's pattern.
@@ -279,6 +280,33 @@ int drawPeaks(ImDrawList* dl, const std::vector<float>& peaks, float x0, float p
     }
     return lines;
 }
+
+// ---- variant rows -----------------------------------------------------------
+// A row's variant k: the row colour turned k steps round the hue circle (16
+// steps), variant 0 the row colour itself; grey rows get some colour.
+ofColor variantColor(const ofColor& base, int k) {
+    if(k <= 0) return base;
+    ofColor c = base;
+    if(c.getSaturation() < 90.0f) c.setSaturation(90.0f);
+    c.setHueAngle(std::fmod(c.getHueAngle() + 22.5f * k, 360.0f));
+    return c;
+}
+bool validVariant(const std::vector<std::string>& names, int k) { return k >= 0 && k < static_cast<int>(names.size()); }
+// "3" (1-based, like the pads); a pitch outside the list: its offset.
+std::string variantNumber(const std::vector<std::string>& names, int k) {
+    if(validVariant(names, k)) return ofToString(k + 1);
+    char text[8];
+    std::snprintf(text, sizeof(text), "%+d", k);
+    return text;
+}
+// "3  Snap 3" for lists and tooltips.
+std::string variantLabel(const std::vector<std::string>& names, int k) {
+    if(!validVariant(names, k)) return variantNumber(names, k) + "  (no such sound)";
+    const auto& name = names[static_cast<size_t>(k)];
+    return ofToString(k + 1) + "  " + (name.empty() ? "Pad " + ofToString(k + 1) : name);
+}
+// The pitch offsets variants can reach (the grid keeps hits within +-24).
+int maxVariants(const std::vector<std::string>& names) { return std::min(static_cast<int>(names.size()), 25); }
 
 // Drum Grid and Piano Roll lanes route through the same role bindings.
 void drawRoleCombo(ofxOceanodeTimelineLaneEditorContext& context, const char* label, std::string& roleId,
@@ -340,6 +368,53 @@ int ofxOceanodeTimelineDrumGridEditor::focusedRow(const ofxOceanodeTimelineLane&
     const auto it = focusedRows.find(lane.id);
     const int row = it == focusedRows.end() ? 0 : it->second;
     return lane.drumRows.empty() ? -1 : std::max(0, std::min(row, static_cast<int>(lane.drumRows.size()) - 1));
+}
+
+const std::vector<std::string>* ofxOceanodeTimelineDrumGridEditor::variantsOf(int rowIndex) const {
+    if(rowIndex < 0 || rowIndex >= static_cast<int>(frameVariants.size())) return nullptr;
+    const auto& names = frameVariants[static_cast<size_t>(rowIndex)];
+    return names.empty() ? nullptr : &names;
+}
+
+int ofxOceanodeTimelineDrumGridEditor::variantCount(int rowIndex) const {
+    const auto* names = variantsOf(rowIndex);
+    return names == nullptr ? 0 : maxVariants(*names);
+}
+
+int ofxOceanodeTimelineDrumGridEditor::currentVariant(const ofxOceanodeTimelineLane& lane, int rowIndex) const {
+    const int count = variantCount(rowIndex);
+    if(count <= 0 || rowIndex >= static_cast<int>(lane.drumRows.size())) return 0;
+    const auto laneIt = currentVariants.find(lane.id);
+    if(laneIt == currentVariants.end()) return 0;
+    const auto it = laneIt->second.find(lane.drumRows[static_cast<size_t>(rowIndex)].slot);
+    return it == laneIt->second.end() ? 0 : std::max(0, std::min(it->second, count - 1));
+}
+
+void ofxOceanodeTimelineDrumGridEditor::setCurrentVariant(const ofxOceanodeTimelineLane& lane, int rowIndex, int variant) {
+    if(rowIndex < 0 || rowIndex >= static_cast<int>(lane.drumRows.size())) return;
+    currentVariants[lane.id][lane.drumRows[static_cast<size_t>(rowIndex)].slot] = std::max(0, variant);
+}
+
+void ofxOceanodeTimelineDrumGridEditor::drawVariantPicker(ofxOceanodeTimelineLane& lane) {
+    if(!ImGui::BeginPopup(("##drumVariantPick" + lane.id).c_str())) return;
+    const auto* names = variantsOf(popupRow);
+    if(names == nullptr || popupRow >= static_cast<int>(lane.drumRows.size())) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    auto& row = lane.drumRows[static_cast<size_t>(popupRow)];
+    ImGui::TextDisabled("%s: sound of new hits", row.name.c_str());
+    const int current = currentVariant(lane, popupRow);
+    for(int k = 0; k < maxVariants(*names); ++k) {
+        ImGui::PushID(k);
+        if(ImGui::Selectable(variantLabel(*names, k).c_str(), k == current)) setCurrentVariant(lane, popupRow, k);
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    if(ImGui::MenuItem("Give every hit this sound"))
+        for(auto& step : row.steps) if(!DrumGrid::stepHidden(row, step)) step.pitch = current;
+    ImGui::EndPopup();
 }
 
 void ofxOceanodeTimelineDrumGridEditor::drawTargets(ofxOceanodeTimelineLaneEditorContext& context) {
@@ -506,12 +581,53 @@ void ofxOceanodeTimelineDrumGridEditor::drawExtraTab(ofxOceanodeTimelineLaneEdit
     ImGui::SeparatorText("Strip");
     StripMode mode = stripModes.count(lane.id) ? stripModes[lane.id] : StripMode::Velocity;
     for(int t = 0; t < kModes; ++t) {
-        if(ImGui::RadioButton((std::string(kStripNames[t]) + "##drumStripMode").c_str(), static_cast<int>(mode) == t))
+        const char* stripName = kStripNames[t];
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_VARIANTS
+        if(t == static_cast<int>(StripMode::Pitch)) {
+            int voices = 0;
+            std::vector<std::string> names;
+            ofxOceanodeTimelineInstrument instrument;
+            const int slot = lane.drumRows[static_cast<size_t>(focused)].slot;
+            if(context.timeline.drumGridInstrument(context.track, lane, voices, names, nullptr, nullptr, &instrument) &&
+               slot >= 0 && slot < static_cast<int>(instrument.rowVariants.size()) && !instrument.rowVariants[static_cast<size_t>(slot)].empty())
+                stripName = "Variant";
+        }
+#endif
+        if(ImGui::RadioButton((std::string(stripName) + "##drumStripMode").c_str(), static_cast<int>(mode) == t))
             stripModes[lane.id] = static_cast<StripMode>(t);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kStripHints[t]);
     }
     ImGui::SeparatorText("Row");
     drawRowSettings(lane, focusedRow(lane), context.timeline.drumStepBeats(lane));
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_VARIANTS
+    // The sound new hits get, when the kit slot has several.
+    {
+        int voices = 0;
+        std::vector<std::string> names;
+        ofxOceanodeTimelineInstrument instrument;
+        context.timeline.drumGridInstrument(context.track, lane, voices, names, nullptr, nullptr, &instrument);
+        const int r = focusedRow(lane);
+        const int slot = lane.drumRows[static_cast<size_t>(r)].slot;
+        if(slot >= 0 && slot < static_cast<int>(instrument.rowVariants.size()) && !instrument.rowVariants[static_cast<size_t>(slot)].empty()) {
+            const auto& variants = instrument.rowVariants[static_cast<size_t>(slot)];
+            int current = 0;
+            const auto laneIt = currentVariants.find(lane.id);
+            if(laneIt != currentVariants.end() && laneIt->second.count(slot)) current = laneIt->second.at(slot);
+            current = std::max(0, std::min(current, maxVariants(variants) - 1));
+            propertyLabel("New hits");
+            if(ImGui::BeginCombo("##drumRowVariant", variantLabel(variants, current).c_str())) {
+                for(int k = 0; k < maxVariants(variants); ++k) {
+                    ImGui::PushID(k);
+                    if(ImGui::Selectable(variantLabel(variants, k).c_str(), k == current)) currentVariants[lane.id][slot] = k;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("The sound hits drawn in this row get.\nEach hit keeps its own: right-click it, Alt-drag it up / down,\nor paint the Variant strip.");
+        }
+    }
+#endif
 }
 
 void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditorContext& context,
@@ -540,6 +656,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
     }
     std::vector<ofColor> rowColors;
     for(const auto& row : lane.drumRows) rowColors.push_back(DrumGrid::rowColor(instrumentColors, row, track.color));
+    frameRowColors = rowColors;
     // Each row's sound, when the instrument reports one (else hits draw as blocks).
     std::vector<RowSound> rowSounds(lane.drumRows.size());
 #ifdef OFXOCEANODE_HAS_TIMELINE_ROW_WAVEFORMS
@@ -556,6 +673,17 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         sound.pitchChangesLength = wave.pitchChangesLength;
     }
 #endif
+    // Each row's variants (named sounds picked by pitch offset), read live.
+    frameVariants.assign(lane.drumRows.size(), {});
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_VARIANTS
+    for(size_t r = 0; r < lane.drumRows.size(); ++r) {
+        const int slot = lane.drumRows[r].slot;
+        if(slot < 0 || slot >= static_cast<int>(instrument.rowVariants.size())) continue;
+        frameVariants[r] = instrument.rowVariants[static_cast<size_t>(slot)];
+        // Its pitch picks a sound, not a speed.
+        if(!frameVariants[r].empty()) rowSounds[r].pitchChangesLength = false;
+    }
+#endif
     auto hasSound = [&](int r) { return r >= 0 && r < static_cast<int>(rowSounds.size()) && rowSounds[static_cast<size_t>(r)].valid(); };
     // With a sound, the focused row's Duration is a stretch (varispeed).
     const char* stripNames[kModes];
@@ -565,6 +693,27 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         stripNames[static_cast<int>(StripMode::Duration)] = "Stretch";
         stripLabels[static_cast<int>(StripMode::Duration)] = "Strch";
     }
+    // With variants, the focused row's Pitch picks its sound.
+    const int focusedVariants = variantCount(focused);
+    if(focusedVariants > 0) {
+        stripNames[static_cast<int>(StripMode::Pitch)] = "Variant";
+        stripLabels[static_cast<int>(StripMode::Pitch)] = "Var";
+    }
+    const bool variantStrip = focusedVariants > 0 && mode == StripMode::Pitch;
+    const std::vector<std::string> noVariants;
+    const auto& focusedNames = focusedVariants > 0 ? *variantsOf(focused) : noVariants;
+    // The strip's value, text and painting, as variants on such a row.
+    auto barNormalized = [&](const Step& step) {
+        if(!variantStrip) return stripNormalized(step, mode);
+        return (ofClamp(static_cast<float>(step.pitch), 0.0f, focusedVariants - 1.0f) + 1.0f) / focusedVariants;
+    };
+    auto barText = [&](const Step& step) {
+        return variantStrip ? variantLabel(focusedNames, step.pitch) : stripText(step, mode);
+    };
+    auto setBar = [&](Step& step, float value) {
+        setStripValue(step, mode, value);
+        if(variantStrip) step.pitch = std::max(0, std::min(step.pitch, focusedVariants - 1));
+    };
 
     // ---- geometry ---------------------------------------------------------
     const float zoneLeft = canvas.zoneLeft;
@@ -670,6 +819,12 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         const auto& c = rowColors[static_cast<size_t>(r)];
         return IM_COL32(c.r, c.g, c.b, alpha);
     };
+    // A hit's colour: its variant's on rows with variants, else the row's.
+    auto hitColor = [&](int r, const Step& step) {
+        const auto& base = rowColors[static_cast<size_t>(r)];
+        const auto* names = variantsOf(r);
+        return names != nullptr && validVariant(*names, step.pitch) ? variantColor(base, step.pitch) : base;
+    };
     dl->AddRectFilled(ImVec2(left, top - 1.0f), ImVec2(right, bottom), trackAlpha(28), 2.0f);
 
     // Row headers: colour swatch, name, M / S, and the length as a field with
@@ -680,6 +835,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 0.0f));
         const float buttonWidth = ImGui::CalcTextSize("-").x + 6.0f * scale;
         const float fieldWidth = lengthFieldWidth();
+        const float variantButtonWidth = ImGui::CalcTextSize("88").x + 8.0f * scale;
+        int openVariantPicker = -1;
         for(int r = 0; r < rowCount; ++r) {
             auto& row = lane.drumRows[static_cast<size_t>(r)];
             const float y1 = top + r * rowHeight, y2 = y1 + rowHeight;
@@ -704,7 +861,15 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             if(rowHeight < textHeight) continue;
             const float controlsX = headerLeft + 7.0f * scale;
             const float controlsY = twoLines ? lineY + textHeight + 2.0f : lineY;
-            const float nameX = twoLines ? controlsX : controlsX + 2.0f * buttonWidth + fieldWidth + 6.0f;
+            // Rows with variants: a button after + showing (and picking) the
+            // sound new hits get, in its colour.
+            // On one line there is no room for both: the length keeps its field
+            // (drag it) and the button takes the place of - / +.
+            const auto* variants = variantsOf(r);
+            const bool compactLength = variants != nullptr && !twoLines;
+            const float variantX = compactLength ? controlsX + fieldWidth + 4.0f : controlsX + 2.0f * buttonWidth + fieldWidth + 6.0f;
+            const bool variantButton = variants != nullptr && variantX + variantButtonWidth <= (twoLines ? headerRight : mx - 4.0f);
+            const float nameX = twoLines ? controlsX : variantX + (variantButton ? variantButtonWidth + 4.0f : 0.0f);
             const std::string name = fitText(row.name.empty() ? "Row " + ofToString(r + 1) : row.name, mx - 4.0f - nameX);
             const ofColor& c = rowColors[static_cast<size_t>(r)];
             const ImU32 nameColor = audible ? IM_COL32((c.r + 2 * 235) / 3, (c.g + 2 * 235) / 3, (c.b + 2 * 235) / 3, 255)
@@ -714,14 +879,16 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             ImGui::PushID(("drumLength" + lane.id).c_str());
             ImGui::PushID(r);
             ImGui::SetCursorScreenPos(ImVec2(controlsX, controlsY));
-            if(ImGui::SmallButton("-")) {
+            if(!compactLength && ImGui::SmallButton("-")) {
                 const double steps = row.length / grid;
                 row.length = std::max(grid, (std::ceil(steps - 1e-6) - 1.0) * grid);
                 DrumGrid::normalizeRow(row);
             }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("One %s step shorter (hits past the end are kept, silent)",
-                                                         kDivisionOptions[divisionIndexForBeats(grid)].label);
-            ImGui::SameLine();
+            if(!compactLength) {
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("One %s step shorter (hits past the end are kept, silent)",
+                                                             kDivisionOptions[divisionIndexForBeats(grid)].label);
+                ImGui::SameLine();
+            }
             ImGui::SetNextItemWidth(fieldWidth);
             const double steps = row.length / grid;
             if(std::abs(steps - std::round(steps)) < 1e-6) {
@@ -742,16 +909,39 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 ImGui::SetTooltip("Length: %s steps of %s = %g beats. Drag, or double-click to type.\nHits past the end are kept (silent).",
                                   lengthLabel(row, grid).c_str(), kDivisionOptions[divisionIndexForBeats(grid)].label, row.length);
             ImGui::SameLine();
-            if(ImGui::SmallButton("+")) {
+            if(!compactLength && ImGui::SmallButton("+")) {
                 const double count = row.length / grid;
                 row.length = std::min(DrumGrid::kMaxLength, (std::floor(count + 1e-6) + 1.0) * grid);
                 DrumGrid::normalizeRow(row);
             }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("One %s step longer", kDivisionOptions[divisionIndexForBeats(grid)].label);
+            if(!compactLength && ImGui::IsItemHovered()) ImGui::SetTooltip("One %s step longer", kDivisionOptions[divisionIndexForBeats(grid)].label);
+            if(variantButton) {
+                const int current = currentVariant(lane, r);
+                const ofColor vc = variantColor(c, current);
+                ImGui::SameLine();
+                ImGui::SetCursorScreenPos(ImVec2(variantX, controlsY));
+                ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(vc.r, vc.g, vc.b, 200));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(vc.r, vc.g, vc.b, 255));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(vc.r, vc.g, vc.b, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(20, 20, 20, 255));
+                if(ImGui::Button((ofToString(current + 1) + "##variant").c_str(), ImVec2(variantButtonWidth, 0.0f))) openVariantPicker = r;
+                ImGui::PopStyleColor(4);
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("New hits: %s\nClick to choose. A hit's own sound: right-click it,\nAlt-drag it up / down, or paint the Variant strip.",
+                                      variantLabel(*variants, current).c_str());
+            }
             ImGui::PopID();
             ImGui::PopID();
         }
         ImGui::PopStyleVar(2);
+        // Opened at the canvas's ID level, where the popup is drawn.
+        if(openVariantPicker >= 0) {
+            context.focusedLaneId = lane.id;
+            focusedRows[lane.id] = openVariantPicker;
+            popupLaneId = lane.id;
+            popupRow = openVariantPicker;
+            ImGui::OpenPopup(("##drumVariantPick" + lane.id).c_str());
+        }
     }
 
     // Rows: grid cells of each pattern, then the hits at their positions. The
@@ -835,8 +1025,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     if(waveRow) {
                         // The hit's span stays as a faint block; its sound is drawn over it,
                         // mirrored around the row's centre, as tall as its velocity.
-                        dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), rowAlpha(r, alpha / 3), 1.5f);
-                        const ofColor& c = rowColors[static_cast<size_t>(r)];
+                        const ofColor c = hitColor(r, step);
+                        dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), IM_COL32(c.r, c.g, c.b, alpha / 3), 1.5f);
                         const ImU32 waveColor = IM_COL32((2 * c.r + 255) / 3, (2 * c.g + 255) / 3, (2 * c.b + 255) / 3, alpha);
                         const float cy = (y1 + y2) * 0.5f;
                         const float half = std::max(1.0f, (y2 - y1) * 0.5f - 1.0f) * std::max(0.2f, step.velocity);
@@ -848,7 +1038,10 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                             waveLinesDrawn += drawPeaks(dl, *sound.peaks, span.xs, span.pass, sound.loops,
                                                         std::max(span.xs, gridClipLeft), std::min(span.xe, right), cy, half, waveColor);
                         }
-                    } else dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), rowAlpha(r, alpha), 1.5f);
+                    } else {
+                        const ofColor c = hitColor(r, step);
+                        dl->AddRectFilled(ImVec2(x1 + 1.0f, fillTop), ImVec2(x2, y2), IM_COL32(c.r, c.g, c.b, alpha), 1.5f);
+                    }
                     const bool sounding = cycle == playCycle && playBeat >= s1 && playBeat < s2;
                     if(sounding && audible) dl->AddRect(ImVec2(x1 + 1.0f, y1), ImVec2(x2, y2), IM_COL32(255, 255, 255, 200), 1.5f, 0, 1.5f);
                     if(!onGrid(step.beat, grid))
@@ -861,7 +1054,26 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                             const float x = x1 + (x2 - x1) * k / step.ratchet;
                             dl->AddLine(ImVec2(x, y1 + 1.0f), ImVec2(x, y1 + std::min(6.0f * scale, (y2 - y1) * 0.4f)), IM_COL32(245, 245, 245, firstPass ? 220 : 90), 1.0f);
                         }
-                    if(firstPass && step.pitch != 0 && x2 - x1 >= 16.0f * scale && y2 - y1 >= textHeight) {
+                    if(const auto* names = variantsOf(r)) {
+                        // Its sound: the number, and the name when the hit is wide enough.
+                        if(firstPass && y2 - y1 >= textHeight) {
+                            std::string text = variantNumber(*names, step.pitch);
+                            const float width = x2 - x1 - 3.0f;
+                            if(ImGui::CalcTextSize(text.c_str()).x <= width) {
+                                if(validVariant(*names, step.pitch)) {
+                                    const auto& name = (*names)[static_cast<size_t>(step.pitch)];
+                                    const std::string full = fitText(text + " " + name, width);
+                                    if(!name.empty() && full.size() > text.size() + 2) text = full;
+                                }
+                                const float textY = y1 + (y2 - y1 - textHeight) * 0.5f;
+                                const bool onFill = !waveRow && fillTop <= textY + textHeight * 0.5f;
+                                dl->AddText(ImVec2(x1 + 2.0f, textY),
+                                            !validVariant(*names, step.pitch) ? IM_COL32(150, 150, 150, 240)
+                                            : onFill ? IM_COL32(20, 20, 20, 240) : IM_COL32(235, 235, 235, 240),
+                                            text.c_str());
+                            }
+                        }
+                    } else if(firstPass && step.pitch != 0 && x2 - x1 >= 16.0f * scale && y2 - y1 >= textHeight) {
                         char text[8];
                         std::snprintf(text, sizeof(text), "%+d", step.pitch);
                         dl->AddText(ImVec2(x1 + 2.0f, y1 + (y2 - y1 - textHeight) * 0.5f), IM_COL32(20, 20, 20, 240), text);
@@ -907,7 +1119,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             bool first = true;
             for(const std::string& line : {fitText(row.name.empty() ? "Row " + ofToString(focused + 1) : row.name, width),
                                            fitText(stripNames[static_cast<int>(mode)], width),
-                                           fitText(altFreePaint(mode) ? "Alt: free" : "Alt: fine", width)}) {
+                                           fitText(altFreePaint(mode) ? "Alt: free" : variantStrip ? "Alt: step" : "Alt: fine", width)}) {
                 if(y + textHeight > stripBottom) break;
                 dl->AddText(ImVec2(headerLeft + 4.0f, y), first ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 170, 255), line.c_str());
                 y += textHeight + 1.0f;
@@ -933,7 +1145,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
         }
         dl->AddRectFilled(ImVec2(left, barsTop), ImVec2(right, stripBottom), IM_COL32(20, 20, 23, 220), 2.0f);
         const float baseY = mode == StripMode::Duration ? stripBottom - durationNormalized(1.0f) * (stripBottom - barsTop)
-                          : mode == StripMode::Pitch || mode == StripMode::Filter ? (barsTop + stripBottom) * 0.5f : stripBottom;
+                          : (mode == StripMode::Pitch && !variantStrip) || mode == StripMode::Filter ? (barsTop + stripBottom) * 0.5f : stripBottom;
         if(mode == StripMode::Filter && stripBottom - barsTop >= 2.0f * textHeight) {
             dl->AddText(ImVec2(left + 3.0f, barsTop + 1.0f), kHighPassColor, "HP");
             dl->AddText(ImVec2(left + 3.0f, stripBottom - textHeight - 1.0f), kLowPassColor, "LP");
@@ -944,7 +1156,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 dl->AddLine(ImVec2(left, y), ImVec2(right, y), IM_COL32(70, 70, 78, 140));
             }
         }
-        if(fromBaseline(mode)) dl->AddLine(ImVec2(left, baseY), ImVec2(right, baseY), IM_COL32(110, 110, 120, 160));
+        if(fromBaseline(mode) && !variantStrip) dl->AddLine(ImVec2(left, baseY), ImVec2(right, baseY), IM_COL32(110, 110, 120, 160));
         const int64_t patterns = std::max<int64_t>(1, static_cast<int64_t>(std::ceil(content / row.length - 1e-9)));
         const float gridPixels = std::abs(xOf(grid, 0) - xOf(0.0, 0));
         dl->PushClipRect(ImVec2(gridClipLeft, barsTop), ImVec2(canvas.max.x, stripBottom), true);
@@ -958,11 +1170,12 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     const float x1 = xOf(std::max(0.0, s1), cycle);
                     const float x2 = std::max(x1 + 3.0f, std::min(xOf(std::min(content, s1 + step.length), cycle), x1 + gridPixels) - 1.5f);
                     if(x2 < left || x1 > right) continue;
-                    const float n = ofClamp(stripNormalized(step, mode), 0.0f, 1.0f);
+                    const float n = ofClamp(barNormalized(step), 0.0f, 1.0f);
                     const float y = stripBottom - n * (stripBottom - barsTop);
                     const int alpha = firstPass ? 225 : 90;
                     if(mode == StripMode::Stutter && step.stutter < 0.5f) continue; // off: no bar
                     ImU32 barColor = rowAlpha(focused, alpha);
+                    if(variantStrip) { const ofColor c = hitColor(focused, step); barColor = IM_COL32(c.r, c.g, c.b, alpha); }
                     if(mode == StripMode::Filter && std::abs(step.filter) >= 0.005f)
                         barColor = (step.filter < 0.0f ? kLowPassColor : kHighPassColor) & (firstPass ? 0xFFFFFFFFu : 0x7FFFFFFFu);
                     dl->AddRectFilled(ImVec2(x1 + 1.0f, std::min(y, baseY)), ImVec2(x2, std::max(y, baseY) + 1.0f), barColor, 1.0f);
@@ -972,7 +1185,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                             dl->AddLine(ImVec2(x1 + 1.0f, ky), ImVec2(x2, ky), IM_COL32(20, 20, 23, 200));
                         }
                     if(firstPass && x2 - x1 >= 26.0f * scale && stripBottom - barsTop >= textHeight * 1.5f)
-                        dl->AddText(ImVec2(x1 + 2.0f, barsTop + 1.0f), IM_COL32(230, 230, 230, 230), stripText(step, mode).c_str());
+                        dl->AddText(ImVec2(x1 + 2.0f, barsTop + 1.0f), IM_COL32(230, 230, 230, 230),
+                                    (variantStrip ? fitText(barText(step), x2 - x1 - 3.0f) : barText(step)).c_str());
                 }
             }
         }
@@ -1062,7 +1276,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 removedStep = row.steps[static_cast<size_t>(dragStep)];
                 row.steps.erase(row.steps.begin() + dragStep);
             } else {
-                if(dragStep < 0 && dragCellBeat < row.length - 1e-9) DrumGrid::addStep(row, newStep(row, dragCellBeat, grid));
+                if(dragStep < 0 && dragCellBeat < row.length - 1e-9)
+                    DrumGrid::addStep(row, newStep(row, dragCellBeat, grid, currentVariant(lane, dragRow)));
                 if(removedLaneId == lane.id) removedLaneId.clear();
             }
         }
@@ -1116,6 +1331,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                               stripNames[tabUnderMouse],
                               tabUnderMouse == static_cast<int>(StripMode::Duration) && hasSound(focused)
                                   ? "Tape varispeed of the hit's sound: x2 plays it twice as long, an octave lower."
+                              : tabUnderMouse == static_cast<int>(StripMode::Pitch) && focusedVariants > 0
+                                  ? "Which of the row's sounds the hit plays (one band each, the first at the bottom)."
                                   : kStripHints[tabUnderMouse],
                               tabUnderMouse == static_cast<int>(StripMode::Duration) ? "Snaps to x0.125 .. x24; Alt: free."
                               : tabUnderMouse == static_cast<int>(StripMode::Filter) ? "Snaps to open near the centre; Alt: free. Double-click a bar: open."
@@ -1273,7 +1490,8 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 }
             }
             if(dragLaneId == lane.id && ImGui::IsMouseDown(ImGuiMouseButton_Left) && dragRow >= 0 && dragRow < rowCount &&
-               (drag == Drag::Pending || drag == Drag::Paint || drag == Drag::Erase || drag == Drag::Velocity || drag == Drag::Move)) {
+               (drag == Drag::Pending || drag == Drag::Paint || drag == Drag::Erase || drag == Drag::Velocity || drag == Drag::Move ||
+                drag == Drag::Variant)) {
                 auto& row = lane.drumRows[static_cast<size_t>(dragRow)];
                 double sourceBeat = 0.0;
                 const bool inside = sourceAtX(mouse.x, sourceBeat);
@@ -1281,18 +1499,30 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 if(drag == Drag::Pending) {
                     const bool movedCell = inside && std::floor(pos / grid) * grid != dragCellBeat;
                     const int r = rowAtY(mouse.y);
-                    if(dragStep >= 0 && std::abs(mouse.y - dragStartY) > 4.0f && !movedCell && r == dragRow) drag = Drag::Velocity;
+                    if(dragStep >= 0 && std::abs(mouse.y - dragStartY) > 4.0f && !movedCell && r == dragRow) {
+                        // Alt on a row with variants: step through its sounds.
+                        drag = io.KeyAlt && variantCount(dragRow) > 0 ? Drag::Variant : Drag::Velocity;
+                        if(drag == Drag::Variant && dragStep < static_cast<int>(row.steps.size()))
+                            dragStartValue = static_cast<float>(row.steps[static_cast<size_t>(dragStep)].pitch);
+                    }
                     else if(dragStep >= 0 && (movedCell || std::abs(mouse.x - previousMouseX) > 6.0f)) drag = Drag::Move;
                     else if(dragStep < 0 && (movedCell || (r >= 0 && r != dragRow))) {
                         drag = Drag::Paint;
                         if(DrumGrid::stepInRange(row, dragCellBeat, dragCellBeat + grid, dragCellBeat) < 0)
-                            DrumGrid::addStep(row, newStep(row, dragCellBeat, grid));
+                            DrumGrid::addStep(row, newStep(row, dragCellBeat, grid, currentVariant(lane, dragRow)));
                     }
                 }
                 if(drag == Drag::Velocity && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
                     auto& step = row.steps[static_cast<size_t>(dragStep)];
                     step.velocity = ofClamp(dragStartValue + (dragStartY - mouse.y) / (120.0f * scale), 0.0f, 1.0f);
                     ImGui::SetTooltip("Velocity %.0f", step.velocity * 100.0f);
+                } else if(drag == Drag::Variant && variantCount(dragRow) > 0 && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
+                    // One sound per ~12 px, up = next.
+                    auto& step = row.steps[static_cast<size_t>(dragStep)];
+                    const int count = variantCount(dragRow);
+                    const int start = std::max(0, std::min(static_cast<int>(std::lround(dragStartValue)), count - 1));
+                    step.pitch = std::max(0, std::min(count - 1, start + static_cast<int>(std::lround((dragStartY - mouse.y) / (12.0f * scale)))));
+                    ImGui::SetTooltip("%s", variantLabel(*variantsOf(dragRow), step.pitch).c_str());
                 } else if(drag == Drag::Move && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
                     // By whole grid steps (keeping an off-grid hit's offset); Alt: freely.
                     double delta = pos - dragStartPos;
@@ -1319,7 +1549,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                         const double cell = std::floor(patternPos(target, sample) / grid) * grid;
                         if(cell >= target.length - 1e-9) continue;
                         const int existing = DrumGrid::stepInRange(target, cell, cell + grid, cell);
-                        if(drag == Drag::Paint && existing < 0) DrumGrid::addStep(target, newStep(target, cell, grid));
+                        if(drag == Drag::Paint && existing < 0) DrumGrid::addStep(target, newStep(target, cell, grid, currentVariant(lane, r)));
                         if(drag == Drag::Erase && existing >= 0) target.steps.erase(target.steps.begin() + existing);
                     }
                 }
@@ -1347,12 +1577,17 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                     const int index = grabAt(row, sourceBeat);
                     if(index >= 0 && edge == nullptr) {
                         const auto& step = row.steps[static_cast<size_t>(index)];
-                        ImGui::SetTooltip("%s at beat %.4g%s\nvel %.0f  pitch %+d  prob %.0f%%  ratchet x%d  gate %.0f%%  duration x%.2f  filter %s  stutter %s\n"
-                                          "Click: remove. Drag: move / velocity. Right-click: edit%s",
-                                          row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)",
-                                          step.velocity * 100.0f, step.pitch, step.probability * 100.0f, step.ratchet,
+                        const auto* names = variantsOf(r);
+                        char pitchText[24];
+                        std::snprintf(pitchText, sizeof(pitchText), "pitch %+d", step.pitch);
+                        ImGui::SetTooltip("%s%s at beat %.4g%s\nvel %.0f  %s  prob %.0f%%  ratchet x%d  gate %.0f%%  duration x%.2f  filter %s  stutter %s\n"
+                                          "Click: remove. Drag: move / velocity%s. Right-click: edit%s",
+                                          row.name.c_str(), names != nullptr ? (": " + variantLabel(*names, step.pitch)).c_str() : "",
+                                          step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)",
+                                          step.velocity * 100.0f, names != nullptr ? "" : pitchText, step.probability * 100.0f, step.ratchet,
                                           step.gate * 100.0f, step.duration, filterText(step.filter).c_str(),
                                           stutterText(step.stutter).c_str(),
+                                          names != nullptr ? ". Alt-drag up / down: sound" : "",
                                           hasSound(r) ? "\nDouble-click: hit editor. Cmd-drag its end: stretch" : "");
                     }
                 }
@@ -1365,6 +1600,9 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                 auto valueAtY = [&](float y) {
                     // Stutter: the bottom few pixels are off (mouse positions are whole pixels).
                     if(mode == StripMode::Stutter && stripBottom - y < 3.0f * scale) return 0.0f;
+                    if(variantStrip)   // one band per sound, the first at the bottom
+                        return static_cast<float>(std::max(0, std::min(focusedVariants - 1, static_cast<int>(std::floor(
+                            (stripBottom - y) / std::max(1.0f, stripBottom - barsTop) * focusedVariants)))));
                     return stripValueAt(mode, (stripBottom - y) / std::max(1.0f, stripBottom - barsTop), altFree);
                 };
                 // The hit whose bar is under x: under the pointer, else in that cell.
@@ -1381,17 +1619,18 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                         dragStartY = mouse.y;
                         previousMouseX = mouse.x;
                         previousMouseY = mouse.y;
-                        dragStartValue = stripValue(row.steps[static_cast<size_t>(index)], mode);
+                        dragStartValue = variantStrip ? static_cast<float>(row.steps[static_cast<size_t>(index)].pitch)
+                                                     : stripValue(row.steps[static_cast<size_t>(index)], mode);
                         drag = io.KeyAlt && !altFreePaint(mode) ? Drag::StripFine : Drag::Strip;
-                        if(drag == Drag::Strip) setStripValue(row.steps[static_cast<size_t>(index)], mode, valueAtY(mouse.y));
+                        if(drag == Drag::Strip) setBar(row.steps[static_cast<size_t>(index)], valueAtY(mouse.y));
                     }
                 }
                 if(dragLaneId == lane.id && dragRow == focused && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                    (drag == Drag::Strip || drag == Drag::StripFine)) {
                     if(drag == Drag::StripFine && dragStep >= 0 && dragStep < static_cast<int>(row.steps.size())) {
                         auto& step = row.steps[static_cast<size_t>(dragStep)];
-                        setStripValue(step, mode, dragStartValue + (dragStartY - mouse.y) * stripFineRate(mode));
-                        ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)], stripText(step, mode).c_str());
+                        setBar(step, dragStartValue + (dragStartY - mouse.y) * stripFineRate(mode));
+                        ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)], barText(step).c_str());
                     } else if(drag == Drag::Strip) {
                         // Every bar between the last mouse position and this one.
                         const float distance = std::abs(mouse.x - previousMouseX);
@@ -1399,30 +1638,30 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
                         for(int k = 1; k <= samples; ++k) {
                             const float t = static_cast<float>(k) / samples;
                             const int index = barAt(previousMouseX + (mouse.x - previousMouseX) * t);
-                            if(index >= 0) setStripValue(row.steps[static_cast<size_t>(index)], mode,
-                                                         valueAtY(previousMouseY + (mouse.y - previousMouseY) * t));
+                            if(index >= 0) setBar(row.steps[static_cast<size_t>(index)],
+                                                  valueAtY(previousMouseY + (mouse.y - previousMouseY) * t));
                         }
                         const int index = barAt(mouse.x);
                         if(index >= 0) ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)],
-                                                         stripText(row.steps[static_cast<size_t>(index)], mode).c_str());
+                                                         barText(row.steps[static_cast<size_t>(index)]).c_str());
                     }
                     previousMouseX = mouse.x;
                     previousMouseY = mouse.y;
                 }
                 if(overStrip && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     const int index = barAt(mouse.x);
-                    if(index >= 0) setStripValue(row.steps[static_cast<size_t>(index)], mode, stripDefault(mode, row));
+                    if(index >= 0) setBar(row.steps[static_cast<size_t>(index)], stripDefault(mode, row));
                 }
                 // Filter: double-click a bar opens it; Stutter: turns it off.
                 if(overStrip && (mode == StripMode::Filter || mode == StripMode::Stutter) &&
                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     const int index = barAt(mouse.x);
-                    if(index >= 0) setStripValue(row.steps[static_cast<size_t>(index)], mode, 0.0f);
+                    if(index >= 0) setBar(row.steps[static_cast<size_t>(index)], 0.0f);
                 }
                 if(overStrip && drag == Drag::None) {
                     const int index = barAt(mouse.x);
                     if(index >= 0) ImGui::SetTooltip("%s %s", stripNames[static_cast<int>(mode)],
-                                                     stripText(row.steps[static_cast<size_t>(index)], mode).c_str());
+                                                     barText(row.steps[static_cast<size_t>(index)]).c_str());
                 }
             }
         }
@@ -1434,6 +1673,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawCanvas(ofxOceanodeTimelineLaneEditor
             ImGui::EndPopup();
         }
         drawRowMenu(lane, grid);
+        drawVariantPicker(lane);
         // The edited hit's sound, and seconds per beat around it.
         const RowSound none;
         const bool popupValid = popupRow >= 0 && popupRow < rowCount && popupStep >= 0 &&
@@ -1478,10 +1718,23 @@ void ofxOceanodeTimelineDrumGridEditor::drawRowMenu(ofxOceanodeTimelineLane& lan
     if(ImGui::SmallButton("Set every hit to this gate")) for(auto& step : row.steps) step.gate = row.gate;
     ImGui::SetNextItemWidth(160.0f);
     if(ImGui::DragInt("Slot##drumRowMenu", &row.slot, 0.1f, 0, 127)) row.slot = std::max(0, row.slot);
+    const int newPitch = currentVariant(lane, popupRow);
+    if(const auto* variants = variantsOf(popupRow)) {
+        contextMenuSection("Sound of new hits");
+        for(int k = 0; k < maxVariants(*variants); ++k) {
+            ImGui::PushID(k);
+            if(ImGui::MenuItem(variantLabel(*variants, k).c_str(), nullptr, k == newPitch, true)) setCurrentVariant(lane, popupRow, k);
+            ImGui::PopID();
+        }
+        if(ImGui::MenuItem("Give every hit this sound"))
+            for(auto& step : row.steps) if(!DrumGrid::stepHidden(row, step)) step.pitch = newPitch;
+        if(ImGui::MenuItem("Randomize sounds"))
+            for(auto& step : row.steps) step.pitch = static_cast<int>(ofRandom(0.0f, static_cast<float>(maxVariants(*variants)) - 1e-3f));
+    }
     contextMenuSection("Pattern (grid steps)");
     if(ImGui::MenuItem("Clear")) clearVisible(row);
     for(int every : {2, 3, 4, 8}) {
-        if(ImGui::MenuItem(("Fill every " + ofToString(every)).c_str())) fillEvery(row, grid, every);
+        if(ImGui::MenuItem(("Fill every " + ofToString(every)).c_str())) fillEvery(row, grid, every, newPitch);
     }
     if(ImGui::MenuItem("Shift left")) shiftRow(row, -grid);
     if(ImGui::MenuItem("Shift right")) shiftRow(row, grid);
@@ -1502,7 +1755,7 @@ void ofxOceanodeTimelineDrumGridEditor::drawRowMenu(ofxOceanodeTimelineLane& lan
         for(double beat = 0.0; beat < row.length - 1e-9; beat += grid) {
             if(ofRandom(1.0f) >= 0.35f) continue;
             const int existing = DrumGrid::stepInRange(row, beat, beat + grid, beat);
-            kept.push_back(existing >= 0 ? row.steps[static_cast<size_t>(existing)] : newStep(row, beat, grid));
+            kept.push_back(existing >= 0 ? row.steps[static_cast<size_t>(existing)] : newStep(row, beat, grid, newPitch));
         }
         row.steps = std::move(kept);
         DrumGrid::normalizeRow(row);
@@ -1548,7 +1801,32 @@ void ofxOceanodeTimelineDrumGridEditor::drawStepMenu(ofxOceanodeTimelineLane& la
     auto& row = lane.drumRows[static_cast<size_t>(popupRow)];
     const auto& step = row.steps[static_cast<size_t>(popupStep)];
     ImGui::Text("%s, hit at beat %.4g%s", row.name.c_str(), step.beat, onGrid(step.beat, grid) ? "" : " (off the grid)");
-    drawStepFields(row, grid, sound, true, true);
+    // Rows with variants: the sounds first, pick one for this hit.
+    const auto* variants = variantsOf(popupRow);
+    if(variants != nullptr) {
+        contextMenuSection("Sound");
+        const int count = maxVariants(*variants);
+        for(int k = 0; k < count; ++k) {
+            ImGui::PushID(k);
+            const ofColor base = popupRow < static_cast<int>(frameRowColors.size()) ? frameRowColors[static_cast<size_t>(popupRow)]
+                                                                                   : ofColor(150, 150, 150);
+            const ofColor c = variantColor(base, k);
+            ImGui::ColorButton("##variantSwatch", ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f),
+                               ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+                               ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()));
+            ImGui::SameLine();
+            if(ImGui::Selectable(variantLabel(*variants, k).c_str(), step.pitch == k)) {
+                row.steps[static_cast<size_t>(popupStep)].pitch = k;
+                ImGui::PopID();
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                return;
+            }
+            ImGui::PopID();
+        }
+        contextMenuSection("Hit");
+    }
+    drawStepFields(row, grid, sound, true, true, variants, false);
     ImGui::EndPopup();
 }
 
@@ -1607,12 +1885,13 @@ void ofxOceanodeTimelineDrumGridEditor::drawHitEditor(ofxOceanodeTimelineLane& l
         ImGui::TextDisabled("One pass %.3g s at %s%s%s%s", pass, stretchText(step.duration).c_str(),
                             sound.loops ? "  loops" : "", sound.gated ? "  gated" : "", sound.mono ? "  mono" : "");
     }
-    drawStepFields(row, grid, sound, hasFilter, hasStutter);
+    drawStepFields(row, grid, sound, hasFilter, hasStutter, variantsOf(popupRow), true);
     ImGui::EndPopup();
 }
 
 bool ofxOceanodeTimelineDrumGridEditor::drawStepFields(ofxOceanodeTimelineDrumRow& row, double grid, const RowSound& sound,
-                                                       bool hasFilter, bool hasStutter) {
+                                                       bool hasFilter, bool hasStutter,
+                                                       const std::vector<std::string>* variants, bool variantField) {
     auto& step = row.steps[static_cast<size_t>(popupStep)];
     // Drag to change; double-click (or Ctrl+click) to type a value.
     float beat = static_cast<float>(step.beat);
@@ -1635,8 +1914,21 @@ bool ofxOceanodeTimelineDrumGridEditor::drawStepFields(ofxOceanodeTimelineDrumRo
     float velocity = step.velocity * 100.0f;
     ImGui::SetNextItemWidth(140.0f);
     if(ImGui::DragFloat("Velocity##drumStep", &velocity, 0.5f, 0.0f, 100.0f, "%.0f")) step.velocity = ofClamp(velocity / 100.0f, 0.0f, 1.0f);
-    ImGui::SetNextItemWidth(140.0f);
-    if(ImGui::DragInt("Pitch (st)##drumStep", &step.pitch, 0.1f, -24, 24, "%+d")) step.pitch = std::max(-24, std::min(24, step.pitch));
+    if(variants == nullptr) {
+        ImGui::SetNextItemWidth(140.0f);
+        if(ImGui::DragInt("Pitch (st)##drumStep", &step.pitch, 0.1f, -24, 24, "%+d")) step.pitch = std::max(-24, std::min(24, step.pitch));
+    } else if(variantField) {
+        // The row's sounds by name (the hit's pitch offset picks one).
+        ImGui::SetNextItemWidth(140.0f);
+        if(ImGui::BeginCombo("Sound##drumStep", variantLabel(*variants, step.pitch).c_str())) {
+            for(int k = 0; k < maxVariants(*variants); ++k) {
+                ImGui::PushID(k);
+                if(ImGui::Selectable(variantLabel(*variants, k).c_str(), step.pitch == k)) step.pitch = k;
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+    }
     float probability = step.probability * 100.0f;
     ImGui::SetNextItemWidth(140.0f);
     if(ImGui::DragFloat("Probability##drumStep", &probability, 0.5f, 0.0f, 100.0f, "%.0f%%")) step.probability = ofClamp(probability / 100.0f, 0.0f, 1.0f);

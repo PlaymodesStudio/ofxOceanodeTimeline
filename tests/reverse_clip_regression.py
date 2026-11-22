@@ -24,6 +24,8 @@ int main() {
         parameters[i].bindParameter(values[i]);
         owner.targets[parameters[i].getEscapedName()] = &parameters[i];
     }
+    // A curve lane takes its first target's range: -10..10.
+    constexpr float kCurveSpan = 20.0f;
     ofParameter<float> gateValue("Gate", 0, 0, 1), pitchValue("Pitch", 60, 0, 127);
     ofxOceanodeParameter<float> gate, pitch;
     gate.bindParameter(gateValue); pitch.bindParameter(pitchValue);
@@ -95,7 +97,9 @@ int main() {
         for(size_t i = 0; i < beats.size(); ++i) {
             const auto after = sample(start + end - beats[i]); // the mirror beat
             for(int k = 0; k < 10; ++k) {
-                const float tolerance = k == 2 ? 0.06f : 0.02f; // Log / Exp is fitted
+                // Curves map over their target's -10..10 range: their
+                // tolerances are in those units (Log / Exp is fitted).
+                const float tolerance = k == 2 ? 0.06f * kCurveSpan : k < 2 ? 0.02f * kCurveSpan : 0.02f;
                 if(std::abs(after[k] - before[i][k]) > tolerance) {
                     std::cerr << name << ": target " << k << " at " << beats[i] << ": " << before[i][k] << " forward vs "
                               << after[k] << " reversed\n";
@@ -107,7 +111,7 @@ int main() {
         assert(model.reverseClip(t, c));
         for(size_t i = 0; i < beats.size(); ++i) {
             const auto again = sample(beats[i]);
-            for(int k = 0; k < 10; ++k) if(std::abs(again[k] - before[i][k]) > (k == 2 ? 0.12f : 0.02f)) {
+            for(int k = 0; k < 10; ++k) if(std::abs(again[k] - before[i][k]) > (k == 2 ? 0.12f * kCurveSpan : k < 2 ? 0.02f * kCurveSpan : 0.02f)) {
                 std::cerr << name << " twice: target " << k << " at " << beats[i] << "\n"; std::abort();
             }
         }

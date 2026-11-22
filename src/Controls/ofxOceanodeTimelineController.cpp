@@ -5813,7 +5813,7 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::MenuItem("Consolidate content"))
                         timeline.consolidateClipContent(scope(timeline), track.id, clip.id);
                     if(ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Permanently remove source data hidden beyond the clip's right edge");
+                        ImGui::SetTooltip("Turn repeats into content of their own, so each pass can be edited apart,\nbake any stretch into the content so the clip plays at 1x,\nand permanently remove source data hidden beyond the clip's right edge");
                 }
             }
             auto* selectedLane = timeline.getLane(scope(timeline), track.id, clip.id, pendingLaneId);
@@ -8235,22 +8235,13 @@ void ofxOceanodeTimelineController::drawPendingTrackPopup() {
             laneId = timeline.createLane(scope(timeline), request.first, clipId, binding->parameterPath, binding->laneType);
             timeline.addBindingToLane(scope(timeline), request.first, clipId, laneId, request.second);
             auto* lane = timeline.getLane(scope(timeline), request.first, clipId, laneId);
-            auto* parameter = container->findTimelineParameter(binding->parameterPath);
             if(lane != nullptr && binding->valueType == typeid(bool).name()) makeToggleLane(lane);
             if(lane != nullptr && chords) {
                 timeline.setLaneMultiRowCount(scope(timeline), request.first, clipId, laneId, std::max(1, chordBank.voices));
                 lane->name = "Chords";
                 lane->beatsPerStep = 1.0;   // chords on beats; Division makes it finer
             }
-            if(lane != nullptr && parameter != nullptr) {
-                if(binding->valueType == typeid(float).name()) {
-                    lane->valueMin = parameter->cast<float>().getParameter().getMin();
-                    lane->valueMax = parameter->cast<float>().getParameter().getMax();
-                } else if(binding->valueType == typeid(int).name()) {
-                    lane->valueMin = parameter->cast<int>().getParameter().getMin();
-                    lane->valueMax = parameter->cast<int>().getParameter().getMax();
-                }
-            }
+            // (addBindingToLane gave the lane its parameter's range.)
         }
         editorState.editorTrackId = request.first; editorState.editorClipId = clipId; editorState.editorLaneId = laneId;
         editorRowScope = {};
@@ -10049,32 +10040,10 @@ std::string ofxOceanodeTimelineController::addBoundLane(ofxOceanodeTimelineManag
             else if(binding.valueType == typeid(ofColor).name()) lane->colors.front() = ofFloatColor(parameter->cast<ofColor>().getParameter().get());
         }
     }
-    if(lane != nullptr && laneType != ofxOceanodeTimelineLaneType::PianoRoll &&
-       laneType != ofxOceanodeTimelineLaneType::MultiGate &&
-       laneType != ofxOceanodeTimelineLaneType::Wave &&
-       !ofxOceanodeTimelineIsHeldValueLane(laneType)) {
-        // A value lane spans the parameter's own range.
-        if(auto* parameter = timeline.resolverFor(sequence).find(binding.parameterPath)) {
-            if(binding.valueType == typeid(float).name()) {
-                lane->valueMin = parameter->cast<float>().getParameter().getMin();
-                lane->valueMax = parameter->cast<float>().getParameter().getMax();
-            } else if(binding.valueType == typeid(int).name()) {
-                lane->valueMin = static_cast<float>(parameter->cast<int>().getParameter().getMin());
-                lane->valueMax = static_cast<float>(parameter->cast<int>().getParameter().getMax());
-            } else if(laneType == ofxOceanodeTimelineLaneType::MultiCurve &&
-                      binding.valueType == typeid(std::vector<float>).name()) {
-                // Over the vector's range.
-                const auto& vectorParameter = parameter->cast<std::vector<float>>().getParameter();
-                const auto minimum = vectorParameter.getMin(), maximum = vectorParameter.getMax();
-                if(!minimum.empty() && !maximum.empty() && maximum.front() > minimum.front()) {
-                    lane->valueMin = minimum.front();
-                    lane->valueMax = maximum.front();
-                }
-            }
-            // One curve per element the vector has now.
-            if(laneType == ofxOceanodeTimelineLaneType::MultiCurve) timeline.fitMultiCurvesToTarget(sequence, trackId, clipId, laneId);
-        }
-    }
+    // (addBindingToLane gave a value lane its target's range.) One curve per
+    // element the vector has now.
+    if(lane != nullptr && laneType == ofxOceanodeTimelineLaneType::MultiCurve)
+        timeline.fitMultiCurvesToTarget(sequence, trackId, clipId, laneId);
     return laneId;
 }
 
