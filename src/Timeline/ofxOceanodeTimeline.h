@@ -2694,8 +2694,9 @@ public:
     // ofxOceanodeTimelineWaveAudioProvider above). The manager does not own
     // the provider; the caller (typically a bridge object living inside
     // ofxOceanodeSuperCollider) is responsible for its lifetime and must
-    // clear it (pass nullptr) before destroying it.
-    void setWaveAudioProvider(ofxOceanodeTimelineWaveAudioProvider* provider) { waveAudioProvider = provider; }
+    // clear it (pass nullptr) before destroying it. The players' engines
+    // hold the same pointer, so they take the change at once.
+    void setWaveAudioProvider(ofxOceanodeTimelineWaveAudioProvider* provider);
     ofxOceanodeTimelineWaveAudioProvider* getWaveAudioProvider() const { return waveAudioProvider; }
 
     // Cross-track clip grouping (see ofxOceanodeTimelineClipGroup above).

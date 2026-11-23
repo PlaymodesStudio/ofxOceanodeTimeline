@@ -602,6 +602,14 @@ void ofxOceanodeTimelineManager::setPlaySettings(const TimelineRef& ref, const o
 
 // ---- Players ----
 
+void ofxOceanodeTimelineManager::setWaveAudioProvider(ofxOceanodeTimelineWaveAudioProvider* provider) {
+    waveAudioProvider = provider;
+    // Each engine keeps its own copy (syncPlayer): one left behind would
+    // dangle once the provider is destroyed, and destroyPlayer calls it.
+    for(auto& player : players)
+        if(player != nullptr && player->engine != nullptr) player->engine->waveAudioProvider = provider;
+}
+
 void ofxOceanodeTimelineManager::destroyPlayer(Player& player) {
     if(player.overridesCanvas)
         if(auto canvas = player.canvas.lock())
