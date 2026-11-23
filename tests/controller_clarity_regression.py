@@ -1496,8 +1496,8 @@ int main() {
     assert(model.getTrack(folder)->parentId.empty());
 
     {
-        // Track heights: a normal track's bottom edge resizes every normal
-        // track at once (saved with the view); a Wave track resizes alone.
+        // Track heights: a track's bottom edge resizes that track alone
+        // (saved with it); the others keep the view's default height.
         // The edge wins over the clip under it, which does not move.
         const bool wasTargets=ui.targetsView; ui.targetsView=false;
         for(int i=0;i<25;++i) frame();
@@ -1511,26 +1511,30 @@ int main() {
         frame(1250,edge,false); frame(1250,edge,true);
         for(int i=1;i<=6;++i) frame(1250,ImVec2(edge.x+i*10.0f,edge.y+40.0f*i/6.0f),true);
         frame(1250,ImVec2(edge.x+60.0f,edge.y+40.0f),false); frame(); frame();
-        // The tracks above grow too, so the height changes by less than the
-        // drag and the grabbed edge stays under the mouse.
+        // Only the grabbed track grows, by the drag: its edge stays under the mouse.
         assert(std::abs(headerRow(t)->maxY-2.0f-(edge.y+40.0f))<1.0f);
-        assert(model.getViewState().trackHeight>80.5f && model.getViewState().trackHeight<119.0f);
-        assert(std::abs(height(t)-model.getViewState().trackHeight)<1.0f && std::abs(height(dt)-height(t))<0.5f); // all at once
+        assert(std::abs(model.getViewState().trackHeight-80.0f)<0.01f);
+        assert(std::abs(model.getTrack(t)->trackHeight-120.0f)<1.0f && std::abs(height(t)-120.0f)<1.0f);
+        assert(std::abs(height(dt)-80.0f)<0.5f);                                     // the others keep theirs
         assert(std::abs(height(wt)-waveBefore)<0.5f);                               // the Wave track keeps its own
         assert(model.getClip(t,c)->startBeat==startBefore);                          // the clip stayed put
         frame(1250,ImVec2(-100,-100),false,"track-height");
         // The Wave track's edge resizes it alone (the others made small so it is in view).
-        model.getViewState().trackHeight=kMinTrackHeight;
+        const float ownHeight=model.getTrack(t)->trackHeight;
+        model.getTrack(t)->trackHeight=0.0f; model.getViewState().trackHeight=kMinTrackHeight;
         for(int i=0;i<25;++i) frame();
         const ImVec2 waveEdge(ui.fileDropBounds.getRight()-40.0f,headerRow(wt)->maxY-2.0f);
         frame(1250,waveEdge,false); frame(1250,waveEdge,true);
         for(int i=1;i<=6;++i) frame(1250,ImVec2(waveEdge.x,waveEdge.y+30.0f*i/6.0f),true);
         frame(1250,ImVec2(waveEdge.x,waveEdge.y+30.0f),false); frame(); frame();
         assert(std::abs(height(wt)-(waveBefore+30.0f))<1.0f && std::abs(height(t)-kMinTrackHeight)<1.0f);
-        // Both saved and read back.
+        // All saved and read back.
+        model.getTrack(t)->trackHeight=ownHeight;
         const auto saved=model.toJson();
-        model.getViewState().trackHeight=80.0f; model.fromJson(saved);
+        model.getViewState().trackHeight=80.0f; model.getTrack(t)->trackHeight=0.0f; model.fromJson(saved);
         assert(std::abs(model.getViewState().trackHeight-kMinTrackHeight)<1.0f);
+        assert(std::abs(model.getTrack(t)->trackHeight-ownHeight)<0.01f);
+        model.getTrack(t)->trackHeight=0.0f;
         assert(std::abs(model.getTrack(wt)->waveTrackHeight-(waveBefore+30.0f))<1.0f);
         model.getViewState().trackHeight=80.0f; model.getTrack(wt)->waveTrackHeight=waveBefore;
         ui.targetsView=wasTargets;

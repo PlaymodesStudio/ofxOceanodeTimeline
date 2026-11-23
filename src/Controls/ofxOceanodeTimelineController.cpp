@@ -4254,9 +4254,6 @@ void ofxOceanodeTimelineController::draw() {
             for(auto* host : hosts) timeline.syncMacroTrackNames(*host);
     }
 
-    // Shared-height tracks drawn so far: resizing all of them from one edge
-    // moves that edge by this many times the height change.
-    int sharedHeightTracks = 0;
     // The arrangement's parentOf / depthOf / isWithin each scan the track
     // list by id: the same lookups through a per-frame index (the loop below
     // never adds, removes or refiles tracks; collapsed and colour are read live).
@@ -4467,8 +4464,10 @@ void ofxOceanodeTimelineController::draw() {
         // (A Macro Morphing Track neither: it has no bindings.)
         const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack() ||
                                     track.isMorphTrack || track.isMarkerTrack;
-        // The height the tracks of the Clips view share.
-        const float sharedTrackHeight = ofClamp(timeline.getViewState().trackHeight, kMinTrackHeight, kMaxTrackHeight);
+        // Its row's height in the Clips view: its own once its bottom edge
+        // was dragged, the view's default one otherwise.
+        const float ownTrackHeight = ofClamp(track.trackHeight > 0.0f ? track.trackHeight : timeline.getViewState().trackHeight,
+                                             kMinTrackHeight, kMaxTrackHeight);
         // A macro track's pad has one row only (what it plays shows under it,
         // unfolded): its header is a line shorter than the other tracks'.
         auto withoutSecondRow = [&](float height) {
@@ -4476,10 +4475,9 @@ void ofxOceanodeTimelineController::draw() {
         };
         const float trackHeaderHeight = track.isWaveTrack
             ? ofClamp(track.waveTrackHeight, kWaveTrackMinHeight, kWaveTrackMaxHeight)
-            : (singleRowTrack ? withoutSecondRow(!targetsView ? sharedTrackHeight : kCollapsedHeight) : kHeaderHeight);
-        // Wave tracks resize alone; the other tracks' rows (Clips view) all at once.
+            : (singleRowTrack ? withoutSecondRow(!targetsView ? ownTrackHeight : kCollapsedHeight) : kHeaderHeight);
+        // Each track's row (Clips view) resizes alone, from its bottom edge.
         const bool resizableTrack = track.isWaveTrack || (singleRowTrack && !targetsView);
-        if(resizableTrack && !track.isWaveTrack) ++sharedHeightTracks;
         bool expandTrackForEditor = false;
         ImGui::SetCursorPos(ImVec2(0, headerY));
         // Keep the header as a visual/layout item only. A full-width
@@ -6345,15 +6343,21 @@ void ofxOceanodeTimelineController::draw() {
                     dl->AddLine(ImVec2(headerMin.x, headerMax.y - 1.0f), ImVec2(headerMax.x, headerMax.y - 1.0f),
                                 IM_COL32(220, 220, 245, 220), 2.0f);
                 if(resizeHovered)
-                    ImGui::SetTooltip(track.isWaveTrack ? "Drag to resize this Wave track" : "Drag to resize all tracks");
+                    ImGui::SetTooltip(track.isWaveTrack ? "Drag to resize this Wave track"
+                                                        : "Drag to resize this track. Double-click for its default height.");
             }
             if(resizeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !clipInteractionClaimedThisFrame) {
                 clipInteractionClaimedThisFrame = true;
                 anyClipInteractionClaimedThisFrame = true;
-                trackResizeId = track.id;
-                trackResizeStartMouseY = ImGui::GetIO().MousePos.y;
-                trackResizeStartHeight = track.isWaveTrack ? trackHeaderHeight : sharedTrackHeight;
-                trackResizeTracksMoved = track.isWaveTrack ? 1 : sharedHeightTracks;
+                if(!track.isWaveTrack && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    // Back to the view's default height.
+                    if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->trackHeight = 0.0f;
+                    trackResizeId.clear();
+                } else {
+                    trackResizeId = track.id;
+                    trackResizeStartMouseY = ImGui::GetIO().MousePos.y;
+                    trackResizeStartHeight = track.isWaveTrack ? trackHeaderHeight : ownTrackHeight;
+                }
             }
             // Later clips are drawn on top, so hit-test in reverse order and
             // let the visually topmost overlapping clip own the gesture.
@@ -6390,14 +6394,13 @@ void ofxOceanodeTimelineController::draw() {
                 for(const auto& clip : track.clips) drawClipMenu(clip);
             if(trackResizeId == track.id) {
                 if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    // Every shared-height track above grows too, so divide
-                    // the drag between them to keep this edge under the mouse.
-                    const float height = trackResizeStartHeight +
-                        (ImGui::GetIO().MousePos.y - trackResizeStartMouseY) / std::max(1, trackResizeTracksMoved);
-                    if(!track.isWaveTrack)
-                        timeline.getViewState().trackHeight = ofClamp(height, kMinTrackHeight, kMaxTrackHeight);
-                    else if(auto* editTrack = timeline.getTrack(scope(timeline), track.id))
-                        editTrack->waveTrackHeight = ofClamp(height, kWaveTrackMinHeight, kWaveTrackMaxHeight);
+                    // Only this track's row: the ones above keep their
+                    // height, so the edge follows the mouse.
+                    const float height = trackResizeStartHeight + ImGui::GetIO().MousePos.y - trackResizeStartMouseY;
+                    if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) {
+                        if(track.isWaveTrack) editTrack->waveTrackHeight = ofClamp(height, kWaveTrackMinHeight, kWaveTrackMaxHeight);
+                        else editTrack->trackHeight = ofClamp(height, kMinTrackHeight, kMaxTrackHeight);
+                    }
                 }
                 if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) trackResizeId.clear();
             }

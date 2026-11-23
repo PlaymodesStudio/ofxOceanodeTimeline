@@ -592,6 +592,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
     trackJson["name"] = track.name;
     trackJson["collapsed"] = track.collapsed;
     if(track.unfoldedRowHeight > 0.0f) trackJson["unfoldedRowHeight"] = track.unfoldedRowHeight;
+    if(track.trackHeight > 0.0f) trackJson["trackHeight"] = track.trackHeight;
     trackJson["muted"] = track.muted;
     trackJson["solo"] = track.solo;
     trackJson["isWaveTrack"] = track.isWaveTrack;
@@ -1077,6 +1078,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         track.name = sequence.makeUniqueTrackName(trackJson.value("name", std::string("Timeline Track")));
         track.collapsed = trackJson.value("collapsed", false);
         track.unfoldedRowHeight = trackJson.value("unfoldedRowHeight", 0.0f);
+        track.trackHeight = trackJson.value("trackHeight", 0.0f);
         track.muted = trackJson.value("muted", false);
         track.solo = trackJson.value("solo", false);
         track.waveTrackHeight = trackJson.value("waveTrackHeight", 96.0f);

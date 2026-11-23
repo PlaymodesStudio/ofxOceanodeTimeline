@@ -1221,6 +1221,10 @@ struct ofxOceanodeTimelineTrack {
     // The height of its row under an unfolded macro track, dragged from that
     // row's bottom edge (0: the default one).
     float unfoldedRowHeight = 0.0f;
+    // The height of its own row in the Clips view, dragged from that row's
+    // bottom edge (0: the view's default, ofxOceanodeTimelineViewState::trackHeight).
+    // A Wave track uses waveTrackHeight instead.
+    float trackHeight = 0.0f;
     bool muted = false;
     bool solo = false;
     std::vector<ofxOceanodeTimelineParameterBinding> bindings;
@@ -1389,7 +1393,9 @@ struct ofxOceanodeTimelineViewState {
     float scrollX = 0.0f;
     // Pinned left column width (track pads / lane properties), in pixels.
     float labelWidth = 280.0f;
-    // Height of every track row in the Clips view (Wave tracks have their own).
+    // Default height of a track row in the Clips view: a track whose bottom
+    // edge was dragged has its own (ofxOceanodeTimelineTrack::trackHeight),
+    // and so does every Wave track.
     float trackHeight = kMinTrackHeight;
 };
 

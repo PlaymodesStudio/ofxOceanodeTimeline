@@ -214,12 +214,11 @@ private:
     std::string pendingTrackId;
     std::string pendingClipId;
     std::string pendingLaneId;
-    // Dragging a track's bottom edge: a Wave track's own height, or the
-    // height every other track shares (viewState.trackHeight).
+    // Dragging a track's bottom edge: that track's own height (a Wave
+    // track's waveTrackHeight, any other's trackHeight).
     std::string trackResizeId;
     float trackResizeStartMouseY = 0.0f;
     float trackResizeStartHeight = 0.0f;
-    int trackResizeTracksMoved = 1; // tracks whose growth moves the grabbed edge
     char pendingTrackName[128] = {};
     char pendingClipName[128] = {};
     char pendingClipRenameName[128] = {};
