@@ -840,15 +840,25 @@ private:
     std::string globalKeyTrackId;
     std::string globalKeyClipId;      // empty: the clip at the beat, or the nearest
     double globalKeyBeat = 0.0;
-    // The keyframe a clip menu was opened on (-1: none), one to remove, and
+    bool globalKeyPaste = false;      // the request pastes the copied keyframes there (else it stores a new one)
+    // The keyframe a clip menu was opened on (-1: none), those to remove, and
     // the one being dragged along its clip. (A clip of an unfolded row's menu
     // uses clipMenuGlobalKey and clipMenuBeat too, in its timeline's beats.)
     int clipMenuGlobalKey = -1;
     std::string globalKeyEditTrackId;
     std::string globalKeyEditClipId;
-    int globalKeyRemoveIndex = -1;
+    std::vector<size_t> globalKeyRemoveIndexes;
+    // The selected keyframes: indexes into one clip's (a click selects one,
+    // Shift or Cmd/Ctrl-click toggles more), which the clip menu copies and
+    // deletes. Cleared where the clip's keyframes change under them.
+    RowScope globalKeySelScope;       // (sequence null: the scope's own)
+    std::string globalKeySelTrackId;
+    std::string globalKeySelClipId;
+    std::set<int> globalKeySelection;
+    bool globalKeySelectedThisFrame = false; // a click chose them: not one on empty space
     int globalKeyDragIndex = -1;
     float globalKeyDragOriginX = 0.0f;
+    bool globalKeyDragMoved = false;  // the press became a drag (else a click, which selects that keyframe alone)
     // The easing of the transition after keyframe globalEaseDragIndex,
     // dragged by its handle (sideways: where it bends; up/down: how sharply),
     // or reset to linear (globalEaseResetIndex).

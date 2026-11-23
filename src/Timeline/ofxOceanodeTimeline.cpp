@@ -6442,6 +6442,138 @@ int ofxOceanodeTimelineManager::moveGlobalKeyframe(ofxOceanodeTimelineSequence& 
     return newIndex;
 }
 
+std::vector<int> ofxOceanodeTimelineManager::moveGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                                  const std::string& clipId, const std::vector<size_t>& indexes,
+                                                                  size_t anchorIndex, double timelineBeat) {
+    std::vector<int> result;
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr || indexes.empty() || anchorIndex >= clip->globalKeyframes.size() || !std::isfinite(timelineBeat)) return result;
+    auto& keyframes = clip->globalKeyframes;
+    for(const size_t index : indexes)
+        if(index >= keyframes.size()) return result;
+    // Where the anchor goes (see moveGlobalKeyframe), then how far that is.
+    const double end = clip->startBeat + clip->durationBeats;
+    timelineBeat = std::max(clip->startBeat, std::min(timelineBeat, end));
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+    double sourceBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(*clip, std::min(timelineBeat, end - 1e-6));
+    if(timelineBeat >= end - 1e-6 && !clip->repeatContent && ofxOceanodeTimelineClipTime::contentOffset(*clip) <= 0.0)
+        sourceBeat = content;
+    double first = keyframes[indexes.front()].beat, last = first;
+    for(const size_t index : indexes) {
+        first = std::min(first, keyframes[index].beat);
+        last = std::max(last, keyframes[index].beat);
+    }
+    // The whole group stays inside the content.
+    double delta = sourceBeat - keyframes[anchorIndex].beat;
+    delta = std::min(delta, std::max(0.0, content - last));
+    delta = std::max(delta, -std::max(0.0, first));
+    result.reserve(indexes.size());
+    if(std::abs(delta) < 1e-9) {
+        for(const size_t index : indexes) result.push_back(static_cast<int>(index));
+        return result;
+    }
+    std::vector<uint64_t> stamps;
+    stamps.reserve(indexes.size());
+    for(const size_t index : indexes) {
+        auto& keyframe = keyframes[index];
+        keyframe.beat += delta;
+        keyframe.stamp = ofxOceanodeTimelineGlobalKeyframe::nextStamp();
+        stamps.push_back(keyframe.stamp);
+    }
+    std::stable_sort(keyframes.begin(), keyframes.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
+    for(const uint64_t stamp : stamps) {
+        const auto at = std::find_if(keyframes.begin(), keyframes.end(), [&](const auto& keyframe) { return keyframe.stamp == stamp; });
+        result.push_back(static_cast<int>(at - keyframes.begin()));
+    }
+    invalidateEvaluationIndexes();
+    return result;
+}
+
+int ofxOceanodeTimelineManager::removeGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                       const std::string& clipId, std::vector<size_t> indexes) {
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr) return 0;
+    // From the last one, so the indexes before it stay what they were.
+    std::sort(indexes.begin(), indexes.end(), std::greater<size_t>());
+    indexes.erase(std::unique(indexes.begin(), indexes.end()), indexes.end());
+    int removed = 0;
+    for(const size_t index : indexes) {
+        if(index >= clip->globalKeyframes.size()) continue;
+        clip->globalKeyframes.erase(clip->globalKeyframes.begin() + static_cast<std::ptrdiff_t>(index));
+        ++removed;
+    }
+    if(removed > 0) invalidateEvaluationIndexes();
+    return removed;
+}
+
+int ofxOceanodeTimelineManager::copyGlobalKeyframes(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                     const std::string& clipId, const std::vector<size_t>& indexes) {
+    const auto* clip = getClip(sequence, trackId, clipId);
+    if(clip == nullptr) return 0;
+    std::vector<ofxOceanodeTimelineGlobalKeyframe> keyframes;
+    for(const size_t index : indexes)
+        if(index < clip->globalKeyframes.size()) keyframes.push_back(clip->globalKeyframes[index]);
+    if(keyframes.empty()) return 0; // (the clipboard keeps what it had)
+    std::stable_sort(keyframes.begin(), keyframes.end(), [](const auto& a, const auto& b) { return a.beat < b.beat; });
+    copiedGlobalKeys = std::move(keyframes);
+    copied = TrackClipboard{}; // one thing copied at a time: Cmd+V pastes the latest
+    return static_cast<int>(copiedGlobalKeys.size());
+}
+
+std::vector<int> ofxOceanodeTimelineManager::pasteGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                                                   const std::string& clipId, double timelineBeat) {
+    std::vector<int> pasted;
+    auto* track = getTrack(sequence, trackId);
+    auto* clip = getClip(sequence, trackId, clipId);
+    if(track == nullptr || !track->isGlobalTrack || clip == nullptr || copiedGlobalKeys.empty() ||
+       !std::isfinite(timelineBeat)) return pasted;
+    timelineBeat = std::max(clip->startBeat, timelineBeat);
+
+    // Where the earliest one goes in the clip's content (see addGlobalKeyframe).
+    const double content = ofxOceanodeTimelineClipTime::sourceDuration(*clip);
+    const bool plain = !isClipStretched(*clip) && !clip->reversed &&
+                       ofxOceanodeTimelineClipTime::contentOffset(*clip) <= 0.0 &&
+                       clip->durationBeats <= content + 1e-6;
+    const double span = copiedGlobalKeys.back().beat - copiedGlobalKeys.front().beat;
+    double firstBeat = 0.0;
+    double limit = content; // no keyframe past it
+    if(plain) {
+        firstBeat = timelineBeat - clip->startBeat;
+        const double lastBeat = firstBeat + span;
+        if(lastBeat > clip->durationBeats) {
+            clip->durationBeats = lastBeat;
+            clip->contentDurationBeats = std::max(content, lastBeat);
+            if(!clip->repeatContent) clip->contentDurationBeats = clip->durationBeats;
+        }
+        limit = std::max(content, lastBeat);
+    } else {
+        if(timelineBeat >= clip->startBeat + clip->durationBeats) return pasted;
+        firstBeat = ofxOceanodeTimelineClipTime::timelineToSourceBeat(*clip, timelineBeat);
+    }
+
+    auto& keyframes = clip->globalKeyframes;
+    std::vector<uint64_t> stamps;
+    for(const auto& source : copiedGlobalKeys) {
+        ofxOceanodeTimelineGlobalKeyframe keyframe = source; // (the values' map is shared: it is never edited in place)
+        keyframe.beat = firstBeat + (source.beat - copiedGlobalKeys.front().beat);
+        if(keyframe.beat > limit + 1e-6) continue;
+        keyframe.stamp = ofxOceanodeTimelineGlobalKeyframe::nextStamp();
+        stamps.push_back(keyframe.stamp);
+        const double beat = keyframe.beat;
+        const auto existing = std::find_if(keyframes.begin(), keyframes.end(), [&](const auto& other) {
+            return std::abs(other.beat - beat) < 1.0 / 960.0;
+        });
+        if(existing != keyframes.end()) *existing = std::move(keyframe);
+        else keyframes.insert(std::upper_bound(keyframes.begin(), keyframes.end(), beat,
+                                  [](double at, const auto& other) { return at < other.beat; }), std::move(keyframe));
+    }
+    for(size_t index = 0; index < keyframes.size(); ++index)
+        if(std::find(stamps.begin(), stamps.end(), keyframes[index].stamp) != stamps.end())
+            pasted.push_back(static_cast<int>(index));
+    if(!stamps.empty()) invalidateEvaluationIndexes();
+    return pasted;
+}
+
 // One channel per path whose value is not the same in every keyframe of a
 // global clip that has it: the others are never written.
 void ofxOceanodeTimelineManager::rebuildGlobalChannels() {

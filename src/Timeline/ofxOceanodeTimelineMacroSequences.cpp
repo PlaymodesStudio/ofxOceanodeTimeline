@@ -1015,6 +1015,7 @@ int ofxOceanodeTimelineManager::copyTracks(const ofxOceanodeTimelineSequence& se
                                                      [](const auto& track) { return !track.isFolder; }));
     if(clipboard.count == 0) clipboard.count = static_cast<int>(clipboard.tracks.size());
     copied = std::move(clipboard);
+    copiedGlobalKeys.clear(); // one thing copied at a time: Cmd+V pastes the latest
     return static_cast<int>(copied.tracks.size());
 }
 
@@ -1063,6 +1064,7 @@ int ofxOceanodeTimelineManager::copyClips(const ofxOceanodeTimelineSequence& seq
         if(members.size() > 1) clipboard.groups.push_back({group.id, members});
     }
     copied = std::move(clipboard);
+    copiedGlobalKeys.clear(); // one thing copied at a time: Cmd+V pastes the latest
     return copied.count;
 }
 

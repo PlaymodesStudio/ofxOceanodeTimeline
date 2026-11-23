@@ -1723,6 +1723,33 @@ public:
     // Moves a keyframe to a timeline beat inside its clip; returns its new index (-1: not moved).
     int moveGlobalKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                             const std::string& clipId, size_t index, double timelineBeat);
+    // Moves several keyframes of a clip together, keeping their spacing:
+    // the one at `anchorIndex` goes to a timeline beat as for
+    // moveGlobalKeyframe, as far as the first and last of them stay inside
+    // the clip's content. Returns their new indexes, in the order of
+    // `indexes` (empty: not moved).
+    std::vector<int> moveGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                         const std::string& clipId, const std::vector<size_t>& indexes,
+                                         size_t anchorIndex, double timelineBeat);
+    // Removes several keyframes of a clip at once; returns how many.
+    int removeGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                               const std::string& clipId, std::vector<size_t> indexes);
+    // Copy and paste of keyframes, between the Global Track clips of any
+    // timelines (the clipboard is the manager's: every Timeline window
+    // shares it). A copy keeps the keyframes' values, easings and spacing,
+    // and takes the place of copied tracks or clips (as those do of it).
+    // Returns how many were copied.
+    int copyGlobalKeyframes(const ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                             const std::string& clipId, const std::vector<size_t>& indexes);
+    int copiedGlobalKeyframeCount() const { return static_cast<int>(copiedGlobalKeys.size()); }
+    // Pastes them into a clip, the earliest at a timeline beat and the
+    // others as far after it as they were copied (in the clip's source
+    // beats). A keyframe already at one of those places is overwritten. An
+    // unstretched clip grows to hold them, as for addGlobalKeyframe; in a
+    // stretched, repeated or offset one, those past its content are left
+    // out. Returns the pasted keyframes' indexes.
+    std::vector<int> pasteGlobalKeyframes(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
+                                          const std::string& clipId, double timelineBeat);
     // ---- Marker Track (see ofxOceanodeTimelineTrack::isMarkerTrack) ----
     // One per timeline: returns the existing one's id when there is one.
     std::string createMarkerTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Markers");
@@ -3145,6 +3172,8 @@ private:
     ClipboardPasteRequest pendingClipboardPaste;
     bool clipboardPasteRequested = false;
     TrackClipboard copied;
+    // The copied Global Track keyframes, in beat order (copyGlobalKeyframes).
+    std::vector<ofxOceanodeTimelineGlobalKeyframe> copiedGlobalKeys;
     // A copied track or clip as the timeline pasted into keeps it: paths
     // rebased from the copied canvas onto `canvas`, targets looked up.
     void rebaseCopiedTrack(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,

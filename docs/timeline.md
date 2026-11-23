@@ -599,11 +599,25 @@ A Global Track of the macro's timeline shows its keyframes on its row, with
 the easing between them, and they are edited there as on its own track: drag a
 keyframe to move it, drag an easing handle to shape the transition
 (double-click: linear), double-click a keyframe to put the playhead on it, and
-right-click to add a keyframe or delete the one under the mouse. The row's pad
+right-click to add a keyframe or to copy, paste or delete keyframes. A click
+selects a keyframe (a white frame around it), Shift or Cmd/Ctrl-click adds
+or removes one, and a right-click on a keyframe that is not selected selects
+it alone; the selection is within one clip. Dragging one of several
+selected keyframes moves them all together, at their distances, as far as
+the first and last stay inside the clip. **Copy** and **Delete** act on
+the selected keyframes. **Paste here** and **Paste at playhead** put the
+copied ones from that position on, keeping their spacing and easings and
+overwriting a keyframe already there; they can go to another clip or another
+timeline's Global Track. With keyframes selected, Cmd/Ctrl+C copies them and
+Delete removes them (not the clip they are in); Cmd/Ctrl+V pastes copied
+keyframes at the playhead, into the clip keyframes were last selected in.
+Copying keyframes replaces copied clips or tracks, and the other way round.
+The row's pad
 has the same **< + Key >** buttons: **+ Key** stores the macro's canvas where
 the playhead plays that timeline (so the playhead has to be on a macro clip
 playing it forward), and **<** and **>** step the playhead through the
-keyframes of every repeat. A macro clip's own preview marks each keyframe with
+keyframes of every repeat. While the playhead is on a keyframe **+ Key** is
+filled with the track's colour: pressing it overwrites that keyframe. A macro clip's own preview marks each keyframe with
 a line.
 
 The unfolded state is saved with the track. Structural work (new tracks,

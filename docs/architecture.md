@@ -115,6 +115,15 @@ keyframes alternately low and high so the line between two of them shows
 that easing (the levels mean nothing else), with a handle per transition:
 dragged sideways it moves the bend, up or down it changes the steepness,
 double-clicked it goes back to linear (`setGlobalKeyframeEase`).
+The controller keeps a selection of keyframes as indexes into one clip's
+(`globalKeySelection`, with the scope, track and clip they are in), cleared
+wherever that clip's keyframes are added, pasted or removed. The clip menu
+copies them to the manager's clipboard (`copyGlobalKeyframes`, shared by
+every Timeline window), pastes it at a beat (`pasteGlobalKeyframes`: the
+values' maps are shared, the stamps new) and removes them
+(`removeGlobalKeyframes`); dragging one of several selected moves them
+together (`moveGlobalKeyframes`). `+ Key` is filled with the track's colour while a
+keyframe plays at the playhead (`globalKeyAtBeat`).
 A value is written only when it differs from what the track last computed
 for that path (`globalLastApplied`), not when the parameter differs: where
 the track's value holds still (stopped, or between equal keyframes) the

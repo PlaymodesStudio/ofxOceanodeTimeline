@@ -2365,6 +2365,19 @@ void ofxOceanodeTimelineController::draw() {
     // actual removals until after the track iteration below, just like the
     // context-menu delete path, because removing a clip can reallocate its
     // track's clip vector.
+    // Selected Global Track keyframes come first: Delete removes them, not
+    // the clip they are in (which a click on one of them selects too).
+    if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+       !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
+       !globalKeySelection.empty() && !lastClickInEditor &&
+       (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false))) {
+        globalKeyEditScope = globalKeySelScope;
+        globalKeyEditTrackId = globalKeySelTrackId;
+        globalKeyEditClipId = globalKeySelClipId;
+        globalKeyRemoveIndexes.clear();
+        for(const int index : globalKeySelection)
+            if(index >= 0) globalKeyRemoveIndexes.push_back(static_cast<size_t>(index));
+    } else
     if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
        !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
        !selectedClips.empty() && !lastClickInEditor && // in the editor, Delete edits the clip's content
@@ -2389,8 +2402,56 @@ void ofxOceanodeTimelineController::draw() {
            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
            !keys.WantTextInput && !ImGui::IsAnyItemActive() && !lastClickInEditor &&
            !(editorState.clipEditorOpen && laneEditors.hasNoteSelection(editorState.editorLaneId))) {
-            if(ImGui::IsKeyPressed(ImGuiKey_C, false)) copySelection(timeline);
-            else if(ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteAtSelection(timeline, transportState.beatPosition);
+            // Selected Global Track keyframes are copied before the clip
+            // they are in; copied ones are pasted at the playhead, into the
+            // clip keyframes were last selected in (else the shown
+            // timeline's Global Track, its clip nearest the playhead).
+            if(ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                if(!globalKeySelection.empty()) {
+                    const RowScopeGuard copying(*this, globalKeySelScope.sequence != nullptr ? &globalKeySelScope : nullptr);
+                    std::vector<size_t> indexes;
+                    for(const int index : globalKeySelection)
+                        if(index >= 0) indexes.push_back(static_cast<size_t>(index));
+                    timeline.copyGlobalKeyframes(scope(timeline), globalKeySelTrackId, globalKeySelClipId, indexes);
+                } else copySelection(timeline);
+            } else if(ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+                if(timeline.copiedGlobalKeyframeCount() > 0) {
+                    const double playhead = std::max(0.0, transportState.beatPosition);
+                    const bool live = globalKeySelScope.sequence == nullptr || timeline.isLiveSequence(*globalKeySelScope.sequence);
+                    bool known = false;
+                    if(live && !globalKeySelClipId.empty()) {
+                        const RowScopeGuard at(*this, globalKeySelScope.sequence != nullptr ? &globalKeySelScope : nullptr);
+                        known = timeline.getClip(scope(timeline), globalKeySelTrackId, globalKeySelClipId) != nullptr;
+                    }
+                    if(known) {
+                        requestGlobalKeyframe = true;
+                        globalKeyPaste = true;
+                        globalKeyScope = globalKeySelScope;
+                        globalKeyTrackId = globalKeySelTrackId;
+                        globalKeyClipId = globalKeySelClipId;
+                        // (A clip of an unfolded row: in its timeline's own beats.)
+                        globalKeyBeat = globalKeySelScope.sequence != nullptr
+                            ? std::max(0.0, globalKeySelScope.map.toSequence(playhead)) : playhead;
+                    } else if(const auto* globalTrack = ofxOceanodeTimelineManager::globalTrackOf(scope(timeline))) {
+                        const ofxOceanodeTimelineClip* nearestClip = nullptr;
+                        double nearest = std::numeric_limits<double>::max();
+                        for(const auto& candidate : globalTrack->clips) {
+                            const double end = candidate.startBeat + candidate.durationBeats;
+                            const double distance = playhead < candidate.startBeat ? candidate.startBeat - playhead
+                                                  : playhead > end ? playhead - end : 0.0;
+                            if(distance < nearest) { nearest = distance; nearestClip = &candidate; }
+                        }
+                        if(nearestClip != nullptr) {
+                            requestGlobalKeyframe = true;
+                            globalKeyPaste = true;
+                            globalKeyScope = {};
+                            globalKeyTrackId = globalTrack->id;
+                            globalKeyClipId = nearestClip->id;
+                            globalKeyBeat = playhead;
+                        }
+                    }
+                } else pasteAtSelection(timeline, transportState.beatPosition);
+            }
         }
     }
     // Grouping/ungrouping is reachable two ways, per the request that
@@ -2795,13 +2856,79 @@ void ofxOceanodeTimelineController::draw() {
         return clip.repeatContent
             ? std::max(1, static_cast<int>(std::ceil(clip.durationBeats / std::max(1e-6, cycleDuration(clip))))) : 1;
     };
+    // Whether a keyframe of a Global Track plays at a beat of its timeline:
+    // "+ Key" there overwrites it.
+    auto globalKeyAtBeat = [&](const ofxOceanodeTimelineTrack& keyTrack, double beat) {
+        for(const auto& keyClip : keyTrack.clips) {
+            const double clipEnd = keyClip.startBeat + keyClip.durationBeats;
+            if(keyClip.globalKeyframes.empty() || beat < keyClip.startBeat - 1e-6 || beat > clipEnd + 1e-6) continue;
+            // Only the repeats around the beat.
+            const int cycles = globalKeyCycles(keyClip);
+            const int around = static_cast<int>(std::floor((beat - keyClip.startBeat) / std::max(1e-6, cycleDuration(keyClip))));
+            for(int cycle = std::max(0, around - 1); cycle <= around + 1 && cycle < cycles; ++cycle)
+                for(const auto& keyframe : keyClip.globalKeyframes)
+                    if(std::abs(sourceToTimelineBeat(keyClip, keyframe.beat, cycle) - beat) < 1.0 / 960.0) return true;
+        }
+        return false;
+    };
+    // "+ Key" while the playhead is on a keyframe: filled with the track's
+    // colour, its label black or white, whichever reads on it. Four style
+    // colours, popped by the caller.
+    auto pushKeyAtPlayheadStyle = [&](const ofColor& c) {
+        auto towardsWhite = [&](float amount) {
+            auto channel = [&](unsigned char value) { return static_cast<int>(value + (255.0f - value) * amount); };
+            return IM_COL32(channel(c.r), channel(c.g), channel(c.b), 255);
+        };
+        const float luminance = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
+        ImGui::PushStyleColor(ImGuiCol_Button, towardsWhite(0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, towardsWhite(0.2f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, towardsWhite(0.35f));
+        ImGui::PushStyleColor(ImGuiCol_Text, luminance > 150.0f ? IM_COL32(20, 20, 25, 255) : IM_COL32(245, 245, 250, 255));
+    };
+    // The selected keyframes of a clip (null: none). at: the placement of
+    // the unfolded row the clip is on (null: a clip of the timeline shown).
+    auto globalKeySelectionIn = [&](const ofxOceanodeTimelineSequence* sequence, const std::string& trackId,
+                                    const std::string& clipId) -> const std::set<int>* {
+        return !globalKeySelection.empty() && globalKeySelScope.sequence == sequence && globalKeySelTrackId == trackId &&
+               globalKeySelClipId == clipId ? &globalKeySelection : nullptr;
+    };
+    // A click on keyframe `key`: alone, toggled among the others, or (a
+    // right-click) alone unless it is one of those selected.
+    enum class GlobalKeySelect { Only, Toggle, Keep };
+    auto selectGlobalKey = [&](const RowScope* at, const std::string& trackId, const std::string& clipId, int key,
+                               GlobalKeySelect how) {
+        const auto* sequence = at != nullptr ? at->sequence : nullptr;
+        if(globalKeySelScope.sequence != sequence || globalKeySelTrackId != trackId || globalKeySelClipId != clipId) {
+            globalKeySelection.clear();
+            globalKeySelScope = at != nullptr ? *at : RowScope{};
+            globalKeySelTrackId = trackId;
+            globalKeySelClipId = clipId;
+        }
+        if(how == GlobalKeySelect::Toggle) {
+            if(globalKeySelection.count(key)) globalKeySelection.erase(key);
+            else globalKeySelection.insert(key);
+        } else if(how == GlobalKeySelect::Only || !globalKeySelection.count(key)) {
+            globalKeySelection = {key};
+        }
+        globalKeySelectedThisFrame = true;
+    };
+    // The valid ones, for the clip's menu.
+    auto selectedGlobalKeysOf = [&](const ofxOceanodeTimelineSequence* sequence, const std::string& trackId,
+                                    const ofxOceanodeTimelineClip& clip) {
+        std::vector<size_t> keys;
+        if(const auto* selection = globalKeySelectionIn(sequence, trackId, clip.id))
+            for(const int index : *selection)
+                if(index >= 0 && index < static_cast<int>(clip.globalKeyframes.size())) keys.push_back(static_cast<size_t>(index));
+        return keys;
+    };
     // Drawn inside [left, right] of the band [top, bottom] (clipped from
     // clipTop): a line and a diamond each, where they play, and the easing
     // between two of them with its handle. compact (a macro clip's preview):
     // a line each, nothing else.
     auto drawGlobalKeys = [&](const ofxOceanodeTimelineClip& clip, const ofxOceanodeTimelineTimeMap& map, float originX,
                               float left, float right, float clipTop, float top, float bottom, ImU32 curveInk,
-                              int firstCycle, int lastCycle, int draggedKey, int draggedEase, bool compact) {
+                              int firstCycle, int lastCycle, int draggedKey, int draggedEase, bool compact,
+                              const std::set<int>* selected = nullptr) {
         const float radius = ofClamp((bottom - top) * 0.3f, 3.0f, 6.0f);
         const int cycles = globalKeyCycles(clip);
         const double clipEnd = clip.startBeat + clip.durationBeats;
@@ -2860,6 +2987,13 @@ void ofxOceanodeTimelineController::draw() {
                                   ImVec2(x - radius, y), ink);
                 dl->AddQuad(ImVec2(x, y - radius), ImVec2(x + radius, y), ImVec2(x, y + radius),
                             ImVec2(x - radius, y), IM_COL32(20, 20, 20, 220), 1.0f);
+                if(selected != nullptr && selected->count(static_cast<int>(index)) > 0) {
+                    // A selected one: a white frame around its diamond, its line brighter.
+                    const float ring = radius + 2.5f;
+                    dl->AddLine(ImVec2(x, top), ImVec2(x, bottom), IM_COL32(255, 255, 255, 150), 1.0f);
+                    dl->AddQuad(ImVec2(x, y - ring), ImVec2(x + ring, y), ImVec2(x, y + ring),
+                                ImVec2(x - ring, y), IM_COL32(255, 255, 255, 255), 2.0f);
+                }
             }
         }
         dl->PopClipRect();
@@ -2930,14 +3064,25 @@ void ofxOceanodeTimelineController::draw() {
         }
         if(hit.key >= 0) {
             const auto& keyframe = clip.globalKeyframes[static_cast<size_t>(hit.key)];
-            ImGui::SetTooltip("Keyframe %d of %zu: %zu parameters\nDrag to move. Double-click: playhead here. Right-click: delete.",
+            ImGui::SetTooltip("Keyframe %d of %zu: %zu parameters\nDrag to move. Double-click: playhead here.\n"
+                              "Click to select, Shift or Cmd/Ctrl-click for more: the selected ones\ndrag together. Right-click: copy, paste, delete.",
                               hit.key + 1, clip.globalKeyframes.size(), keyframe.values ? keyframe.values->size() : size_t(0));
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             if(!clicked) return GlobalKeyGesture::Hovered;
+            // Shift or Cmd/Ctrl: in or out of the selection, nothing else.
+            const auto& io = ImGui::GetIO();
+            if(io.KeyShift || io.KeyCtrl || io.KeySuper) {
+                selectGlobalKey(at, trackId, clip.id, hit.key, GlobalKeySelect::Toggle);
+                return GlobalKeyGesture::Clicked;
+            }
+            // One of several selected: they stay selected, to be dragged
+            // together (a click without a drag selects it alone, on release).
+            selectGlobalKey(at, trackId, clip.id, hit.key, GlobalKeySelect::Keep);
             if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) seekShownTimeline(timeline, hit.beat);
             else {
                 globalKeyDragIndex = hit.key;
                 globalKeyDragOriginX = originX;
+                globalKeyDragMoved = false;
             }
             return GlobalKeyGesture::Clicked;
         }
@@ -3042,7 +3187,8 @@ void ofxOceanodeTimelineController::draw() {
                     globalKeyEditClipId == innerClip.id;
                 drawGlobalKeys(innerClip, map, originX, x1, x2, contentTop, contentTop, y2, IM_COL32(color.r, color.g, color.b, 255),
                                innerFirst, innerLast, editingHere ? globalKeyDragIndex : -1,
-                               editingHere ? globalEaseDragIndex : -1, !chrome);
+                               editingHere ? globalEaseDragIndex : -1, !chrome,
+                               globalKeySelectionIn(&shown, innerTrack.id, innerClip.id));
             }
         } else if(innerTrack.isWaveTrack && !innerClip.muted) {
             // Its waveform, where this placement plays it.
@@ -3653,11 +3799,18 @@ void ofxOceanodeTimelineController::draw() {
                     if(ImGui::SmallButton(("<##innerPrevGlobalKey" + rowId).c_str())) step = -1;
                     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous keyframe");
                     ImGui::SameLine(0.0f, kKeyNavGap);
-                    if(ImGui::SmallButton(("+ Key##innerAddGlobalKey" + rowId).c_str())) {
+                    // (Where the playhead plays the timeline, in its own beats.)
+                    const bool keyAtPlayhead = playheadEditable &&
+                        globalKeyAtBeat(innerTrack, std::max(0.0, atPlayhead->at.map.toSequence(playheadBeat)));
+                    if(keyAtPlayhead) pushKeyAtPlayheadStyle(innerTrack.color);
+                    const bool addKey = ImGui::SmallButton(("+ Key##innerAddGlobalKey" + rowId).c_str());
+                    if(keyAtPlayhead) ImGui::PopStyleColor(4);
+                    if(addKey) {
                         anyClipInteractionClaimedThisFrame = true;
                         if(playheadEditable) {
                             // In the timeline's own beats, where the playhead plays it.
                             requestGlobalKeyframe = true;
+                            globalKeyPaste = false;
                             globalKeyScope = atPlayhead->at;
                             globalKeyTrackId = innerTrack.id;
                             globalKeyClipId.clear();
@@ -3668,7 +3821,8 @@ void ofxOceanodeTimelineController::draw() {
                         if(playheadEditable)
                             ImGui::SetTooltip("Add keyframe: store every parameter of %s's canvas where the\n"
                                               "playhead plays this timeline. A keyframe already there is\n"
-                                              "overwritten, and every clip placing the timeline follows.", macroLabel.c_str());
+                                              "overwritten, and every clip placing the timeline follows.%s", macroLabel.c_str(),
+                                              keyAtPlayhead ? "\nThe playhead is on a keyframe: this overwrites it." : "");
                         else
                             ImGui::SetTooltip(atPlayhead.has_value()
                                 ? "The clip under the playhead plays this timeline reversed:\nadd keyframes where a clip plays it forward."
@@ -3931,6 +4085,7 @@ void ofxOceanodeTimelineController::draw() {
                             innerMenuClipId = clip->id;
                             innerMenuGroup = group;
                             clipMenuGlobalKey = globalKeyHit;
+                            if(globalKeyHit >= 0) selectGlobalKey(&placement.at, innerTrack.id, clip->id, globalKeyHit, GlobalKeySelect::Keep);
                             clipMenuBeat = snapBeat(placement.at.map.toSequence(beatAtOffset(mouse.x - unfoldedOriginX)));
                             ImGui::OpenPopup(menuId.c_str());
                         }
@@ -4112,8 +4267,9 @@ void ofxOceanodeTimelineController::draw() {
                         ImGui::TextDisabled("in %s", macroLabel.c_str());
                         if(innerTrack.isGlobalTrack) {
                             contextMenuSection("Keyframes");
-                            auto requestKey = [&](const RowScope& at, double beat) {
+                            auto requestKey = [&](const RowScope& at, double beat, bool paste = false) {
                                 requestGlobalKeyframe = true;
+                                globalKeyPaste = paste;
                                 globalKeyScope = at;
                                 globalKeyTrackId = innerMenuTrackId;
                                 globalKeyClipId = innerMenuClipId;
@@ -4128,16 +4284,33 @@ void ofxOceanodeTimelineController::draw() {
                             if(ImGui::MenuItem("Add keyframe here")) requestKey(innerMenuAt, clipMenuBeat);
                             if(ImGui::IsItemHovered())
                                 ImGui::SetTooltip("Store the macro's canvas as it is now at this position of the clip.");
-                            const bool onKey = clipMenuGlobalKey >= 0 && clipMenuGlobalKey < static_cast<int>(clip->globalKeyframes.size());
-                            if(ImGui::MenuItem("Delete keyframe", nullptr, false, onKey)) {
+                            // The selected keyframes (a right-click on one selects it).
+                            const auto selectedKeys = selectedGlobalKeysOf(inner, innerMenuTrackId, *clip);
+                            const std::string selectedLabel = selectedKeys.size() > 1 ? ofToString(selectedKeys.size()) + " keyframes" : "keyframe";
+                            const int copiedKeys = timeline.copiedGlobalKeyframeCount();
+                            const std::string copiedLabel = copiedKeys > 1 ? ofToString(copiedKeys) + " keyframes" : "keyframe";
+                            const char* selectTip = "Click a keyframe to select it (Shift or Cmd/Ctrl-click: more),\nor right-click one.";
+                            if(ImGui::MenuItem(("Copy " + selectedLabel).c_str(), nullptr, false, !selectedKeys.empty()))
+                                timeline.copyGlobalKeyframes(*inner, innerMenuTrackId, innerMenuClipId, selectedKeys);
+                            if(selectedKeys.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s", selectTip);
+                            if(ImGui::MenuItem(("Paste " + copiedLabel + " here").c_str(), nullptr, false, copiedKeys > 0))
+                                requestKey(innerMenuAt, clipMenuBeat, true);
+                            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip(copiedKeys > 0
+                                    ? "The copied keyframes from this position of the clip, keeping their spacing.\nA keyframe already there is overwritten."
+                                    : "No keyframes copied yet.");
+                            if(ImGui::MenuItem(("Paste " + copiedLabel + " at playhead").c_str(), nullptr, false, copiedKeys > 0 && playheadEditable))
+                                requestKey(atPlayhead->at, atPlayhead->at.map.toSequence(playheadBeat), true);
+                            if(ImGui::MenuItem(("Delete " + selectedLabel).c_str(), nullptr, false, !selectedKeys.empty())) {
                                 globalKeyEditScope = innerMenuAt;
                                 globalKeyEditTrackId = innerMenuTrackId;
                                 globalKeyEditClipId = innerMenuClipId;
-                                globalKeyRemoveIndex = clipMenuGlobalKey;
+                                globalKeyRemoveIndexes = selectedKeys;
                                 clipMenuGlobalKey = -1;
                             }
-                            if(!onKey && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                                ImGui::SetTooltip("Right-click a keyframe to delete it.");
+                            if(selectedKeys.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip("%s", selectTip);
                             contextMenuSection("Clip");
                         }
                         if(innerTrack.isMorphTrack) {
@@ -4744,10 +4917,14 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::SmallButton(("<##prevGlobalKey" + track.id).c_str())) step = -1;
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous keyframe");
             ImGui::SameLine(0.0f, kKeyNavGap);
+            const bool keyAtPlayhead = globalKeyAtBeat(track, std::max(0.0, transportState.beatPosition));
+            if(keyAtPlayhead) pushKeyAtPlayheadStyle(track.color);
             const bool addKey = ImGui::SmallButton(("+ Key##addGlobalKey" + track.id).c_str());
+            if(keyAtPlayhead) ImGui::PopStyleColor(4);
             if(addKey) {
                 anyClipInteractionClaimedThisFrame = true;
                 requestGlobalKeyframe = true;
+                globalKeyPaste = false;
                 globalKeyScope = {};
                 globalKeyTrackId = track.id;
                 globalKeyClipId.clear();
@@ -4756,7 +4933,8 @@ void ofxOceanodeTimelineController::draw() {
             if(ImGui::IsItemHovered())
                 ImGui::SetTooltip("Add keyframe: store every parameter of the patch at the playhead.\n"
                                   "A keyframe already there is overwritten. Playback interpolates\n"
-                                  "the parameters that differ between keyframes.");
+                                  "the parameters that differ between keyframes.%s",
+                                  keyAtPlayhead ? "\nThe playhead is on a keyframe: this overwrites it." : "");
             ImGui::SameLine(0.0f, kKeyNavGap);
             if(ImGui::SmallButton((">##nextGlobalKey" + track.id).c_str())) step = 1;
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the next keyframe");
@@ -5384,7 +5562,8 @@ void ofxOceanodeTimelineController::draw() {
                     globalKeyEditClipId == clip.id;
                 drawGlobalKeys(clip, {}, min.x, left, right, min.y + 3.0f, top, bottom, clipInk(clip, 255),
                                firstVisibleCycle, lastVisibleCycle, editingHere ? globalKeyDragIndex : -1,
-                               editingHere ? globalEaseDragIndex : -1, false);
+                               editingHere ? globalEaseDragIndex : -1, false,
+                               globalKeySelectionIn(nullptr, track.id, clip.id));
                 return;
             }
             if(track.isMacroTrack()) {
@@ -5683,6 +5862,7 @@ void ofxOceanodeTimelineController::draw() {
                 clipMenuHitBeat = beatAtOffset(mouse.x - min.x);
                 clipMenuBeat = snapBeat(clipMenuHitBeat); // "Split here"
                 clipMenuGlobalKey = globalKeyHit;
+                if(globalKeyHit >= 0) selectGlobalKey(nullptr, track.id, clip.id, globalKeyHit, GlobalKeySelect::Keep);
                 // Right-clicking a clip that's part of the current multi-
                 // selection keeps that whole selection (so the popup's
                 // "Group" action groups all of it); right-clicking outside
@@ -5831,8 +6011,9 @@ void ofxOceanodeTimelineController::draw() {
             drawSynthNavigation(timeline, track, &clip);
             if(track.isGlobalTrack) {
                 contextMenuSection("Keyframes");
-                auto requestKey = [&](double beat) {
+                auto requestKey = [&](double beat, bool paste = false) {
                     requestGlobalKeyframe = true;
+                    globalKeyPaste = paste;
                     globalKeyScope = {};
                     globalKeyTrackId = track.id;
                     globalKeyClipId = clip.id;
@@ -5844,16 +6025,33 @@ void ofxOceanodeTimelineController::draw() {
                 if(ImGui::MenuItem("Add keyframe here")) requestKey(clipMenuBeat);
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip("Store the patch as it is now at this position of the clip.");
-                const bool onKey = clipMenuGlobalKey >= 0 && clipMenuGlobalKey < static_cast<int>(clip.globalKeyframes.size());
-                if(ImGui::MenuItem("Delete keyframe", nullptr, false, onKey)) {
+                // The selected keyframes (a right-click on one selects it).
+                const auto selectedKeys = selectedGlobalKeysOf(nullptr, track.id, clip);
+                const std::string selectedLabel = selectedKeys.size() > 1 ? ofToString(selectedKeys.size()) + " keyframes" : "keyframe";
+                const int copiedKeys = timeline.copiedGlobalKeyframeCount();
+                const std::string copiedLabel = copiedKeys > 1 ? ofToString(copiedKeys) + " keyframes" : "keyframe";
+                const char* selectTip = "Click a keyframe to select it (Shift or Cmd/Ctrl-click: more),\nor right-click one.";
+                if(ImGui::MenuItem(("Copy " + selectedLabel).c_str(), nullptr, false, !selectedKeys.empty()))
+                    timeline.copyGlobalKeyframes(scope(timeline), track.id, clip.id, selectedKeys);
+                if(selectedKeys.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", selectTip);
+                if(ImGui::MenuItem(("Paste " + copiedLabel + " here").c_str(), nullptr, false, copiedKeys > 0))
+                    requestKey(clipMenuBeat, true);
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip(copiedKeys > 0
+                        ? "The copied keyframes from this position of the clip, keeping their spacing.\nA keyframe already there is overwritten."
+                        : "No keyframes copied yet.");
+                if(ImGui::MenuItem(("Paste " + copiedLabel + " at playhead").c_str(), nullptr, false, copiedKeys > 0))
+                    requestKey(transportState.beatPosition, true);
+                if(ImGui::MenuItem(("Delete " + selectedLabel).c_str(), nullptr, false, !selectedKeys.empty())) {
                     globalKeyEditScope = {};
                     globalKeyEditTrackId = track.id;
                     globalKeyEditClipId = clip.id;
-                    globalKeyRemoveIndex = clipMenuGlobalKey;
+                    globalKeyRemoveIndexes = selectedKeys;
                     clipMenuGlobalKey = -1;
                 }
-                if(!onKey && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Right-click a keyframe to delete it.");
+                if(selectedKeys.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", selectTip);
             }
             contextMenuSection("Clip");
             if(track.isMacroTrack()) {
@@ -7674,9 +7872,24 @@ void ofxOceanodeTimelineController::draw() {
         requestGlobalKeyframe = false;
         if(globalKeyScope.sequence == nullptr || timeline.isLiveSequence(*globalKeyScope.sequence)) {
             const RowScopeGuard adding(*this, globalKeyScope.sequence != nullptr ? &globalKeyScope : nullptr);
-            timeline.addGlobalKeyframe(scope(timeline), globalKeyTrackId, globalKeyClipId, globalKeyBeat);
+            // (Either changes the clip's keyframes: the selection's indexes
+            // no longer say which.)
+            globalKeySelection.clear();
+            if(globalKeyPaste) {
+                // The pasted ones are selected, ready to be copied on or deleted.
+                const auto pasted = timeline.pasteGlobalKeyframes(scope(timeline), globalKeyTrackId, globalKeyClipId, globalKeyBeat);
+                if(!pasted.empty()) {
+                    globalKeySelScope = globalKeyScope;
+                    globalKeySelTrackId = globalKeyTrackId;
+                    globalKeySelClipId = globalKeyClipId;
+                    globalKeySelection.insert(pasted.begin(), pasted.end());
+                }
+            } else {
+                timeline.addGlobalKeyframe(scope(timeline), globalKeyTrackId, globalKeyClipId, globalKeyBeat);
+            }
         }
         globalKeyScope = {};
+        globalKeyPaste = false;
     }
     // A Marker Track's new marker (its + or menu), then opened to edit it.
     if(requestNewTrackMarker) {
@@ -7689,24 +7902,64 @@ void ofxOceanodeTimelineController::draw() {
     if(globalKeyEditScope.sequence != nullptr && !timeline.isLiveSequence(*globalKeyEditScope.sequence)) {
         // Its timeline is gone (the macro deleted, a preset loaded).
         globalKeyEditScope = {};
-        globalKeyRemoveIndex = globalKeyDragIndex = globalEaseResetIndex = globalEaseDragIndex = -1;
+        globalKeyRemoveIndexes.clear();
+        globalKeyDragIndex = globalEaseResetIndex = globalEaseDragIndex = -1;
     }
+    if(globalKeySelScope.sequence != nullptr && !timeline.isLiveSequence(*globalKeySelScope.sequence)) {
+        globalKeySelScope = {};
+        globalKeySelection.clear();
+    }
+    // A click anywhere else on the tracks leaves no keyframe selected. Not a
+    // click in a menu: a popup opened from this window counts as hovering
+    // it, and the press on "Copy" or "Delete" would empty the selection
+    // before the release that runs them.
+    if(!globalKeySelection.empty() && !globalKeySelectedThisFrame && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+       !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) &&
+       ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_NoPopupHierarchy))
+        globalKeySelection.clear();
+    globalKeySelectedThisFrame = false;
     {
         const RowScopeGuard editingGlobalKey(*this, globalKeyEditScope.sequence != nullptr ? &globalKeyEditScope : nullptr);
-        if(globalKeyRemoveIndex >= 0) {
-            timeline.removeGlobalKeyframe(scope(timeline), globalKeyEditTrackId, globalKeyEditClipId,
-                                           static_cast<size_t>(globalKeyRemoveIndex));
-            globalKeyRemoveIndex = -1;
+        if(!globalKeyRemoveIndexes.empty()) {
+            timeline.removeGlobalKeyframes(scope(timeline), globalKeyEditTrackId, globalKeyEditClipId, globalKeyRemoveIndexes);
+            globalKeyRemoveIndexes.clear();
+            globalKeySelection.clear();
         }
         if(globalKeyDragIndex >= 0) {
-            if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) globalKeyDragIndex = -1;
-            else if(ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+            // The selection, when the dragged keyframe is one of several selected.
+            const bool together = globalKeySelection.size() > 1 && globalKeySelection.count(globalKeyDragIndex) > 0 &&
+                globalKeySelScope.sequence == globalKeyEditScope.sequence && globalKeySelTrackId == globalKeyEditTrackId &&
+                globalKeySelClipId == globalKeyEditClipId;
+            if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                // A click, not a drag: that keyframe alone.
+                if(together && !globalKeyDragMoved) globalKeySelection = {globalKeyDragIndex};
+                globalKeyDragIndex = -1;
+            } else if(ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+                globalKeyDragMoved = true;
                 // The keyframe follows the mouse along its clip, snapped like a clip.
                 const double beat = snapBeat(std::max(0.0, beatAtOffset(ImGui::GetIO().MousePos.x - globalKeyDragOriginX)));
-                const int moved = timeline.moveGlobalKeyframe(scope(timeline), globalKeyEditTrackId, globalKeyEditClipId,
-                                                               static_cast<size_t>(globalKeyDragIndex), beat);
-                if(moved < 0) globalKeyDragIndex = -1;
-                else globalKeyDragIndex = moved;
+                if(together) {
+                    // ...and the others selected with it, at their distances.
+                    const std::vector<size_t> indexes(globalKeySelection.begin(), globalKeySelection.end());
+                    const size_t anchor = static_cast<size_t>(std::distance(globalKeySelection.begin(),
+                                                                            globalKeySelection.find(globalKeyDragIndex)));
+                    const auto moved = timeline.moveGlobalKeyframes(scope(timeline), globalKeyEditTrackId, globalKeyEditClipId,
+                                                                    indexes, static_cast<size_t>(globalKeyDragIndex), beat);
+                    if(moved.empty()) globalKeyDragIndex = -1;
+                    else {
+                        globalKeySelection = std::set<int>(moved.begin(), moved.end());
+                        globalKeyDragIndex = moved[anchor];
+                    }
+                } else {
+                    const int moved = timeline.moveGlobalKeyframe(scope(timeline), globalKeyEditTrackId, globalKeyEditClipId,
+                                                                   static_cast<size_t>(globalKeyDragIndex), beat);
+                    if(moved < 0) globalKeyDragIndex = -1;
+                    else {
+                        // (The dragged keyframe is the selected one: it follows.)
+                        if(moved != globalKeyDragIndex && !globalKeySelection.empty()) globalKeySelection = {moved};
+                        globalKeyDragIndex = moved;
+                    }
+                }
             }
         }
         if(globalEaseResetIndex >= 0) {
