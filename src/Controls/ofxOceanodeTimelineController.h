@@ -713,6 +713,28 @@ private:
     void jumpToBeat(double beat);
     void drawMarkerRenamePopup(ofxOceanodeTimelineManager& timeline);
 
+    // ---- Marker Track (ofxOceanodeTimelineTrack::isMarkerTrack) ----
+    // Its markers are edited in the timeline shown (scope()), found by uid:
+    // their numbers change as they move.
+    std::string trackMarkerTrackId;    // the track of the marker pressed or edited
+    int trackMarkerDragUid = -1;       // pressed marker (a drag moves it)
+    float trackMarkerDragStartX = 0.0f;
+    double trackMarkerDragStartBeat = 0.0;
+    bool trackMarkerDragMoved = false;
+    int trackMarkerEditUid = -1;       // the marker the popup edits
+    bool requestTrackMarkerPopup = false;
+    ImVec2 trackMarkerPopupAnchor;
+    char trackMarkerTitle[128] = "";
+    char trackMarkerDescription[2048] = "";
+    double trackMarkerBeatEdit = 0.0;  // the popup's Beat field while it is typed in
+    // A marker asked for from the track's + or menu, made at the deferred
+    // edit point and then opened in the popup.
+    bool requestNewTrackMarker = false;
+    std::string newTrackMarkerTrackId;
+    double newTrackMarkerBeat = 0.0;
+    void openTrackMarkerPopup(const ofxOceanodeTimelineTrack& track, int uid, const ImVec2& anchor);
+    void drawTrackMarkerPopup(ofxOceanodeTimelineManager& timeline);
+
     // ---- View ----
     // Session-only alternate projections of the same clips and routing.
     bool targetsView = false;

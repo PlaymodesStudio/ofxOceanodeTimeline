@@ -154,6 +154,32 @@ keyframes on the clip, serves "+ Key" (track header) and the clip menu's
 keyframe actions at its deferred edit point, and drags a keyframe along its
 clip there.
 
+## Marker Track
+
+A Marker Track is a track with `isMarkerTrack` (`createMarkerTrack`,
+`markerTrackOf`; one per timeline). It has no bindings and no clips:
+`createClip`, `addBinding`, `duplicateTrack` and the paste rules refuse it.
+Its markers (`trackMarkers`, `ofxOceanodeTimelineTrackMarker`: uid, beat,
+title, description, colour) are timeline beats, kept sorted by beat. A
+marker's index is its number. Edits find a marker by its `uid`, which stays
+put while its number changes. The markers are saved as the track's
+`"markers"`. They are not the ruler's markers (`ofxOceanodeTimelineMarker`,
+the global transport's). `sequenceSignature` hashes their beats only.
+
+The controller draws the track as a single row, in the track loop's
+single-row branch: section fills, then each marker's line and flag. It
+handles click (seek), drag (`moveTrackMarker`), and double-click or
+right-click (`openTrackMarkerPopup`). A new marker, from the pad's **+**, the
+track menu or a double-click, is made at the deferred edit point
+(`requestNewTrackMarker`). The popup (`drawTrackMarkerPopup`) is drawn with
+the window's other popups and edits the marker in place.
+
+The Timeline node (`Nodes/timelineTransport`) keeps a MARKERS separator and
+a Go To Marker int while its timeline has a Marker Track (`updateMarkerPort`).
+It saves `"markerPort"` and installs the port in `loadBeforeConnections`,
+before the timeline loads, as it does the routers. A change of the value
+seeks the timeline (`trackMarkerBeat`, `seekTimeline`).
+
 ## Arrangement and scope presentation
 
 Track folders are tracks with `isFolder` (no bindings or clips); a track's

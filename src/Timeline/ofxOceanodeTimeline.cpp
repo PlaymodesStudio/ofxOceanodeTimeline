@@ -1331,8 +1331,8 @@ std::string ofxOceanodeTimelineManager::duplicateTrack(ofxOceanodeTimelineSequen
     const std::string sourceId = trackId; // caller may pass the track's own id by reference
     const auto* source = getTrack(sequence, sourceId);
     if(source == nullptr) return {};
-    // Its copy would be the timeline's second Macro Morphing Track.
-    if(source->isMorphTrack) return {};
+    // Its copy would be the timeline's second Macro Morphing (or Marker) Track.
+    if(source->isMorphTrack || source->isMarkerTrack) return {};
     const auto groups = sequence.clipGroups;
     std::vector<std::string> originals;
     for(const auto& clip : source->clips) originals.push_back(clip.id);
@@ -1855,7 +1855,7 @@ std::string ofxOceanodeTimelineManager::addBinding(ofxOceanodeTimelineSequence& 
                                                    ofxOceanodeTimelineAutomationMode mode) {
     auto* track = getTrack(sequence, trackId);
     if(track == nullptr || track->isWaveTrack || track->isGlobalTrack || track->isFolder || track->isMacroTrack() ||
-       track->isMorphTrack || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
+       track->isMorphTrack || track->isMarkerTrack || container == nullptr || !isStepLaneCompatible(parameter)) return std::string();
 
     // A gated macro's Active belongs to its macro track.
     if(isGatedMacroActive(parameter)) return std::string();
@@ -2780,7 +2780,8 @@ std::string ofxOceanodeTimelineManager::createClip(ofxOceanodeTimelineSequence& 
                                                    double startBeat,
                                                    double durationBeats) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->isFolder) return std::string();
+    // (A Marker Track holds markers, never clips.)
+    if(track == nullptr || track->isFolder || track->isMarkerTrack) return std::string();
 
     // A Macro Morphing Track keeps its overlap rules: the clip goes to the
     // nearest valid timing, or nowhere.
@@ -4719,7 +4720,8 @@ bool ofxOceanodeTimelineManager::removeFolder(ofxOceanodeTimelineSequence& seque
 
 bool ofxOceanodeTimelineManager::setTrackMuted(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, bool muted) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr || track->muted == muted) return false;
+    // (A Marker Track plays nothing: no mute.)
+    if(track == nullptr || track->isMarkerTrack || track->muted == muted) return false;
     track->muted = muted;
     refreshPlaybackEnablement();
     return true;
@@ -4737,7 +4739,8 @@ bool ofxOceanodeTimelineManager::setTrackLatencyOffset(ofxOceanodeTimelineSequen
 
 bool ofxOceanodeTimelineManager::setTrackSolo(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, bool solo) {
     auto* track = getTrack(sequence, trackId);
-    if(track == nullptr) return false;
+    // (A Marker Track plays nothing: its solo would silence every other track.)
+    if(track == nullptr || track->isMarkerTrack) return false;
     // Setting it by hand replaces what a Toggle lane drove, until a lane
     // drives it again (on the engine playing the timeline).
     bool wasDriven = false;
@@ -6171,6 +6174,118 @@ void ofxOceanodeTimelineManager::applyAutomation() {
     }
     // The host's pass after the nodes ran ends the update (see sourceSequenceSignature).
     if(!isEngine() && !parameterCacheActive) closeSourceSignatures();
+}
+
+// ---- Marker Track ---------------------------------------------------------
+
+ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::markerTrackOf(ofxOceanodeTimelineSequence& sequence) {
+    for(auto& track : sequence.tracks)
+        if(track.isMarkerTrack) return &track;
+    return nullptr;
+}
+
+const ofxOceanodeTimelineTrack* ofxOceanodeTimelineManager::markerTrackOf(const ofxOceanodeTimelineSequence& sequence) {
+    for(const auto& track : sequence.tracks)
+        if(track.isMarkerTrack) return &track;
+    return nullptr;
+}
+
+std::string ofxOceanodeTimelineManager::createMarkerTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName) {
+    if(!isLiveSequence(sequence)) return std::string();
+    if(const auto* existing = markerTrackOf(static_cast<const ofxOceanodeTimelineSequence&>(sequence))) return existing->id;
+    const auto trackId = createTrack(sequence, requestedName);
+    auto* track = getTrack(sequence, trackId);
+    if(track == nullptr) return std::string();
+    track->isMarkerTrack = true;
+    track->color = ofColor(150, 150, 165, 255);
+    return trackId;
+}
+
+namespace {
+ofxOceanodeTimelineTrack* markerTrackById(ofxOceanodeTimelineManager& manager, ofxOceanodeTimelineSequence& sequence,
+                                          const std::string& trackId) {
+    auto* track = manager.getTrack(sequence, trackId);
+    return track != nullptr && track->isMarkerTrack ? track : nullptr;
+}
+void sortTrackMarkers(ofxOceanodeTimelineTrack& track) {
+    // Stable: two markers on one beat keep the order they had.
+    std::stable_sort(track.trackMarkers.begin(), track.trackMarkers.end(),
+                     [](const auto& a, const auto& b) { return a.beat < b.beat; });
+}
+} // namespace
+
+int ofxOceanodeTimelineManager::addTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat) {
+    auto* track = markerTrackById(*this, sequence, trackId);
+    if(track == nullptr || !std::isfinite(beat)) return -1;
+    int uid = 0;
+    for(const auto& marker : track->trackMarkers) uid = std::max(uid, marker.uid + 1);
+    ofxOceanodeTimelineTrackMarker marker;
+    marker.uid = uid;
+    marker.beat = std::max(0.0, beat);
+    // (The default colour, the same for every new marker: ofxOceanodeTimelineTrackMarker.)
+    // (The flag already shows its number, which changes as markers move.)
+    marker.title = "Marker";
+    track->trackMarkers.push_back(marker);
+    sortTrackMarkers(*track);
+    return uid;
+}
+
+bool ofxOceanodeTimelineManager::removeTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid) {
+    auto* track = markerTrackById(*this, sequence, trackId);
+    if(track == nullptr) return false;
+    const auto before = track->trackMarkers.size();
+    track->trackMarkers.erase(std::remove_if(track->trackMarkers.begin(), track->trackMarkers.end(),
+                                             [&](const auto& marker) { return marker.uid == uid; }),
+                              track->trackMarkers.end());
+    return track->trackMarkers.size() != before;
+}
+
+int ofxOceanodeTimelineManager::moveTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid, double beat) {
+    auto* track = markerTrackById(*this, sequence, trackId);
+    if(track == nullptr || !std::isfinite(beat)) return -1;
+    auto* marker = const_cast<ofxOceanodeTimelineTrackMarker*>(findTrackMarker(*track, uid));
+    if(marker == nullptr) return -1;
+    marker->beat = std::max(0.0, beat);
+    sortTrackMarkers(*track);
+    int index = -1;
+    findTrackMarker(*track, uid, &index);
+    return index;
+}
+
+bool ofxOceanodeTimelineManager::setTrackMarkerText(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid,
+                                                     const std::string& title, const std::string& description) {
+    auto* track = markerTrackById(*this, sequence, trackId);
+    auto* marker = track == nullptr ? nullptr : const_cast<ofxOceanodeTimelineTrackMarker*>(findTrackMarker(*track, uid));
+    if(marker == nullptr) return false;
+    marker->title = title;
+    marker->description = description;
+    return true;
+}
+
+bool ofxOceanodeTimelineManager::setTrackMarkerColor(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid,
+                                                      const ofColor& color) {
+    auto* track = markerTrackById(*this, sequence, trackId);
+    auto* marker = track == nullptr ? nullptr : const_cast<ofxOceanodeTimelineTrackMarker*>(findTrackMarker(*track, uid));
+    if(marker == nullptr) return false;
+    marker->color = color;
+    return true;
+}
+
+const ofxOceanodeTimelineTrackMarker* ofxOceanodeTimelineManager::findTrackMarker(const ofxOceanodeTimelineTrack& track, int uid, int* index) {
+    for(size_t i = 0; i < track.trackMarkers.size(); ++i)
+        if(track.trackMarkers[i].uid == uid) {
+            if(index != nullptr) *index = static_cast<int>(i);
+            return &track.trackMarkers[i];
+        }
+    if(index != nullptr) *index = -1;
+    return nullptr;
+}
+
+bool ofxOceanodeTimelineManager::trackMarkerBeat(const ofxOceanodeTimelineSequence& sequence, int index, double& beat) {
+    const auto* track = markerTrackOf(sequence);
+    if(track == nullptr || index < 0 || index >= static_cast<int>(track->trackMarkers.size())) return false;
+    beat = track->trackMarkers[static_cast<size_t>(index)].beat;
+    return true;
 }
 
 // ---- Global Track ---------------------------------------------------------

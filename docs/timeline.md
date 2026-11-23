@@ -697,6 +697,42 @@ written while its source plays alone, so save it before the next crossfade.
 change while two sources play: one of them (the one further along) stays
 live, the other loads again on the next frame.
 
+## Marker Track
+
+A Marker Track holds markers: moments of the timeline, each with a title, a
+description and a colour. The colour fills the marker's section, from the
+marker to the next one (the last one to the end). Markers are numbered in
+time order from 0. The number is not stored: moving a marker past another
+renumbers both. A Marker Track plays nothing and has no clips, targets, M or
+S. A timeline has one at most, so it is never duplicated.
+
+**Creating it.** Use **+ Markers** on the toolbar, or **Add Marker Track** in
+the timeline's actions menu.
+
+**Markers.** The track pad's **+** adds a marker at the playhead. **<** and
+**>** move the playhead to the previous or next marker. On the track:
+
+- Double-click empty space to add a marker there. **Add marker here** in the
+  track's right-click menu does the same.
+- Click a marker to move the playhead to it.
+- Drag a marker to move it (snapped to the grid).
+- Double-click or right-click a marker to edit it.
+
+A new marker opens its popup at once. The popup shows the marker's number,
+its title, description, colour and beat, and has **Delete marker**. Edits
+apply as you type and make one undo step when the popup closes.
+
+**Go To Marker.** A Timeline node whose timeline has a Marker Track shows a
+**MARKERS** separator with a **Go To Marker** int input. When the value
+changes to a marker's number, that timeline's playhead goes there, as
+Restart seeks. A number with no marker does nothing, and neither does -1.
+To jump to the same marker again, send another value first, for example -1:
+an input set to the same number every frame must not hold the playhead
+there. The value is never saved, so loading a preset does not move the
+playhead. The node saves that it has the port, so its cable survives a
+project load. The port and separator go away when the timeline has no
+Marker Track.
+
 ## Several timelines, each with its clock source
 
 There is no main timeline, and no fixed Timeline window: every timeline

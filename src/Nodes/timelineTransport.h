@@ -10,6 +10,9 @@
 //  that track's routers, under a ROUTERS separator: Input routers as its
 //  inputs, Output routers as its outputs. Several nodes may point at one
 //  timeline: each has every router.
+//  When the timeline has a Marker Track, the node also has Go To Marker,
+//  under a MARKERS separator: an int that moves the timeline's playhead to
+//  the marker of that number (0 the earliest) when it changes.
 //
 
 #ifndef timelineTransport_h
@@ -37,6 +40,11 @@ private:
     // The router ports follow the selected timeline's Macro Morphing Track
     // (none: no ports); inputs go to its engine, its outputs come back.
     void updateRouters();
+    // Go To Marker follows the selected timeline's Marker Track (none: no
+    // separator, no input).
+    void updateMarkerPort();
+    void installMarkerPort();
+    void removeMarkerPort();
 
     ofParameter<int> timelineSelector;
     std::shared_ptr<ofxOceanodeParameter<int>> timelineSelectorParam;
@@ -60,6 +68,15 @@ private:
     MacroMixerPorts routers{*this, "ROUTERS"};
     // The engine the ports were last matched against (compared only).
     const MacroMixerRuntime* routersEngine = nullptr;
+
+    // Go To Marker (and its MARKERS separator), installed while the timeline
+    // has a Marker Track, and before the cables load when the node was saved
+    // with it (the timeline loads after them). Never saved: a preset load
+    // does not move the playhead. It jumps when the value changes (an input
+    // that sets the same number every frame does not hold the playhead).
+    ofParameter<int> goToMarker;
+    std::shared_ptr<ofxOceanodeParameter<int>> goToMarkerParam;
+    int lastGoToMarker = -1;
 
     ofEventListeners listeners;
 };

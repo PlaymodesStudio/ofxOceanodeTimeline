@@ -5,6 +5,8 @@
 
 #include "timelineTransport.h"
 #include "ofxOceanodeContainer.h"
+#include "ofxOceanodeAutomationExtension.h"
+#include "ofxOceanodeCustomGuiExtension.h"
 
 void timelineTransport::setup() {
     color = ofColor::red;
@@ -25,6 +27,7 @@ void timelineTransport::setup() {
     listeners.push(timelineSelector.newListener([this](int &index) {
         if(updatingSelector) return;
         if(index >= 0 && index < static_cast<int>(timelineRefs.size())) selectedRef = timelineRefs[index];
+        lastGoToMarker = -1; // (another timeline: any number jumps again)
     }));
     // The manager, while a timeline is selected (none: nothing to play).
     auto manager = [this]() -> ofxOceanodeTimelineManager* {
@@ -43,6 +46,20 @@ void timelineTransport::setup() {
             timeline->seekTimeline(selectedRef, 0.0);
             timeline->playTimeline(selectedRef);
         }
+    }));
+    // Go To Marker: the playhead to the marker of that number (0 the
+    // earliest) of the timeline's Marker Track, as Restart seeks. Only a
+    // change jumps, so an input set every frame does not hold the playhead.
+    goToMarker.set("Go To Marker", -1, -1, 0);
+    listeners.push(goToMarker.newListener([this, manager](int &index) {
+        if(index == lastGoToMarker) return;
+        lastGoToMarker = index;
+        auto* timeline = manager();
+        if(timeline == nullptr || index < 0) return;
+        const auto* sequence = timeline->findTimeline(selectedRef);
+        double beat = 0.0;
+        if(sequence != nullptr && ofxOceanodeTimelineManager::trackMarkerBeat(*sequence, index, beat))
+            timeline->seekTimeline(selectedRef, beat);
     }));
     // A Trigger Input router fires in the track's engine as it arrives,
     // from whichever node it comes.
@@ -142,9 +159,49 @@ void timelineTransport::updateRouters() {
     if(const auto* outputs = manager.morphOutputs(*sequence)) routers.publish(*outputs);
 }
 
+void timelineTransport::installMarkerPort() {
+    if(goToMarkerParam) return;
+    addSeparator("MARKERS");
+    goToMarkerParam = addParameter(goToMarker, ofxOceanodeParameterFlags_DisableOutConnection |
+                                   ofxOceanodeParameterFlags_DisableSavePreset | ofxOceanodeParameterFlags_DisableSaveProject);
+    parameterGroupChanged.notify();
+}
+
+void timelineTransport::removeMarkerPort() {
+    if(!goToMarkerParam) return;
+    auto& parameter = static_cast<ofxOceanodeAbstractParameter&>(*goToMarkerParam);
+    // As a router port goes: its bindings, custom GUI entries and cables first.
+    if(hostContainer != nullptr && parameter.isTimelined())
+        if(auto* extension = hostContainer->getAutomationExtension()) extension->removeParameterBindings(parameter);
+    if(hostContainer != nullptr && hostContainer->customGuiContainsParameterAnywhere(parameter))
+        if(auto* extension = hostContainer->getCustomGuiExtension()) extension->removeParameterBindings(parameter);
+    parameter.removeAllConnections();
+    removeParameter(parameter.getName());
+    removeSeparator("MARKERS");
+    goToMarkerParam.reset();
+    lastGoToMarker = -1;
+    parameterGroupChanged.notify();
+}
+
+void timelineTransport::updateMarkerPort() {
+    if(hostContainer == nullptr) return;
+    auto& manager = hostContainer->getTimelineManager();
+    const auto* sequence = selectedRef.timeline.empty() ? nullptr : manager.findTimeline(selectedRef);
+    // A saved timeline that is not there (yet: the timeline loads after node
+    // presets) keeps the port restored with the node, and its cable.
+    if(sequence == nullptr && !selectedRef.timeline.empty()) return;
+    const auto* track = sequence != nullptr ? ofxOceanodeTimelineManager::markerTrackOf(*sequence) : nullptr;
+    if(track == nullptr) { removeMarkerPort(); return; }
+    installMarkerPort();
+    // Its range: the markers there are (-1: none).
+    const int last = std::max(0, static_cast<int>(track->trackMarkers.size()) - 1);
+    if(goToMarker.getMax() != last) goToMarker.setMax(last);
+}
+
 void timelineTransport::update(ofEventArgs &a) {
     refreshTimelineList();
     updateRouters();
+    updateMarkerPort();
 }
 
 void timelineTransport::draw(ofEventArgs &a) {
@@ -166,6 +223,8 @@ void timelineTransport::presetSave(ofJson &json) {
     json["timelineFormat"] = 15; // an empty id means none (before 15: the canvas's default timeline)
     // The router ports as they are, so their cables find them on load.
     if(!routers.ports().empty()) json["morphRouters"] = routers.savePorts();
+    // Go To Marker, so its cable finds it on load.
+    if(goToMarkerParam) json["markerPort"] = true;
 }
 
 void timelineTransport::loadBeforeConnections(ofJson &json) {
@@ -174,6 +233,8 @@ void timelineTransport::loadBeforeConnections(ofJson &json) {
     // track's routers once the timeline has loaded (updateRouters).
     if(!json.contains("morphRouters") || !routers.restorePorts(json["morphRouters"])) routers.clear();
     routersEngine = nullptr;
+    // Go To Marker the same way (its timeline's Marker Track is checked once loaded).
+    if(json.value("markerPort", false)) installMarkerPort();
 }
 
 void timelineTransport::presetRecallAfterSettingParameters(ofJson &json) {

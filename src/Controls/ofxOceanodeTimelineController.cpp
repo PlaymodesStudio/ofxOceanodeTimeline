@@ -1366,6 +1366,9 @@ void ofxOceanodeTimelineController::restoreHistory(ofxOceanodeTimelineManager& t
     clipDragMode = ClipDragMode::None;
     groupDragSnapshot.clear();
     markerDragId.clear();
+    trackMarkerDragUid = -1;
+    trackMarkerEditUid = -1;
+    requestNewTrackMarker = false;
     loopDragMode = LoopDragMode::None;
     pendingJump = false;
 }
@@ -1386,6 +1389,9 @@ void ofxOceanodeTimelineController::resetEditorForScope() {
     trackHeaderDragId.clear();
     trackHeaderDragging = false;
     markerDragId.clear();
+    trackMarkerDragUid = -1;
+    trackMarkerEditUid = -1;
+    requestNewTrackMarker = false;
     loopDragMode = LoopDragMode::None;
     pendingJump = false;
     editorState.clipEditorOpen = false;
@@ -2298,6 +2304,23 @@ void ofxOceanodeTimelineController::draw() {
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("New track with an audio file. Wave tracks play on the timeline's own transport\n"
                           "(a relative timeline's only while it previews).");
+    {
+        // A Marker Track (one per timeline): the button adds it, or is off once there is one.
+        const bool canAddMarkers = shownSequence != nullptr && ofxOceanodeTimelineManager::markerTrackOf(
+            static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline))) == nullptr;
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canAddMarkers);
+        if(ImGui::Button("+ Markers")) {
+            const auto trackId = timeline.createMarkerTrack(scope(timeline));
+            if(!trackId.empty()) { selectedClips.clear(); selectedTracks = {trackId}; }
+        }
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", canAddMarkers
+                ? "New Marker Track: markers with a title, a description and the colour of their section,\n"
+                  "numbered in time order from 0. A Timeline node on this timeline gets Go To Marker."
+                : "This timeline already has a Marker Track (one at most).");
+    }
     {
         const auto& copiedNow = timeline.trackClipboard();
         if(copiedNow.kind != ofxOceanodeTimelineManager::TrackClipboard::Kind::None && shownSequence != nullptr) {
@@ -3566,12 +3589,14 @@ void ofxOceanodeTimelineController::draw() {
                 ofColor pickedColor;
                 if(padColorSwatch(rowId, innerTrack.color, pad, pickedColor))
                     if(auto* editTrack = timeline.getTrack(*inner, innerTrack.id)) editTrack->color = pickedColor;
-                ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
-                if(playbackToggle("innerMute" + rowId, "M", innerTrack.muted, "Mute this track of the macro's timeline"))
-                    timeline.setTrackMuted(*inner, innerTrack.id, !innerTrack.muted);
-                ImGui::SameLine();
-                if(playbackToggle("innerSolo" + rowId, "S", innerTrack.solo, "Solo within the macro's timeline"))
-                    timeline.setTrackSolo(*inner, innerTrack.id, !innerTrack.solo);
+                if(!innerTrack.isMarkerTrack) {   // (markers play nothing: no M or S)
+                    ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
+                    if(playbackToggle("innerMute" + rowId, "M", innerTrack.muted, "Mute this track of the macro's timeline"))
+                        timeline.setTrackMuted(*inner, innerTrack.id, !innerTrack.muted);
+                    ImGui::SameLine();
+                    if(playbackToggle("innerSolo" + rowId, "S", innerTrack.solo, "Solo within the macro's timeline"))
+                        timeline.setTrackSolo(*inner, innerTrack.id, !innerTrack.solo);
+                }
                 if(settingsButton) {
                     ImGui::SetCursorScreenPos(ImVec2(settingsX, pad.y));
                     const bool settingsClicked = ImGui::SmallButton(("   ##innerClipSettings" + rowId).c_str());
@@ -3717,6 +3742,71 @@ void ofxOceanodeTimelineController::draw() {
                         dl->PopClipRect();
                     }
                 }
+                // A Marker Track's markers, wherever a macro clip plays the
+                // timeline forward: sections, flags and descriptions as on its
+                // own track, read-only here (edited on its own timeline). A
+                // click on a flag puts the playhead there.
+                if(innerTrack.isMarkerTrack) {
+                    const auto& markers = innerTrack.trackMarkers;
+                    const ImVec2 mouse = ImGui::GetIO().MousePos;
+                    const float lineHeight = ImGui::GetFontSize();
+                    const bool rowHovered = hoverRect(ImVec2(zoneLeft, rowMin.y), rowMax) && mouse.x >= zoneLeft && !overResize &&
+                                            innerDrag.mode == ClipDragMode::None && clipDragMode == ClipDragMode::None;
+                    for(const auto& placement : placements) {
+                        if(placement.reversed) continue;
+                        const float left = std::max(zoneLeft, unfoldedOriginX + beatOffset(placement.from));
+                        const float right = std::min(rowMax.x, unfoldedOriginX + beatOffset(placement.to));
+                        if(right <= left) continue;
+                        const auto& map = placement.at.map;
+                        auto markerBeat = [&](size_t i) { return map.toTimeline(markers[i].beat); };
+                        auto markerX = [&](size_t i) { return unfoldedOriginX + beatOffset(markerBeat(i)); };
+                        auto sectionEnd = [&](size_t i) { return i + 1 < markers.size() ? std::min(right, markerX(i + 1)) : right; };
+                        dl->PushClipRect(ImVec2(left, rowMin.y), ImVec2(right, rowMax.y), true);
+                        for(size_t i = 0; i < markers.size(); ++i) {
+                            const float x1 = std::max(left, markerX(i)), x2 = sectionEnd(i);
+                            if(x2 <= x1) continue;
+                            const auto& c = markers[i].color;
+                            dl->AddRectFilled(ImVec2(x1, rowMin.y), ImVec2(x2, rowMax.y), IM_COL32(c.r, c.g, c.b, 70));
+                        }
+                        for(size_t i = 0; i < markers.size(); ++i) {
+                            const auto& marker = markers[i];
+                            const float x = markerX(i), sectionRight = sectionEnd(i);
+                            if(x < left - 1.0f || x > right + 1.0f) continue;   // (outside what this clip plays)
+                            const std::string label = ofToString(i) + "  " + marker.title;
+                            const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+                            const float flagRight = std::max(x + 12.0f, std::min(x + textSize.x + 10.0f, sectionRight - 2.0f));
+                            const ImVec2 flagMin(x, rowMin.y + 2.0f), flagMax(flagRight, rowMin.y + lineHeight + 6.0f);
+                            const bool flagHovered = rowHovered && (hoverRect(flagMin, flagMax) || std::abs(mouse.x - x) <= 4.0f);
+                            const auto& c = marker.color;
+                            const ImU32 ink = IM_COL32(c.r, c.g, c.b, 255);
+                            dl->AddLine(ImVec2(x, rowMin.y), ImVec2(x, rowMax.y), ink, flagHovered ? 3.0f : 2.0f);
+                            dl->AddRectFilled(flagMin, flagMax, flagHovered ? IM_COL32(std::min(255, c.r + 40), std::min(255, c.g + 40),
+                                                                                       std::min(255, c.b + 40), 255) : ink);
+                            const float luminance = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
+                            const ImU32 flagText = luminance > 150.0f ? IM_COL32(20, 20, 25, 255) : IM_COL32(245, 245, 250, 255);
+                            dl->PushClipRect(ImVec2(std::max(x, left), rowMin.y), ImVec2(std::max(std::max(x, left), sectionRight - 2.0f), rowMax.y), true);
+                            dl->AddText(ImVec2(x + 5.0f, rowMin.y + 4.0f), flagText, label.c_str());
+                            if(!marker.description.empty() && rowMax.y - rowMin.y > lineHeight * 2.0f + 10.0f)
+                                dl->AddText(ImVec2(x + 6.0f, flagMax.y + 3.0f), ink, marker.description.c_str());
+                            dl->PopClipRect();
+                            if(flagHovered) {
+                                if(!ImGui::IsAnyItemActive()) {
+                                    if(marker.description.empty())
+                                        ImGui::SetTooltip("Marker %d: %s  (%s)\nClick: playhead here.\nEdit it on its own timeline.",
+                                                          static_cast<int>(i), marker.title.c_str(), macroLabel.c_str());
+                                    else
+                                        ImGui::SetTooltip("Marker %d: %s  (%s)\n\n%s\n\nClick: playhead here.\nEdit it on its own timeline.",
+                                                          static_cast<int>(i), marker.title.c_str(), macroLabel.c_str(), marker.description.c_str());
+                                }
+                                if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !anyClipInteractionClaimedThisFrame) {
+                                    anyClipInteractionClaimedThisFrame = true;
+                                    seekShownTimeline(timeline, markerBeat(i));
+                                }
+                            }
+                        }
+                        dl->PopClipRect();
+                    }
+                }
                 const float playheadX = unfoldedOriginX + beatOffset(transportState.beatPosition);
                 if(playheadX >= zoneLeft && playheadX <= rowMax.x) dl->AddLine(ImVec2(playheadX, rowMin.y), ImVec2(playheadX, rowMax.y), kPlayhead, 2);
                 dl->PopClipRect();
@@ -3850,7 +3940,8 @@ void ofxOceanodeTimelineController::draw() {
                 // Empty space where a macro clip plays the timeline forward:
                 // a new clip there, in the timeline's own beats.
                 const bool canCreateClips = !innerTrack.isMacroTrack() && !innerTrack.isWaveTrack && !innerTrack.isGlobalTrack &&
-                                            !innerTrack.isMorphTrack;   // (its clips come with their sources)
+                                            !innerTrack.isMorphTrack &&   // (its clips come with their sources)
+                                            !innerTrack.isMarkerTrack;    // (markers only, edited on its own timeline)
                 // Notes the forward placement under the mouse for a row's menu
                 // (false: outside the macro clips, or in a mirrored one).
                 auto menuPlacementAtMouse = [&]() {
@@ -4375,7 +4466,7 @@ void ofxOceanodeTimelineController::draw() {
         // regardless of its own collapsed flag.
         // (A Macro Morphing Track neither: it has no bindings.)
         const bool singleRowTrack = !targetsView || trackCollapsed || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack() ||
-                                    track.isMorphTrack;
+                                    track.isMorphTrack || track.isMarkerTrack;
         // The height the tracks of the Clips view share.
         const float sharedTrackHeight = ofClamp(timeline.getViewState().trackHeight, kMinTrackHeight, kMaxTrackHeight);
         // A macro track's pad has one row only (what it plays shows under it,
@@ -4471,11 +4562,14 @@ void ofxOceanodeTimelineController::draw() {
         // A Global Track's "+ Key" (a keyframe at the playhead), between
         // "<" and ">" (the playhead to the keyframe before, or after, where
         // it is).
+        // A Marker Track's "+" (a marker at the playhead) sits there too,
+        // between the same "<" and ">" (to the marker before, or after).
         constexpr float kKeyNavGap = 2.0f;
-        const float globalKeysWidth = !track.isGlobalTrack ? 0.0f
-            : padButtonWidth("<") + kKeyNavGap + padButtonWidth("+ Key") + kKeyNavGap + padButtonWidth(">");
+        const bool keyButtons = track.isGlobalTrack || track.isMarkerTrack;
+        const float globalKeysWidth = !keyButtons ? 0.0f
+            : padButtonWidth("<") + kKeyNavGap + padButtonWidth(track.isMarkerTrack ? "+" : "+ Key") + kKeyNavGap + padButtonWidth(">");
         const float globalKeysX = (pad.hasSecondRow ? pad.right : firstRowRight) - globalKeysWidth;
-        if(track.isGlobalTrack && !pad.hasSecondRow) firstRowRight = globalKeysX - padSpacing;
+        if(keyButtons && !pad.hasSecondRow) firstRowRight = globalKeysX - padSpacing;
         // The name gives way to the buttons that follow it.
         const float nameRight = std::max(pad.nameX, std::min(pad.nameX + ImGui::CalcTextSize(track.name.c_str()).x,
             firstRowRight - smallButtonReserve("   ") - (addLaneButton ? smallButtonReserve("+") : 0.0f)));
@@ -4489,7 +4583,7 @@ void ofxOceanodeTimelineController::draw() {
         };
         const bool overPadControl = overPadSwatch(pad) || overPadButtons(settingsX, leftGroupRight, pad.y) ||
             overPadButtons(pad.muteX, pad.right, pad.y) ||
-            (track.isGlobalTrack && overPadButtons(globalKeysX, globalKeysX + globalKeysWidth, specificY));
+            (keyButtons && overPadButtons(globalKeysX, globalKeysX + globalKeysWidth, specificY));
         // The arrow's strip is the whole height of the pad.
         const bool editorArrowHovered = editorArrow &&
             hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + kPadArrowSlot, headerMax.y));
@@ -4498,7 +4592,8 @@ void ofxOceanodeTimelineController::draw() {
         // nothing to fold, so it gets no arrow.
         const ImVec2 arrowAt(pad.arrowX, pad.y);
         if(track.isMacroTrack() || track.isMorphTrack) drawFoldArrow(dl, arrowAt, track.macroUnfolded);
-        else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack) drawFoldArrow(dl, arrowAt, !trackCollapsed);
+        else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack && !track.isMarkerTrack)
+            drawFoldArrow(dl, arrowAt, !trackCollapsed);
         else if(editorArrow) drawFoldArrow(dl, arrowAt, editorOpenHere, editorArrowHovered ? IM_COL32(255, 255, 255, 255) : labelTextColor);
         if(editorArrowHovered && !ImGui::IsAnyItemActive())
             ImGui::SetTooltip(editorOpenHere ? "Close the clip editor" : "Open the clip editor");
@@ -4579,7 +4674,7 @@ void ofxOceanodeTimelineController::draw() {
                 requestRenamePopup = true;
             } else if((track.isMacroTrack() || track.isMorphTrack) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->macroUnfolded = !track.macroUnfolded;
-            } else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack &&
+            } else if(targetsView && !track.isWaveTrack && !track.isGlobalTrack && !track.isMorphTrack && !track.isMarkerTrack &&
                       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overArrowSlot) {
                 if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->collapsed = !trackCollapsed;
             } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
@@ -4680,15 +4775,54 @@ void ofxOceanodeTimelineController::draw() {
                 if(found) seekShownTimeline(timeline, target);
             }
         }
+        if(track.isMarkerTrack) {
+            // ---- Second row: a Marker Track's marker buttons ----
+            int step = 0;
+            ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
+            ImGui::SetCursorScreenPos(ImVec2(globalKeysX, specificY));
+            if(ImGui::SmallButton(("<##prevTrackMarker" + track.id).c_str())) step = -1;
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous marker");
+            ImGui::SameLine(0.0f, kKeyNavGap);
+            if(ImGui::SmallButton(("+##addTrackMarker" + track.id).c_str())) {
+                anyClipInteractionClaimedThisFrame = true;
+                requestNewTrackMarker = true;
+                newTrackMarkerTrackId = track.id;
+                newTrackMarkerBeat = std::max(0.0, transportState.beatPosition);
+                trackMarkerPopupAnchor = ImVec2(ImGui::GetItemRectMax().x + 8.0f, ImGui::GetItemRectMin().y);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Add a marker at the playhead: a title, a description and the colour\n"
+                                  "of the section it starts. Markers are numbered in time order, from 0:\n"
+                                  "a Timeline node's Go To Marker jumps to one by its number.");
+            ImGui::SameLine(0.0f, kKeyNavGap);
+            if(ImGui::SmallButton((">##nextTrackMarker" + track.id).c_str())) step = 1;
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the next marker");
+            ImGui::PopStyleColor();
+            if(step != 0) {
+                anyClipInteractionClaimedThisFrame = true;
+                const double here = transportState.beatPosition;
+                double target = 0.0;
+                bool found = false;
+                for(const auto& marker : track.trackMarkers) {
+                    if(step < 0 ? marker.beat >= here - 1e-4 : marker.beat <= here + 1e-4) continue;
+                    if(!found || (step < 0 ? marker.beat > target : marker.beat < target)) { target = marker.beat; found = true; }
+                }
+                if(found) seekShownTimeline(timeline, target);
+            }
+        }
         // ---- First row, against the right edge: latency, M and S ----
-        ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
-        if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
-            timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
-        ImGui::SameLine();
-        // Shows the solo playback uses, which a Toggle lane may be driving.
-        const bool soloed = track.solo; // (a Toggle lane driving it is the engine's playback state)
-        if(playbackToggle("trackSolo" + track.id, "S", soloed, "Solo track (multiple solos allowed)"))
-            timeline.setTrackSolo(scope(timeline), track.id, !soloed);
+        // (A Marker Track plays nothing: no M or S. Its solo would silence
+        // every other track.)
+        if(!track.isMarkerTrack) {
+            ImGui::SetCursorScreenPos(ImVec2(pad.muteX, pad.y));
+            if(playbackToggle("trackMute" + track.id, "M", track.muted, "Mute track"))
+                timeline.setTrackMuted(scope(timeline), track.id, !track.muted);
+            ImGui::SameLine();
+            // Shows the solo playback uses, which a Toggle lane may be driving.
+            const bool soloed = track.solo; // (a Toggle lane driving it is the engine's playback state)
+            if(playbackToggle("trackSolo" + track.id, "S", soloed, "Solo track (multiple solos allowed)"))
+                timeline.setTrackSolo(scope(timeline), track.id, !soloed);
+        }
         if(!latencyLabel.empty()) {
             const ImVec2 size = ImGui::CalcTextSize(latencyLabel.c_str());
             const ImVec2 at(latencyX, pad.y);
@@ -4710,7 +4844,7 @@ void ofxOceanodeTimelineController::draw() {
                     static_cast<unsigned char>(ofClamp(menuColor[2] * 255.0f, 0.0f, 255.0f)),
                     static_cast<unsigned char>(ofClamp(menuColor[3] * 255.0f, 0.0f, 255.0f)));
             }
-            if(!track.isWaveTrack && !track.isMorphTrack) {
+            if(!track.isWaveTrack && !track.isMorphTrack && !track.isMarkerTrack) {
                 // The toolbar has no view selector: this is the way into the
                 // target rows, and back to the clips.
                 const bool rowsShown = targetsView && !trackCollapsed;
@@ -4792,7 +4926,18 @@ void ofxOceanodeTimelineController::draw() {
                 }
             }
             contextMenuSection("Create");
-            if(track.isMorphTrack) {
+            if(track.isMarkerTrack) {
+                // Its markers: where the menu was opened (the playhead, from the pad).
+                if(ImGui::MenuItem("Add marker here")) {
+                    requestNewTrackMarker = true;
+                    newTrackMarkerTrackId = track.id;
+                    newTrackMarkerBeat = snapBeat(std::max(0.0, pendingWaveClipBeat));
+                    trackMarkerPopupAnchor = ImGui::GetMousePos();
+                    ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A marker here, opened to set its title, description and colour.");
+            } else if(track.isMorphTrack) {
                 // Its clips play sources: a new one comes with its source,
                 // after the last clip and overlapping it.
                 if(ImGui::MenuItem("Add Morphing Source")) {
@@ -4826,18 +4971,18 @@ void ofxOceanodeTimelineController::draw() {
                 }
                 ImGui::CloseCurrentPopup();
             }
-            if(const auto label = pasteLabel(timeline, true, true); !label.empty() && !track.isMorphTrack) {
+            if(const auto label = pasteLabel(timeline, true, true); !label.empty() && !track.isMorphTrack && !track.isMarkerTrack) {
                 if(ImGui::MenuItem(label.c_str())) {
                     trackPaste = {true, true, track.id, snapBeat(pendingWaveClipBeat)};
                     ImGui::CloseCurrentPopup();
                 }
             }
-            if(!track.isMorphTrack && ImGui::MenuItem("Load clip from disk...")) {
+            if(!track.isMorphTrack && !track.isMarkerTrack && ImGui::MenuItem("Load clip from disk...")) {
                 clipFileRequest = ClipFileRequest::Load;
                 clipFileTrackId = track.id;
                 clipImportBeat = snapBeat(pendingWaveClipBeat);
             }
-            if(!track.isWaveTrack && !track.isMorphTrack) {
+            if(!track.isWaveTrack && !track.isMorphTrack && !track.isMarkerTrack) {
                 const bool canCaptureState = std::any_of(track.bindings.begin(), track.bindings.end(), [](const auto& binding) {
                     return binding.valueType == typeid(float).name() ||
                            binding.valueType == typeid(int).name() ||
@@ -4931,7 +5076,8 @@ void ofxOceanodeTimelineController::draw() {
                 newFolderAroundTrackId = track.id;
             }
             drawTrackArrangeMenu(timeline, track);
-            if(ImGui::MenuItem("Duplicate track")) {
+            // (A timeline has one Marker Track: it has no copy.)
+            if(!track.isMarkerTrack && ImGui::MenuItem("Duplicate track")) {
                 duplicateTrackId = track.id;
                 ImGui::CloseCurrentPopup();
             }
@@ -6044,6 +6190,106 @@ void ofxOceanodeTimelineController::draw() {
             const ImVec2 min = headerMin, max = headerMax, laneMin(min.x + kLabelWidth - timelineScrollX, min.y);
             dl->PushClipRect(ImVec2(zoneLeft, min.y), ImVec2(max.x, max.y), true);
             drawGrid(laneMin, max);
+            if(track.isMarkerTrack) {
+                // ---- A Marker Track: each marker's section (to the next
+                // marker, the last one to the end) in its colour, then the
+                // markers: a line, a flag with its number and title, and its
+                // description under it. Click jumps there, drag moves it,
+                // double-click or right-click edits it; double-click on
+                // empty space adds one there.
+                const auto& markers = track.trackMarkers;
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const float lineHeight = ImGui::GetFontSize();
+                const bool laneHovered = hoverRect(min, max) && mouse.x >= zoneLeft && clipDragMode == ClipDragMode::None &&
+                                         trackResizeId.empty();
+                auto markerX = [&](size_t i) { return laneMin.x + beatOffset(markers[i].beat); };
+                auto sectionEnd = [&](size_t i) { return i + 1 < markers.size() ? markerX(i + 1) : max.x; };
+                for(size_t i = 0; i < markers.size(); ++i) {
+                    const float x1 = markerX(i), x2 = sectionEnd(i);
+                    if(x2 < zoneLeft || x1 > max.x) continue;
+                    const auto& c = markers[i].color;
+                    dl->AddRectFilled(ImVec2(std::max(x1, zoneLeft), min.y), ImVec2(std::min(x2, max.x), max.y),
+                                      IM_COL32(c.r, c.g, c.b, 70));
+                }
+                int hoveredUid = -1;
+                for(size_t i = 0; i < markers.size(); ++i) {
+                    const auto& marker = markers[i];
+                    const float x = markerX(i), right = sectionEnd(i);
+                    if(right < zoneLeft || x > max.x + 1.0f) continue;
+                    const std::string label = ofToString(i) + "  " + marker.title;
+                    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+                    // The flag never reaches past the next marker.
+                    const float flagRight = std::max(x + 12.0f, std::min(x + textSize.x + 10.0f, right - 2.0f));
+                    const ImVec2 flagMin(x, min.y + 2.0f), flagMax(flagRight, min.y + lineHeight + 6.0f);
+                    const bool active = trackMarkerDragUid == marker.uid && trackMarkerTrackId == track.id;
+                    const bool flagHovered = laneHovered &&
+                        (hoverRect(flagMin, flagMax) || std::abs(mouse.x - x) <= 4.0f);
+                    if(flagHovered) hoveredUid = marker.uid;
+                    const auto& c = marker.color;
+                    const ImU32 ink = IM_COL32(c.r, c.g, c.b, 255);
+                    dl->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), ink, flagHovered || active ? 3.0f : 2.0f);
+                    dl->AddRectFilled(flagMin, flagMax, flagHovered || active ? IM_COL32(std::min(255, c.r + 40), std::min(255, c.g + 40),
+                                                                                         std::min(255, c.b + 40), 255) : ink);
+                    // Dark text on a light flag, light on a dark one.
+                    const float luminance = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
+                    const ImU32 flagText = luminance > 150.0f ? IM_COL32(20, 20, 25, 255) : IM_COL32(245, 245, 250, 255);
+                    dl->PushClipRect(ImVec2(std::max(x, zoneLeft), min.y), ImVec2(std::min(right - 2.0f, max.x), max.y), true);
+                    dl->AddText(ImVec2(x + 5.0f, min.y + 4.0f), flagText, label.c_str());
+                    if(!marker.description.empty() && max.y - min.y > lineHeight * 2.0f + 10.0f)
+                        // In the marker's colour, as its flag.
+                        dl->AddText(ImVec2(x + 6.0f, flagMax.y + 3.0f), ink, marker.description.c_str());
+                    dl->PopClipRect();
+                    if(flagHovered && !ImGui::IsAnyItemActive() && trackMarkerDragUid < 0) {
+                        if(marker.description.empty())
+                            ImGui::SetTooltip("Marker %d: %s\nClick: playhead here. Drag: move it.\nDouble-click or right-click: edit it.",
+                                              static_cast<int>(i), marker.title.c_str());
+                        else
+                            ImGui::SetTooltip("Marker %d: %s\n\n%s\n\nClick: playhead here. Drag: move it.\nDouble-click or right-click: edit it.",
+                                              static_cast<int>(i), marker.title.c_str(), marker.description.c_str());
+                    }
+                }
+                if(hoveredUid >= 0 && !clipInteractionClaimedThisFrame) {
+                    if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        clipInteractionClaimedThisFrame = true;
+                        anyClipInteractionClaimedThisFrame = true;
+                        trackMarkerDragUid = -1;
+                        openTrackMarkerPopup(track, hoveredUid, ImVec2(mouse.x + 12.0f, mouse.y));
+                    } else if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        clipInteractionClaimedThisFrame = true;
+                        anyClipInteractionClaimedThisFrame = true;
+                        trackMarkerTrackId = track.id;
+                        trackMarkerDragUid = hoveredUid;
+                        trackMarkerDragStartX = mouse.x;
+                        trackMarkerDragMoved = false;
+                        if(const auto* pressed = ofxOceanodeTimelineManager::findTrackMarker(track, hoveredUid))
+                            trackMarkerDragStartBeat = pressed->beat;
+                    }
+                } else if(laneHovered && !clipInteractionClaimedThisFrame && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    // Double-click on empty space: a marker there.
+                    clipInteractionClaimedThisFrame = true;
+                    anyClipInteractionClaimedThisFrame = true;
+                    requestNewTrackMarker = true;
+                    newTrackMarkerTrackId = track.id;
+                    newTrackMarkerBeat = snapBeat(std::max(0.0, beatAtOffset(mouse.x - laneMin.x)));
+                    trackMarkerPopupAnchor = ImVec2(mouse.x + 12.0f, mouse.y);
+                }
+                if(trackMarkerDragUid >= 0 && trackMarkerTrackId == track.id) {
+                    // Drawn above: moving it now changes only this track's markers.
+                    if(ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                        if(std::abs(mouse.x - trackMarkerDragStartX) >= std::max(3.0f, ImGui::GetIO().MouseDragThreshold))
+                            trackMarkerDragMoved = true;
+                        if(trackMarkerDragMoved) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                            timeline.moveTrackMarker(scope(timeline), track.id, trackMarkerDragUid,
+                                                     snapBeat(std::max(0.0, beatAtOffset(mouse.x - laneMin.x))));
+                        }
+                    } else {
+                        // A click (no drag) puts the playhead there.
+                        if(!trackMarkerDragMoved) seekShownTimeline(timeline, trackMarkerDragStartBeat);
+                        trackMarkerDragUid = -1;
+                    }
+                }
+            }
             // Two passes: every clip's box/label first, then every lane's content on
             // top, so overlapping clips' translucent boxes never dim curves drawn
             // earlier -- all curves in a collapsed track read equally bright.
@@ -6111,7 +6357,8 @@ void ofxOceanodeTimelineController::draw() {
             }
             // Later clips are drawn on top, so hit-test in reverse order and
             // let the visually topmost overlapping clip own the gesture.
-            clipDropRows.push_back({track.id, std::string(), min.y, max.y});
+            // (Clips are never dropped on a Marker Track.)
+            if(!track.isMarkerTrack) clipDropRows.push_back({track.id, std::string(), min.y, max.y});
             for(auto clipIt = track.clips.rbegin(); clipIt != track.clips.rend(); ++clipIt) {
                 const auto* frontLane = clipIt->lanes.empty() ? nullptr : &clipIt->lanes.front();
                 handleClip(*clipIt, frontLane, laneMin, max);
@@ -7420,6 +7667,14 @@ void ofxOceanodeTimelineController::draw() {
         }
         globalKeyScope = {};
     }
+    // A Marker Track's new marker (its + or menu), then opened to edit it.
+    if(requestNewTrackMarker) {
+        requestNewTrackMarker = false;
+        const int uid = timeline.addTrackMarker(scope(timeline), newTrackMarkerTrackId, newTrackMarkerBeat);
+        if(uid >= 0)
+            if(const auto* track = timeline.getTrack(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline)), newTrackMarkerTrackId))
+                openTrackMarkerPopup(*track, uid, trackMarkerPopupAnchor);
+    }
     if(globalKeyEditScope.sequence != nullptr && !timeline.isLiveSequence(*globalKeyEditScope.sequence)) {
         // Its timeline is gone (the macro deleted, a preset loaded).
         globalKeyEditScope = {};
@@ -7981,6 +8236,7 @@ void ofxOceanodeTimelineController::draw() {
         requestClipRenamePopup = false;
     }
     drawClipRenamePopup(timeline);
+    drawTrackMarkerPopup(timeline);
     drawClipImportPopup(timeline);
     drawPasteNoticePopup();
     drawClipSettingsWindow(timeline, endBeat);
@@ -8147,7 +8403,7 @@ void ofxOceanodeTimelineController::drawClipImportPopup(ofxOceanodeTimelineManag
     if(ImGui::BeginCombo("Destination track", destination ? destination->name.c_str() : "New track")) {
         if(ImGui::Selectable("New track", clipFileTrackId.empty())) clipFileTrackId.clear();
         for(const auto& candidate : scope(timeline).tracks) {
-            if(candidate.isWaveTrack != wave || candidate.isFolder) continue;
+            if(candidate.isWaveTrack != wave || candidate.isFolder || candidate.isMarkerTrack) continue;
             if(ImGui::Selectable((candidate.name + "##" + candidate.id).c_str(), clipFileTrackId == candidate.id))
                 clipFileTrackId = candidate.id;
         }
@@ -8381,6 +8637,90 @@ void ofxOceanodeTimelineController::drawMarkerRenamePopup(ofxOceanodeTimelineMan
     }
     ImGui::SameLine();
     if(ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+void ofxOceanodeTimelineController::openTrackMarkerPopup(const ofxOceanodeTimelineTrack& track, int uid, const ImVec2& anchor) {
+    const auto* marker = ofxOceanodeTimelineManager::findTrackMarker(track, uid);
+    if(marker == nullptr) return;
+    trackMarkerTrackId = track.id;
+    trackMarkerEditUid = uid;
+    std::strncpy(trackMarkerTitle, marker->title.c_str(), sizeof(trackMarkerTitle) - 1);
+    trackMarkerTitle[sizeof(trackMarkerTitle) - 1] = '\0';
+    std::strncpy(trackMarkerDescription, marker->description.c_str(), sizeof(trackMarkerDescription) - 1);
+    trackMarkerDescription[sizeof(trackMarkerDescription) - 1] = '\0';
+    trackMarkerPopupAnchor = anchor;
+    requestTrackMarkerPopup = true;
+}
+
+// A Marker Track's marker: its number (what Go To Marker takes), title,
+// description, colour and beat, edited in place; or deleted. Its edits are
+// one undo step, recorded once the popup closes.
+void ofxOceanodeTimelineController::drawTrackMarkerPopup(ofxOceanodeTimelineManager& timeline) {
+    constexpr const char* kPopup = "##trackMarkerPopup";
+    if(requestTrackMarkerPopup) {
+        requestTrackMarkerPopup = false;
+        ImGui::OpenPopup(kPopup);
+        ImGui::SetNextWindowPos(trackMarkerPopupAnchor, ImGuiCond_Always);
+    }
+    if(!ImGui::BeginPopup(kPopup, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    auto& sequence = scope(timeline);
+    const auto* track = timeline.getTrack(static_cast<const ofxOceanodeTimelineSequence&>(sequence), trackMarkerTrackId);
+    int index = -1;
+    const auto* marker = track == nullptr || !track->isMarkerTrack ? nullptr
+        : ofxOceanodeTimelineManager::findTrackMarker(*track, trackMarkerEditUid, &index);
+    if(marker == nullptr) {
+        // Gone (undone, the timeline changed): nothing left to edit.
+        trackMarkerEditUid = -1;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    const auto& c = marker->color;
+    const ImVec2 swatchAt = ImGui::GetCursorScreenPos();
+    const float swatchSize = ImGui::GetFontSize();
+    ImGui::GetWindowDrawList()->AddRectFilled(swatchAt, ImVec2(swatchAt.x + swatchSize, swatchAt.y + swatchSize),
+                                              IM_COL32(c.r, c.g, c.b, 255), 2.0f);
+    ImGui::Dummy(ImVec2(swatchSize, swatchSize));
+    ImGui::SameLine();
+    ImGui::Text("Marker %d", index);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Go To Marker %d jumps here)", index);
+    if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(320.0f);
+    if(ImGui::InputText("Title", trackMarkerTitle, sizeof(trackMarkerTitle)))
+        timeline.setTrackMarkerText(sequence, trackMarkerTrackId, trackMarkerEditUid, trackMarkerTitle, trackMarkerDescription);
+    if(ImGui::InputTextMultiline("Description", trackMarkerDescription, sizeof(trackMarkerDescription),
+                                 ImVec2(320.0f, ImGui::GetTextLineHeight() * 5.0f + 8.0f)))
+        timeline.setTrackMarkerText(sequence, trackMarkerTrackId, trackMarkerEditUid, trackMarkerTitle, trackMarkerDescription);
+    float color[3] = {c.r / 255.0f, c.g / 255.0f, c.b / 255.0f};
+    ImGui::SetNextItemWidth(320.0f);
+    if(ImGui::ColorEdit3("Color", color))
+        timeline.setTrackMarkerColor(sequence, trackMarkerTrackId, trackMarkerEditUid,
+                                     ofColor(static_cast<unsigned char>(ofClamp(color[0] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(color[1] * 255.0f, 0.0f, 255.0f)),
+                                             static_cast<unsigned char>(ofClamp(color[2] * 255.0f, 0.0f, 255.0f)), 255));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The colour of its section, up to the next marker.");
+    // (InputScalar takes no EnterReturnsTrue: the typed beat is kept apart
+    // and applied when the field is left or Enter pressed.)
+    const ImGuiID beatFieldId = ImGui::GetID("Beat");
+    if(ImGui::GetActiveID() != beatFieldId) trackMarkerBeatEdit = marker->beat;
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::InputDouble("Beat", &trackMarkerBeatEdit, 0.0, 0.0, "%.3f");
+    if(ImGui::IsItemDeactivatedAfterEdit())
+        timeline.moveTrackMarker(sequence, trackMarkerTrackId, trackMarkerEditUid, std::max(0.0, trackMarkerBeatEdit));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Where it is, in timeline beats (Enter to move it).\nMarkers are numbered in time order.");
+    ImGui::Separator();
+    if(ImGui::Button("Done") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        trackMarkerEditUid = -1;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("Delete marker")) {
+        timeline.removeTrackMarker(sequence, trackMarkerTrackId, trackMarkerEditUid);
+        trackMarkerEditUid = -1;
+        ImGui::CloseCurrentPopup();
+    }
     ImGui::EndPopup();
 }
 
@@ -9658,7 +9998,7 @@ void ofxOceanodeTimelineController::openNoteGroupSetup(ofxOceanodeTimelineManage
         // Default to a track where one of these parameters already is, else a new track.
         if(noteSetupTrackId.empty()) {
             for(const auto& track : scope(timeline).tracks) {
-                if(track.isWaveTrack || track.isFolder) continue;
+                if(track.isWaveTrack || track.isFolder || track.isMarkerTrack) continue;
                 if(std::any_of(track.bindings.begin(), track.bindings.end(), [&](const auto& b) {
                        return !b.parameterPath.empty() && std::find(std::begin(noteSetupRolePaths), std::end(noteSetupRolePaths),
                                                                     b.parameterPath) != std::end(noteSetupRolePaths);
@@ -9703,7 +10043,7 @@ void ofxOceanodeTimelineController::drawNoteGroupSetupPopup(ofxOceanodeTimelineM
         if(ImGui::BeginCombo("Track", currentTrack == nullptr ? "New track" : currentTrack->name.c_str())) {
             if(ImGui::Selectable("New track", currentTrack == nullptr)) noteSetupTrackId.clear();
             for(const auto& track : scope(timeline).tracks) {
-                if(track.isWaveTrack || track.isFolder) continue;
+                if(track.isWaveTrack || track.isFolder || track.isMarkerTrack) continue;
                 if(ImGui::Selectable((track.name + "##" + track.id).c_str(), track.id == noteSetupTrackId))
                     noteSetupTrackId = track.id;
             }

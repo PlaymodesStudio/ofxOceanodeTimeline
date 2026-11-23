@@ -748,6 +748,26 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
                     : "A track whose clips each play a macro folder (a source); where two clips overlap,\n"
                       "one mixes or morphs into the other. Add its sources from the track's menu.");
         }
+        {
+            // A Marker Track: moments of the timeline, numbered in time
+            // order, that a Timeline node's Go To Marker jumps to. One at most.
+            const bool exists = timeline.timelineExists(shown);
+            const bool hasOne = exists &&
+                ofxOceanodeTimelineManager::markerTrackOf(static_cast<const ofxOceanodeTimelineSequence&>(scope(timeline))) != nullptr;
+            if(ImGui::MenuItem("Add Marker Track", nullptr, false, exists && !hasOne)) {
+                auto& host = scope(timeline);
+                beginHistoryGesture(timeline);
+                const auto trackId = timeline.createMarkerTrack(host);
+                if(!trackId.empty()) { selectedClips.clear(); selectedTracks = {trackId}; }
+                finishHistoryGesture(timeline);
+            }
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", hasOne
+                    ? "This timeline already has a Marker Track: a timeline holds one at most."
+                    : "A track of markers: moments with a title, a description and the colour of the\n"
+                      "section they start. Numbered in time order from 0; a Timeline node pointing at\n"
+                      "this timeline gets Go To Marker, which jumps to the marker of that number.");
+        }
         if(ImGui::MenuItem("Load clip...", nullptr, false, timeline.timelineExists(shown))) {
             // At the shown timeline's playhead, on the one selected track if any.
             const auto shownTransport = timeline.transportFor(shown);

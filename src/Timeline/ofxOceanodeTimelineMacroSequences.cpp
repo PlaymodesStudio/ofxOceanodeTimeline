@@ -843,7 +843,7 @@ void ofxOceanodeTimelineManager::saveClipboardAutomation(ofxOceanodeContainer& c
             if(source == nullptr) continue;
             // A wave, Global or macro track drives no copied parameter by a binding.
             auto drives = [&](const ofxOceanodeTimelineTrack& track) {
-                if(track.isFolder || track.isWaveTrack || track.isGlobalTrack || track.isMacroTrack()) return false;
+                if(track.isFolder || track.isWaveTrack || track.isGlobalTrack || track.isMarkerTrack || track.isMacroTrack()) return false;
                 return std::any_of(track.bindings.begin(), track.bindings.end(),
                                    [&](const auto& binding) { return !toCopied(binding.parameterPath).empty(); });
             };
@@ -1089,6 +1089,8 @@ void ofxOceanodeTimelineManager::rebaseCopiedTrack(ofxOceanodeTimelineTrack& tra
 bool ofxOceanodeTimelineManager::copiedTrackFits(const ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineSequence& sequence,
                                                  const TimelineRef& ref) {
     if(track.isMorphTrack) return false;
+    // Markers: one Marker Track per timeline.
+    if(track.isMarkerTrack) return markerTrackOf(sequence) == nullptr;
     const bool sameCanvas = normalizedCanvas(ref.canvas) == copied.canvas;
     // Keyframes of the whole patch: its own canvas's, one track per timeline.
     if(track.isGlobalTrack) return sameCanvas && globalTrackOf(sequence) == nullptr;
@@ -1191,7 +1193,7 @@ std::vector<std::pair<std::string, std::string>> ofxOceanodeTimelineManager::pas
         if(destination == nullptr || destination->isFolder) return made;
         // Audio onto audio, keyframes onto keyframes, a macro's passes onto
         // a track playing the same one; automation onto automation.
-        const bool fits = !destination->isMorphTrack &&
+        const bool fits = !destination->isMorphTrack && !destination->isMarkerTrack && !track.isMarkerTrack &&
             destination->isWaveTrack == track.isWaveTrack && destination->isGlobalTrack == track.isGlobalTrack &&
             destination->isMacroTrack() == track.isMacroTrack() &&
             (!track.isGlobalTrack || sameCanvas) &&

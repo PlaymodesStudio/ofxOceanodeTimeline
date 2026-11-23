@@ -2602,6 +2602,9 @@ uint64_t ofxOceanodeTimelineManager::sequenceSignature(const ofxOceanodeTimeline
         hash.add(track.macroGate); hash.add(track.macroPreRollMs); hash.add(track.macroTailMs);
         // (The stamp changes whenever the engine state does.)
         hash.add(track.isMorphTrack); hash.add(track.morphStateStamp); hash.add(track.morphPreloadSeconds);
+        // (A Marker Track plays nothing: only where its markers are, which Go To Marker reads.)
+        hash.add(track.isMarkerTrack); hash.add(track.trackMarkers.size());
+        for(const auto& marker : track.trackMarkers) hash.add(marker.beat);
         hash.add(track.waveVolume); hash.add(track.waveVolumeAutomationEnabled); hash.add(track.waveVolumeInterpolation);
         hash.add(track.waveVolumePoints.size());
         for(const auto& point : track.waveVolumePoints) { hash.add(point.beat); hash.add(point.value); }

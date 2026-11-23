@@ -622,6 +622,14 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
         if(!track.macroFoldedTimelines.empty()) trackJson["macroFoldedTimelines"] = track.macroFoldedTimelines;
     }
+    if(track.isMarkerTrack) {
+        trackJson["isMarkerTrack"] = true;
+        trackJson["markers"] = ofJson::array();
+        for(const auto& marker : track.trackMarkers)
+            trackJson["markers"].push_back({
+                {"uid", marker.uid}, {"beat", marker.beat}, {"title", marker.title}, {"description", marker.description},
+                {"color", {{"r", marker.color.r}, {"g", marker.color.g}, {"b", marker.color.b}, {"a", marker.color.a}}}});
+    }
     trackJson["waveVolumeInterpolation"] = track.waveVolumeInterpolation;
     trackJson["waveVolumePoints"] = ofJson::array();
     for(const auto& point : track.waveVolumePoints)
@@ -1098,6 +1106,44 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
             track.isMorphTrack = false;
             ofLogWarning("ofxOceanodeTimeline")
                 << "A timeline has one Macro Morphing Track: \"" << track.name << "\" was loaded as an ordinary track.";
+        }
+        // A Marker Track: a timeline has one. A file with more keeps its
+        // first; the others load as ordinary (empty) tracks.
+        track.isMarkerTrack = !track.isWaveTrack && !track.isGlobalTrack && !track.isFolder && track.macroCanvas.empty() &&
+                              !track.isMorphTrack && trackJson.value("isMarkerTrack", false);
+        if(track.isMarkerTrack && std::any_of(sequence.tracks.begin(), sequence.tracks.end(),
+                                              [](const auto& loaded) { return loaded.isMarkerTrack; })) {
+            track.isMarkerTrack = false;
+            ofLogWarning("ofxOceanodeTimeline")
+                << "A timeline has one Marker Track: \"" << track.name << "\" was loaded as an ordinary track.";
+        }
+        track.trackMarkers.clear();
+        // (It plays nothing: a mute or solo it was saved with would only silence the others.)
+        if(track.isMarkerTrack) track.muted = track.solo = false;
+        if(track.isMarkerTrack && trackJson.contains("markers") && trackJson["markers"].is_array()) {
+            std::set<int> uids;
+            for(const auto& markerJson : trackJson["markers"]) {
+                if(!markerJson.is_object()) continue;
+                ofxOceanodeTimelineTrackMarker marker;
+                marker.uid = markerJson.value("uid", 0);
+                marker.beat = std::max(0.0, markerJson.value("beat", 0.0));
+                if(!std::isfinite(marker.beat)) marker.beat = 0.0;
+                marker.title = markerJson.value("title", std::string());
+                marker.description = markerJson.value("description", std::string());
+                if(markerJson.contains("color") && markerJson["color"].is_object()) {
+                    const auto& colorJson = markerJson["color"];
+                    marker.color = ofColor(static_cast<unsigned char>(ofClamp(colorJson.value("r", 210), 0, 255)),
+                                           static_cast<unsigned char>(ofClamp(colorJson.value("g", 80), 0, 255)),
+                                           static_cast<unsigned char>(ofClamp(colorJson.value("b", 80), 0, 255)),
+                                           static_cast<unsigned char>(ofClamp(colorJson.value("a", 255), 0, 255)));
+                }
+                // (A repeated uid, from a hand-edited file, gets a free one.)
+                while(uids.count(marker.uid)) ++marker.uid;
+                uids.insert(marker.uid);
+                track.trackMarkers.push_back(marker);
+            }
+            std::stable_sort(track.trackMarkers.begin(), track.trackMarkers.end(),
+                             [](const auto& a, const auto& b) { return a.beat < b.beat; });
         }
         if(track.isMorphTrack && trackJson.contains("morphState")) {
             // (Text; an object in the first files written with the track.)

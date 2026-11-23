@@ -1199,6 +1199,20 @@ struct ofxOceanodeTimelinePianoVoicing {
                                           // slots then depend on the repeat being played
 };
 
+// A marker of a Marker Track (ofxOceanodeTimelineTrack::isMarkerTrack): a
+// moment of the timeline with a title, a description and the colour of the
+// section it starts (up to the next marker). Not the ruler's markers
+// (ofxOceanodeTimelineMarker, the global transport's). Its number, the one
+// Go To Marker takes, is its place in time order (0 the earliest): not
+// stored, it follows the markers as they move.
+struct ofxOceanodeTimelineTrackMarker {
+    int uid = 0;                 // stable within its track (edits find it by this)
+    double beat = 0.0;           // timeline beats
+    std::string title;           // short, drawn on the track
+    std::string description;     // long text
+    ofColor color = ofColor(210, 80, 80, 255); // every new marker's, until changed
+};
+
 struct ofxOceanodeTimelineTrack {
     std::string id;
     std::string name;
@@ -1296,6 +1310,12 @@ struct ofxOceanodeTimelineTrack {
     // playhead reaches it, which can stall that frame). Loaded ahead, the
     // source runs silent until its clip starts.
     float morphPreloadSeconds = 0.0f;
+    // Marker Track (createMarkerTrack): no bindings and no clips, only
+    // markers in timeline beats, kept sorted by beat (a marker's index is
+    // its number). A timeline has at most one; a Timeline node pointing at
+    // it publishes Go To Marker.
+    bool isMarkerTrack = false;
+    std::vector<ofxOceanodeTimelineTrackMarker> trackMarkers;
 };
 // Two neighbouring clips of a Macro Morphing Track that overlap: the
 // transition from the earlier one into the later one, over these beats.
@@ -1697,6 +1717,24 @@ public:
     // Moves a keyframe to a timeline beat inside its clip; returns its new index (-1: not moved).
     int moveGlobalKeyframe(ofxOceanodeTimelineSequence& sequence, const std::string& trackId,
                             const std::string& clipId, size_t index, double timelineBeat);
+    // ---- Marker Track (see ofxOceanodeTimelineTrack::isMarkerTrack) ----
+    // One per timeline: returns the existing one's id when there is one.
+    std::string createMarkerTrack(ofxOceanodeTimelineSequence& sequence, const std::string& requestedName = "Markers");
+    static ofxOceanodeTimelineTrack* markerTrackOf(ofxOceanodeTimelineSequence& sequence);
+    static const ofxOceanodeTimelineTrack* markerTrackOf(const ofxOceanodeTimelineSequence& sequence);
+    // A new marker at a timeline beat (the default colour, titled
+    // "Marker"); returns its uid (-1: not a marker track).
+    int addTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, double beat);
+    bool removeTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid);
+    // Moves it and keeps the markers in time order; returns its new index (-1: none).
+    int moveTrackMarker(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid, double beat);
+    bool setTrackMarkerText(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid,
+                            const std::string& title, const std::string& description);
+    bool setTrackMarkerColor(ofxOceanodeTimelineSequence& sequence, const std::string& trackId, int uid, const ofColor& color);
+    // The marker with that uid and its index (number); nullptr: none.
+    static const ofxOceanodeTimelineTrackMarker* findTrackMarker(const ofxOceanodeTimelineTrack& track, int uid, int* index = nullptr);
+    // The beat of marker number `index` of the timeline's Marker Track (false: none).
+    static bool trackMarkerBeat(const ofxOceanodeTimelineSequence& sequence, int index, double& beat);
     // Independent copy immediately below the source, with fresh routing/content IDs.
     std::string duplicateTrack(const std::string& trackId);
     std::string duplicateTrack(ofxOceanodeTimelineSequence& sequence, const std::string& trackId);

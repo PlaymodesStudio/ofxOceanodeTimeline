@@ -175,7 +175,7 @@ public:
                     if(auto* sequence = timelineManager.findTimeline(ref)) {
                         const std::string path = pathFor(canvas);
                         for(const auto& track : sequence->tracks) {
-                            if(track.isWaveTrack || track.isGlobalTrack || track.isFolder || track.isMacroTrack()) continue;
+                            if(track.isWaveTrack || track.isGlobalTrack || track.isMarkerTrack || track.isFolder || track.isMacroTrack()) continue;
                             const bool bound = std::any_of(track.bindings.begin(), track.bindings.end(),
                                                            [&](const auto& binding) { return binding.parameterPath == path; });
                             // A track already driving it reads as such.
