@@ -4466,8 +4466,12 @@ void ofxOceanodeTimelineController::draw() {
                                     track.isMorphTrack || track.isMarkerTrack;
         // Its row's height in the Clips view: its own once its bottom edge
         // was dragged, the view's default one otherwise.
+        // (A Marker Track's pad has its buttons on the first row: it can be
+        // a line shorter than the others.)
+        const float trackMinHeight = track.isMarkerTrack
+            ? std::max(kRowHeight, kMinTrackHeight - (ImGui::GetFontSize() + kPadRowGap)) : kMinTrackHeight;
         const float ownTrackHeight = ofClamp(track.trackHeight > 0.0f ? track.trackHeight : timeline.getViewState().trackHeight,
-                                             kMinTrackHeight, kMaxTrackHeight);
+                                             trackMinHeight, kMaxTrackHeight);
         // A macro track's pad has one row only (what it plays shows under it,
         // unfolded): its header is a line shorter than the other tracks'.
         auto withoutSecondRow = [&](float height) {
@@ -4562,12 +4566,16 @@ void ofxOceanodeTimelineController::draw() {
         // it is).
         // A Marker Track's "+" (a marker at the playhead) sits there too,
         // between the same "<" and ">" (to the marker before, or after).
+        // (A Marker Track's are always on the first row, against the right
+        // edge, where it has no M or S.)
         constexpr float kKeyNavGap = 2.0f;
         const bool keyButtons = track.isGlobalTrack || track.isMarkerTrack;
+        const bool keysOnFirstRow = track.isMarkerTrack || !pad.hasSecondRow;
+        const float keysY = keysOnFirstRow ? pad.y : pad.secondY;
         const float globalKeysWidth = !keyButtons ? 0.0f
             : padButtonWidth("<") + kKeyNavGap + padButtonWidth(track.isMarkerTrack ? "+" : "+ Key") + kKeyNavGap + padButtonWidth(">");
-        const float globalKeysX = (pad.hasSecondRow ? pad.right : firstRowRight) - globalKeysWidth;
-        if(keyButtons && !pad.hasSecondRow) firstRowRight = globalKeysX - padSpacing;
+        const float globalKeysX = (track.isMarkerTrack || pad.hasSecondRow ? pad.right : firstRowRight) - globalKeysWidth;
+        if(keyButtons && keysOnFirstRow) firstRowRight = globalKeysX - padSpacing;
         // The name gives way to the buttons that follow it.
         const float nameRight = std::max(pad.nameX, std::min(pad.nameX + ImGui::CalcTextSize(track.name.c_str()).x,
             firstRowRight - smallButtonReserve("   ") - (addLaneButton ? smallButtonReserve("+") : 0.0f)));
@@ -4581,7 +4589,7 @@ void ofxOceanodeTimelineController::draw() {
         };
         const bool overPadControl = overPadSwatch(pad) || overPadButtons(settingsX, leftGroupRight, pad.y) ||
             overPadButtons(pad.muteX, pad.right, pad.y) ||
-            (keyButtons && overPadButtons(globalKeysX, globalKeysX + globalKeysWidth, specificY));
+            (keyButtons && overPadButtons(globalKeysX, globalKeysX + globalKeysWidth, keysY));
         // The arrow's strip is the whole height of the pad.
         const bool editorArrowHovered = editorArrow &&
             hoverRect(ImVec2(headerMin.x + folderIndent, headerMin.y), ImVec2(headerMin.x + folderIndent + kPadArrowSlot, headerMax.y));
@@ -4774,10 +4782,10 @@ void ofxOceanodeTimelineController::draw() {
             }
         }
         if(track.isMarkerTrack) {
-            // ---- Second row: a Marker Track's marker buttons ----
+            // ---- First row, after the name: a Marker Track's marker buttons ----
             int step = 0;
             ImGui::PushStyleColor(ImGuiCol_Text, labelTextColor);
-            ImGui::SetCursorScreenPos(ImVec2(globalKeysX, specificY));
+            ImGui::SetCursorScreenPos(ImVec2(globalKeysX, keysY));
             if(ImGui::SmallButton(("<##prevTrackMarker" + track.id).c_str())) step = -1;
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Playhead to the previous marker");
             ImGui::SameLine(0.0f, kKeyNavGap);
@@ -6399,7 +6407,7 @@ void ofxOceanodeTimelineController::draw() {
                     const float height = trackResizeStartHeight + ImGui::GetIO().MousePos.y - trackResizeStartMouseY;
                     if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) {
                         if(track.isWaveTrack) editTrack->waveTrackHeight = ofClamp(height, kWaveTrackMinHeight, kWaveTrackMaxHeight);
-                        else editTrack->trackHeight = ofClamp(height, kMinTrackHeight, kMaxTrackHeight);
+                        else editTrack->trackHeight = ofClamp(height, trackMinHeight, kMaxTrackHeight);
                     }
                 }
                 if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) trackResizeId.clear();
