@@ -620,6 +620,7 @@ ofJson ofxOceanodeTimelineManager::trackToJson(const ofxOceanodeTimelineTrack& t
         // and the engine's state has keys that are null.
         if(!track.morphState.is_null()) trackJson["morphState"] = track.morphState.dump();
         if(track.morphPreloadSeconds > 0.0f) trackJson["morphPreloadSeconds"] = track.morphPreloadSeconds;
+        if(track.morphOthersFolded) trackJson["morphOthersFolded"] = true;
         if(track.macroUnfolded) trackJson["macroUnfolded"] = true;
         if(!track.macroFoldedTimelines.empty()) trackJson["macroFoldedTimelines"] = track.macroFoldedTimelines;
     }
@@ -1157,6 +1158,7 @@ void ofxOceanodeTimelineManager::sequenceContentFromJson(ofxOceanodeTimelineSequ
         if(track.isMorphTrack && trackJson.contains("morphPreloadSeconds") && trackJson["morphPreloadSeconds"].is_number()) {
             track.morphPreloadSeconds = ofClamp(trackJson["morphPreloadSeconds"].get<float>(), 0.0f, 30.0f);
         }
+        track.morphOthersFolded = track.isMorphTrack && trackJson.value("morphOthersFolded", false);
         const bool unfolds = !track.macroCanvas.empty() || track.isMorphTrack;
         track.macroUnfolded = unfolds && trackJson.value("macroUnfolded", false);
         track.macroFoldedTimelines.clear();

@@ -1314,6 +1314,9 @@ struct ofxOceanodeTimelineTrack {
     // playhead reaches it, which can stall that frame). Loaded ahead, the
     // source runs silent until its clip starts.
     float morphPreloadSeconds = 0.0f;
+    // Unfolded, the sources that are not playing at the playhead are rows
+    // under an "Other tracks" folder row: folded away, all of them at once.
+    bool morphOthersFolded = false;
     // Marker Track (createMarkerTrack): no bindings and no clips, only
     // markers in timeline beats, kept sorted by beat (a marker's index is
     // its number). A timeline has at most one; a Timeline node pointing at
