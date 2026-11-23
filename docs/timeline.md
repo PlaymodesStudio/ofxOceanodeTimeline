@@ -643,6 +643,13 @@ outputs carry the mix. Several Timeline nodes may point at one timeline; each
 publishes the outputs, and the last input to change wins. Without such a node
 the track still plays and draws, and its outputs go nowhere.
 
+The routers can be edited with sources already on the track. Removing one
+always works. Adding, renaming, retyping or turning one around (output to
+input or back) works when every source has that router, of that type, and
+nothing inside the source drives it when it is an input; otherwise the edit is
+refused with the name of the source and its reason. A router that changes side
+moves to the other side of the Timeline node, which drops its cable.
+
 **Sources and clips.** **Add Morphing Source** in the track's menu asks for a
 macro folder; a macro's header menu has **Add to Timeline Macro Morphing
 Track**, which adds the macro as it was last saved (a local macro at any
