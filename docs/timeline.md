@@ -891,15 +891,18 @@ timeline's canvas.
 **Nodes that follow a timeline.** Nodes synced to the transport (Phasor,
 Counter, Ramp, Beat Transport, the SuperCollider boxes) have a **Time Source**
 in the inspector in place of *Sync To Transport*: **Free** (not synced),
-**Auto** (the timeline its canvas plays: the global transport, or its macro's
-own timeline when that plays free), **Clock** (always running at the global
+**Auto** (the timeline its canvas plays: the global transport through the
+loop of the canvas's first timeline linked to it, or its macro's own
+timeline when that plays free), **Clock** (always running at the global
 tempo), or any timeline by name, this canvas's first: the global transport
-for one linked to it, its own transport otherwise (a dependent timeline's
-preview). The choice is saved by id, so renaming a timeline keeps it; a
+through that timeline's loop for one linked to it, its own transport
+otherwise (a dependent timeline's preview). So a loop drawn on the timeline
+loops the synced nodes too (a SampleBox synced to the transport repeats the
+looped span), while the global transport itself runs on. The choice is saved by id, so renaming a timeline keeps it; a
 deleted one shows *(missing)* and the node holds stopped (a node saved
 before timelines had ids of their own still follows its canvas's first
 timeline). **Global transport** in that list always follows the global
-transport, wherever the node is. **Beat Transport** has the same choice on the node itself, its
+transport, wherever the node is, straight on: no timeline's loop. **Beat Transport** has the same choice on the node itself, its
 **Transport** dropdown: **Global Transport** (the default), then every
 timeline that has a transport, this canvas's first (a dependent timeline's
 is its preview). It reads that transport's beat, tempo, play state, meter and

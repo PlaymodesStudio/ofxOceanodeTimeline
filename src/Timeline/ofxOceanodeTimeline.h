@@ -2839,6 +2839,11 @@ public:
     // An offline render (Render Audio...) plays every timeline straight
     // through: loops are ignored while this is on, their settings kept.
     static void setLoopsSuspended(bool suspended) { loopsSuspendedFlag() = suspended; }
+    // Hands the root transport the loop of every timeline linked to it, so
+    // the nodes following one (by Time Source, or as their canvas's first
+    // linked timeline) see its looped position (ofxOceanodeTransport::LoopView).
+    // Each update does it; call it after setLoopsSuspended to apply at once.
+    void publishLoopViews();
     static bool loopsSuspended() { return loopsSuspendedFlag(); }
     // Play on preset load: when a preset with this on finishes loading, the
     // transport starts from the beginning (saved per preset, off by default)
@@ -3190,6 +3195,7 @@ private:
     // Creates, refreshes and runs the engines of the free timelines.
     void updatePlayers();
     void updateTimeSources();
+    std::set<std::string> publishedLoopViews;
     void destroyPlayer(Player& player);
     Player* playerFor(const TimelineRef& ref) const;
     // The engine copy: paths and macro canvases made absolute from canvas.
@@ -3776,6 +3782,8 @@ private:
     // timeline linked to it loops on its own while it runs on. Identity
     // while the loop is off or the position is before it.
     ofxOceanodeTransportState loopedState(ofxOceanodeTransportState state) const;
+    // This manager's loop and kept playhead, as loopedState applies them.
+    ofxOceanodeTransport::LoopView loopView() const;
     static bool& loopsSuspendedFlag() { static bool flag = false; return flag; }
     // Points every piano-roll lane that uses any of affectedBindingIds at the group's roles.
     void syncNoteGroupLanes(ofxOceanodeTimelineTrack& track, const ofxOceanodeTimelineNoteGroup& group,

@@ -788,7 +788,11 @@ void ofxOceanodeTimelineController::drawTimelineActions(ofxOceanodeTimelineManag
                 auto locked = root.lock();
                 return locked != nullptr ? locked->getTransportState().beatPosition : 0.0;
             };
-            host.suspendLoops = [](bool suspended) { ofxOceanodeTimelineManager::setLoopsSuspended(suspended); };
+            host.suspendLoops = [root, manager = &timeline](bool suspended) {
+                ofxOceanodeTimelineManager::setLoopsSuspended(suspended);
+                // The nodes' loop views too, before the render's first frame.
+                if(root.lock() != nullptr) manager->publishLoopViews();
+            };
             ofxOceanodeTimelineRenderRange range;
             range.timelineName = timeline.timelineName(shown);
             if(const auto* play = timeline.playSettings(shown)) {

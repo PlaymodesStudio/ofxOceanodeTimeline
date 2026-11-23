@@ -491,7 +491,18 @@ global map) and never sets them; the loop is the timeline's own, and the
 root transport is never given one: the engine wraps the root's position
 into its loop itself (`loopedState`, through `playState`: the pass as
 `loopCount`, so wraps, lookahead past the loop end and the playhead shown
-work as on a looping transport while the global transport runs on). Free: a transport derived from the root's
+work as on a looping transport while the global transport runs on). Nodes
+following the root see the same loop: each update the primary publishes
+every Global timeline's loop and kept playhead on the root
+(`publishLoopViews`, `ofxOceanodeTransport::LoopView`, by `timeSourceId`,
+and a canvas's first Global timeline also as
+`ofxOceanodeTransport::canvasLoopViewId(canvas)`, `""` for the root canvas,
+and `canvas#default`); `ofxOceanodeNodeModel::getFrameTransportState`
+wraps the root's states through the view of the timeline the node follows
+(`applyTimelineLoop`: Auto = its canvas's, else the root canvas's; a chosen
+Global timeline's own; Global transport and Clock: none), with the same
+pure fold `loopedState` uses (`ofxOceanodeTransport::loopedThrough`). Render
+Audio's suspension removes the views. Free: a transport derived from the root's
 clock (`ofxOceanodeTransport::makeDerived`) with the timeline's own tempo,
 loop and meter (`adoptPlaySettings`). Dependent: a derived transport too, at
 its host's tempo now (`hostBpmFor`, through the host's transport) with its
@@ -569,8 +580,9 @@ restart when the placement changes).
 `updateTimeSources` registers every timeline with the root transport as a
 time source (`timeSourceId(ref)`: `canvas#timeline`, `root#tl_1` for the
 root canvas's first): the root transport itself for a Global one, the
-player's transport otherwise; a canvas's `tl_1` is registered a second time
-as `canvas#default`, hidden, for nodes saved before version 15.
+player's transport otherwise, all listed (a Global one is followed through
+its loop view); a canvas's `tl_1` is registered a second time as
+`canvas#default`, hidden, for nodes saved before version 15.
 
 The **undo histories** are the primary's: one per timeline
 (`sequenceHistories`, typed snapshots of its tracks, groups, settings and

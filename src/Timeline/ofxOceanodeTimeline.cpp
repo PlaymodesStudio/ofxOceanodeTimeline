@@ -5829,6 +5829,7 @@ void ofxOceanodeTimelineManager::evaluateAutomation() {
         updatePlayers();
         updateMorphEngines();
         updateTimeSources();
+        publishLoopViews();
         if(metronome) {
             // It follows its timeline: that one's transport (a new one when
             // its clock source changed) and meter; gone with the timeline.

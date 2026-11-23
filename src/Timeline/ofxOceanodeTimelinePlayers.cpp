@@ -98,25 +98,73 @@ ofxOceanodeTransportState ofxOceanodeTimelineManager::loopedState(ofxOceanodeTra
     }
     previousLoopClock = state;
     hasPreviousLoopClock = true;
-    state.loopEnabled = loopEnabled;
-    state.loopStartBeat = loopStartBeat;
-    state.loopEndBeat = loopEndBeat;
-    state.loopCount = loopPositionAnchor.valid ? loopPositionAnchor.pass : 0;
-    if(loopPositionAnchor.valid) {
-        state.beatPosition = loopPositionAnchor.localBeat + state.beatPosition - loopPositionAnchor.clockBeat;
-        state.seconds = beatToSeconds(state.beatPosition, state.bpm);
+    // The anchor is current now (valid only for this generation): the same
+    // wrap the nodes following this timeline get (publishLoopViews).
+    auto view = loopView();
+    view.hasLastClock = false;
+    auto looped = ofxOceanodeTransport::loopedThrough(view, state);
+    // Seconds through this timeline's tempo map (BPM lane), wherever the
+    // position was moved or folded into the loop.
+    const bool anchored = loopPositionAnchor.valid;
+    const double mapped = anchored ? loopPositionAnchor.localBeat + state.beatPosition - loopPositionAnchor.clockBeat
+                                   : state.beatPosition;
+    const bool folded = looped.loopActive() && mapped >= loopStartBeat &&
+                        !(anchored && loopPositionAnchor.localBeat >= loopEndBeat);
+    if(anchored || folded) looped.seconds = beatToSeconds(looped.beatPosition, looped.bpm);
+    return looped;
+}
+
+ofxOceanodeTransport::LoopView ofxOceanodeTimelineManager::loopView() const {
+    ofxOceanodeTransport::LoopView view;
+    view.enabled = loopEnabled;
+    view.startBeat = loopStartBeat;
+    view.endBeat = loopEndBeat;
+    view.anchored = loopPositionAnchor.valid;
+    view.clockBeat = loopPositionAnchor.clockBeat;
+    view.localBeat = loopPositionAnchor.localBeat;
+    view.pass = loopPositionAnchor.pass;
+    view.generation = loopPositionAnchor.generation;
+    view.hasLastClock = hasPreviousLoopClock;
+    view.lastClock = previousLoopClock;
+    return view;
+}
+
+void ofxOceanodeTimelineManager::publishLoopViews() {
+    if(isEngine() || container == nullptr) return;
+    auto root = container->getRootTransport();
+    if(root == nullptr) return;
+    std::set<std::string> present;
+    // Rendering: the nodes run straight through, as the timelines do.
+    if(!loopsSuspended()) {
+        std::set<std::string> canvasesDone;
+        // allTimelines order: a canvas's timelines in their order, so the
+        // first one linked to the global transport is its canvas's view.
+        for(const auto& listed : allTimelines()) {
+            const auto ref = normalizedRef(listed);
+            auto* player = playerFor(ref);
+            if(player == nullptr || player->engine == nullptr || player->source != ClockSource::Global) continue;
+            const auto view = player->engine->loopView();
+            const auto id = timeSourceId(ref);
+            root->setLoopView(id, view);
+            present.insert(id);
+            if(!canvasesDone.insert(ref.canvas).second) continue;
+            // (and its "<canvas>#default" id, which nodes saved before version 15 follow)
+            std::vector<std::string> canvasIds = {timeSourceId({ref.canvas, std::string()})};
+            if(rootCanvas(ref.canvas)) {
+                canvasIds.push_back(ofxOceanodeTransport::canvasLoopViewId(""));
+                canvasIds.push_back(ofxOceanodeTransport::canvasLoopViewId(container->getCanvasID()));
+            } else if(auto* canvas = canvasContainer(ref.canvas)) {
+                canvasIds.push_back(ofxOceanodeTransport::canvasLoopViewId(canvas->getCanvasID()));
+            }
+            for(const auto& canvasId : canvasIds) {
+                root->setLoopView(canvasId, view);
+                present.insert(canvasId);
+            }
+        }
     }
-    // Moving the end behind the playhead must not pull the playhead back.
-    // Continue from here; the next seek/play start can enter the new loop.
-    if(!state.loopActive() || state.beatPosition < loopStartBeat ||
-       (loopPositionAnchor.valid && loopPositionAnchor.localBeat >= loopEndBeat)) return state;
-    const double length = loopEndBeat - loopStartBeat;
-    const double passes = std::floor((state.beatPosition - loopStartBeat) / length);
-    state.loopCount += static_cast<uint64_t>(std::max(0.0, passes));
-    state.beatPosition = loopStartBeat + (state.beatPosition - loopStartBeat - passes * length);
-    if(state.beatPosition >= loopEndBeat) state.beatPosition = loopStartBeat;
-    state.seconds = beatToSeconds(state.beatPosition, state.bpm);
-    return state;
+    for(const auto& id : publishedLoopViews)
+        if(present.count(id) == 0) root->removeLoopView(id);
+    publishedLoopViews = std::move(present);
 }
 
 void ofxOceanodeTimelineManager::adoptPlaySettings(const ofxOceanodeTimelinePlaySettings& settings) {
@@ -904,11 +952,12 @@ void ofxOceanodeTimelineManager::updateTimeSources() {
         info.label = timelineName(ref);
         info.group = group;
         info.selectable = transport != nullptr;
-        // Linked to the global transport, it is that transport's position:
-        // not listed (nodes follow the global transport itself), still found
-        // by its id.
-        info.hidden = transport != nullptr && !transport->isDerived();
+        // Linked to the global transport: listed too. A node choosing it
+        // follows the global transport wrapped into this timeline's loop
+        // (publishLoopViews); Auto follows its canvas's first such timeline.
+        info.hidden = false;
         if(!info.selectable) info.note = "Not playing yet.";
+        else if(!transport->isDerived()) info.note = "Linked to the global transport: follows it through this timeline's loop.";
         else if(clockSourceOf(ref) == ClockSource::Dependent)
             info.note = "Placed in another timeline: this follows its own transport, which previews it alone.";
         root->registerTimeSource(info, transport);

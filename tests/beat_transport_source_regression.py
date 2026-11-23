@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
     transport->setDriverMode(TransportDriverMode::FrameStep);
     ofxOceanodeContainer root(registry, types, transport); root.setCanvasID("Canvas");
     auto& timeline = ofxOceanodeTimeline::attach(root);
-    timeline.setEditTarget(timeline.addTimeline("", "Timeline 1"));
+    const auto mainTimeline = timeline.addTimeline("", "Timeline 1");
+    timeline.setEditTarget(mainTimeline);
     timeline.setSchedulingEnabled(false);
     auto& node = root.createNode(std::make_unique<beatTransport>(), 1);
     auto& beats = static_cast<beatTransport&>(node.getNodeModel());
@@ -90,8 +91,9 @@ int main(int argc, char** argv) {
     frame(0.0);
     auto drumsTransport = timeline.transportFor(drums);
     assert(drumsTransport != nullptr && drumsTransport->isDerived());
-    assert(selector.getMax() >= 1);
-    selector = 1; // Drums
+    // Global, the main timeline (linked to the global transport: listed, its loop), then Drums.
+    assert(selector.getMax() >= 2);
+    selector = selector.getMax(); // Drums
     frame(0.0);
     assert(beats.getTimeSourceId() == ofxOceanodeTimelineManager::timeSourceId(drums)); // saved by id
     assert(beats.getTransport() == drumsTransport);
@@ -114,8 +116,43 @@ int main(int argc, char** argv) {
     frame(0.0);
     assert(beats.getTimeSourceId() == ofxOceanodeNodeModel::TimeSourceGlobal && beats.getTransport() == transport);
 
+    // The main timeline loops 0..2 while the global transport runs on to beat 3:
+    // Global ignores the loop; Auto (this canvas's first linked timeline) and
+    // the main timeline chosen by id follow it.
+    {
+        auto looped = *timeline.playSettings(mainTimeline);
+        looped.loopEnabled = true; looped.loopStartBeat = 0.0; looped.loopEndBeat = 2.0;
+        timeline.setPlaySettings(mainTimeline, looped);
+        frame(0.0);
+        transport->seekToBeat(0.0); // enters the new loop (an edit alone keeps the playhead where it was)
+        transport->play();
+        frame(1.5);
+        double playhead = -1.0;
+        assert(timeline.timelinePlayheadBeat(mainTimeline, playhead)); NEAR(playhead, 1.0);
+        NEAR(transport->getState().beatPosition, 3.0);
+        NEAR(beatOut.get(), 3.0);
+        beats.setTimeSourceId(ofxOceanodeNodeModel::TimeSourceAuto);
+        frame(0.0);
+        NEAR(beatOut.get(), 1.0);
+        beats.setTimeSourceId(ofxOceanodeTimelineManager::timeSourceId(mainTimeline));
+        frame(0.0);
+        assert(beats.getTransport() == transport);
+        NEAR(beatOut.get(), 1.0);
+        frame(0.25); // on past the loop end: wrapped to its start
+        NEAR(transport->getState().beatPosition, 3.5); NEAR(beatOut.get(), 1.5);
+        frame(0.5);
+        NEAR(transport->getState().beatPosition, 4.5); NEAR(beatOut.get(), 0.5);
+        beats.setTimeSourceId(ofxOceanodeNodeModel::TimeSourceGlobal);
+        frame(0.0);
+        NEAR(beatOut.get(), 4.5);
+        transport->stop();
+        looped.loopEnabled = false;
+        timeline.setPlaySettings(mainTimeline, looped);
+        frame(0.0);
+    }
+
     // A deleted timeline: kept as the choice, shown as missing, outputs stopped.
-    selector = 1;
+    selector = selector.getMax(); // Drums
     frame(0.0);
     assert(beats.getTransport() == drumsTransport);
     timeline.removeTimeline(drums);
@@ -123,7 +160,7 @@ int main(int argc, char** argv) {
     assert(beats.isTimeSourceMissing() && beats.getTransport() == nullptr);
     assert(playingOut.get() == 0);
     assert(selector.get() == selector.getMax()); // the "Missing transport" entry, last
-    std::cout << "Beat Transport source passed: global by default, a free timeline's transport (beat, BPM, meter, Stop), back to global, missing timeline.\n";
+    std::cout << "Beat Transport source passed: global by default, a free timeline's transport (beat, BPM, meter, Stop), back to global, a timeline loop (Auto, by id, Global ignores it), missing timeline.\n";
     return 0;
 }
 '''
