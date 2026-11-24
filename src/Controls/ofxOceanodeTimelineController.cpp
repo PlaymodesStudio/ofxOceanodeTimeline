@@ -7328,10 +7328,68 @@ void ofxOceanodeTimelineController::draw() {
             if(track.isMorphTrack) {
                 const float idleOriginX = zoneLeft - timelineScrollX;
                 const float idleRight = ImGui::GetWindowPos().x + ImGui::GetWindowWidth();
-                const float tab = folderIndent + kUnfoldedIndent;
+                // Under an "Other tracks" folder row of their own, one step in
+                // from the track: folded, they all go away together.
+                const float folderTab = folderIndent + kUnfoldedIndent;
+                const float tab = folderTab + kUnfoldedIndent;
                 const float indent = std::min(kLabelWidth - 140.0f, tab);
                 const ImVec2 mouse = ImGui::GetIO().MousePos;
-                for(const auto& idle : timeline.morphIdleSources(scope(timeline), track)) {
+                const auto idleSources = timeline.morphIdleSources(scope(timeline), track);
+                // (Only the sources that have a clip on the track get rows.)
+                auto placed = [&](const std::string& sourceId) {
+                    return std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) { return clip.morphSource == sourceId; });
+                };
+                size_t idleCount = 0;
+                for(const auto& idle : idleSources) if(placed(idle.id)) ++idleCount;
+                const ImU32 othersHeader = mutedTrackColor(track.color, 0.28f, 0.5f);
+                if(idleCount > 0) {
+                    ImGui::SetCursorPos(ImVec2(0, ImGui::GetCursorPosY()));
+                    ImGui::Dummy(ImVec2(contentWidth, kRowHeight));
+                    const ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
+                    const float folderPad = std::min(kLabelWidth - 140.0f, folderTab);
+                    const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
+                    dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.08f));
+                    drawGutter(dl, rowMin, rowMax.y, folderPad, insideLevels);
+                    dl->AddRectFilled(ImVec2(rowMin.x + folderPad, rowMin.y), padMax, othersHeader);
+                    const PadRow pad = padRow(rowMin, rowMax, folderPad);
+                    drawFoldArrow(dl, ImVec2(pad.arrowX, pad.y), !track.morphOthersFolded);
+                    const std::string label = "Other tracks  (" + ofToString(idleCount) + ")";
+                    dl->PushClipRect(ImVec2(pad.swatchX, rowMin.y), ImVec2(pad.right, rowMax.y), true);
+                    dl->AddText(ImVec2(pad.swatchX, pad.y), IM_COL32(210, 210, 210, 255), label.c_str());
+                    dl->PopClipRect();
+                    // Where the clips of those sources are on the track.
+                    dl->PushClipRect(ImVec2(zoneLeft, rowMin.y), ImVec2(idleRight, rowMax.y), true);
+                    for(const auto& clip : track.clips) {
+                        if(std::none_of(idleSources.begin(), idleSources.end(), [&](const auto& idle) { return idle.id == clip.morphSource; })) continue;
+                        const float x1 = idleOriginX + beatOffset(clip.startBeat);
+                        const float x2 = idleOriginX + beatOffset(clip.startBeat + clip.durationBeats);
+                        dl->AddRectFilled(ImVec2(x1, rowMin.y + 3.0f), ImVec2(x2, rowMax.y - 3.0f),
+                                          IM_COL32(track.color.r, track.color.g, track.color.b, 40));
+                    }
+                    dl->PopClipRect();
+                    auto foldOthers = [&](bool folded) {
+                        if(auto* editTrack = timeline.getTrack(scope(timeline), track.id)) editTrack->morphOthersFolded = folded;
+                    };
+                    if(hoverRect(rowMin, padMax)) {
+                        if(!ImGui::IsAnyItemActive())
+                            ImGui::SetTooltip("The sources that are not playing at the playhead, with their tracks.\n"
+                                              "Click the arrow to fold them all away.");
+                        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x < rowMin.x + folderPad + kPadArrowSlot)
+                            foldOthers(!track.morphOthersFolded);
+                    }
+                    // A click on the folded row's summary unfolds it.
+                    if(track.morphOthersFolded && mouse.x >= zoneLeft && hoverRect(ImVec2(zoneLeft, rowMin.y), rowMax) &&
+                       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !anyClipInteractionClaimedThisFrame) {
+                        anyClipInteractionClaimedThisFrame = true;
+                        foldOthers(false);
+                    }
+                }
+                // (Their rows are inside that folder: its colour down their indentation.)
+                std::vector<ImU32> otherLevels = insideLevels;
+                otherLevels.push_back(othersHeader);
+                for(const auto& idle : idleSources) {
+                    if(track.morphOthersFolded) break;
                     // Where its clips are, and the one nearest to the playhead.
                     std::vector<const ofxOceanodeTimelineClip*> sourceClips;
                     for(const auto& clip : track.clips) if(clip.morphSource == idle.id) sourceClips.push_back(&clip);
@@ -7358,7 +7416,7 @@ void ofxOceanodeTimelineController::draw() {
                         ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
                         const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
                         dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(track.color, 0.07f));
-                        drawGutter(dl, rowMin, rowMax.y, indent, insideLevels);
+                        drawGutter(dl, rowMin, rowMax.y, indent, otherLevels);
                         dl->AddRectFilled(ImVec2(rowMin.x + indent, rowMin.y), padMax, mutedTrackColor(track.color, 0.22f, 0.5f));
                         const PadRow pad = padRow(rowMin, rowMax, indent);
                         const std::string label = idle.name + (timeline.morphSourceDirty(scope(timeline), idle.id) ? " *" : "") +
@@ -7394,7 +7452,7 @@ void ofxOceanodeTimelineController::draw() {
                             ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y));
                             const ImVec2 padMax(rowMin.x + kLabelWidth, rowMax.y);
                             dl->AddRectFilled(rowMin, rowMax, mutedTrackColor(innerTrack.color, 0.06f));
-                            drawGutter(dl, rowMin, rowMax.y, rowIndent, insideLevels);
+                            drawGutter(dl, rowMin, rowMax.y, rowIndent, otherLevels);
                             dl->AddRectFilled(ImVec2(rowMin.x + rowIndent, rowMin.y), padMax, mutedTrackColor(innerTrack.color, 0.18f, 0.5f));
                             const PadRow pad = padRow(rowMin, rowMax, rowIndent);
                             dl->PushClipRect(ImVec2(pad.swatchX, rowMin.y), ImVec2(pad.right, rowMax.y), true);

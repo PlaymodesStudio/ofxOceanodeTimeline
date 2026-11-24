@@ -643,6 +643,13 @@ outputs carry the mix. Several Timeline nodes may point at one timeline; each
 publishes the outputs, and the last input to change wins. Without such a node
 the track still plays and draws, and its outputs go nowhere.
 
+The routers can be edited with sources already on the track. Removing one
+always works. Adding, renaming, retyping or turning one around (output to
+input or back) works when every source has that router, of that type, and
+nothing inside the source drives it when it is an input; otherwise the edit is
+refused with the name of the source and its reason. A router that changes side
+moves to the other side of the Timeline node, which drops its cable.
+
 **Sources and clips.** **Add Morphing Source** in the track's menu asks for a
 macro folder; a macro's header menu has **Add to Timeline Macro Morphing
 Track**, which adds the macro as it was last saved (a local macro at any
@@ -691,8 +698,11 @@ start. It is off by default, and is not used for a Morph set to run in place.
 **Unfolding.** The arrow on the track's header shows the
 sources under the track. The sources playing at the playhead (one, or the two
 of a transition) show their tracks as a macro track does: editable in place.
-The other sources show dimmed, read-only rows with their clips as bars; a
-double-click moves the playhead onto that source. A source's parameters exist
+The other sources are under an **Other tracks** row: dimmed, read-only rows
+with their clips as bars; a double-click moves the playhead onto that source.
+The arrow on **Other tracks** folds all of them away at once (the row then
+shows where their clips are, and a click on it unfolds them again); it is
+saved with the project. A source's parameters exist
 only while it plays, which is why only those rows are editable.
 
 **Source timelines.** A source's timelines never play on their own: they
